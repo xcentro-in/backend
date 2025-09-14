@@ -17,7 +17,6 @@ func NewUserService() *UserService {
 }
 
 func (s *UserService) CreateUser(name, email string) string {
-	msg := fmt.Sprintf("Creating user: Name=%s, Email=%s", name, email)
-	logger.GetDefault().Info(msg)
-	return msg
+	logger.GetDefault().Info("Creating user: Name=%s, Email=%s", name, email)
+	return fmt.Sprintf("Creating user: Name=%s, Email=%s", name, email)
 }

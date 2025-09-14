@@ -3,6 +3,7 @@ package main
 import (
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
+	httphandler "xcentro.in/internal/handlers/http"
 	"xcentro.in/internal/shared/logger"
 )
 
@@ -22,6 +23,10 @@ func NewXcentroServer() *XcentroServer {
 		echo: e,
 		log:  logger.GetDefault(),
 	}
+}
+
+func (s *XcentroServer) RegisterRouters() {
+	httphandler.RegisterRouters(s.echo)
 }
 
 func (s *XcentroServer) Start(address string) {
