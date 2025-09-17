@@ -13,5 +13,10 @@ type UserRepository interface {
 	UpdateUserPAN(userID, newPAN string) error
 	UpdateUserKYCStatus(userID string, newStatus shared.KYCStatus) error
 	UpdateUserKYCData(userID, kycData string) error
-	//TODO: Add more otp/verification related methods
+	// Email and Mobile verification methods
+	CreateVerificationCode(code *UserVerificationCodes) error
+	VerifyVerificationCode(userID, code string, codeType shared.VerificationType) (bool, error)
+	CheckUserEmailVerified(userID string) (bool, error)
+	CheckUserMobileVerified(userID string) (bool, error)
+	CheckUserEmailMobileVerified(userID string) (bool, error)
 }

@@ -13,7 +13,7 @@ type AuthPayload struct {
 
 type AuthJWTClaim struct {
 	jwt.RegisteredClaims
-	Role      []shared.UserRole `json:"rl"`
+	Roles     []shared.UserRole `json:"rls"`
 	BIDs      []string          `json:"bids"`
 	DeviceOS  string            `json:"do"`
 	DeviceApp string            `json:"da"`
