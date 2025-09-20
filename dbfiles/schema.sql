@@ -27,13 +27,12 @@ CREATE TYPE xcentro.fee_multiplier_type AS ENUM ('FLAT', 'PERCENTAGE');
 CREATE TYPE xcentro.payment_cycle_enum AS ENUM ('WEEKLY', 'BIWEEKLY', 'MONTHLY', 'QUARTERLY', 'ANNUALLY');
 
 
+-- UUIDv7 Generator - Fast, Secure, RFC 9562 Compliant
 CREATE OR REPLACE FUNCTION generate_uuid_v7(
-    -- Optional: a specific timestamp to use. Defaults to the current time.
     p_timestamp TIMESTAMPTZ DEFAULT clock_timestamp()
 )
 RETURNS UUID
 LANGUAGE plpgsql
--- This function's result changes on every call, so it must be VOLATILE.
 VOLATILE
 AS $$
 DECLARE
@@ -70,8 +69,8 @@ BEGIN
     -- 6. Set the version (7) and embed microsecond precision in bytes 6-7
     -- Byte 6: version (4 bits) + high 4 bits of microseconds
     -- Byte 7: low 8 bits of microseconds
-    uuid_bytes := SET_BYTE(uuid_bytes, 6, (7 << 4) | ((v_microsec >> 8) & 15));
-    uuid_bytes := SET_BYTE(uuid_bytes, 7, v_microsec & 255);
+    uuid_bytes := SET_BYTE(uuid_bytes, 6, ((7 << 4) | ((v_microsec >> 8) & 15))::INTEGER);
+    uuid_bytes := SET_BYTE(uuid_bytes, 7, (v_microsec & 255)::INTEGER);
     
     -- 7. Set the 2-bit variant (RFC 4122) in the 9th byte
     --    Variant is 10xxxxxx, preserving the random bits in the lower 6 bits

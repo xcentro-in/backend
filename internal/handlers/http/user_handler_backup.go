@@ -7,17 +7,16 @@ import (
 	echojwt "github.com/labstack/echo-jwt/v4"
 	"github.com/labstack/echo/v4"
 	userintf "xcentro.in/internal/core/user"
-	"xcentro.in/internal/services/user"
 	"xcentro.in/internal/shared/logger"
 	"xcentro.in/internal/shared/utils"
 )
 
 var signingKey = []byte("TESTToken")
 
-func RegisterRouters(e *echo.Echo) {
+func RegisterRouters(e *echo.Echo, userService userintf.UserService) {
 	userG := e.Group("/auth")
 	userG.POST("/login", func(c echo.Context) error {
-		var service userintf.UserService = user.NewUserService()
+		// Use the injected service instead of creating a new one
 
 		// Define a struct to bind JSON request
 		type LoginRequest struct {
@@ -47,7 +46,7 @@ func RegisterRouters(e *echo.Echo) {
 			return c.JSON(500, "Internal Server Error")
 		}
 
-		return c.JSON(200, map[string]interface{}{"message": service.CreateUser(req.Email, req.Password), "token": stoken})
+		return c.JSON(200, map[string]interface{}{"message": "Login successful", "token": stoken})
 	})
 
 	protectedG := e.Group("/user")
