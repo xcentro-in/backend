@@ -22,7 +22,7 @@ func NewAuthHandler(userService user.UserService, authService auth.AuthService) 
 	}
 }
 
-func RegisterAuthRoutes(e *echo.Echo, userService user.UserService, authService auth.AuthService) {
+func RegisterAuthRoutes(e *echo.Group, userService user.UserService, authService auth.AuthService) {
 	authHandler := NewAuthHandler(userService, authService)
 
 	authGroup := e.Group("/auth")

@@ -1,8 +1,12 @@
 package auth
 
-import "github.com/golang-jwt/jwt/v5"
+import (
+	"github.com/golang-jwt/jwt/v5"
+	"github.com/labstack/echo/v4"
+)
 
-type AuthService struct {
-	CreateAuthJWT            func(userid string) (string, error)
-	ExtractAndValidateClaims func(token *jwt.Token) (*AuthJWTClaim, error)
+type AuthService interface {
+	CreateAuthJWT(userid string) (string, error)
+	ExtractAndValidateClaims(token *jwt.Token) (*jwt.RegisteredClaims, error)
+	GetEchoAuthMiddleware() echo.MiddlewareFunc
 }

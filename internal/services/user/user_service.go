@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	"xcentro.in/internal/adapters/database/postgres/client"
-	"xcentro.in/internal/adapters/database/postgres/user_repository"
+	userRepo "xcentro.in/internal/adapters/database/postgres/user"
 	"xcentro.in/internal/core/auth"
 	"xcentro.in/internal/core/shared"
 	"xcentro.in/internal/core/user"
@@ -14,13 +14,13 @@ import (
 
 // UserService provides business logic for user operations
 type UserService struct {
-	userRepo  *user_repository.PgUserRepository
+	userRepo  *userRepo.PgUserRepository
 	txManager client.TxManager
 	logger    *logger.Logger
 }
 
 // NewUserService creates a new user service with dependency injection
-func NewUserService(userRepo *user_repository.PgUserRepository, txManager client.TxManager) *UserService {
+func NewUserService(userRepo *userRepo.PgUserRepository, txManager client.TxManager) *UserService {
 	return &UserService{
 		userRepo:  userRepo,
 		txManager: txManager,

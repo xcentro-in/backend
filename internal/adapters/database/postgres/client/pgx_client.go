@@ -27,6 +27,7 @@ type DBConfig struct {
 	Database        string
 	Username        string
 	Password        string
+	Schema          string
 	MaxConnections  int32
 	MinConnections  int32
 	MaxConnLifetime time.Duration
@@ -38,13 +39,14 @@ type DBConfig struct {
 func NewPgxDB(ctx context.Context, config DBConfig) (*PgxDB, error) {
 	// Build connection string
 	dsn := fmt.Sprintf(
-		"host=%s port=%d dbname=%s user=%s password=%s sslmode=%s",
+		"host=%s port=%d dbname=%s user=%s password=%s sslmode=%s search_path=%s",
 		config.Host,
 		config.Port,
 		config.Database,
 		config.Username,
 		config.Password,
 		config.SSLMode,
+		config.Schema,
 	)
 
 	// Parse config
@@ -106,6 +108,11 @@ func (db *PgxDB) Close() {
 // Ping tests the database connection
 func (db *PgxDB) Ping(ctx context.Context) error {
 	return db.pool.Ping(ctx)
+}
+
+// GetPool returns the underlying pgxpool.Pool
+func (db *PgxDB) GetPool() *pgxpool.Pool {
+	return db.pool
 }
 
 // Query implements Querier interface for transactions

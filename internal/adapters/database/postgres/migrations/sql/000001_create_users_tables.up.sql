@@ -1,0 +1,187 @@
+-- Create schema if it doesn't exist
+CREATE SCHEMA IF NOT EXISTS xcentro;
+
+-- #############################################################################
+-- # Custom ENUM Types for Data Integrity
+-- #############################################################################
+CREATE TYPE xcentro.verification_type AS ENUM ('EMAIL_VERIFICATION', 'MOBILE_VERIFICATION');
+CREATE TYPE xcentro.kyc_status_enum AS ENUM ('NOT_STARTED', 'IN_REVIEW', 'NEEDS_UPDATE', 'VERIFIED', 'REJECTED');
+CREATE TYPE xcentro.user_role_enum AS ENUM ('OWNER', 'ADMIN', 'FINANCE', 'SUPPORT');
+CREATE TYPE xcentro.business_type_enum AS ENUM ('SOLE_PROPRIETORSHIP', 'PARTNERSHIP', 'LIMITED_LIABILITY_PARTNERSHIP', 'PRIVATE_LIMITED_COMPANY', 'ONE_PERSON_COMPANY', 'SECTION_8_NON_PROFIT', 'TRUST', 'NGO', 'SOCIETY', 'COOPERATIVE_SOCIETY', 'OTHER');
+CREATE TYPE xcentro.subscription_type_enum AS ENUM ('FREE_PLAN', 'BASIC_PLAN', 'PREMIUM_PLAN', 'ENTERPRISE_PLAN');
+
+-- Required for gen_random_bytes (pgcrypto) - idempotent creation
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
+
+-- UUIDv7 Generator - Fast, Secure, RFC 9562 Compliant
+-- Note: place the function inside the xcentro schema for namespacing
+CREATE OR REPLACE FUNCTION xcentro.generate_uuid_v7(
+    p_timestamp TIMESTAMPTZ DEFAULT clock_timestamp()
+)
+RETURNS UUID
+LANGUAGE plpgsql
+VOLATILE
+AS $$
+DECLARE
+    -- Epoch time as double precision for microsecond extraction
+    v_time          DOUBLE PRECISION;
+    -- 48-bit UNIX timestamp in milliseconds
+    unix_ts_ms      BIGINT;
+    -- Microsecond component for sub-millisecond precision
+    v_microsec      BIGINT;
+    -- The full 16-byte UUID data
+    uuid_bytes      BYTEA;
+    
+    -- Constants for microsecond calculation
+    c_milli         DOUBLE PRECISION := 1000.0;      -- 1,000
+    c_micro         DOUBLE PRECISION := 1000000.0;   -- 1,000,000
+    c_scale         DOUBLE PRECISION := 4.096;       -- 4.0 * (1024 / 1000) for 12-bit precision
+BEGIN
+    -- 1. Extract epoch time with microsecond precision
+    v_time := EXTRACT(EPOCH FROM p_timestamp);
+    
+    -- 2. Get millisecond timestamp (48 bits)
+    unix_ts_ms := TRUNC(v_time * c_milli);
+    
+    -- 3. Extract microseconds within the current millisecond and encode in 12 bits
+    -- This gives us sub-millisecond ordering capability
+    v_microsec := TRUNC((v_time * c_micro - unix_ts_ms * c_milli) * c_scale);
+    
+    -- 4. Generate 16 cryptographically secure random bytes as base
+    uuid_bytes := gen_random_bytes(16);
+    
+    -- 5. Overwrite the first 6 bytes (48 bits) with the big-endian timestamp
+    uuid_bytes := OVERLAY(uuid_bytes PLACING SUBSTRING(INT8SEND(unix_ts_ms) FROM 3 FOR 6) FROM 1);
+    
+    -- 6. Set the version (7) and embed microsecond precision in bytes 6-7
+    -- Byte 6: version (4 bits) + high 4 bits of microseconds
+    -- Byte 7: low 8 bits of microseconds
+    uuid_bytes := SET_BYTE(uuid_bytes, 6, ((7 << 4) | ((v_microsec >> 8) & 15))::INTEGER);
+    uuid_bytes := SET_BYTE(uuid_bytes, 7, (v_microsec & 255)::INTEGER);
+    
+    -- 7. Set the 2-bit variant (RFC 4122) in the 9th byte
+    --    Variant is 10xxxxxx, preserving the random bits in the lower 6 bits
+    uuid_bytes := SET_BYTE(uuid_bytes, 8, (GET_BYTE(uuid_bytes, 8) & 63) | 128);
+    
+    -- 8. Convert the final byte array to a UUID and return it
+    RETURN ENCODE(uuid_bytes, 'hex')::UUID;
+END;
+$$;
+
+-- #############################################################################
+-- # Automatic Timestamp Trigger Function
+-- #############################################################################
+CREATE OR REPLACE FUNCTION xcentro.trigger_set_timestamp()
+RETURNS TRIGGER AS $$
+BEGIN
+  NEW.updated_at = NOW();
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+COMMENT ON FUNCTION xcentro.trigger_set_timestamp() IS 'This trigger function automatically sets the updated_at column to the current timestamp whenever a row is updated.';
+
+
+-- #############################################################################
+-- # User Entity
+-- #############################################################################
+
+-- Table for user accounts, authentication, and KYC data
+CREATE TABLE xcentro.user_table (
+    id UUID PRIMARY KEY DEFAULT xcentro.generate_uuid_v7(),
+    email VARCHAR(254) UNIQUE NOT NULL,
+    pwd_hash TEXT NOT NULL,
+    mobile VARCHAR(20),
+    pan VARCHAR(10),
+    kyc_status xcentro.kyc_status_enum NOT NULL DEFAULT 'NOT_STARTED',
+    kyc_data JSONB,
+    email_verified BOOLEAN DEFAULT FALSE,
+    mobile_verified BOOLEAN DEFAULT FALSE,
+    updated_at TIMESTAMPTZ
+);
+COMMENT ON TABLE xcentro.user_table IS 'User accounts, authentication, and KYC data.';
+
+-- Table for user verification codes
+CREATE TABLE xcentro.user_verification_codes (
+    id UUID PRIMARY KEY DEFAULT xcentro.generate_uuid_v7(),
+    user_id UUID REFERENCES xcentro.user_table(id) ON DELETE CASCADE,
+    code TEXT,
+    code_type xcentro.verification_type,
+    expires_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    used BOOLEAN DEFAULT FALSE,
+    retry_attempts INTEGER DEFAULT 0
+);
+CREATE INDEX idx_user_verification_codes_user_id ON xcentro.user_verification_codes(user_id);
+
+
+-- #############################################################################
+-- # Business Entity
+-- #############################################################################
+
+-- Table for Know Your Business (KYB) identity and corporate data
+CREATE TABLE xcentro.kyb_data (
+    income_tax_id TEXT PRIMARY KEY,
+    income_tax_id_data JSONB,
+    company_id TEXT,
+    company_id_data JSONB,
+    business_deed TEXT
+);
+COMMENT ON TABLE xcentro.kyb_data IS 'Stores Know Your Business (KYB) identity and corporate data.';
+
+-- Table for business entities and their KYB information
+CREATE TABLE xcentro.business (
+    bid UUID PRIMARY KEY DEFAULT xcentro.generate_uuid_v7(),
+    name TEXT,
+    gstin VARCHAR(15) UNIQUE,
+    gst_data JSONB,
+    income_tax_id TEXT REFERENCES xcentro.kyb_data(income_tax_id),
+    kyb_status xcentro.kyc_status_enum DEFAULT 'NOT_STARTED',
+    business_type xcentro.business_type_enum,
+    country_code VARCHAR(3),
+    currency_code VARCHAR(3),
+    updated_at TIMESTAMPTZ
+);
+COMMENT ON TABLE xcentro.business IS 'Business entities and their KYB information.';
+-- Correct column for income tax reference index
+CREATE INDEX idx_business_income_tax_id ON xcentro.business(income_tax_id);
+CREATE TRIGGER set_timestamp
+BEFORE UPDATE ON xcentro.business
+FOR EACH ROW
+EXECUTE PROCEDURE xcentro.trigger_set_timestamp();
+
+-- Table to map users to businesses with specific roles
+CREATE TABLE xcentro.business_user_relation (
+    user_id UUID NOT NULL REFERENCES xcentro.user_table(id) ON DELETE CASCADE,
+    bid UUID NOT NULL REFERENCES xcentro.business(bid) ON DELETE CASCADE,
+    role xcentro.user_role_enum,
+    role_claim xcentro.user_role_enum,
+    added_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ,
+    PRIMARY KEY (user_id, bid)
+);
+COMMENT ON TABLE xcentro.business_user_relation IS 'Maps users to businesses with specific roles.';
+CREATE INDEX idx_business_user_relation_bid ON xcentro.business_user_relation(bid);
+CREATE TRIGGER set_timestamp
+BEFORE UPDATE ON xcentro.business_user_relation
+FOR EACH ROW
+EXECUTE PROCEDURE xcentro.trigger_set_timestamp();
+
+
+-- ##############################################################################
+-- # Subscription Entity
+-- #############################################################################
+
+CREATE TABLE xcentro.subscription_status (
+    bid UUID PRIMARY KEY NOT NULL REFERENCES xcentro.business(bid) ON DELETE CASCADE,
+    subscription_type xcentro.subscription_type_enum NOT NULL,
+    start_date DATE,
+    expiry_date DATE
+);
+COMMENT ON TABLE xcentro.subscription_status IS 'Tracks the subscription status of businesses.';
+
+-- Trigger for user_table updates (missing earlier)
+CREATE TRIGGER set_timestamp
+BEFORE UPDATE ON xcentro.user_table
+FOR EACH ROW
+EXECUTE PROCEDURE xcentro.trigger_set_timestamp();

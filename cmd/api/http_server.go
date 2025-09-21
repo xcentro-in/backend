@@ -5,19 +5,27 @@ import (
 
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
+	redis "xcentro.in/internal/adapters/cache/redis/client"
 	"xcentro.in/internal/adapters/database/postgres/client"
+	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/logger"
 )
 
 type externalClients struct {
 	db        client.DB
 	txManager client.TxManager
+	rcache    *redis.RedisClient
+}
+
+type serverMetaData struct {
+	clients externalClients
+	config  config.Config
 }
 
 type xcentroServer struct {
-	echo    *echo.Echo
-	log     *logger.Logger
-	clients externalClients
+	echo *echo.Echo
+	log  *logger.Logger
+	meta serverMetaData
 }
 
 func NewXcentroServer() *xcentroServer {
@@ -26,6 +34,7 @@ func NewXcentroServer() *xcentroServer {
 		log:  logger.GetDefault(),
 	}
 
+	server.loadConfig()
 	server.registerGlobalMiddleware()
 	server.registerClients()
 	server.registerRouters()
@@ -39,17 +48,35 @@ func (s *xcentroServer) registerGlobalMiddleware() {
 	s.echo.Use(middleware.Recover())
 }
 
+func (s *xcentroServer) loadConfig() {
+	cfg, err := config.Load("")
+	if err != nil {
+		s.log.Errorf("Failed to load config: %v", err)
+		panic(err)
+	}
+	s.log.Info("Config loaded successfully")
+	s.meta.config = cfg
+}
+
 func (s *xcentroServer) registerClients() {
-	// Database client
-	dbConfig := client.DefaultDBConfig()
-	pgxclient, err := client.NewPgxDB(context.Background(), dbConfig)
+	// Postgres client
+	pgxclient, err := client.NewPgxDB(context.Background(), s.meta.config.Database.ToDBConfig())
 	if err != nil {
 		s.log.Errorf("Failed to create database client: %v", err)
 		panic(err)
 	}
 	s.log.Info("Database client created successfully")
-	s.clients.db = pgxclient
-	s.clients.txManager = client.NewTxManager(pgxclient)
+	s.meta.clients.db = pgxclient
+	s.meta.clients.txManager = client.NewTxManager(pgxclient)
+
+	// Redis client
+	redisClient, err := redis.NewRedisClient(s.meta.config.Rcache)
+	if err != nil {
+		s.log.Errorf("Failed to create Redis client: %v", err)
+		panic(err)
+	}
+	s.log.Info("Redis client created successfully")
+	s.meta.clients.rcache = redisClient
 }
 
 func (s *xcentroServer) registerRouters() {
