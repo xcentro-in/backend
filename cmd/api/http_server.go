@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
@@ -83,8 +84,10 @@ func (s *xcentroServer) registerRouters() {
 	registerRouters(s)
 }
 
-func (s *xcentroServer) start(address string) {
-	err := s.echo.Start(address)
+func (s *xcentroServer) start() {
+	addr := fmt.Sprintf("%s:%d", s.meta.config.Server.Host, s.meta.config.Server.Port)
+	s.log.Infof("Starting server at %s", addr)
+	err := s.echo.Start(addr)
 	if err != nil {
 		s.log.Errorf("Failed to start server error %v", err)
 	}
@@ -102,5 +105,5 @@ func (s *xcentroServer) start(address string) {
 
 func main() {
 	server := NewXcentroServer()
-	server.start(":8888")
+	server.start()
 }

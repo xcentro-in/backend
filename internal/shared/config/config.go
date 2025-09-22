@@ -13,10 +13,11 @@ import (
 // Config holds the application configuration.
 // Sensitive fields (like Password) are excluded from JSON marshalling.
 type Config struct {
-	Database DatabaseConfig  `json:"database"`
-	Server   ServerConfig    `json:"server"`
-	Rcache   RedisConfig     `json:"rcache"`
-	JWT      JWTSecretConfig `json:"jwt"`
+	Database          DatabaseConfig          `json:"database"`
+	MigrationDatabase MigrationDatabaseConfig `json:"migration_database"`
+	Server            ServerConfig            `json:"server"`
+	Rcache            RedisConfig             `json:"rcache"`
+	JWT               JWTSecretConfig         `json:"jwt"`
 }
 
 // JWTSecretConfig holds JWT secret configuration.
@@ -28,6 +29,7 @@ type JWTSecretConfig struct {
 type RedisConfig struct {
 	Host           string `json:"host" env:"REDIS_HOST" env-default:"localhost"`
 	Port           int    `json:"port" env:"REDIS_PORT" env-default:"6379"`
+	Username       string `json:"username" env:"REDIS_USERNAME" env-default:""`
 	Password       string `json:"-" env:"REDIS_PASSWORD"` // no weak default
 	DB             int    `json:"db" env:"REDIS_DB" env-default:"0"`
 	MaxConnections int    `json:"max_connections" env:"REDIS_MAX_CONNECTIONS" env-default:"10"`
@@ -46,6 +48,17 @@ type DatabaseConfig struct {
 	MaxConnLifetime time.Duration `json:"max_conn_lifetime" env:"DB_MAX_CONN_LIFETIME" env-default:"1h"`
 	MaxConnIdleTime time.Duration `json:"max_conn_idle_time" env:"DB_MAX_CONN_IDLE_TIME" env-default:"30m"`
 	SSLMode         string        `json:"ssl_mode" env:"DB_SSL_MODE" env-default:"disable"`
+}
+
+// MigrationDatabaseConfig holds database configuration specifically for migrations.
+type MigrationDatabaseConfig struct {
+	Host     string `json:"host" env:"DB_HOST" env-default:"localhost"`
+	Port     int    `json:"port" env:"DB_PORT" env-default:"5432"`
+	Database string `json:"database" env:"DB_NAME" env-default:"xcentro"`
+	Username string `json:"username" env:"DB_MIGRATION_USER" env-default:"postgres"`
+	Password string `json:"-" env:"DB_MIGRATION_PASSWORD" env-required:"true"` // no weak default
+	Schema   string `json:"schema" env:"DB_SCHEMA" env-default:"xcentro"`
+	SSLMode  string `json:"ssl_mode" env:"DB_SSL_MODE" env-default:"disable"`
 }
 
 // ServerConfig holds server configuration.
@@ -72,6 +85,12 @@ func Load(path string) (Config, error) {
 			return cfg, fmt.Errorf("read env: %w", err)
 		}
 	} else {
+		// Try to load from .env file first if it exists
+		if err := cleanenv.ReadConfig(".env", &cfg); err != nil {
+			// If .env doesn't exist or fails to load, continue with env vars only
+			log.Printf("No .env file found or failed to load, using environment variables only: %v", err)
+		}
+		// Load/override from environment variables
 		if err := cleanenv.ReadEnv(&cfg); err != nil {
 			return cfg, fmt.Errorf("read env: %w", err)
 		}
@@ -107,8 +126,26 @@ func (dc DatabaseConfig) ToDBConfig() client.DBConfig {
 	}
 }
 
+// ToDBConfig converts MigrationDatabaseConfig to client.DBConfig.
+func (mdc MigrationDatabaseConfig) ToDBConfig() client.DBConfig {
+	return client.DBConfig{
+		Host:            mdc.Host,
+		Port:            mdc.Port,
+		Database:        mdc.Database,
+		Username:        mdc.Username,
+		Password:        mdc.Password,
+		Schema:          mdc.Schema,
+		MaxConnections:  1, // migrations typically need only one connection
+		MinConnections:  1,
+		MaxConnLifetime: time.Hour,
+		MaxConnIdleTime: 30 * time.Minute,
+		SSLMode:         mdc.SSLMode,
+	}
+}
+
 // Safe returns a redacted copy for logging/metrics.
 func (c Config) Safe() Config {
 	c.Database.Password = "***REDACTED***"
+	c.MigrationDatabase.Password = "***REDACTED***"
 	return c
 }

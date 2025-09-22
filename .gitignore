@@ -1,0 +1,157 @@
+# =============================================================================
+# Go Build Artifacts
+# =============================================================================
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool, specifically when used with LiteIDE
+*.out
+
+# Dependency directories (remove the comment below to include it)
+# vendor/
+
+# Go workspace file
+go.work
+
+# =============================================================================
+# Environment Files - NEVER COMMIT THESE
+# =============================================================================
+# Environment files at any depth in the repository
+**/.env
+**/.env.*
+!**/.env.example
+!**/.env.template
+!**/.env.sample
+
+# Common environment file patterns
+.envrc
+.env.local
+.env.development
+.env.test
+.env.production
+.env.staging
+
+# =============================================================================
+# IDE and Editor Files
+# =============================================================================
+# Visual Studio Code
+.vscode/
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# GoLand/IntelliJ IDEA
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# Vim
+*.swp
+*.swo
+*~
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+auto-save-list
+tramp
+.\#*
+
+# =============================================================================
+# Operating System Files
+# =============================================================================
+# macOS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Icon?
+Thumbs.db
+
+# Linux
+*~
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# =============================================================================
+# Logs and Temporary Files
+# =============================================================================
+*.log
+*.tmp
+*.temp
+/tmp/
+/temp/
+
+# =============================================================================
+# Database and Cache Files
+# =============================================================================
+*.db
+*.sqlite
+*.sqlite3
+
+# =============================================================================
+# Docker and Container Files
+# =============================================================================
+# Ignore docker-compose override files
+docker-compose.override.yml
+docker-compose.override.yaml
+
+# =============================================================================
+# Security and Secrets
+# =============================================================================
+# Private keys and certificates
+*.pem
+*.key
+*.crt
+*.cert
+*.p12
+*.pfx
+
+# JWT secrets and other sensitive files
+secrets/
+*.secret
+
+# =============================================================================
+# Documentation and Build Artifacts
+# =============================================================================
+# Generated documentation
+/docs/build/
+
+# Coverage reports
+coverage.txt
+coverage.out
+coverage.html
+
+# =============================================================================
+# Project Specific
+# =============================================================================
+# Migration backup files
+*.backup
+
+# Configuration backups
+config.backup.*
+
+# Local development files
+local/
+.local/
+
+# Vendor directory (if using go modules with vendor)
+# vendor/

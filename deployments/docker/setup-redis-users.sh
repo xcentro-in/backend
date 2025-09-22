@@ -31,7 +31,7 @@ check_redis_running() {
 create_redis_users() {
     print_info "Setting up Redis users..."
     
-    # Create superuser (rename default user)
+    # Create superuser (dedicated admin user separate from disabled 'default')
     print_info "Creating Redis superuser..."
     docker exec xcentro-redis redis-cli --no-auth-warning -a "$REDIS_SUPERUSER_PASSWORD" \
         ACL SETUSER "$REDIS_SUPERUSER" on ">"$REDIS_SUPERUSER_PASSWORD"" +@all ~* || {
@@ -120,7 +120,10 @@ show_user_info() {
     echo "  • Connect as app user: ./connect-redis.sh app"
     echo
     print_info "Current Redis ACL users:"
-    docker exec xcentro-redis redis-cli --no-auth-warning -a "$REDIS_SUPERUSER_PASSWORD" ACL LIST
+    # Need to specify the superuser explicitly because the 'default' user is disabled.
+    if ! docker exec xcentro-redis redis-cli --no-auth-warning --user "$REDIS_SUPERUSER" -a "$REDIS_SUPERUSER_PASSWORD" ACL LIST; then
+        print_warning "Could not list ACL users (authentication failed). Verify superuser credentials."
+    fi
 }
 
 main() {

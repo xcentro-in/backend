@@ -18,7 +18,7 @@ type MigrationService struct {
 }
 
 // NewMigrationService creates a new migration service
-func NewMigrationService(migrationsPath string, dbConfig config.DatabaseConfig) *MigrationService {
+func NewMigrationService(migrationsPath string, dbConfig config.MigrationDatabaseConfig) *MigrationService {
 	databaseURL := fmt.Sprintf("pgx5://%s:%s@%s:%d/%s?sslmode=%s",
 		dbConfig.Username,
 		dbConfig.Password,

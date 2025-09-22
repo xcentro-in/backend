@@ -44,17 +44,6 @@ BEGIN
     END IF;
 END\$\$;
 
--- Create admin user (for migrations - can create/drop tables, indexes, etc.)
-DO \$\$
-BEGIN
-    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '${DB_ADMIN_USER}') THEN
-        CREATE ROLE ${DB_ADMIN_USER} WITH LOGIN PASSWORD '${DB_ADMIN_PASSWORD}' INHERIT;
-        RAISE NOTICE 'Created role ${DB_ADMIN_USER}';
-    ELSE
-        RAISE NOTICE 'Role ${DB_ADMIN_USER} already exists';
-    END IF;
-END\$\$;
-
 -- Create read-write user (for application - standard CRUD operations)
 DO \$\$
 BEGIN
@@ -72,40 +61,31 @@ ALTER DATABASE ${POSTGRES_DB} OWNER TO ${DB_OWNER_USER};
 -- Grant permissions to owner user (full access)
 GRANT ALL PRIVILEGES ON DATABASE ${POSTGRES_DB} TO ${DB_OWNER_USER};
 
--- Grant permissions to admin user (for migrations)
-GRANT CONNECT, TEMP, CREATE ON DATABASE ${POSTGRES_DB} TO ${DB_ADMIN_USER};
-GRANT USAGE, CREATE ON SCHEMA public TO ${DB_ADMIN_USER};
-GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO ${DB_ADMIN_USER};
-GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO ${DB_ADMIN_USER};
-GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO ${DB_ADMIN_USER};
+-- Create xcentro schema for application
+CREATE SCHEMA IF NOT EXISTS xcentro;
+ALTER SCHEMA xcentro OWNER TO ${DB_OWNER_USER};
 
 -- Grant permissions to read-write user (for application)
 GRANT CONNECT ON DATABASE ${POSTGRES_DB} TO ${DB_RW_USER};
-GRANT USAGE ON SCHEMA public TO ${DB_RW_USER};
-GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${DB_RW_USER};
-GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO ${DB_RW_USER};
-GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO ${DB_RW_USER};
+GRANT USAGE ON SCHEMA xcentro TO ${DB_RW_USER};
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA xcentro TO ${DB_RW_USER};
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA xcentro TO ${DB_RW_USER};
 
--- Set up default privileges for future objects created by owner
-ALTER DEFAULT PRIVILEGES FOR ROLE ${DB_OWNER_USER} IN SCHEMA public
-    GRANT ALL PRIVILEGES ON TABLES TO ${DB_ADMIN_USER};
-ALTER DEFAULT PRIVILEGES FOR ROLE ${DB_OWNER_USER} IN SCHEMA public
-    GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO ${DB_RW_USER};
-ALTER DEFAULT PRIVILEGES FOR ROLE ${DB_OWNER_USER} IN SCHEMA public
-    GRANT USAGE, SELECT ON SEQUENCES TO ${DB_ADMIN_USER};
-ALTER DEFAULT PRIVILEGES FOR ROLE ${DB_OWNER_USER} IN SCHEMA public
-    GRANT USAGE, SELECT ON SEQUENCES TO ${DB_RW_USER};
+-- Example: How owner creates RW users for backends (replace with actual values)
+-- CREATE ROLE <backend_name>_rw WITH LOGIN PASSWORD '<secure_password>';
+-- GRANT CONNECT ON DATABASE ${POSTGRES_DB} TO <backend_name>_rw;
+-- GRANT USAGE ON SCHEMA xcentro TO <backend_name>_rw;
+-- GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA xcentro TO <backend_name>_rw;
+-- GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA xcentro TO <backend_name>_rw;
 
--- Set up default privileges for future objects created by admin
-ALTER DEFAULT PRIVILEGES FOR ROLE ${DB_ADMIN_USER} IN SCHEMA public
-    GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO ${DB_RW_USER};
-ALTER DEFAULT PRIVILEGES FOR ROLE ${DB_ADMIN_USER} IN SCHEMA public
-    GRANT USAGE, SELECT ON SEQUENCES TO ${DB_RW_USER};
+-- Set up default privileges for admin (DDL only - no data access)
+-- Admin gets structure management but no data access on future objects
 
 -- User setup completed
 DO \$\$
 BEGIN
     RAISE NOTICE 'User setup completed successfully';
+    RAISE NOTICE 'Owner handles all DDL operations. RW user handles application data access.';
 END\$\$;
 SQL
 )
@@ -119,14 +99,21 @@ show_user_info() {
     print_info "PostgreSQL User Setup Complete!"
     echo
     print_info "Created users:"
-    echo -e "${GREEN}• Owner user (${DB_OWNER_USER}):${NC} Full database ownership and permissions"
-    echo -e "${GREEN}• Admin user (${DB_ADMIN_USER}):${NC} Can manage tables, indexes, schemas for migrations"
-    echo -e "${GREEN}• Read-Write user (${DB_RW_USER}):${NC} Standard CRUD operations for application"
+    echo -e "${GREEN}• Owner user (${DB_OWNER_USER}):${NC} Database superuser - handles DDL + creates additional RW users"
+    echo -e "${GREEN}• Read-Write user (${DB_RW_USER}):${NC} Standard CRUD operations on xcentro schema"
+    echo
+    print_info "Created schemas:"
+    echo -e "${GREEN}• xcentro:${NC} Main application schema (owned by ${DB_OWNER_USER})"
     echo
     print_info "Connection examples:"
     echo "  • Connect as owner: ./connect-postgres.sh owner"
-    echo "  • Connect as admin: ./connect-postgres.sh admin"
     echo "  • Connect as rw: ./connect-postgres.sh rw"
+    echo
+    print_info "To create additional RW users for other backends (as owner):"
+    echo "  CREATE ROLE <backend_name>_rw WITH LOGIN PASSWORD '<secure_password>';"
+    echo "  GRANT CONNECT ON DATABASE ${POSTGRES_DB} TO <backend_name>_rw;"
+    echo "  GRANT USAGE ON SCHEMA xcentro TO <backend_name>_rw;"
+    echo "  GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA xcentro TO <backend_name>_rw;"
     echo
     print_info "List current users:"
     docker exec xcentro-postgres psql -U "$POSTGRES_SUPERUSER" -d "$POSTGRES_DB" -c "\\du"
@@ -151,9 +138,8 @@ case "${1:-}" in
         echo "Usage: $0 [help]"
         echo
         echo "This script creates the required PostgreSQL users for the XCentro application:"
-        echo "  • Owner user: Full database permissions"
-        echo "  • Admin user: Migration management (create/drop tables, indexes)"
-        echo "  • Read-Write user: Standard CRUD operations"
+        echo "  • Owner user: Database superuser (handles DDL operations, creates additional RW users)"
+        echo "  • Read-Write user: Standard CRUD operations on xcentro schema"
         echo
         echo "Prerequisites:"
         echo "  • PostgreSQL container must be running (./start.sh)"

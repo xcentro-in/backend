@@ -31,7 +31,7 @@ func main() {
 	log := logger.GetDefault()
 
 	// Initialize migration service
-	migrationService := migrations.NewMigrationService(*path, cfg.Database)
+	migrationService := migrations.NewMigrationService(*path, cfg.MigrationDatabase)
 
 	ctx := context.Background()
 

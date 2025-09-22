@@ -1,0 +1,35 @@
+name: Trigger Power Automate on main branch
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  trigger-power-automate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch commit details
+        id: commit_info
+        run: |
+          echo "COMMIT_AUTHOR=$(git show -s --format='%an <%ae>' ${{ github.sha }})" >> $GITHUB_ENV
+          echo "COMMIT_DATE=$(git show -s --format='%cI' ${{ github.sha }})" >> $GITHUB_ENV
+          echo "COMMIT_MESSAGE=$(git show -s --format='%s' ${{ github.sha }})" >> $GITHUB_ENV
+          echo "COMMIT_URL=https://github.com/${{ github.repository }}/commit/${{ github.sha }}" >> $GITHUB_ENV
+
+      - name: Trigger Power Automate webhook
+        env:
+          POWERAUTOMATE_URL: ${{ secrets.POWERAUTOMATE_URL }}
+          COMMIT_AUTHOR: ${{ env.COMMIT_AUTHOR }}
+          COMMIT_DATE: ${{ env.COMMIT_DATE }}
+          COMMIT_MESSAGE: ${{ env.COMMIT_MESSAGE }}
+          COMMIT_URL: ${{ env.COMMIT_URL }}
+        run: |
+          curl -X POST "${POWERAUTOMATE_URL}" \
+            -H "Content-Type: application/json" \
+            -d '{
+                  "author": "'"${COMMIT_AUTHOR}"'",
+                  "commit_date": "'"${COMMIT_DATE}"'",
+                  "commit_url": "'"${COMMIT_URL}"'",
+                  "commit_message": "'"${COMMIT_MESSAGE}"'"
+                }'
