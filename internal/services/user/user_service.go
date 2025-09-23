@@ -47,7 +47,13 @@ func (s *UserService) CreateUser(ctx context.Context, authPayload auth.AuthPaylo
 		// Check if user already exists
 		existingUser, err := txUserRepo.GetUserByEmail(ctx, authPayload.Email)
 		if err == nil && existingUser != nil {
-			return fmt.Errorf("user with email %s already exists", authPayload.Email)
+			s.logger.Errorf("user with email %s already exists", authPayload.Email)
+			return nil
+		}
+
+		if err != nil {
+			s.logger.Errorf("failed to check existing user: %v", err)
+			return err
 		}
 
 		// Create new user

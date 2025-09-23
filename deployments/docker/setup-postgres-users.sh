@@ -65,11 +65,31 @@ GRANT ALL PRIVILEGES ON DATABASE ${POSTGRES_DB} TO ${DB_OWNER_USER};
 CREATE SCHEMA IF NOT EXISTS xcentro;
 ALTER SCHEMA xcentro OWNER TO ${DB_OWNER_USER};
 
+-- Create pgcrypto extension in the xcentro schema
+CREATE EXTENSION IF NOT EXISTS pgcrypto SCHEMA xcentro;
+
 -- Grant permissions to read-write user (for application)
 GRANT CONNECT ON DATABASE ${POSTGRES_DB} TO ${DB_RW_USER};
 GRANT USAGE ON SCHEMA xcentro TO ${DB_RW_USER};
+
+-- Grant permissions on existing tables and sequences (if any)
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA xcentro TO ${DB_RW_USER};
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA xcentro TO ${DB_RW_USER};
+
+-- Grant EXECUTE permissions on existing functions (if any)
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA xcentro TO ${DB_RW_USER};
+
+-- Grant EXECUTE permission on pgcrypto extension functions (required for UUID generation)
+-- Since we created pgcrypto in xcentro schema, the functions are already accessible via the schema grant above
+-- But we can be explicit about the commonly used functions:
+-- GRANT EXECUTE ON FUNCTION xcentro.gen_random_uuid() TO ${DB_RW_USER};
+-- GRANT EXECUTE ON FUNCTION xcentro.gen_random_bytes(integer) TO ${DB_RW_USER};
+
+-- Set default privileges for future objects created by the owner
+-- This ensures that tables/sequences/functions created by migrations will have correct permissions
+ALTER DEFAULT PRIVILEGES FOR ROLE ${DB_OWNER_USER} IN SCHEMA xcentro GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO ${DB_RW_USER};
+ALTER DEFAULT PRIVILEGES FOR ROLE ${DB_OWNER_USER} IN SCHEMA xcentro GRANT USAGE, SELECT ON SEQUENCES TO ${DB_RW_USER};
+ALTER DEFAULT PRIVILEGES FOR ROLE ${DB_OWNER_USER} IN SCHEMA xcentro GRANT EXECUTE ON FUNCTIONS TO ${DB_RW_USER};
 
 -- Example: How owner creates RW users for backends (replace with actual values)
 -- CREATE ROLE <backend_name>_rw WITH LOGIN PASSWORD '<secure_password>';
@@ -114,6 +134,14 @@ show_user_info() {
     echo "  GRANT CONNECT ON DATABASE ${POSTGRES_DB} TO <backend_name>_rw;"
     echo "  GRANT USAGE ON SCHEMA xcentro TO <backend_name>_rw;"
     echo "  GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA xcentro TO <backend_name>_rw;"
+    echo "  GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA xcentro TO <backend_name>_rw;"
+    echo "  ALTER DEFAULT PRIVILEGES FOR ROLE ${DB_OWNER_USER} IN SCHEMA xcentro GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO <backend_name>_rw;"
+    echo "  ALTER DEFAULT PRIVILEGES FOR ROLE ${DB_OWNER_USER} IN SCHEMA xcentro GRANT EXECUTE ON FUNCTIONS TO <backend_name>_rw;"
+    echo
+    print_info "NOTE: Default privileges are set so future tables/functions created by migrations will have correct permissions."
+    print_info "If you need to grant permissions on existing objects after migrations, run:"
+    echo "  GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA xcentro TO ${DB_RW_USER};"
+    echo "  GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA xcentro TO ${DB_RW_USER};"
     echo
     print_info "List current users:"
     docker exec xcentro-postgres psql -U "$POSTGRES_SUPERUSER" -d "$POSTGRES_DB" -c "\\du"

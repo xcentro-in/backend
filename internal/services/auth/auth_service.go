@@ -6,6 +6,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	echojwt "github.com/labstack/echo-jwt/v4"
 	"github.com/labstack/echo/v4"
+	"golang.org/x/crypto/bcrypt"
 	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/logger"
 )
@@ -26,7 +27,7 @@ func (s *AuthService) CreateAuthJWT(userid string) (string, error) {
 		ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)),
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claim)
-	stoken, err := token.SignedString(s.config.SecretKey)
+	stoken, err := token.SignedString([]byte(s.config.SecretKey))
 
 	if err != nil {
 		logger.Error("token signing failed: %v", err)
@@ -51,4 +52,18 @@ func (s *AuthService) GetEchoAuthMiddleware() echo.MiddlewareFunc {
 			return &jwt.RegisteredClaims{}
 		},
 	})
+}
+
+func (s *AuthService) HashPassword(password string) (string, error) {
+	//TODO: need to add salt from .env
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return "", err
+	}
+	return string(hashedPassword), nil
+}
+
+func (s *AuthService) ComparePassword(hashedPassword, password string) error {
+	//TODO: need to add salt from .env
+	return bcrypt.CompareHashAndPassword([]byte(hashedPassword), []byte(password))
 }

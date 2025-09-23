@@ -10,9 +10,6 @@ CREATE TYPE xcentro.user_role_enum AS ENUM ('OWNER', 'ADMIN', 'FINANCE', 'SUPPOR
 CREATE TYPE xcentro.business_type_enum AS ENUM ('SOLE_PROPRIETORSHIP', 'PARTNERSHIP', 'LIMITED_LIABILITY_PARTNERSHIP', 'PRIVATE_LIMITED_COMPANY', 'ONE_PERSON_COMPANY', 'SECTION_8_NON_PROFIT', 'TRUST', 'NGO', 'SOCIETY', 'COOPERATIVE_SOCIETY', 'OTHER');
 CREATE TYPE xcentro.subscription_type_enum AS ENUM ('FREE_PLAN', 'BASIC_PLAN', 'PREMIUM_PLAN', 'ENTERPRISE_PLAN');
 
--- Required for gen_random_bytes (pgcrypto) - idempotent creation
-CREATE EXTENSION IF NOT EXISTS pgcrypto;
-
 
 -- UUIDv7 Generator - Fast, Secure, RFC 9562 Compliant
 -- Note: place the function inside the xcentro schema for namespacing
@@ -49,7 +46,7 @@ BEGIN
     v_microsec := TRUNC((v_time * c_micro - unix_ts_ms * c_milli) * c_scale);
     
     -- 4. Generate 16 cryptographically secure random bytes as base
-    uuid_bytes := gen_random_bytes(16);
+    uuid_bytes := xcentro.gen_random_bytes(16);
     
     -- 5. Overwrite the first 6 bytes (48 bits) with the big-endian timestamp
     uuid_bytes := OVERLAY(uuid_bytes PLACING SUBSTRING(INT8SEND(unix_ts_ms) FROM 3 FOR 6) FROM 1);

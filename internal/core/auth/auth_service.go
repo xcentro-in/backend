@@ -9,4 +9,6 @@ type AuthService interface {
 	CreateAuthJWT(userid string) (string, error)
 	ExtractAndValidateClaims(token *jwt.Token) (*jwt.RegisteredClaims, error)
 	GetEchoAuthMiddleware() echo.MiddlewareFunc
+	HashPassword(password string) (string, error)
+	ComparePassword(hashedPassword, password string) error
 }

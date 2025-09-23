@@ -2,9 +2,11 @@ package user
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"xcentro.in/internal/adapters/database/postgres/client"
 	"xcentro.in/internal/core/auth"
@@ -33,46 +35,28 @@ func (r *PgUserRepository) WithTx(tx client.Tx) user.UserRepository {
 
 // CreateUser creates a new user from auth payload
 func (r *PgUserRepository) CreateUser(ctx context.Context, authPayload auth.AuthPayload) (*user.User, error) {
-	userID := uuid.New().String()
-
 	query := `
-		INSERT INTO users (id, email, mobile, pan, kyc_status, kyc_data, email_verified, mobile_verified, role)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-		RETURNING id, email, mobile, pan, kyc_status, kyc_data, email_verified, mobile_verified, role
+		INSERT INTO user_table (email, pwd_hash, mobile, pan, kyc_data)
+		VALUES ($1, $2, $3, $4, $5)
+		RETURNING id, email;
 	`
 
 	var u user.User
-	var kycStatusInt int
-	var roleInt int
 
 	err := r.querier.QueryRow(ctx, query,
-		userID,
 		authPayload.Email,
-		"", // mobile - empty initially
-		"", // pan - empty initially
-		int(shared.KYCNotStarted),
-		"",                // kyc_data - empty initially
-		false,             // email_verified
-		false,             // mobile_verified
-		int(shared.Owner), // default role
+		authPayload.Password,
+		"",   // mobile - empty initially
+		"",   // pan - empty initially
+		"{}", // kyc_data - empty initially
 	).Scan(
 		&u.Id,
 		&u.Email,
-		&u.Mobile,
-		&u.PAN,
-		&kycStatusInt,
-		&u.KycData,
-		&u.EmailVerified,
-		&u.MobileVerified,
-		&roleInt,
 	)
 
 	if err != nil {
 		return nil, fmt.Errorf("failed to create user: %w", err)
 	}
-
-	u.KycStatus = shared.KYCStatus(kycStatusInt)
-	u.Role = shared.UserRole(roleInt)
 
 	return &u, nil
 }
@@ -81,7 +65,7 @@ func (r *PgUserRepository) CreateUser(ctx context.Context, authPayload auth.Auth
 func (r *PgUserRepository) GetUserByID(ctx context.Context, userID string) (*user.User, error) {
 	query := `
 		SELECT id, email, mobile, pan, kyc_status, kyc_data, email_verified, mobile_verified, role
-		FROM users
+		FROM user_table
 		WHERE id = $1
 	`
 
@@ -114,33 +98,24 @@ func (r *PgUserRepository) GetUserByID(ctx context.Context, userID string) (*use
 // GetUserByEmail retrieves a user by email
 func (r *PgUserRepository) GetUserByEmail(ctx context.Context, email string) (*user.User, error) {
 	query := `
-		SELECT id, email, mobile, pan, kyc_status, kyc_data, email_verified, mobile_verified, role
-		FROM users
+		SELECT id, pwd_hash
+		FROM user_table
 		WHERE email = $1
 	`
 
 	var u user.User
-	var kycStatusInt int
-	var roleInt int
 
 	err := r.querier.QueryRow(ctx, query, email).Scan(
 		&u.Id,
-		&u.Email,
-		&u.Mobile,
-		&u.PAN,
-		&kycStatusInt,
-		&u.KycData,
-		&u.EmailVerified,
-		&u.MobileVerified,
-		&roleInt,
+		&u.PwdHash,
 	)
 
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("failed to get user by email: %w", err)
 	}
-
-	u.KycStatus = shared.KYCStatus(kycStatusInt)
-	u.Role = shared.UserRole(roleInt)
 
 	return &u, nil
 }

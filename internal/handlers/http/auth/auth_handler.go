@@ -29,8 +29,7 @@ func RegisterAuthRoutes(e *echo.Group, userService user.UserService, authService
 	/**
 	  can add middleware here for auth group and its subgroups
 	**/
-
-	authGroup.GET("/login", authHandler.HandleLogin)
+	authGroup.POST("/login", authHandler.HandleLogin)
 	authGroup.POST("/signup", authHandler.HandleSignup)
 
 	// Sub group is prefixed with /auth
@@ -55,6 +54,13 @@ func (ah AuthHandler) HandleSignup(c echo.Context) error {
 		logger.Error("Email or password missing")
 		return c.JSON(400, map[string]any{"message": "Email or password missing", "data": nil})
 	}
+
+	hashedPassword, err := ah.authService.HashPassword(signupReq.Password)
+	if err != nil {
+		logger.Errorf("Failed to hash password %v", err)
+		return c.JSON(500, map[string]any{"message": "Failed to process password", "data": nil})
+	}
+	signupReq.Password = hashedPassword
 
 	user, err := ah.userService.CreateUser(c.Request().Context(), signupReq)
 	if err != nil {
@@ -91,7 +97,7 @@ func (ah AuthHandler) HandleLogin(c echo.Context) error {
 		return c.JSON(500, map[string]any{"message": "Failed to get user by email", "data": nil})
 	}
 
-	if user == nil || user.PAN != loginReq.Password {
+	if user == nil || ah.authService.ComparePassword(user.PwdHash, loginReq.Password) != nil {
 		logger.Error("Invalid email or password")
 		return c.JSON(401, map[string]any{"message": "Invalid email or password", "data": nil})
 	}
