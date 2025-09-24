@@ -3,6 +3,7 @@ package auth
 import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/labstack/echo/v4"
+	redis "xcentro.in/internal/adapters/cache/redis/client"
 )
 
 type AuthService interface {
@@ -11,4 +12,5 @@ type AuthService interface {
 	GetEchoAuthMiddleware() echo.MiddlewareFunc
 	HashPassword(password string) (string, error)
 	ComparePassword(hashedPassword, password string) error
+	GetRedisClient() *redis.RedisClient
 }

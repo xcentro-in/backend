@@ -11,7 +11,7 @@ import (
 )
 
 type RedisClient struct {
-	client *redis.Client
+	Client *redis.Client
 }
 
 func NewRedisClient(cfg config.RedisConfig) (*RedisClient, error) {
@@ -33,12 +33,12 @@ func NewRedisClient(cfg config.RedisConfig) (*RedisClient, error) {
 	logger.Info("Connected to Redis successfully")
 
 	return &RedisClient{
-		client: rdb,
+		Client: rdb,
 	}, nil
 }
 
 func (r *RedisClient) Close() error {
-	if err := r.client.Close(); err != nil {
+	if err := r.Client.Close(); err != nil {
 		return fmt.Errorf("failed to close Redis connection: %w", err)
 	}
 

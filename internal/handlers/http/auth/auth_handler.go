@@ -74,6 +74,9 @@ func (ah AuthHandler) HandleSignup(c echo.Context) error {
 		return c.JSON(500, map[string]any{"message": "Failed to create token", "data": nil})
 	}
 
+	rclient := ah.authService.GetRedisClient()
+	rclient.Client.HSet(c.Request().Context(), "xcentro:"+user.Id, "token", token, "isrevoked", "false")
+
 	return c.JSON(201, map[string]any{"message": "User created successfully", "data": map[string]string{"token": token}})
 
 }
@@ -107,6 +110,9 @@ func (ah AuthHandler) HandleLogin(c echo.Context) error {
 		logger.Errorf("Failed to create token %v", err)
 		return c.JSON(500, map[string]any{"message": "Failed to create token", "data": nil})
 	}
+
+	rclient := ah.authService.GetRedisClient()
+	rclient.Client.HSet(c.Request().Context(), "xcentro:"+user.Id, "token", token, "isrevoked", "false")
 
 	return c.JSON(200, map[string]any{"message": "Login successful", "data": map[string]string{"token": token}})
 }

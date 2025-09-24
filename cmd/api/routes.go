@@ -13,7 +13,7 @@ func registerV1AuthRoutes(meta *serverMetaData, group *echo.Group) {
 		userRepo.NewPgUserRepository(meta.clients.db),
 		meta.clients.txManager,
 	)
-	authService := authservice.NewAuthService(&meta.config.JWT)
+	authService := authservice.NewAuthService(&meta.config.JWT, meta.clients.rcache)
 	auth.RegisterAuthRoutes(group, userService, authService)
 }
 
