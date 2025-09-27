@@ -30,8 +30,8 @@ DROP TABLE IF EXISTS xcentro.user_table;
 -- # General Functions and Types
 -- #############################################################################
 DROP FUNCTION IF EXISTS xcentro.trigger_set_timestamp();
-DROP FUNCTION IF EXISTS xcentro.generate_uuid_v7();
-DROP FUNCTION IF EXISTS generate_uuid_v7(); -- legacy unqualified version
+-- DROP FUNCTION IF EXISTS xcentro.generate_uuid_v7();
+-- DROP FUNCTION IF EXISTS generate_uuid_v7(); -- legacy unqualified version
 DROP TYPE IF EXISTS xcentro.verification_type;
 DROP TYPE IF EXISTS xcentro.kyc_status_enum;
 DROP TYPE IF EXISTS xcentro.user_role_enum;

@@ -66,7 +66,7 @@ CREATE SCHEMA IF NOT EXISTS xcentro;
 ALTER SCHEMA xcentro OWNER TO ${DB_OWNER_USER};
 
 -- Create pgcrypto extension in the xcentro schema
-CREATE EXTENSION IF NOT EXISTS pgcrypto SCHEMA xcentro;
+-- CREATE EXTENSION IF NOT EXISTS pgcrypto SCHEMA xcentro;
 
 -- Grant permissions to read-write user (for application)
 GRANT CONNECT ON DATABASE ${POSTGRES_DB} TO ${DB_RW_USER};
@@ -78,12 +78,6 @@ GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA xcentro TO ${DB_RW_USER};
 
 -- Grant EXECUTE permissions on existing functions (if any)
 GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA xcentro TO ${DB_RW_USER};
-
--- Grant EXECUTE permission on pgcrypto extension functions (required for UUID generation)
--- Since we created pgcrypto in xcentro schema, the functions are already accessible via the schema grant above
--- But we can be explicit about the commonly used functions:
--- GRANT EXECUTE ON FUNCTION xcentro.gen_random_uuid() TO ${DB_RW_USER};
--- GRANT EXECUTE ON FUNCTION xcentro.gen_random_bytes(integer) TO ${DB_RW_USER};
 
 -- Set default privileges for future objects created by the owner
 -- This ensures that tables/sequences/functions created by migrations will have correct permissions

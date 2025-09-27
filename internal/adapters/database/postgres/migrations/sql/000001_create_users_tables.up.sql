@@ -13,58 +13,58 @@ CREATE TYPE xcentro.subscription_type_enum AS ENUM ('FREE_PLAN', 'BASIC_PLAN', '
 
 -- UUIDv7 Generator - Fast, Secure, RFC 9562 Compliant
 -- Note: place the function inside the xcentro schema for namespacing
-CREATE OR REPLACE FUNCTION xcentro.generate_uuid_v7(
-    p_timestamp TIMESTAMPTZ DEFAULT clock_timestamp()
-)
-RETURNS UUID
-LANGUAGE plpgsql
-VOLATILE
-AS $$
-DECLARE
-    -- Epoch time as double precision for microsecond extraction
-    v_time          DOUBLE PRECISION;
-    -- 48-bit UNIX timestamp in milliseconds
-    unix_ts_ms      BIGINT;
-    -- Microsecond component for sub-millisecond precision
-    v_microsec      BIGINT;
-    -- The full 16-byte UUID data
-    uuid_bytes      BYTEA;
+-- CREATE OR REPLACE FUNCTION xcentro.generate_uuid_v7(
+--     p_timestamp TIMESTAMPTZ DEFAULT clock_timestamp()
+-- )
+-- RETURNS UUID
+-- LANGUAGE plpgsql
+-- VOLATILE
+-- AS $$
+-- DECLARE
+--     -- Epoch time as double precision for microsecond extraction
+--     v_time          DOUBLE PRECISION;
+--     -- 48-bit UNIX timestamp in milliseconds
+--     unix_ts_ms      BIGINT;
+--     -- Microsecond component for sub-millisecond precision
+--     v_microsec      BIGINT;
+--     -- The full 16-byte UUID data
+--     uuid_bytes      BYTEA;
     
-    -- Constants for microsecond calculation
-    c_milli         DOUBLE PRECISION := 1000.0;      -- 1,000
-    c_micro         DOUBLE PRECISION := 1000000.0;   -- 1,000,000
-    c_scale         DOUBLE PRECISION := 4.096;       -- 4.0 * (1024 / 1000) for 12-bit precision
-BEGIN
-    -- 1. Extract epoch time with microsecond precision
-    v_time := EXTRACT(EPOCH FROM p_timestamp);
+--     -- Constants for microsecond calculation
+--     c_milli         DOUBLE PRECISION := 1000.0;      -- 1,000
+--     c_micro         DOUBLE PRECISION := 1000000.0;   -- 1,000,000
+--     c_scale         DOUBLE PRECISION := 4.096;       -- 4.0 * (1024 / 1000) for 12-bit precision
+-- BEGIN
+--     -- 1. Extract epoch time with microsecond precision
+--     v_time := EXTRACT(EPOCH FROM p_timestamp);
     
-    -- 2. Get millisecond timestamp (48 bits)
-    unix_ts_ms := TRUNC(v_time * c_milli);
+--     -- 2. Get millisecond timestamp (48 bits)
+--     unix_ts_ms := TRUNC(v_time * c_milli);
     
-    -- 3. Extract microseconds within the current millisecond and encode in 12 bits
-    -- This gives us sub-millisecond ordering capability
-    v_microsec := TRUNC((v_time * c_micro - unix_ts_ms * c_milli) * c_scale);
+--     -- 3. Extract microseconds within the current millisecond and encode in 12 bits
+--     -- This gives us sub-millisecond ordering capability
+--     v_microsec := TRUNC((v_time * c_micro - unix_ts_ms * c_milli) * c_scale);
     
-    -- 4. Generate 16 cryptographically secure random bytes as base
-    uuid_bytes := xcentro.gen_random_bytes(16);
+--     -- 4. Generate 16 cryptographically secure random bytes as base
+--     uuid_bytes := xcentro.gen_random_bytes(16);
     
-    -- 5. Overwrite the first 6 bytes (48 bits) with the big-endian timestamp
-    uuid_bytes := OVERLAY(uuid_bytes PLACING SUBSTRING(INT8SEND(unix_ts_ms) FROM 3 FOR 6) FROM 1);
+--     -- 5. Overwrite the first 6 bytes (48 bits) with the big-endian timestamp
+--     uuid_bytes := OVERLAY(uuid_bytes PLACING SUBSTRING(INT8SEND(unix_ts_ms) FROM 3 FOR 6) FROM 1);
     
-    -- 6. Set the version (7) and embed microsecond precision in bytes 6-7
-    -- Byte 6: version (4 bits) + high 4 bits of microseconds
-    -- Byte 7: low 8 bits of microseconds
-    uuid_bytes := SET_BYTE(uuid_bytes, 6, ((7 << 4) | ((v_microsec >> 8) & 15))::INTEGER);
-    uuid_bytes := SET_BYTE(uuid_bytes, 7, (v_microsec & 255)::INTEGER);
+--     -- 6. Set the version (7) and embed microsecond precision in bytes 6-7
+--     -- Byte 6: version (4 bits) + high 4 bits of microseconds
+--     -- Byte 7: low 8 bits of microseconds
+--     uuid_bytes := SET_BYTE(uuid_bytes, 6, ((7 << 4) | ((v_microsec >> 8) & 15))::INTEGER);
+--     uuid_bytes := SET_BYTE(uuid_bytes, 7, (v_microsec & 255)::INTEGER);
     
-    -- 7. Set the 2-bit variant (RFC 4122) in the 9th byte
-    --    Variant is 10xxxxxx, preserving the random bits in the lower 6 bits
-    uuid_bytes := SET_BYTE(uuid_bytes, 8, (GET_BYTE(uuid_bytes, 8) & 63) | 128);
+--     -- 7. Set the 2-bit variant (RFC 4122) in the 9th byte
+--     --    Variant is 10xxxxxx, preserving the random bits in the lower 6 bits
+--     uuid_bytes := SET_BYTE(uuid_bytes, 8, (GET_BYTE(uuid_bytes, 8) & 63) | 128);
     
-    -- 8. Convert the final byte array to a UUID and return it
-    RETURN ENCODE(uuid_bytes, 'hex')::UUID;
-END;
-$$;
+--     -- 8. Convert the final byte array to a UUID and return it
+--     RETURN ENCODE(uuid_bytes, 'hex')::UUID;
+-- END;
+-- $$;
 
 -- #############################################################################
 -- # Automatic Timestamp Trigger Function
@@ -85,7 +85,7 @@ COMMENT ON FUNCTION xcentro.trigger_set_timestamp() IS 'This trigger function au
 
 -- Table for user accounts, authentication, and KYC data
 CREATE TABLE xcentro.user_table (
-    id UUID PRIMARY KEY DEFAULT xcentro.generate_uuid_v7(),
+    id UUID PRIMARY KEY DEFAULT uuidv7(),
     email VARCHAR(254) UNIQUE NOT NULL,
     pwd_hash TEXT NOT NULL,
     mobile VARCHAR(20),
@@ -100,7 +100,7 @@ COMMENT ON TABLE xcentro.user_table IS 'User accounts, authentication, and KYC d
 
 -- Table for user verification codes
 CREATE TABLE xcentro.user_verification_codes (
-    id UUID PRIMARY KEY DEFAULT xcentro.generate_uuid_v7(),
+    id UUID PRIMARY KEY DEFAULT uuidv7(),
     user_id UUID REFERENCES xcentro.user_table(id) ON DELETE CASCADE,
     code TEXT,
     code_type xcentro.verification_type,
@@ -128,7 +128,7 @@ COMMENT ON TABLE xcentro.kyb_data IS 'Stores Know Your Business (KYB) identity a
 
 -- Table for business entities and their KYB information
 CREATE TABLE xcentro.business (
-    bid UUID PRIMARY KEY DEFAULT xcentro.generate_uuid_v7(),
+    bid UUID PRIMARY KEY DEFAULT uuidv7(),
     name TEXT,
     gstin VARCHAR(15) UNIQUE,
     gst_data JSONB,

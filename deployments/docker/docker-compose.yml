@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:17.6-alpine
+    image: postgres:18-alpine
     container_name: xcentro-postgres
     restart: unless-stopped
     environment:
@@ -13,7 +13,7 @@ services:
       - pg_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_SUPERUSER:-postgres}"]
-      interval: 10s
+      interval: 30s
       timeout: 5s
       retries: 5
 
@@ -28,7 +28,7 @@ services:
       - redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "--no-auth-warning", "-a", "${REDIS_SUPERUSER_PASSWORD:-RedisSuper123!}", "ping"]
-      interval: 10s
+      interval: 30s
       timeout: 5s
       retries: 5
 

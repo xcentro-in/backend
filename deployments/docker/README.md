@@ -31,7 +31,7 @@ A clean, simple Docker setup for PostgreSQL and Redis databases used by the XCen
 ## Architecture
 
 ### PostgreSQL Setup
-- **Container**: `xcentro-postgres` (PostgreSQL 17.6 Alpine)
+- **Container**: `xcentro-postgres` (PostgreSQL 18 Alpine)
 - **Database**: `xcentro` 
 - **Superuser**: `postgres` (for administrative tasks)
 - **Port**: 5432
@@ -52,7 +52,14 @@ A clean, simple Docker setup for PostgreSQL and Redis databases used by the XCen
 
 ## Configuration
 
-All configuration is managed through the `.env` file:
+All configuration is managed through the `.env` file. Use `.env.example` as a template:
+
+```bash
+# Copy the example file
+cp .env.example .env
+```
+
+**Configuration variables:**
 
 ```bash
 # PostgreSQL Configuration
