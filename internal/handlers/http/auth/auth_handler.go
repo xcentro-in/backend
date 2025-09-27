@@ -75,8 +75,11 @@ func (ah AuthHandler) HandleSignup(c echo.Context) error {
 	}
 
 	rclient := ah.authService.GetRedisClient()
-	rclient.Client.HSet(c.Request().Context(), "xcentro:"+user.Id, "token", token, "isrevoked", "false")
-
+	result := rclient.Client.HSet(c.Request().Context(), "xcentro:"+user.Id, "token", token, "isrevoked", "false")
+	if(result.Err() != nil) {
+		logger.Errorf("Failed to store token in redis %v", result.Err())
+		return c.JSON(500, map[string]any{"message": "Failed to store token", "data": nil})
+	}
 	return c.JSON(201, map[string]any{"message": "User created successfully", "data": map[string]string{"token": token}})
 
 }

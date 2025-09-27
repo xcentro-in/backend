@@ -30,7 +30,7 @@ func registerV1Routes(s *xcentroServer) {
 	// Authentication Routes
 	registerV1AuthRoutes(&s.meta, v1)
 	// User Routes
-	// Buiseness Routes
+	// Busieness Routes
 }
 
 func registerRouters(s *xcentroServer) {

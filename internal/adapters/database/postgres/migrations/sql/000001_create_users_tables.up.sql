@@ -94,6 +94,7 @@ CREATE TABLE xcentro.user_table (
     kyc_data JSONB,
     email_verified BOOLEAN DEFAULT FALSE,
     mobile_verified BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ
 );
 COMMENT ON TABLE xcentro.user_table IS 'User accounts, authentication, and KYC data.';
