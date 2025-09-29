@@ -18,18 +18,23 @@ type PaymentOrchestrator interface {
 
 // MockPaymentOrchestrator provides a mock implementation with detailed logging
 type MockPaymentOrchestrator struct {
-	// No dependencies yet - just print-based implementation
+	// Gateway instances for payment processing
+	jioPayGateway   PaymentGateway
+	easebuzzGateway PaymentGateway
 }
 
 // NewMockPaymentOrchestrator creates a new mock payment orchestrator
 func NewMockPaymentOrchestrator() PaymentOrchestrator {
-	return &MockPaymentOrchestrator{}
+	return &MockPaymentOrchestrator{
+		jioPayGateway:   NewMockJioPayGateway(),
+		easebuzzGateway: NewMockEasebuzzGateway(),
+	}
 }
 
 // ProcessPayment processes a payment request with detailed logging
 func (o *MockPaymentOrchestrator) ProcessPayment(ctx context.Context, request PaymentRequest) (*PaymentResponse, error) {
 	fmt.Println("=== ORCHESTRATOR: ProcessPayment Called ===")
-	fmt.Printf("User ID: %s\n", request.UserID)
+	fmt.Printf("Business ID: %s\n", request.BusinessID)
 	fmt.Printf("Amount: %d %s\n", request.Amount, request.Currency)
 	fmt.Printf("Payment Method: %s\n", request.PaymentMethod)
 	fmt.Printf("Description: %s\n", request.Description)
@@ -53,28 +58,56 @@ func (o *MockPaymentOrchestrator) ProcessPayment(ctx context.Context, request Pa
 	feeAmount := o.calculateMockFee(request.Amount, request.PaymentMethod)
 	fmt.Printf("💰 Calculated Fee: %d %s\n", feeAmount, request.Currency)
 
-	// Generate mock payment ID
+	// Generate transaction IDs
+	transactionID := fmt.Sprintf("txn_%s_%s", time.Now().Format("20060102"), uuid.New().String()[:8])
 	paymentID := uuid.New().String()
+	fmt.Printf("🆔 Generated Transaction ID: %s\n", transactionID)
 	fmt.Printf("🆔 Generated Payment ID: %s\n", paymentID)
 
-	// Mock gateway payment ID
-	gatewayPaymentID := fmt.Sprintf("%s_%s", gateway, paymentID[:8])
-	fmt.Printf("🏦 Gateway Payment ID: %s\n", gatewayPaymentID)
+	// Get selected gateway instance
+	selectedGateway := o.getGatewayInstance(gateway)
+	if selectedGateway == nil {
+		return nil, fmt.Errorf("gateway instance not found: %s", gateway)
+	}
 
-	// Create mock response
+	// Prepare gateway payment request
+	gatewayRequest := GatewayPaymentRequest{
+		BusinessID:      request.BusinessID,
+		TransactionID:   transactionID,
+		Amount:          request.Amount + feeAmount, // Include fee in total
+		Currency:        request.Currency,
+		PaymentMethod:   request.PaymentMethod,
+		Description:     request.Description,
+		CallbackURL:     request.CallbackURL,
+		CardDetails:     request.CardDetails,
+		NetBankingDetails: request.NetBankingDetails,
+		UPIDetails:      request.UPIDetails,
+		WalletDetails:   request.WalletDetails,
+		Metadata:        request.Metadata,
+	}
+
+	// Call actual gateway
+	fmt.Printf("🚀 Calling %s gateway for payment initiation...\n", gateway)
+	gatewayResponse, err := selectedGateway.InitiatePayment(ctx, gatewayRequest)
+	if err != nil {
+		fmt.Printf("❌ Gateway call failed: %v\n", err)
+		return nil, fmt.Errorf("gateway payment initiation failed: %w", err)
+	}
+
+	// Create final response
 	response := &PaymentResponse{
 		PaymentID:        paymentID,
-		Status:           PaymentStatusPending,
+		Status:           gatewayResponse.Status,
 		Amount:           request.Amount,
 		FeeAmount:        feeAmount,
 		TotalAmount:      request.Amount + feeAmount,
 		Currency:         request.Currency,
 		PaymentMethod:    request.PaymentMethod,
 		GatewayUsed:      gateway,
-		GatewayPaymentID: gatewayPaymentID,
-		RedirectURL:      fmt.Sprintf("https://mock-%s.com/payment/%s", gateway, gatewayPaymentID),
-		Message:          "Payment initiated successfully",
-		CreatedAt:        time.Now(),
+		GatewayPaymentID: gatewayResponse.GatewayPaymentID,
+		RedirectURL:      gatewayResponse.RedirectURL,
+		Message:          gatewayResponse.Message,
+		CreatedAt:        gatewayResponse.CreatedAt,
 		Metadata:         request.Metadata,
 	}
 
@@ -88,7 +121,7 @@ func (o *MockPaymentOrchestrator) ProcessPayment(ctx context.Context, request Pa
 // TokenizeCard tokenizes a card with detailed logging
 func (o *MockPaymentOrchestrator) TokenizeCard(ctx context.Context, request TokenizeRequest) (*TokenizeResponse, error) {
 	fmt.Println("=== ORCHESTRATOR: TokenizeCard Called ===")
-	fmt.Printf("User ID: %s\n", request.UserID)
+	fmt.Printf("Business ID: %s\n", request.BusinessID)
 	fmt.Printf("Card Type: %s\n", request.CardDetails.CardType)
 	fmt.Printf("Card Category: %s\n", request.CardDetails.CardCategory)
 	fmt.Printf("Last Four Digits: %s\n", request.CardDetails.LastFourDigits)
@@ -105,25 +138,56 @@ func (o *MockPaymentOrchestrator) TokenizeCard(ctx context.Context, request Toke
 	}
 	fmt.Printf("🎯 Selected Gateway for Tokenization: %s\n", gateway)
 
-	// Generate mock token
-	token := fmt.Sprintf("tok_%s_%s_%s", gateway, request.CardDetails.CardType, uuid.New().String()[:8])
-	cardID := uuid.New().String()
+	// Generate transaction ID for tokenization
+	transactionID := fmt.Sprintf("tok_%s_%s", time.Now().Format("20060102"), uuid.New().String()[:8])
+	fmt.Printf("🆔 Generated Tokenization Transaction ID: %s\n", transactionID)
 
-	fmt.Printf("🔐 Generated Token: %s\n", token)
-	fmt.Printf("🆔 Generated Card ID: %s\n", cardID)
+	// Get selected gateway instance
+	selectedGateway := o.getGatewayInstance(gateway)
+	if selectedGateway == nil {
+		return nil, fmt.Errorf("gateway instance not found for tokenization: %s", gateway)
+	}
 
+	// Prepare gateway tokenization request
+	gatewayRequest := GatewayTokenizeRequest{
+		BusinessID:    request.BusinessID,
+		TransactionID: transactionID,
+		CardDetails:   request.CardDetails,
+		CallbackURL:   "https://mock-callback.com/tokenize", // TODO: Make configurable
+		Metadata: map[string]any{
+			"tokenization_request": true,
+			"business_id":         request.BusinessID,
+		},
+	}
+
+	// For Easebuzz, add amount requirement
+	if gateway == GatewayEasebuzz {
+		gatewayRequest.Amount = 100 // Minimum amount for Easebuzz tokenization (₹1)
+		gatewayRequest.Currency = CurrencyINR
+		fmt.Printf("💰 Adding amount for Easebuzz tokenization: %d %s\n", gatewayRequest.Amount, gatewayRequest.Currency)
+	}
+
+	// Call actual gateway for tokenization
+	fmt.Printf("🚀 Calling %s gateway for tokenization...\n", gateway)
+	gatewayResponse, err := selectedGateway.TokenizeCard(ctx, gatewayRequest)
+	if err != nil {
+		fmt.Printf("❌ Gateway tokenization failed: %v\n", err)
+		return nil, fmt.Errorf("gateway tokenization failed: %w", err)
+	}
+
+	// Create final response
 	response := &TokenizeResponse{
-		Token:          token,
-		CardID:         cardID,
+		Token:          gatewayResponse.Token,
+		CardID:         gatewayResponse.CardID,
 		LastFourDigits: request.CardDetails.LastFourDigits,
 		CardType:       request.CardDetails.CardType,
 		CardCategory:   request.CardDetails.CardCategory,
 		ExpiryMonth:    request.CardDetails.ExpiryMonth,
 		ExpiryYear:     request.CardDetails.ExpiryYear,
 		GatewayUsed:    gateway,
-		Status:         "success",
-		Message:        "Card tokenized successfully",
-		CreatedAt:      time.Now(),
+		Status:         gatewayResponse.Status,
+		Message:        gatewayResponse.Message,
+		CreatedAt:      gatewayResponse.ExpiresAt.Add(-15 * time.Minute), // Mock created time
 	}
 
 	fmt.Printf("✅ Card tokenization successful with %s\n", gateway)
@@ -136,10 +200,10 @@ func (o *MockPaymentOrchestrator) TokenizeCard(ctx context.Context, request Toke
 func (o *MockPaymentOrchestrator) ValidatePaymentRequest(request PaymentRequest) error {
 	fmt.Println("--- Validating Payment Request ---")
 
-	if request.UserID == "" {
-		return fmt.Errorf("user_id is required")
+	if request.BusinessID == "" {
+		return fmt.Errorf("business_id is required")
 	}
-	fmt.Println("✓ User ID is valid")
+	fmt.Println("✓ Business ID is valid")
 
 	if request.Amount <= 0 {
 		return fmt.Errorf("amount must be greater than 0")
@@ -266,5 +330,17 @@ func (o *MockPaymentOrchestrator) calculateMockFee(amount int64, method PaymentM
 		return amount * 10 / 1000 // 1.0%
 	default:
 		return amount * 20 / 1000 // 2.0% default
+	}
+}
+
+// getGatewayInstance returns the appropriate gateway instance
+func (o *MockPaymentOrchestrator) getGatewayInstance(gatewayType GatewayType) PaymentGateway {
+	switch gatewayType {
+	case GatewayJioPay:
+		return o.jioPayGateway
+	case GatewayEasebuzz:
+		return o.easebuzzGateway
+	default:
+		return nil
 	}
 }

@@ -75,7 +75,7 @@ type TokenizedCard struct {
 
 // PaymentRequest represents a request to process a payment
 type PaymentRequest struct {
-	UserID          string                 `json:"user_id"`
+	BusinessID      string                 `json:"business_id"`
 	Amount          int64                  `json:"amount"`
 	Currency        Currency               `json:"currency"`
 	PaymentMethod   PaymentMethod          `json:"payment_method"`
@@ -107,7 +107,7 @@ type PaymentResponse struct {
 
 // TokenizeRequest represents a request to tokenize a card
 type TokenizeRequest struct {
-	UserID      string       `json:"user_id"`
+	BusinessID  string       `json:"business_id"`
 	CardDetails Card         `json:"card_details"`
 }
 

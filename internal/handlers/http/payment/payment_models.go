@@ -32,7 +32,7 @@ type MakePaymentRequest struct {
 	UPI           *UPIDetails            `json:"upi,omitempty"`
 	Wallet        *WalletDetails         `json:"wallet,omitempty"`
 	CallbackURL   string                 `json:"callback_url"`
-	Metadata      map[string]any `json:"metadata,omitempty"`
+	Metadata      map[string]any 		 `json:"metadata,omitempty"`
 }
 
 // CardDetails represents card payment details

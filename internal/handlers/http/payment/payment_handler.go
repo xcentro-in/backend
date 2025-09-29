@@ -292,7 +292,7 @@ func (h *PaymentHandler) Tokenize(c echo.Context) error {
 
 	// Convert HTTP request to core domain request
 	coreRequest := payment.TokenizeRequest{
-		UserID: req.UserID,
+		BusinessID: req.UserID, // TODO: This should be BusinessID, not UserID
 		CardDetails: payment.Card{
 			Number:         req.CardDetails.CardNumber,
 			ExpiryMonth:    req.CardDetails.ExpiryMonth,
@@ -342,30 +342,270 @@ func (h *PaymentHandler) Tokenize(c echo.Context) error {
 
 // MakePayment handles POST /process_payment/make_payment
 func (h *PaymentHandler) MakePayment(c echo.Context) error {
-	fmt.Println("=== MAKE_PAYMENT API CALLED ===")
+	fmt.Println("=== HANDLER: MakePayment API Called ===")
 
-	// Print request body
-	var body map[string]any
-	if err := c.Bind(&body); err != nil {
-		fmt.Printf("Error binding request body: %v\n", err)
-	} else {
-		fmt.Printf("Request Body: %+v\n", body)
+	// Parse request body
+	var req MakePaymentRequest
+	if err := c.Bind(&req); err != nil {
+		fmt.Printf("❌ Error binding request: %v\n", err)
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error": "invalid_request",
+			"message": "Invalid request body",
+		})
 	}
 
-	return c.JSON(http.StatusOK, map[string]any{
-		"message": "make_payment endpoint called",
+	fmt.Printf("📥 Request: Amount: %d, Currency: %s, Payment Method: %s\n", req.Amount, req.Currency, req.PaymentMethod)
+
+	// Validate required fields
+	if err := h.validatePaymentRequest(&req); err != nil {
+		fmt.Printf("❌ Validation error: %v\n", err)
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error": "validation_failed",
+			"message": err.Error(),
+		})
+	}
+
+	// Calculate fees using business rules
+	// TODO: don't think we really need to do this here, as the orchestrator should handle it
+	// Jiopay doens't need fee calc
+	// easebuzz might need as there is no reseller model
+	// no idea how their reseller model is going to work
+	fmt.Println("💰 Calculating payment fees...")
+	feeCalculation, err := h.feeCalculator.CalculateFee(
+		req.Amount,
+		payment.PaymentMethod(req.PaymentMethod),
+		payment.CardType(getCardTypeFromRequest(&req)),
+		payment.CardCategory(getCardCategoryFromRequest(&req)),
+	)
+	if err != nil {
+		fmt.Printf("❌ Fee calculation error: %v\n", err)
+		return c.JSON(http.StatusInternalServerError, map[string]any{
+			"error": "fee_calculation_failed",
+			"message": "Failed to calculate payment fees",
+		})
+	}
+
+	fmt.Printf("💰 Fee calculated: Base: %d, Fee: %d, Total: %d %s\n",
+		feeCalculation.BaseAmount, feeCalculation.FeeAmount,
+		feeCalculation.TotalAmount, feeCalculation.Currency)
+
+	// Convert HTTP request to core domain request
+	coreRequest := payment.PaymentRequest{
+		BusinessID:    "business-123", // TODO: Extract from request context or JWT token
+		Amount:        req.Amount,
+		Currency:      payment.Currency(req.Currency),
+		PaymentMethod: payment.PaymentMethod(req.PaymentMethod),
+		Description:   req.Description,
+		CallbackURL:   req.CallbackURL,
+		Metadata:      req.Metadata,
+	}
+
+	// Add payment method specific details
+	h.populatePaymentMethodDetails(&coreRequest, &req)
+
+	// Call orchestrator to process payment
+	fmt.Println("🔄 Calling Payment Orchestrator...")
+	paymentResponse, err := h.orchestrator.ProcessPayment(c.Request().Context(), coreRequest)
+	if err != nil {
+		fmt.Printf("❌ Orchestrator error: %v\n", err)
+		return c.JSON(http.StatusInternalServerError, map[string]any{
+			"error": "payment_processing_failed",
+			"message": "Failed to process payment",
+		})
+	}
+
+	// Convert core response to HTTP response
+	response := &MakePaymentResponse{
+		PaymentID:        paymentResponse.PaymentID,
+		Status:           string(paymentResponse.Status),
+		Amount:           paymentResponse.Amount,
+		Currency:         string(paymentResponse.Currency),
+		PaymentMethod:    string(paymentResponse.PaymentMethod),
+		GatewayUsed:      string(paymentResponse.GatewayUsed),
+		GatewayPaymentID: paymentResponse.GatewayPaymentID,
+		RedirectURL:      paymentResponse.RedirectURL,
+		Message:          paymentResponse.Message,
+		CreatedAt:        paymentResponse.CreatedAt.Format("2006-01-02T15:04:05Z"),
+		Metadata:         paymentResponse.Metadata,
+	}
+
+	fmt.Printf("✅ Payment initiated successfully: %s\n", paymentResponse.PaymentID)
+	fmt.Printf("🌐 Redirect URL: %s\n", paymentResponse.RedirectURL)
+	fmt.Printf("🏦 Gateway Used: %s\n", paymentResponse.GatewayUsed)
+	fmt.Println("=== HANDLER: MakePayment Complete ===")
+
+	return c.JSON(http.StatusCreated, map[string]any{
+		"message": "Payment initiated successfully",
 		"endpoint": "POST /v1/process_payment/make_payment",
 		"status": "success",
-		"received_data": body,
+		"data": response,
 	})
+}
+
+// Helper functions for MakePayment handler
+
+// validatePaymentRequest validates the payment request
+func (h *PaymentHandler) validatePaymentRequest(req *MakePaymentRequest) error {
+	// Validate amount
+	if req.Amount <= 0 {
+		return fmt.Errorf("amount must be greater than 0")
+	}
+
+	// Validate currency
+	if req.Currency != "INR" && req.Currency != "USD" {
+		return fmt.Errorf("currency must be INR or USD")
+	}
+
+	// Validate payment method
+	validMethods := map[string]bool{
+		"card": true, "netbanking": true, "upi": true, "wallet": true,
+	}
+	if !validMethods[req.PaymentMethod] {
+		return fmt.Errorf("invalid payment method: %s", req.PaymentMethod)
+	}
+
+	// Validate callback URL
+	if req.CallbackURL == "" {
+		return fmt.Errorf("callback_url is required")
+	}
+
+	// Payment method specific validation
+	switch req.PaymentMethod {
+	case "card":
+		if req.CardDetails == nil {
+			return fmt.Errorf("card_details are required for card payments")
+		}
+		if err := h.validateCardDetails(req.CardDetails); err != nil {
+			return fmt.Errorf("card validation failed: %v", err)
+		}
+	case "netbanking":
+		if req.NetBanking == nil {
+			return fmt.Errorf("net_banking details are required for netbanking payments")
+		}
+		if req.NetBanking.BankCode == "" {
+			return fmt.Errorf("bank_code is required for netbanking")
+		}
+	case "upi":
+		if req.UPI == nil {
+			return fmt.Errorf("upi details are required for UPI payments")
+		}
+		if req.UPI.VPA == "" {
+			return fmt.Errorf("vpa is required for UPI payments")
+		}
+	case "wallet":
+		if req.Wallet == nil {
+			return fmt.Errorf("wallet details are required for wallet payments")
+		}
+		if req.Wallet.WalletType == "" {
+			return fmt.Errorf("wallet_type is required for wallet payments")
+		}
+	}
+
+	return nil
+}
+
+// validateCardDetails validates card-specific details
+func (h *PaymentHandler) validateCardDetails(card *CardDetails) error {
+	if card.CardNumber == "" {
+		return fmt.Errorf("card_number is required")
+	}
+	if card.ExpiryMonth == "" {
+		return fmt.Errorf("expiry_month is required")
+	}
+	if card.ExpiryYear == "" {
+		return fmt.Errorf("expiry_year is required")
+	}
+	if card.CVV == "" {
+		return fmt.Errorf("cvv is required")
+	}
+	if card.HolderName == "" {
+		return fmt.Errorf("holder_name is required")
+	}
+
+	// Validate card type and category
+	validCardTypes := map[string]bool{
+		"visa": true, "mastercard": true, "rupay": true, "amex": true, "diners": true,
+	}
+	if !validCardTypes[card.CardType] {
+		return fmt.Errorf("invalid card_type: %s", card.CardType)
+	}
+
+	validCardCategories := map[string]bool{
+		"credit": true, "debit": true, "corporate": true,
+	}
+	if !validCardCategories[card.CardCategory] {
+		return fmt.Errorf("invalid card_category: %s", card.CardCategory)
+	}
+
+	return nil
+}
+
+// getCardTypeFromRequest extracts card type from request
+func getCardTypeFromRequest(req *MakePaymentRequest) string {
+	if req.CardDetails != nil {
+		return req.CardDetails.CardType
+	}
+	return ""
+}
+
+// getCardCategoryFromRequest extracts card category from request
+func getCardCategoryFromRequest(req *MakePaymentRequest) string {
+	if req.CardDetails != nil {
+		return req.CardDetails.CardCategory
+	}
+	return ""
+}
+
+// populatePaymentMethodDetails adds payment method specific details to core request
+func (h *PaymentHandler) populatePaymentMethodDetails(coreReq *payment.PaymentRequest, httpReq *MakePaymentRequest) {
+	switch httpReq.PaymentMethod {
+	case "card":
+		if httpReq.CardDetails != nil {
+			coreReq.CardDetails = &payment.Card{
+				Number:         httpReq.CardDetails.CardNumber,
+				ExpiryMonth:    httpReq.CardDetails.ExpiryMonth,
+				ExpiryYear:     httpReq.CardDetails.ExpiryYear,
+				CVV:            httpReq.CardDetails.CVV,
+				HolderName:     httpReq.CardDetails.HolderName,
+				CardType:       payment.CardType(httpReq.CardDetails.CardType),
+				CardCategory:   payment.CardCategory(httpReq.CardDetails.CardCategory),
+				LastFourDigits: httpReq.CardDetails.LastFourDigits,
+			}
+		}
+	case "netbanking":
+		if httpReq.NetBanking != nil {
+			coreReq.NetBankingDetails = &payment.NetBanking{
+				BankCode: httpReq.NetBanking.BankCode,
+				BankName: httpReq.NetBanking.BankName,
+			}
+		}
+	case "upi":
+		if httpReq.UPI != nil {
+			coreReq.UPIDetails = &payment.UPI{
+				VPA: httpReq.UPI.VPA,
+			}
+		}
+	case "wallet":
+		if httpReq.Wallet != nil {
+			coreReq.WalletDetails = &payment.Wallet{
+				WalletID: httpReq.Wallet.WalletID,
+				Currency: payment.Currency(httpReq.Currency),
+			}
+		}
+	}
 }
 
 // RegisterPaymentRoutes registers all payment routes
 func RegisterPaymentRoutes(group *echo.Group, orchestrator payment.PaymentOrchestrator, feeCalculator business_rules.FeeCalculator, walletService business_rules.WalletService) {
 	handler := NewPaymentHandler(orchestrator, feeCalculator, walletService)
 
+	// Core payment operations
 	group.POST("/fetch_wallet", handler.FetchWallet)
 	group.POST("/get_fee_rules", handler.GetFeeRules)
 	group.POST("/tokenize", handler.Tokenize)
 	group.POST("/make_payment", handler.MakePayment)
+
+	// Webhook endpoints (Phase 3C)
+	webhookGroup := group.Group("/webhooks")
+	RegisterWebhookRoutes(webhookGroup, orchestrator)
 }
