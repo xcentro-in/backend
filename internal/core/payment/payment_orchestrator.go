@@ -249,71 +249,99 @@ func (o *MockPaymentOrchestrator) ValidatePaymentRequest(request PaymentRequest)
 
 // SelectGateway selects the appropriate gateway based on payment method and card details
 func (o *MockPaymentOrchestrator) SelectGateway(request PaymentRequest) (GatewayType, error) {
-	fmt.Println("--- Gateway Selection Logic ---")
+	fmt.Println("--- Enhanced Gateway Selection Logic ---")
 
 	switch request.PaymentMethod {
 	case PaymentMethodNetBanking:
-		fmt.Println("🏦 Net Banking detected")
-		fmt.Println("📍 Route Rule: All Net Banking → JioPay")
+		fmt.Println("🏦 NetBanking detected")
+		fmt.Println("📍 Rule: All NetBanking → JioPay")
 		return GatewayJioPay, nil
 
 	case PaymentMethodUPI:
 		fmt.Println("📱 UPI detected")
-		fmt.Println("📍 Route Rule: All UPI → JioPay (default)")
+		fmt.Println("📍 Rule: All UPI → JioPay")
 		return GatewayJioPay, nil
 
 	case PaymentMethodWallet:
 		fmt.Println("👛 Wallet detected")
-		fmt.Println("📍 Route Rule: All Wallet → JioPay (default)")
+		fmt.Println("📍 Rule: All Wallet → JioPay")
 		return GatewayJioPay, nil
 
 	case PaymentMethodCard:
-		if request.CardDetails == nil {
-			return "", fmt.Errorf("card details are required for card payments")
-		}
-
-		cardType := request.CardDetails.CardType
-		cardCategory := request.CardDetails.CardCategory
-
-		fmt.Printf("💳 Card detected: %s %s\n", cardCategory, cardType)
-
-		// JioPay routing rules
-		if cardCategory == CardCategoryCredit {
-			fmt.Println("💎 Credit Card detected")
-			switch cardType {
-			case CardTypeVisa, CardTypeMastercard, CardTypeRupay:
-				fmt.Printf("📍 Route Rule: %s Credit → JioPay\n", cardType)
-				return GatewayJioPay, nil
-			}
-		}
-
-		if cardCategory == CardCategoryCorporate {
-			fmt.Println("🏢 Corporate Card detected")
-			fmt.Println("📍 Route Rule: All Corporate Cards → JioPay")
-			return GatewayJioPay, nil
-		}
-
-		// Easebuzz routing rules
-		if cardType == CardTypeAmex || cardType == CardTypeDiners {
-			fmt.Printf("🎯 %s Card detected\n", cardType)
-			fmt.Printf("📍 Route Rule: %s Cards → Easebuzz\n", cardType)
-			return GatewayEasebuzz, nil
-		}
-
-		if cardCategory == CardCategoryDebit && (cardType == CardTypeVisa || cardType == CardTypeMastercard) {
-			fmt.Printf("💳 %s Debit Card detected\n", cardType)
-			fmt.Printf("📍 Route Rule: %s Debit → Easebuzz\n", cardType)
-			return GatewayEasebuzz, nil
-		}
-
-		// Default fallback
-		fmt.Printf("⚠️  Unmatched card combination: %s %s\n", cardCategory, cardType)
-		fmt.Println("📍 Route Rule: Fallback → JioPay")
-		return GatewayJioPay, nil
+		return o.selectGatewayForCard(request.CardDetails, request.Amount)
 
 	default:
 		return "", fmt.Errorf("unsupported payment method: %s", request.PaymentMethod)
 	}
+}
+
+// selectGatewayForCard implements the exact card routing business rules
+func (o *MockPaymentOrchestrator) selectGatewayForCard(card *Card, amount int64) (GatewayType, error) {
+	if card == nil {
+		return "", fmt.Errorf("card details are required for card payments")
+	}
+
+	fmt.Printf("💳 Card: %s %s, Amount: ₹%.2f\n",
+		card.CardCategory, card.CardType, float64(amount)/100)
+
+	// Corporate Credit Cards - All → JioPay
+	if card.CardCategory == CardCategoryCorporate {
+		fmt.Println("🏢 Corporate Card detected")
+		fmt.Printf("📍 Rule: All Corporate CC (%s) → JioPay\n", card.CardType)
+		return GatewayJioPay, nil
+	}
+
+	// Credit Cards
+	if card.CardCategory == CardCategoryCredit {
+		fmt.Println("💎 Credit Card detected")
+		switch card.CardType {
+		case CardTypeVisa, CardTypeMastercard:
+			fmt.Printf("📍 Rule: %s Credit → JioPay\n", card.CardType)
+			return GatewayJioPay, nil
+		case CardTypeRupay:
+			fmt.Println("📍 Rule: RuPay Credit → JioPay")
+			return GatewayJioPay, nil
+		case CardTypeDiners, CardTypeAmex:
+			fmt.Printf("📍 Rule: %s Credit → Easebuzz\n", card.CardType)
+			return GatewayEasebuzz, nil
+		default:
+			return "", fmt.Errorf("unsupported credit card type: %s", card.CardType)
+		}
+	}
+
+	// Debit Cards
+	if card.CardCategory == CardCategoryDebit {
+		fmt.Println("💳 Debit Card detected")
+		switch card.CardType {
+		case CardTypeVisa, CardTypeMastercard:
+			threshold := int64(200000) // ₹2000 in paise
+			if amount < threshold {
+				fmt.Printf("📍 Rule: %s Debit < ₹2000 → Easebuzz\n", card.CardType)
+				return GatewayEasebuzz, nil
+			} else {
+				fmt.Printf("📍 Rule: %s Debit >= ₹2000 → JioPay\n", card.CardType)
+				return GatewayJioPay, nil
+			}
+		case CardTypeRupay:
+			fmt.Println("📍 Rule: RuPay Debit (any amount) → JioPay")
+			return GatewayJioPay, nil
+		case CardTypeDiners, CardTypeAmex:
+			// Note: Debit cards for Amex/Diners are rare, but handling for completeness
+			fmt.Printf("📍 Rule: %s Debit → Easebuzz\n", card.CardType)
+			return GatewayEasebuzz, nil
+		default:
+			return "", fmt.Errorf("unsupported debit card type: %s", card.CardType)
+		}
+	}
+
+	// Prepaid cards (if any) - fallback to JioPay
+	if card.CardCategory == CardCategoryCredit { // Assuming prepaid would be similar category
+		fmt.Println("💰 Prepaid Card detected")
+		fmt.Println("📍 Rule: Prepaid Cards → JioPay (fallback)")
+		return GatewayJioPay, nil
+	}
+
+	return "", fmt.Errorf("unsupported card combination: %s %s", card.CardCategory, card.CardType)
 }
 
 // calculateMockFee calculates a mock fee based on payment method
