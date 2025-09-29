@@ -4,6 +4,7 @@ import (
 	"github.com/labstack/echo/v4"
 	userRepo "xcentro.in/internal/adapters/database/postgres/user"
 	"xcentro.in/internal/handlers/http/auth"
+	"xcentro.in/internal/handlers/http/payment"
 	authservice "xcentro.in/internal/services/auth"
 	"xcentro.in/internal/services/user"
 )
@@ -29,8 +30,13 @@ func registerV1Routes(s *xcentroServer) {
 
 	// Authentication Routes
 	registerV1AuthRoutes(&s.meta, v1)
+
+	// Payment Routes
+	processPaymentGroup := v1.Group("/process_payment")
+	payment.RegisterPaymentRoutes(processPaymentGroup)
+
 	// User Routes
-	// Busieness Routes
+	// Business Routes
 }
 
 func registerRouters(s *xcentroServer) {
