@@ -1,8 +1,11 @@
 package payment
 
 import (
+	"context"
 	"fmt"
 	"net/http"
+	"strings"
+	"time"
 
 	"github.com/labstack/echo/v4"
 	"xcentro.in/internal/core/business_rules"
@@ -288,11 +291,24 @@ func (h *PaymentHandler) Tokenize(c echo.Context) error {
 		})
 	}
 
-	fmt.Printf("📥 Request: User ID: %s, Card: %s %s\n", req.UserID, req.CardDetails.CardCategory, req.CardDetails.CardType)
+	fmt.Printf("📥 Request: Business ID: %s, Card: %s %s\n", req.UserID, req.CardDetails.CardCategory, req.CardDetails.CardType)
+
+	// Validate card details
+	if err := h.validateTokenizeRequest(&req); err != nil {
+		fmt.Printf("❌ Validation error: %v\n", err)
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error": "validation_failed",
+			"message": err.Error(),
+		})
+	}
+
+	// Create context with timeout for blocking tokenization
+	ctx, cancel := context.WithTimeout(c.Request().Context(), 60*time.Second)
+	defer cancel()
 
 	// Convert HTTP request to core domain request
 	coreRequest := payment.TokenizeRequest{
-		BusinessID: req.UserID, // TODO: This should be BusinessID, not UserID
+		BusinessID: req.UserID, // TODO: Extract from JWT token in production
 		CardDetails: payment.Card{
 			Number:         req.CardDetails.CardNumber,
 			ExpiryMonth:    req.CardDetails.ExpiryMonth,
@@ -301,43 +317,73 @@ func (h *PaymentHandler) Tokenize(c echo.Context) error {
 			HolderName:     req.CardDetails.HolderName,
 			CardType:       payment.CardType(req.CardDetails.CardType),
 			CardCategory:   payment.CardCategory(req.CardDetails.CardCategory),
-			LastFourDigits: req.CardDetails.LastFourDigits,
+			LastFourDigits: extractLastFourDigits(req.CardDetails.CardNumber),
 		},
 	}
 
-	// Call orchestrator to tokenize card
-	fmt.Println("🔄 Calling Payment Orchestrator for tokenization...")
-	tokenizeResponse, err := h.orchestrator.TokenizeCard(c.Request().Context(), coreRequest)
+	// Call orchestrator for complete tokenization (blocking call)
+	fmt.Println("🔄 Calling Payment Orchestrator for complete tokenization...")
+	fmt.Println("⏳ This may take up to 60 seconds for JioPay 2-step process...")
+	tokenizeResponse, err := h.orchestrator.TokenizeCard(ctx, coreRequest)
 	if err != nil {
-		fmt.Printf("❌ Orchestrator error: %v\n", err)
+		fmt.Printf("❌ Tokenization failed: %v\n", err)
+		return h.handleTokenizationError(err)
+	}
+
+	// Store tokenized card in business wallet immediately
+	fmt.Println("💾 Storing tokenized card in business wallet...")
+	storedCard := &payment.StoredCard{
+		CardID:         tokenizeResponse.CardID,
+		BusinessID:     coreRequest.BusinessID,
+		Token:          tokenizeResponse.Token, // Backend only - never exposed to client
+		LastFourDigits: tokenizeResponse.LastFourDigits,
+		CardType:       tokenizeResponse.CardType,
+		CardCategory:   tokenizeResponse.CardCategory,
+		ExpiryMonth:    tokenizeResponse.ExpiryMonth,
+		ExpiryYear:     tokenizeResponse.ExpiryYear,
+		IssuerBank:     "Unknown", // TODO: Add bank detection logic, or can omit as well.
+		CardHolderName: coreRequest.CardDetails.HolderName,
+		IsActive:       true,
+		GatewayUsed:    tokenizeResponse.GatewayUsed,
+		AddedAt:        time.Now(),
+		Metadata: map[string]any{
+			"tokenization_date": time.Now().Format("2006-01-02"),
+			"gateway_used":      string(tokenizeResponse.GatewayUsed),
+			"tokenization_id":   tokenizeResponse.CardID,
+		},
+	}
+
+	// Add to business wallet via wallet service
+	if err := h.walletService.AddPaymentSource(coreRequest.BusinessID, storedCard); err != nil {
+		fmt.Printf("❌ Failed to store card in wallet: %v\n", err)
 		return c.JSON(http.StatusInternalServerError, map[string]any{
-			"error": "tokenization_failed",
-			"message": "Failed to tokenize card",
+			"error": "storage_failed",
+			"message": "Card was tokenized but failed to save. Please contact support.",
 		})
 	}
 
-	// Convert core response to HTTP response
-	response := &TokenizeResponse{
-		Token:          tokenizeResponse.Token,
-		CardID:         tokenizeResponse.CardID,
-		LastFourDigits: tokenizeResponse.LastFourDigits,
-		CardType:       string(tokenizeResponse.CardType),
-		CardCategory:   string(tokenizeResponse.CardCategory),
-		ExpiryMonth:    tokenizeResponse.ExpiryMonth,
-		ExpiryYear:     tokenizeResponse.ExpiryYear,
-		Status:         tokenizeResponse.Status,
-		Message:        tokenizeResponse.Message,
+	// Create success response (no token exposure)
+	response := map[string]any{
+		"status":  "success",
+		"message": "Card tokenized and saved successfully",
+		"card_info": map[string]any{
+			"card_id":           tokenizeResponse.CardID,
+			"last_four_digits":  tokenizeResponse.LastFourDigits,
+			"card_type":        string(tokenizeResponse.CardType),
+			"card_category":    string(tokenizeResponse.CardCategory),
+			"expiry_month":     tokenizeResponse.ExpiryMonth,
+			"expiry_year":      tokenizeResponse.ExpiryYear,
+			"gateway_used":     string(tokenizeResponse.GatewayUsed),
+		},
 	}
 
-	fmt.Printf("✅ Card tokenized successfully: %s\n", tokenizeResponse.Token)
+	fmt.Printf("✅ Card tokenized and stored successfully: %s\n", tokenizeResponse.CardID)
+	fmt.Printf("💳 Card Info: %s %s ending in %s\n",
+		tokenizeResponse.CardCategory, tokenizeResponse.CardType, tokenizeResponse.LastFourDigits)
+	fmt.Printf("🏦 Gateway Used: %s\n", tokenizeResponse.GatewayUsed)
 	fmt.Println("=== HANDLER: Tokenize Complete ===")
 
-	return c.JSON(http.StatusCreated, map[string]any{
-		"message": "Card tokenized successfully",
-		"endpoint": "POST /v1/process_payment/tokenize",
-		"status": "success",
-		"data": response,
-	})
+	return c.JSON(http.StatusCreated, response)
 }
 
 // MakePayment handles POST /process_payment/make_payment
@@ -592,6 +638,67 @@ func (h *PaymentHandler) populatePaymentMethodDetails(coreReq *payment.PaymentRe
 				Currency: payment.Currency(httpReq.Currency),
 			}
 		}
+	}
+}
+
+// Helper functions for Tokenize handler
+
+// validateTokenizeRequest validates the tokenization request
+func (h *PaymentHandler) validateTokenizeRequest(req *TokenizeRequest) error {
+	if req.UserID == "" {
+		return fmt.Errorf("user_id is required")
+	}
+
+	if req.CardDetails == nil {
+		return fmt.Errorf("card_details are required")
+	}
+
+	return h.validateCardDetails(req.CardDetails)
+}
+
+// extractLastFourDigits safely extracts the last 4 digits from card number
+func extractLastFourDigits(cardNumber string) string {
+	// Remove any spaces or special characters
+	cleaned := strings.ReplaceAll(cardNumber, " ", "")
+	cleaned = strings.ReplaceAll(cleaned, "-", "")
+
+	if len(cleaned) >= 4 {
+		return cleaned[len(cleaned)-4:]
+	}
+	return cleaned
+}
+
+// handleTokenizationError provides user-friendly error responses
+func (h *PaymentHandler) handleTokenizationError(err error) error {
+	errorMessage := err.Error()
+
+	// Categorize errors for better user experience
+	switch {
+	case strings.Contains(errorMessage, "transaction_declined"):
+		return echo.NewHTTPError(http.StatusBadRequest, map[string]any{
+			"error": "card_declined",
+			"message": "Card was declined. Please check your card details and try again.",
+		})
+	case strings.Contains(errorMessage, "invalid_card"):
+		return echo.NewHTTPError(http.StatusBadRequest, map[string]any{
+			"error": "invalid_card",
+			"message": "Invalid card details. Please check and try again.",
+		})
+	case strings.Contains(errorMessage, "timeout"):
+		return echo.NewHTTPError(http.StatusRequestTimeout, map[string]any{
+			"error": "timeout",
+			"message": "Tokenization timed out. Please try again.",
+		})
+	case strings.Contains(errorMessage, "gateway"):
+		return echo.NewHTTPError(http.StatusServiceUnavailable, map[string]any{
+			"error": "gateway_error",
+			"message": "Payment gateway temporarily unavailable. Please try again later.",
+		})
+	default:
+		return echo.NewHTTPError(http.StatusInternalServerError, map[string]any{
+			"error": "tokenization_failed",
+			"message": "Unable to save card. Please try again.",
+		})
 	}
 }
 

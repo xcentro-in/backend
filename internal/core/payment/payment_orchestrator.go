@@ -160,11 +160,9 @@ func (o *MockPaymentOrchestrator) TokenizeCard(ctx context.Context, request Toke
 		},
 	}
 
-	// For Easebuzz, add amount requirement
+	// For Easebuzz, amount is implicit (₹1 built into tokenization API)
 	if gateway == GatewayEasebuzz {
-		gatewayRequest.Amount = 100 // Minimum amount for Easebuzz tokenization (₹1)
-		gatewayRequest.Currency = CurrencyINR
-		fmt.Printf("💰 Adding amount for Easebuzz tokenization: %d %s\n", gatewayRequest.Amount, gatewayRequest.Currency)
+		fmt.Printf("💰 Easebuzz tokenization: ₹1 amount is implicit in API\n")
 	}
 
 	// Call actual gateway for tokenization
@@ -174,6 +172,7 @@ func (o *MockPaymentOrchestrator) TokenizeCard(ctx context.Context, request Toke
 		fmt.Printf("❌ Gateway tokenization failed: %v\n", err)
 		return nil, fmt.Errorf("gateway tokenization failed: %w", err)
 	}
+	fmt.Print("✅ Gateway tokenization successful\n")
 
 	// Create final response
 	response := &TokenizeResponse{
@@ -187,7 +186,7 @@ func (o *MockPaymentOrchestrator) TokenizeCard(ctx context.Context, request Toke
 		GatewayUsed:    gateway,
 		Status:         gatewayResponse.Status,
 		Message:        gatewayResponse.Message,
-		CreatedAt:      gatewayResponse.ExpiresAt.Add(-15 * time.Minute), // Mock created time
+		// CreatedAt:      gatewayResponse.ExpiresAt.Add(-15 * time.Minute), // Mock created time
 	}
 
 	fmt.Printf("✅ Card tokenization successful with %s\n", gateway)

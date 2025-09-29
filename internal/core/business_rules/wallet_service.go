@@ -15,21 +15,38 @@ type WalletService interface {
 
 // MockWalletService provides a mock implementation for business wallet operations
 type MockWalletService struct {
-	// No dependencies yet - just mock data
+	// In-memory storage for Phase 3B.1 (replace with database in later phases)
+	storedCards map[string][]*payment.StoredCard // businessID -> cards
 }
 
 // NewMockWalletService creates a new mock wallet service
 func NewMockWalletService() WalletService {
-	return &MockWalletService{}
+	return &MockWalletService{
+		storedCards: make(map[string][]*payment.StoredCard),
+	}
 }
 
 // GetBusinessWallet retrieves the complete business wallet with all payment sources
+// TODO: clean the logic here and move to DB in later phases
+// For now, returns mock data along with any real stored cards from tokenization
+// some part of it is similar to real life
+// need to take down mock data and see how it works
 func (ws *MockWalletService) GetBusinessWallet(businessID string) (*payment.BusinessWallet, error) {
 	fmt.Println("=== WALLET SERVICE: GetBusinessWallet Called ===")
 	fmt.Printf("Business ID: %s\n", businessID)
 
+	// Get real stored cards (from tokenization) and combine with mock data
+	realStoredCards := ws.storedCards[businessID]
+	if realStoredCards == nil {
+		realStoredCards = make([]*payment.StoredCard, 0)
+	}
+
 	// Generate mock payment sources
-	storedCards := ws.generateMockStoredCards(businessID)
+	mockStoredCards := ws.generateMockStoredCards(businessID)
+
+	// Combine real and mock cards
+	storedCards := append(realStoredCards, mockStoredCards...)
+
 	bankAccounts := ws.generateMockBankAccounts(businessID)
 	upiDetails := ws.generateMockUPIDetails(businessID)
 	creditLines := ws.generateMockCreditLines(businessID)
@@ -43,7 +60,8 @@ func (ws *MockWalletService) GetBusinessWallet(businessID string) (*payment.Busi
 		LastUpdated:  payment.Now(),
 	}
 
-	fmt.Printf("💳 Found %d stored cards\n", len(storedCards))
+	fmt.Printf("💳 Found %d stored cards (%d real + %d mock)\n",
+		len(storedCards), len(realStoredCards), len(mockStoredCards))
 	fmt.Printf("🏦 Found %d bank accounts\n", len(bankAccounts))
 	fmt.Printf("📱 Found %d UPI details\n", len(upiDetails))
 	fmt.Printf("💰 Found %d credit lines\n", len(creditLines))
@@ -59,9 +77,41 @@ func (ws *MockWalletService) AddPaymentSource(businessID string, source payment.
 	fmt.Printf("Source Type: %s\n", source.GetSourceType())
 	fmt.Printf("Source ID: %s\n", source.GetSourceID())
 
-	// Mock implementation - just log the action
+	// Store the payment source based on type
+	switch source.GetSourceType() {
+	case payment.PaymentSourceCard:
+		if storedCard, ok := source.(*payment.StoredCard); ok {
+			// Initialize the business's card slice if not exists
+			if ws.storedCards[businessID] == nil {
+				ws.storedCards[businessID] = make([]*payment.StoredCard, 0)
+			}
+
+			// Add the card to storage
+			ws.storedCards[businessID] = append(ws.storedCards[businessID], storedCard)
+
+			fmt.Printf("💾 Stored card: %s %s ending in %s\n",
+				storedCard.CardCategory, storedCard.CardType, storedCard.LastFourDigits)
+			fmt.Printf("🎫 Token stored securely (backend only)\n")
+		} else {
+			return fmt.Errorf("invalid stored card type")
+		}
+
+	case payment.PaymentSourceBankAccount:
+		// TODO: Implement bank account storage when needed
+		fmt.Printf("🏦 Bank account storage not implemented yet\n")
+
+	case payment.PaymentSourceUPI:
+		// TODO: Implement UPI storage when needed
+		fmt.Printf("📱 UPI storage not implemented yet\n")
+
+	case payment.PaymentSourceCreditLine:
+		// TODO: Implement credit line storage when needed
+		fmt.Printf("💰 Credit line storage not implemented yet\n")
+	}
+
 	fmt.Printf("✅ Payment source added successfully\n")
 	fmt.Printf("📋 Source Info: %+v\n", source.GetDisplayInfo())
+	fmt.Printf("📊 Total stored cards for business: %d\n", len(ws.storedCards[businessID]))
 
 	fmt.Println("=== WALLET SERVICE: AddPaymentSource Complete ===")
 	return nil

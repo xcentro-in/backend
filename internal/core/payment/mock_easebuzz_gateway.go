@@ -25,48 +25,49 @@ func (g *MockEasebuzzGateway) GetGatewayType() GatewayType {
 }
 
 // TokenizeCard implements Easebuzz-specific tokenization flow
-// Easebuzz Flow: Direct tokenize API with amount → credit + tokenize
+// Easebuzz Flow: Direct tokenize API with implicit ₹1 → credit + tokenize
 func (g *MockEasebuzzGateway) TokenizeCard(ctx context.Context, request GatewayTokenizeRequest) (*GatewayTokenizeResponse, error) {
-	fmt.Println("=== EASEBUZZ GATEWAY: TokenizeCard Called ===")
+	fmt.Println("=== EASEBUZZ GATEWAY: Direct Tokenization ===")
 	fmt.Printf("📥 Business ID: %s\n", request.BusinessID)
 	fmt.Printf("📥 Transaction ID: %s\n", request.TransactionID)
-	fmt.Printf("💳 Card Type: %s %s\n", request.CardDetails.CardCategory, request.CardDetails.CardType)
-	fmt.Printf("💰 Amount: %d %s\n", request.Amount, request.Currency)
+	fmt.Printf("💳 Card: %s %s ending in %s\n",
+		request.CardDetails.CardCategory, request.CardDetails.CardType, request.CardDetails.LastFourDigits)
 
-	// TODO: Implement actual Easebuzz tokenization API call
-	// Easebuzz requires amount for tokenization (does credit + tokenize)
+	// Easebuzz tokenization with implicit ₹1 amount
+	fmt.Println("🔄 Calling Easebuzz direct tokenization API...")
+	fmt.Printf("💰 Implicit Amount: ₹1 (built into tokenization)\n")
 
-	if request.Amount <= 0 {
-		return nil, fmt.Errorf("amount is required for Easebuzz tokenization")
-	}
+	// Simulate direct tokenization API call (credit + tokenize in one step)
+	time.Sleep(3 * time.Second) // Simulate API call delay
 
-	fmt.Println("🔄 Calling Easebuzz tokenization API with amount...")
-
-	// Mock tokenization
+	// Generate token
 	token := fmt.Sprintf("eb_tok_%s_%s", request.CardDetails.CardType, uuid.New().String()[:8])
 	cardID := uuid.New().String()
 
-	// Mock response
+	// Mock successful response
 	response := &GatewayTokenizeResponse{
 		Token:         token,
 		CardID:        cardID,
 		TransactionID: request.TransactionID,
 		Status:        "success",
-		Message:       "Card tokenized successfully with Easebuzz",
-		RedirectURL:   fmt.Sprintf("https://mock-easebuzz.com/tokenize/%s", cardID),
-		ExpiresAt:     &[]time.Time{time.Now().Add(20 * time.Minute)}[0],
+		Message:       "Card tokenized successfully with Easebuzz direct flow",
+		RedirectURL:   "", // No redirect needed for tokenization
+		ExpiresAt:     nil, // Tokens don't expire
 		Metadata: map[string]any{
-			"gateway":       "easebuzz",
-			"amount":        request.Amount,
-			"mock_data":     true,
-			"tokenize_flow": "direct_with_amount",
+			"gateway":           "easebuzz",
+			"tokenization_flow": "direct",
+			"validation_amount": 100, // ₹1 in paise (implicit)
+			"credit_processed":  true,
+			"mock_data":        true,
 		},
 	}
 
-	fmt.Printf("✅ Token generated: %s\n", token)
+	fmt.Printf("✅ Tokenization complete!\n")
+	fmt.Printf("🎫 Token: %s\n", token)
 	fmt.Printf("🆔 Card ID: %s\n", cardID)
-	fmt.Printf("🌐 Redirect URL: %s\n", response.RedirectURL)
-	fmt.Println("=== EASEBUZZ GATEWAY: TokenizeCard Complete ===")
+	fmt.Printf("💳 ₹1 credit processed and token generated\n")
+	fmt.Printf("⏱️  Total time: ~3 seconds (direct API call)\n")
+	fmt.Println("=== EASEBUZZ GATEWAY: Direct Tokenization Complete ===")
 
 	return response, nil
 }

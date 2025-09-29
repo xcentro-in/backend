@@ -25,54 +25,66 @@ func (g *MockJioPayGateway) GetGatewayType() GatewayType {
 }
 
 // TokenizeCard implements JioPay-specific tokenization flow
-// JioPay Flow: Transaction first → get auth reference → call tokenize API
+// JioPay Flow: ₹1 Transaction → extract authResponseCode → call tokenize API
 func (g *MockJioPayGateway) TokenizeCard(ctx context.Context, request GatewayTokenizeRequest) (*GatewayTokenizeResponse, error) {
-	fmt.Println("=== JIOPAY GATEWAY: TokenizeCard Called ===")
+	fmt.Println("=== JIOPAY GATEWAY: Complete Tokenization Flow ===")
 	fmt.Printf("📥 Business ID: %s\n", request.BusinessID)
 	fmt.Printf("📥 Transaction ID: %s\n", request.TransactionID)
-	fmt.Printf("💳 Card Type: %s %s\n", request.CardDetails.CardCategory, request.CardDetails.CardType)
+	fmt.Printf("💳 Card: %s %s ending in %s\n",
+		request.CardDetails.CardCategory, request.CardDetails.CardType, request.CardDetails.LastFourDigits)
 
-	// TODO: Implement actual JioPay tokenization flow:
-	// 1. First make a small transaction to get auth reference
-	// 2. Use auth reference to call tokenize API
-	// 3. Return token for future payments
+	// STEP 1: Make ₹1 transaction to validate card
+	fmt.Println("🔄 Step 1: Making ₹1 validation transaction...")
+	fmt.Printf("💰 Transaction Amount: ₹1 (validation)\n")
 
-	// STEP 1: Mock transaction for auth reference (if not provided)
-	authReference := request.AuthReference
-	if authReference == "" {
-		fmt.Println("🔄 Step 1: Creating mock transaction for auth reference...")
-		authReference = fmt.Sprintf("jio_auth_%s", uuid.New().String()[:12])
-		fmt.Printf("🔐 Generated Auth Reference: %s\n", authReference)
-	} else {
-		fmt.Printf("🔐 Using provided Auth Reference: %s\n", authReference)
-	}
+	// Simulate transaction API call
+	time.Sleep(2 * time.Second) // Simulate network delay
 
-	// STEP 2: Mock tokenization call
-	fmt.Println("🔄 Step 2: Calling JioPay tokenization API...")
+	// Mock transaction response
+	transactionID := fmt.Sprintf("jio_txn_%s", uuid.New().String()[:8])
+	authResponseCode := fmt.Sprintf("AUTH_%s_%d", uuid.New().String()[:6], time.Now().Unix()%10000)
+
+	fmt.Printf("✅ Transaction successful: %s\n", transactionID)
+	fmt.Printf("🔐 Auth Response Code: %s\n", authResponseCode)
+
+	// STEP 2: Extract authResponseCode (simulate webhook processing)
+	fmt.Println("🔄 Step 2: Processing transaction webhook...")
+	time.Sleep(1 * time.Second) // Simulate webhook processing
+	fmt.Printf("📨 Webhook received for transaction: %s\n", transactionID)
+	fmt.Printf("🔑 Extracted authResponseCode: %s\n", authResponseCode)
+
+	// STEP 3: Call JioPay tokenize API with authResponseCode
+	fmt.Println("🔄 Step 3: Calling JioPay tokenization API...")
+	time.Sleep(1 * time.Second) // Simulate tokenization API call
+
+	// Generate token
 	token := fmt.Sprintf("jio_tok_%s_%s", request.CardDetails.CardType, uuid.New().String()[:8])
 	cardID := uuid.New().String()
 
-	// Mock response
+	// Mock tokenization response
 	response := &GatewayTokenizeResponse{
 		Token:         token,
 		CardID:        cardID,
 		TransactionID: request.TransactionID,
 		Status:        "success",
-		Message:       "Card tokenized successfully with JioPay",
-		RedirectURL:   fmt.Sprintf("https://mock-jiopay.com/tokenize/%s", cardID),
-		ExpiresAt:     &[]time.Time{time.Now().Add(15 * time.Minute)}[0],
+		Message:       "Card tokenized successfully with JioPay 2-step process",
+		RedirectURL:   "", // No redirect needed for tokenization
+		ExpiresAt:     nil, // Tokens don't expire
 		Metadata: map[string]any{
-			"gateway":        "jiopay",
-			"auth_reference": authReference,
-			"mock_data":      true,
-			"tokenize_flow":  "transaction_first",
+			"gateway":             "jiopay",
+			"tokenization_flow":   "two_step",
+			"validation_txn_id":   transactionID,
+			"auth_response_code":  authResponseCode,
+			"validation_amount":   100, // ₹1 in paise
+			"mock_data":          true,
 		},
 	}
 
-	fmt.Printf("✅ Token generated: %s\n", token)
+	fmt.Printf("✅ Tokenization complete!\n")
+	fmt.Printf("🎫 Token: %s\n", token)
 	fmt.Printf("🆔 Card ID: %s\n", cardID)
-	fmt.Printf("🌐 Redirect URL: %s\n", response.RedirectURL)
-	fmt.Println("=== JIOPAY GATEWAY: TokenizeCard Complete ===")
+	fmt.Printf("⏱️  Total time: ~4 seconds (₹1 txn + webhook + tokenize)\n")
+	fmt.Println("=== JIOPAY GATEWAY: Complete Tokenization Flow Complete ===")
 
 	return response, nil
 }
