@@ -2,15 +2,23 @@ package payment
 
 // === REQUEST MODELS ===
 
+// FetchWalletRequest represents the request for fetching business wallet information
+type FetchWalletRequest struct {
+	BusinessID string `json:"business_id"`
+}
+
+// GetFeeRulesRequest represents the request for getting fee rules
+type GetFeeRulesRequest struct {
+	PaymentMethod string `json:"payment_method"`
+	CardType      string `json:"card_type,omitempty"`
+	CardCategory  string `json:"card_category,omitempty"`
+	Amount        int64  `json:"amount,omitempty"`
+}
+
 // TokenizeRequest represents the request for card tokenization
 type TokenizeRequest struct {
-	CardNumber   string `json:"card_number"`
-	ExpiryMonth  string `json:"expiry_month"`
-	ExpiryYear   string `json:"expiry_year"`
-	CVV          string `json:"cvv"`
-	HolderName   string `json:"holder_name"`
-	CardType     string `json:"card_type"`     // visa, mastercard, rupay, amex, diners
-	CardCategory string `json:"card_category"` // credit, debit, corporate
+	UserID      string       `json:"user_id"`
+	CardDetails *CardDetails `json:"card_details"`
 }
 
 // MakePaymentRequest represents the request for making a payment
@@ -24,18 +32,19 @@ type MakePaymentRequest struct {
 	UPI           *UPIDetails            `json:"upi,omitempty"`
 	Wallet        *WalletDetails         `json:"wallet,omitempty"`
 	CallbackURL   string                 `json:"callback_url"`
-	Metadata      map[string]interface{} `json:"metadata,omitempty"`
+	Metadata      map[string]any `json:"metadata,omitempty"`
 }
 
 // CardDetails represents card payment details
 type CardDetails struct {
-	CardNumber   string `json:"card_number"`
-	ExpiryMonth  string `json:"expiry_month"`
-	ExpiryYear   string `json:"expiry_year"`
-	CVV          string `json:"cvv"`
-	HolderName   string `json:"holder_name"`
-	CardType     string `json:"card_type"`
-	CardCategory string `json:"card_category"`
+	CardNumber     string `json:"card_number"`
+	ExpiryMonth    string `json:"expiry_month"`
+	ExpiryYear     string `json:"expiry_year"`
+	CVV            string `json:"cvv"`
+	HolderName     string `json:"holder_name"`
+	CardType       string `json:"card_type"`
+	CardCategory   string `json:"card_category"`
+	LastFourDigits string `json:"last_four_digits,omitempty"`
 }
 
 // NetBankingDetails represents net banking payment details
@@ -57,14 +66,61 @@ type WalletDetails struct {
 
 // === RESPONSE MODELS ===
 
-// FetchWalletResponse represents the response for fetching wallet information
+// FetchWalletResponse represents the response for fetching business wallet information
 type FetchWalletResponse struct {
-	WalletID      string  `json:"wallet_id"`
-	Balance       float64 `json:"balance"`
-	Currency      string  `json:"currency"`
-	WalletType    string  `json:"wallet_type"`
-	Status        string  `json:"status"`
-	LastUpdated   string  `json:"last_updated"`
+	BusinessID   string                   `json:"business_id"`
+	StoredCards  []StoredCardResponse     `json:"stored_cards"`
+	BankAccounts []BankAccountResponse    `json:"bank_accounts"`
+	UPIDetails   []UPIDetailResponse      `json:"upi_details"`
+	CreditLines  []CreditLineResponse     `json:"credit_lines"`
+	LastUpdated  string                   `json:"last_updated"`
+}
+
+// StoredCardResponse represents a stored card in the API response
+type StoredCardResponse struct {
+	CardID         string `json:"card_id"`
+	LastFourDigits string `json:"last_four_digits"`
+	CardType       string `json:"card_type"`
+	CardCategory   string `json:"card_category"`
+	ExpiryMonth    string `json:"expiry_month"`
+	ExpiryYear     string `json:"expiry_year"`
+	IssuerBank     string `json:"issuer_bank"`
+	IsActive       bool   `json:"is_active"`
+	Nickname       string `json:"nickname,omitempty"`
+}
+
+// BankAccountResponse represents a bank account in the API response
+type BankAccountResponse struct {
+	AccountID       string `json:"account_id"`
+	LastFiveDigits  string `json:"last_five_digits"`
+	BankName        string `json:"bank_name"`
+	IFSCCode        string `json:"ifsc_code"`
+	AccountType     string `json:"account_type"`
+	IsActive        bool   `json:"is_active"`
+	IsVerified      bool   `json:"is_verified"`
+	Nickname        string `json:"nickname,omitempty"`
+}
+
+// UPIDetailResponse represents a UPI detail in the API response
+type UPIDetailResponse struct {
+	UPIID      string `json:"upi_id"`
+	UPIAddress string `json:"upi_address"`
+	Provider   string `json:"provider"`
+	IsActive   bool   `json:"is_active"`
+	IsVerified bool   `json:"is_verified"`
+	Nickname   string `json:"nickname,omitempty"`
+}
+
+// CreditLineResponse represents a credit line in the API response
+type CreditLineResponse struct {
+	CreditLineID   string  `json:"credit_line_id"`
+	Provider       string  `json:"provider"`
+	AvailableLimit float64 `json:"available_limit"`
+	TotalLimit     float64 `json:"total_limit"`
+	Currency       string  `json:"currency"`
+	Status         string  `json:"status"`
+	IsActive       bool    `json:"is_active"`
+	Nickname       string  `json:"nickname,omitempty"`
 }
 
 // GetFeeRulesResponse represents the response for fee rules
@@ -102,7 +158,7 @@ type MakePaymentResponse struct {
 	RedirectURL     string                 `json:"redirect_url,omitempty"`
 	Message         string                 `json:"message"`
 	CreatedAt       string                 `json:"created_at"`
-	Metadata        map[string]interface{} `json:"metadata,omitempty"`
+	Metadata        map[string]any `json:"metadata,omitempty"`
 }
 
 // === COMMON RESPONSE MODELS ===
@@ -112,7 +168,7 @@ type StandardResponse struct {
 	Message  string      `json:"message"`
 	Endpoint string      `json:"endpoint"`
 	Status   string      `json:"status"`
-	Data     interface{} `json:"data,omitempty"`
+	Data     any `json:"data,omitempty"`
 }
 
 // ErrorResponse represents an error response

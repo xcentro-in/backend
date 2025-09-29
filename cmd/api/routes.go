@@ -3,6 +3,8 @@ package main
 import (
 	"github.com/labstack/echo/v4"
 	userRepo "xcentro.in/internal/adapters/database/postgres/user"
+	"xcentro.in/internal/core/business_rules"
+	corePayment "xcentro.in/internal/core/payment"
 	"xcentro.in/internal/handlers/http/auth"
 	"xcentro.in/internal/handlers/http/payment"
 	authservice "xcentro.in/internal/services/auth"
@@ -16,6 +18,17 @@ func registerV1AuthRoutes(meta *serverMetaData, group *echo.Group) {
 	)
 	authService := authservice.NewAuthService(&meta.config.JWT, meta.clients.rcache)
 	auth.RegisterAuthRoutes(group, userService, authService)
+}
+
+func registerV1PaymentRoutes(meta *serverMetaData, group *echo.Group) {
+	// Create payment services (Phase 2)
+	orchestrator := corePayment.NewMockPaymentOrchestrator()
+	feeCalculator := business_rules.NewMockFeeCalculator()
+	walletService := business_rules.NewMockWalletService()
+
+	// Register payment routes with services
+	processPaymentGroup := group.Group("/process_payment")
+	payment.RegisterPaymentRoutes(processPaymentGroup, orchestrator, feeCalculator, walletService)
 }
 
 func registerV1Routes(s *xcentroServer) {
@@ -32,8 +45,7 @@ func registerV1Routes(s *xcentroServer) {
 	registerV1AuthRoutes(&s.meta, v1)
 
 	// Payment Routes
-	processPaymentGroup := v1.Group("/process_payment")
-	payment.RegisterPaymentRoutes(processPaymentGroup)
+	registerV1PaymentRoutes(&s.meta, v1)
 
 	// User Routes
 	// Business Routes
