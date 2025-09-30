@@ -37,9 +37,3 @@ DROP TYPE IF EXISTS xcentro.kyc_status_enum;
 DROP TYPE IF EXISTS xcentro.user_role_enum;
 DROP TYPE IF EXISTS xcentro.business_type_enum;
 DROP TYPE IF EXISTS xcentro.subscription_type_enum;
-
-
--- #############################################################################
--- # Schema
--- #############################################################################
-DROP SCHEMA IF EXISTS xcentro;

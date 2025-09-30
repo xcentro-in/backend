@@ -1,22 +1,28 @@
 package business
 
-import "xcentro.in/internal/core/shared"
+import (
+	"context"
+
+	"xcentro.in/internal/core/shared"
+)
 
 // BusinessRepository defines the interface for interacting with business data.
 type BusinessRepository interface {
-	FindByID(id string) (*Business, error)
-	FindByGSTIN(gstin string) (*Business, error)
-	Create(business *Business) error
-	Update(business *Business) error
-	UpdateKYBData(bid string, kybData *BusinessKYBData) (*BusinessKYBData, error)
-	UpdateSubscriptionStatus(bid string, subData *BusinessSubscription) error
+	FindByID(ctx context.Context, id string) (*Business, error)
+	FindByGSTIN(ctx context.Context, gstin string) (*Business, error)
+	CreateBusinessByNameAndGSTIN(ctx context.Context, name string, gstin string) (*Business, error)
+	Create(ctx context.Context, business *Business) error
+	Update(ctx context.Context, business *Business) error
+	UpdateKYBData(ctx context.Context, bid string, kybData *BusinessKYBData) (*BusinessKYBData, error)
+	UpdateSubscriptionStatus(ctx context.Context, bid string, subData *BusinessSubscription) error
 }
 
 // BusinessUserRelationRepository defines the interface for the relationship data.
 type BusinessUserRelationRepository interface {
-	FindByUser(userID string) ([]*BusinessUserRelation, error)
-	FindByBusiness(bid string) ([]*BusinessUserRelation, error)
-	AddUserToBusiness(relation *BusinessUserRelation) error
-	UpdateUserRole(userID string, bid string, newRole shared.UserRole) error
-	RemoveUserFromBusiness(userID string, bid string) error
+	FindByUser(ctx context.Context, userID string) ([]*BusinessUserRelation, error)
+	FindByBusiness(ctx context.Context, bid string) ([]*BusinessUserRelation, error)
+	AddUserToBusiness(ctx context.Context, relation *BusinessUserRelation) error
+	UpdateUserRole(ctx context.Context, userID string, bid string, newRole shared.UserRole) error
+	UpdateKYBInitiated(ctx context.Context, uid string, bid string, initiated bool) error
+	RemoveUserFromBusiness(ctx context.Context, userID string, bid string) error
 }

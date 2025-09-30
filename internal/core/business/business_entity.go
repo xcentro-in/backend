@@ -27,12 +27,13 @@ type BusinessKYBData struct {
 
 // BusinessUserRelation represents the many-to-many relationship between users and businesses.
 type BusinessUserRelation struct {
-	UserID    string          `json:"userid"`
-	BID       string          `json:"bid"`
-	Role      shared.UserRole `json:"role"`
-	RoleClaim shared.UserRole `json:"roleClaim"`
-	AddedAt   string          `json:"addedAt"`
-	Timestamp string          `json:"timestamp"`
+	UserID       string          `json:"userid"`
+	BID          string          `json:"bid"`
+	Role         shared.UserRole `json:"role"`
+	RoleClaim    shared.UserRole `json:"roleClaim"`
+	AddedAt      string          `json:"addedAt"`
+	KybInitiated bool            `json:"kybInitiated"`
+	Timestamp    string          `json:"timestamp"`
 }
 
 type BusinessSubscription struct {
@@ -42,4 +43,12 @@ type BusinessSubscription struct {
 	ValidTill        string                  `json:"validTill"`
 	AutoRenew        bool                    `json:"autoRenew"`
 	RenewalAmount    float64                 `json:"renewalAmount"`
+}
+
+type BusinessKYBDTO struct {
+	BID          string              `json:"bid"`
+	BusinessType shared.BusinessType `json:"businessType"`
+	ITID         string              `json:"itid"`
+	CID          string              `json:"cid"`
+	DocUrl       string              `json:"docUrl"`
 }

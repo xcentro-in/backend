@@ -39,7 +39,8 @@ type KYBstatus uint8
 
 const (
 	KYBNotStarted KYBstatus = iota
-	KYBInReview
+	KYBInProgress
+	KYBCompleted
 	KYBNeedsUpdate
 	KYBVerified
 	KYBRejected

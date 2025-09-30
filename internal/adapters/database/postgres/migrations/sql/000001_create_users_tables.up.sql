@@ -1,6 +1,3 @@
--- Create schema if it doesn't exist
-CREATE SCHEMA IF NOT EXISTS xcentro;
-
 -- #############################################################################
 -- # Custom ENUM Types for Data Integrity
 -- #############################################################################
@@ -154,6 +151,7 @@ CREATE TABLE xcentro.business_user_relation (
     bid UUID NOT NULL REFERENCES xcentro.business(bid) ON DELETE CASCADE,
     role xcentro.user_role_enum,
     role_claim xcentro.user_role_enum,
+    kyb_initiated BOOLEAN DEFAULT FALSE,
     added_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ,
     PRIMARY KEY (user_id, bid)
