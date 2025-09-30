@@ -488,6 +488,193 @@ func (h *PaymentHandler) MakePayment(c echo.Context) error {
 	})
 }
 
+// AddPaymentSource handles POST /process_payment/add_payment_source
+func (h *PaymentHandler) AddPaymentSource(c echo.Context) error {
+	fmt.Println("=== HANDLER: AddPaymentSource API Called ===")
+
+	// Parse request body
+	var req AddPaymentSourceRequest
+	if err := c.Bind(&req); err != nil {
+		fmt.Printf("❌ Error binding request: %v\n", err)
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error": "invalid_request",
+			"message": "Invalid request body",
+		})
+	}
+
+	fmt.Printf("📥 Request: Business ID: %s, Source Type: %s\n", req.BusinessID, req.SourceType)
+
+	// Validate request
+	if err := h.validateAddPaymentSourceRequest(&req); err != nil {
+		fmt.Printf("❌ Validation error: %v\n", err)
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error": "validation_failed",
+			"message": err.Error(),
+		})
+	}
+
+	// Create context with timeout
+	ctx, cancel := context.WithTimeout(c.Request().Context(), 30*time.Second)
+	defer cancel()
+
+	// Route to appropriate handler based on source type
+	switch req.SourceType {
+	case "bank_account":
+		return h.handleBankAccountAddition(ctx, c, &req)
+	case "upi":
+		return h.handleUPIAccountAddition(ctx, c, &req)
+	default:
+		fmt.Printf("❌ Unsupported source type: %s\n", req.SourceType)
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error": "unsupported_source_type",
+			"message": fmt.Sprintf("Source type '%s' is not supported", req.SourceType),
+		})
+	}
+}
+
+// handleBankAccountAddition handles bank account verification and addition
+func (h *PaymentHandler) handleBankAccountAddition(ctx context.Context, c echo.Context, req *AddPaymentSourceRequest) error {
+	fmt.Println("🏦 Processing bank account addition...")
+
+	// Convert HTTP request to core domain request
+	bankAccount := &payment.BankAccount{
+		AccountNumber:     req.BankAccountDetails.AccountNumber,
+		IFSCCode:          req.BankAccountDetails.IFSCCode,
+		AccountHolderName: req.BankAccountDetails.AccountHolderName,
+		BankName:          req.BankAccountDetails.BankName,
+		BranchName:        req.BankAccountDetails.BranchName,
+		AccountType:       payment.BankAccountType(req.BankAccountDetails.AccountType),
+	}
+
+	fmt.Println("🔄 Calling Wallet Service for bank account verification and addition...")
+
+	// Call wallet service to add and verify bank account
+	err := h.walletService.AddPaymentSource(req.BusinessID, bankAccount)
+	if err != nil {
+		fmt.Printf("❌ Bank account addition failed: %v\n", err)
+
+		// Check if it's a bank verification error
+		if bankVerifyErr, ok := err.(*business_rules.BankVerificationError); ok {
+			return c.JSON(http.StatusBadRequest, map[string]any{
+				"error": bankVerifyErr.Code,
+				"message": bankVerifyErr.Message,
+				"details": bankVerifyErr.Details,
+			})
+		}
+
+		return c.JSON(http.StatusInternalServerError, map[string]any{
+			"error": "internal_error",
+			"message": "Failed to add bank account",
+		})
+	}
+
+	// Create success response
+	response := AddPaymentSourceResponse{
+		Success:           true,
+		Message:           "Bank account verified and added successfully",
+		SourceID:          bankAccount.GetSourceID(),
+		SourceType:        "bank_account",
+		VerificationStatus: "verified",
+		AccountDetails: &VerifiedAccountDetails{
+			MaskedAccountNumber: h.maskAccountNumber(req.BankAccountDetails.AccountNumber),
+			VerifiedName:        req.BankAccountDetails.AccountHolderName, // TODO: Use verified name from response
+			BankName:            req.BankAccountDetails.BankName,
+			BranchName:          req.BankAccountDetails.BranchName,
+			IFSCCode:            req.BankAccountDetails.IFSCCode,
+			AccountType:         req.BankAccountDetails.AccountType,
+			IsActive:            true,
+		},
+	}
+
+	fmt.Printf("✅ Bank account added successfully with ID: %s\n", bankAccount.GetSourceID())
+	fmt.Println("=== HANDLER: AddPaymentSource Complete ===")
+
+	return c.JSON(http.StatusCreated, map[string]any{
+		"message": "Payment source added successfully",
+		"endpoint": "POST /v1/process_payment/add_payment_source",
+		"status": "success",
+		"data": response,
+	})
+}
+
+// handleUPIAccountAddition handles UPI account verification and addition
+func (h *PaymentHandler) handleUPIAccountAddition(ctx context.Context, c echo.Context, req *AddPaymentSourceRequest) error {
+	fmt.Println("📱 Processing UPI account addition...")
+
+	// TODO: Implement UPI verification logic when UPI service is available
+	return c.JSON(http.StatusNotImplemented, map[string]any{
+		"error": "not_implemented",
+		"message": "UPI account addition is not yet implemented",
+	})
+}
+
+// Helper functions for AddPaymentSource handler
+
+// validateAddPaymentSourceRequest validates the add payment source request
+func (h *PaymentHandler) validateAddPaymentSourceRequest(req *AddPaymentSourceRequest) error {
+	// Validate business ID
+	if req.BusinessID == "" {
+		return fmt.Errorf("business_id is required")
+	}
+
+	// Validate source type
+	if req.SourceType == "" {
+		return fmt.Errorf("source_type is required")
+	}
+
+	// Validate source-specific details
+	switch req.SourceType {
+	case "bank_account":
+		if req.BankAccountDetails == nil {
+			return fmt.Errorf("bank_account_details is required for bank_account source type")
+		}
+		return h.validateBankAccountDetails(req.BankAccountDetails)
+	case "upi":
+		if req.UPIAccountDetails == nil {
+			return fmt.Errorf("upi_account_details is required for upi source type")
+		}
+		return h.validateUPIAccountDetails(req.UPIAccountDetails)
+	default:
+		return fmt.Errorf("unsupported source_type: %s", req.SourceType)
+	}
+}
+
+// validateBankAccountDetails validates bank account details
+func (h *PaymentHandler) validateBankAccountDetails(details *BankAccountDetails) error {
+	if details.AccountNumber == "" {
+		return fmt.Errorf("account_number is required")
+	}
+	if details.IFSCCode == "" {
+		return fmt.Errorf("ifsc_code is required")
+	}
+	if details.AccountHolderName == "" {
+		return fmt.Errorf("account_holder_name is required")
+	}
+	if details.BankName == "" {
+		return fmt.Errorf("bank_name is required")
+	}
+	if details.AccountType == "" {
+		return fmt.Errorf("account_type is required")
+	}
+	return nil
+}
+
+// validateUPIAccountDetails validates UPI account details
+func (h *PaymentHandler) validateUPIAccountDetails(details *UPIAccountDetails) error {
+	if details.UPIAddress == "" {
+		return fmt.Errorf("upi_address is required")
+	}
+	return nil
+}
+
+// maskAccountNumber masks account number for display
+func (h *PaymentHandler) maskAccountNumber(accountNumber string) string {
+	if len(accountNumber) <= 4 {
+		return "****"
+	}
+	return "****" + accountNumber[len(accountNumber)-4:]
+}
+
 // Helper functions for MakePayment handler
 
 // validatePaymentRequest validates the payment request
@@ -724,6 +911,7 @@ func RegisterPaymentRoutes(group *echo.Group, orchestrator payment.PaymentOrches
 	group.POST("/get_fee_rules", handler.GetFeeRules)
 	group.POST("/tokenize", handler.Tokenize)
 	group.POST("/make_payment", handler.MakePayment)
+	group.POST("/add_payment_source", handler.AddPaymentSource)
 
 	// Webhook endpoints (Phase 3C)
 	webhookGroup := group.Group("/webhooks")

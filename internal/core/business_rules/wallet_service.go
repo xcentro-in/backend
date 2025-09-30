@@ -1,7 +1,10 @@
 package business_rules
 
 import (
+	"context"
 	"fmt"
+	"strings"
+	"time"
 	"xcentro.in/internal/core/payment"
 )
 
@@ -17,12 +20,17 @@ type WalletService interface {
 type MockWalletService struct {
 	// In-memory storage for Phase 3B.1 (replace with database in later phases)
 	storedCards map[string][]*payment.StoredCard // businessID -> cards
+	bankAccounts map[string][]*payment.BankAccount // businessID -> bank accounts
+	// Bank verification service for penny drop verification
+	bankVerificationService BankVerificationService
 }
 
 // NewMockWalletService creates a new mock wallet service
 func NewMockWalletService() WalletService {
 	return &MockWalletService{
-		storedCards: make(map[string][]*payment.StoredCard),
+		storedCards:             make(map[string][]*payment.StoredCard),
+		bankAccounts:            make(map[string][]*payment.BankAccount),
+		bankVerificationService: NewMockBankVerificationService(),
 	}
 }
 
@@ -47,7 +55,15 @@ func (ws *MockWalletService) GetBusinessWallet(businessID string) (*payment.Busi
 	// Combine real and mock cards
 	storedCards := append(realStoredCards, mockStoredCards...)
 
-	bankAccounts := ws.generateMockBankAccounts(businessID)
+	// Get real bank accounts (from verification) and combine with mock data
+	realBankAccounts := ws.bankAccounts[businessID]
+	if realBankAccounts == nil {
+		realBankAccounts = make([]*payment.BankAccount, 0)
+	}
+
+	// Generate mock bank accounts and combine with real ones
+	mockBankAccounts := ws.generateMockBankAccounts(businessID)
+	bankAccounts := append(realBankAccounts, mockBankAccounts...)
 	upiDetails := ws.generateMockUPIDetails(businessID)
 	creditLines := ws.generateMockCreditLines(businessID)
 
@@ -97,8 +113,91 @@ func (ws *MockWalletService) AddPaymentSource(businessID string, source payment.
 		}
 
 	case payment.PaymentSourceBankAccount:
-		// TODO: Implement bank account storage when needed
-		fmt.Printf("🏦 Bank account storage not implemented yet\n")
+		if bankAccount, ok := source.(*payment.BankAccount); ok {
+			fmt.Printf("🏦 Processing bank account verification\n")
+			fmt.Printf("📄 Account: %s\n", ws.maskAccountNumber(bankAccount.AccountNumber))
+			fmt.Printf("🏧 IFSC: %s\n", bankAccount.IFSCCode)
+			fmt.Printf("👤 Holder: %s\n", bankAccount.AccountHolderName)
+
+			// Step 1: Validate bank account details
+			if err := ws.validateBankAccountDetails(bankAccount); err != nil {
+				fmt.Printf("❌ Bank account validation failed: %v\n", err)
+				return err
+			}
+
+			// Step 2: Check for duplicate accounts
+			if err := ws.checkDuplicateBankAccount(businessID, bankAccount.AccountNumber); err != nil {
+				fmt.Printf("❌ Duplicate account check failed: %v\n", err)
+				return err
+			}
+
+			// Step 3: Perform penny drop verification
+			fmt.Println("🔄 Initiating penny drop verification...")
+			verificationRequest := BankVerificationRequest{
+				BusinessID:        businessID,
+				RequestID:         fmt.Sprintf("verify_%s_%d", businessID[:8], time.Now().Unix()),
+				AccountNumber:     bankAccount.AccountNumber,
+				IFSCCode:          bankAccount.IFSCCode,
+				AccountHolderName: bankAccount.AccountHolderName,
+				BankName:          bankAccount.BankName,
+				BranchName:        bankAccount.BranchName,
+				AccountType:       bankAccount.AccountType,
+				Metadata: map[string]any{
+					"source":      "wallet_service",
+					"business_id": businessID,
+				},
+			}
+
+			// Call verification service (this simulates 3rd party API call)
+			ctx := context.Background() // TODO: Use proper context from request
+			verificationResponse, err := ws.bankVerificationService.VerifyBankAccount(ctx, verificationRequest)
+			if err != nil {
+				fmt.Printf("❌ Bank verification failed: %v\n", err)
+				return fmt.Errorf("bank account verification failed: %w", err)
+			}
+
+			// Step 4: Process verification results
+			if verificationResponse.Status != BankVerificationStatusSuccess {
+				fmt.Printf("❌ Verification unsuccessful: %s\n", verificationResponse.FailureReason)
+				return fmt.Errorf("bank account verification failed: %s", verificationResponse.FailureReason)
+			}
+
+			// Step 5: Update bank account with verification results
+			bankAccount.IsVerified = true
+			bankAccount.IsActive = true
+			bankAccount.AccountHolderName = verificationResponse.VerifiedAccountName // Use verified name
+			bankAccount.BankName = verificationResponse.BankName                     // Use verified bank details
+			bankAccount.BranchName = verificationResponse.BranchName
+			bankAccount.AddedAt = time.Now()
+
+			// Add verification metadata
+			if bankAccount.Metadata == nil {
+				bankAccount.Metadata = make(map[string]any)
+			}
+			bankAccount.Metadata["verification_status"] = "verified"
+			bankAccount.Metadata["verification_date"] = verificationResponse.VerifiedAt.Format("2006-01-02")
+			bankAccount.Metadata["verification_amount"] = verificationResponse.VerificationAmount
+			bankAccount.Metadata["transaction_reference"] = verificationResponse.TransactionReference
+			bankAccount.Metadata["provider"] = string(verificationResponse.Provider)
+
+			// Step 6: Store verified bank account
+			// TODO: Replace with database storage in production
+			if ws.bankAccounts[businessID] == nil {
+				ws.bankAccounts[businessID] = make([]*payment.BankAccount, 0)
+			}
+
+			// Add the verified bank account to storage
+			ws.bankAccounts[businessID] = append(ws.bankAccounts[businessID], bankAccount)
+
+			fmt.Printf("✅ Bank account verified and stored successfully\n")
+			fmt.Printf("🏦 Verified Bank: %s\n", bankAccount.BankName)
+			fmt.Printf("👤 Verified Name: %s\n", bankAccount.AccountHolderName)
+			fmt.Printf("🔗 Reference: %s\n", verificationResponse.TransactionReference)
+			fmt.Printf("📊 Total bank accounts for business: %d\n", len(ws.bankAccounts[businessID]))
+
+		} else {
+			return fmt.Errorf("invalid bank account type")
+		}
 
 	case payment.PaymentSourceUPI:
 		// TODO: Implement UPI storage when needed
@@ -323,4 +422,59 @@ func (ws *MockWalletService) generateMockCreditLines(businessID string) []*payme
 			},
 		},
 	}
+}
+
+// Helper methods for bank account verification
+
+// validateBankAccountDetails validates bank account details before verification
+func (ws *MockWalletService) validateBankAccountDetails(bankAccount *payment.BankAccount) error {
+	if bankAccount.AccountNumber == "" {
+		return fmt.Errorf("account number is required")
+	}
+
+	if len(bankAccount.AccountNumber) < 9 || len(bankAccount.AccountNumber) > 18 {
+		return fmt.Errorf("account number must be between 9 and 18 digits")
+	}
+
+	if bankAccount.IFSCCode == "" {
+		return fmt.Errorf("IFSC code is required")
+	}
+
+	if len(bankAccount.IFSCCode) != 11 {
+		return fmt.Errorf("IFSC code must be exactly 11 characters")
+	}
+
+	if bankAccount.AccountHolderName == "" {
+		return fmt.Errorf("account holder name is required")
+	}
+
+	if strings.TrimSpace(bankAccount.AccountHolderName) == "" {
+		return fmt.Errorf("account holder name cannot be empty")
+	}
+
+	return nil
+}
+
+// checkDuplicateBankAccount checks if the account number already exists for the business
+func (ws *MockWalletService) checkDuplicateBankAccount(businessID, accountNumber string) error {
+	existingAccounts := ws.bankAccounts[businessID]
+	if existingAccounts == nil {
+		return nil // No existing accounts, so no duplicates
+	}
+
+	for _, account := range existingAccounts {
+		if account.AccountNumber == accountNumber {
+			return fmt.Errorf("bank account already exists: %s", ws.maskAccountNumber(accountNumber))
+		}
+	}
+
+	return nil
+}
+
+// maskAccountNumber masks the account number for secure display
+func (ws *MockWalletService) maskAccountNumber(accountNumber string) string {
+	if len(accountNumber) <= 4 {
+		return "****"
+	}
+	return "****" + accountNumber[len(accountNumber)-4:]
 }

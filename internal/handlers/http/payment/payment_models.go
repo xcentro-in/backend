@@ -70,6 +70,30 @@ type TokenCardDetails struct {
 	CardID string `json:"card_id"` // Reference to stored card (primary key)
 }
 
+// AddPaymentSourceRequest represents the request for adding a payment source to wallet
+type AddPaymentSourceRequest struct {
+	BusinessID           string                `json:"business_id"`
+	SourceType           string                `json:"source_type"` // bank_account, upi, etc.
+	BankAccountDetails   *BankAccountDetails   `json:"bank_account_details,omitempty"`
+	UPIAccountDetails    *UPIAccountDetails    `json:"upi_account_details,omitempty"`
+}
+
+// BankAccountDetails represents bank account details for verification and addition
+type BankAccountDetails struct {
+	AccountNumber     string `json:"account_number"`
+	IFSCCode          string `json:"ifsc_code"`
+	AccountHolderName string `json:"account_holder_name"`
+	BankName          string `json:"bank_name"`
+	BranchName        string `json:"branch_name,omitempty"`
+	AccountType       string `json:"account_type"` // savings, current, etc.
+}
+
+// UPIAccountDetails represents UPI account details for verification and addition
+type UPIAccountDetails struct {
+	UPIAddress string `json:"upi_address"`
+	Provider   string `json:"provider,omitempty"`
+}
+
 // === RESPONSE MODELS ===
 
 // FetchWalletResponse represents the response for fetching business wallet information
@@ -165,6 +189,35 @@ type MakePaymentResponse struct {
 	Message         string                 `json:"message"`
 	CreatedAt       string                 `json:"created_at"`
 	Metadata        map[string]any `json:"metadata,omitempty"`
+}
+
+// AddPaymentSourceResponse represents the response for adding a payment source
+type AddPaymentSourceResponse struct {
+	Success           bool                       `json:"success"`
+	Message           string                     `json:"message"`
+	SourceID          string                     `json:"source_id,omitempty"`
+	SourceType        string                     `json:"source_type"`
+	VerificationStatus string                    `json:"verification_status"`
+	AccountDetails     *VerifiedAccountDetails   `json:"account_details,omitempty"`
+	UPIDetails         *VerifiedUPIDetails       `json:"upi_details,omitempty"`
+}
+
+// VerifiedAccountDetails represents verified bank account details in response
+type VerifiedAccountDetails struct {
+	MaskedAccountNumber string `json:"masked_account_number"`
+	VerifiedName        string `json:"verified_name"`
+	BankName            string `json:"bank_name"`
+	BranchName          string `json:"branch_name,omitempty"`
+	IFSCCode            string `json:"ifsc_code"`
+	AccountType         string `json:"account_type"`
+	IsActive            bool   `json:"is_active"`
+}
+
+// VerifiedUPIDetails represents verified UPI details in response
+type VerifiedUPIDetails struct {
+	UPIAddress string `json:"upi_address"`
+	Provider   string `json:"provider"`
+	IsActive   bool   `json:"is_active"`
 }
 
 // === COMMON RESPONSE MODELS ===
