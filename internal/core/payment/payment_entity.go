@@ -15,6 +15,9 @@ type Payment struct {
 	GatewayPaymentID string                 `json:"gateway_payment_id,omitempty"`
 	CallbackURL      string                 `json:"callback_url"`
 	RedirectURL      string                 `json:"redirect_url,omitempty"`
+	// Link to payment source used (for tokenized payments)
+	PaymentSourceID   *string               `json:"payment_source_id,omitempty"`   // UUID of card/bank account
+	PaymentSourceType *PaymentSourceType    `json:"payment_source_type,omitempty"` // 'card', 'bank_account', etc.
 	CardDetails      *Card                  `json:"card_details,omitempty"`
 	NetBankingDetails *NetBanking           `json:"net_banking_details,omitempty"`
 	UPIDetails       *UPI                   `json:"upi_details,omitempty"`

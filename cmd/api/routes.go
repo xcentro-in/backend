@@ -2,6 +2,7 @@ package main
 
 import (
 	"github.com/labstack/echo/v4"
+	paymentRepo "xcentro.in/internal/adapters/database/postgres/payment"
 	userRepo "xcentro.in/internal/adapters/database/postgres/user"
 	"xcentro.in/internal/core/business_rules"
 	corePayment "xcentro.in/internal/core/payment"
@@ -21,10 +22,15 @@ func registerV1AuthRoutes(meta *serverMetaData, group *echo.Group) {
 }
 
 func registerV1PaymentRoutes(meta *serverMetaData, group *echo.Group) {
-	// Create payment services (Phase 2)
-	orchestrator := corePayment.NewMockPaymentOrchestrator()
+	// Create payment repository instances (Phase 4.2)
+	paymentRepository := paymentRepo.NewPgPaymentRepository(meta.clients.db)
+	storedCardRepository := paymentRepo.NewPgStoredCardRepository(meta.clients.db)
+	bankAccountRepository := paymentRepo.NewPgBankAccountRepository(meta.clients.db)
+
+	// Create payment services (Phase 2) with repository dependencies
+	orchestrator := corePayment.NewMockPaymentOrchestrator(paymentRepository, storedCardRepository)
 	feeCalculator := business_rules.NewMockFeeCalculator()
-	walletService := business_rules.NewMockWalletService()
+	walletService := business_rules.NewMockWalletService(storedCardRepository, bankAccountRepository)
 
 	// Register payment routes with services
 	processPaymentGroup := group.Group("/process_payment")

@@ -27,6 +27,9 @@ type MockWalletService struct {
 	bankAccounts map[string][]*payment.BankAccount // businessID -> bank accounts
 	// Bank verification service for penny drop verification
 	bankVerificationService BankVerificationService
+	// Repository dependencies (Phase 4.2)
+	storedCardRepo  payment.StoredCardRepository
+	bankAccountRepo payment.BankAccountRepository
 }
 
 // NewMockWalletService creates a new mock wallet service
@@ -34,11 +37,13 @@ type MockWalletService struct {
 // - Rename to NewWalletService()
 // - Add parameters: storedCardRepo, bankAccountRepo, bankVerificationLogRepo
 // - Remove map initialization, initialize repo dependencies instead
-func NewMockWalletService() WalletService {
+func NewMockWalletService(storedCardRepo payment.StoredCardRepository, bankAccountRepo payment.BankAccountRepository) WalletService {
 	return &MockWalletService{
 		storedCards:             make(map[string][]*payment.StoredCard),
 		bankAccounts:            make(map[string][]*payment.BankAccount),
 		bankVerificationService: NewMockBankVerificationService(),
+		storedCardRepo:          storedCardRepo,
+		bankAccountRepo:         bankAccountRepo,
 	}
 }
 
@@ -56,9 +61,15 @@ func (ws *MockWalletService) GetBusinessWallet(businessID string) (*payment.Busi
 	// - Replace in-memory map lookup: ws.storedCards[businessID]
 	// - Call: storedCardRepo.GetStoredCardsByBusinessID(ctx, businessID)
 	// - Filter for is_active = true
+	ctx := context.Background()
+	dbStoredCards, _ := ws.storedCardRepo.GetStoredCardsByBusinessID(ctx, businessID)
 	realStoredCards := ws.storedCards[businessID]
 	if realStoredCards == nil {
 		realStoredCards = make([]*payment.StoredCard, 0)
+	}
+	// Combine database cards with in-memory cards (temporarily until Phase 4.5)
+	if dbStoredCards != nil {
+		realStoredCards = append(realStoredCards, dbStoredCards...)
 	}
 
 	// Generate mock payment sources
@@ -76,9 +87,14 @@ func (ws *MockWalletService) GetBusinessWallet(businessID string) (*payment.Busi
 	// - Replace in-memory map lookup: ws.bankAccounts[businessID]
 	// - Call: bankAccountRepo.GetBankAccountsByBusinessID(ctx, businessID)
 	// - Filter for is_active = true and is_verified = true
+	dbBankAccounts, _ := ws.bankAccountRepo.GetBankAccountsByBusinessID(ctx, businessID)
 	realBankAccounts := ws.bankAccounts[businessID]
 	if realBankAccounts == nil {
 		realBankAccounts = make([]*payment.BankAccount, 0)
+	}
+	// Combine database accounts with in-memory accounts (temporarily until Phase 4.5)
+	if dbBankAccounts != nil {
+		realBankAccounts = append(realBankAccounts, dbBankAccounts...)
 	}
 
 	// Generate mock bank accounts and combine with real ones
@@ -136,6 +152,8 @@ func (ws *MockWalletService) AddPaymentSource(businessID string, source payment.
 			// - Call: storedCardRepo.CreateStoredCard(ctx, storedCard)
 			// - Repository will generate card_id via database UUID
 			// - Handle duplicate errors if card already exists
+			ctx := context.Background()
+			_ = ws.storedCardRepo.CreateStoredCard(ctx, storedCard)
 			ws.storedCards[businessID] = append(ws.storedCards[businessID], storedCard)
 
 			fmt.Printf("💾 Stored card: %s %s ending in %s\n",
@@ -232,6 +250,7 @@ func (ws *MockWalletService) AddPaymentSource(businessID string, source payment.
 			// - Call: bankAccountRepo.CreateBankAccount(ctx, bankAccount)
 			// - Link to verification log via verification_log_id
 			// - Repository will encrypt account_number and generate account_id
+			_ = ws.bankAccountRepo.CreateBankAccount(ctx, bankAccount)
 			if ws.bankAccounts[businessID] == nil {
 				ws.bankAccounts[businessID] = make([]*payment.BankAccount, 0)
 			}
