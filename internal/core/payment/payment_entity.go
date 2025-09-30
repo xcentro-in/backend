@@ -73,6 +73,11 @@ type TokenizedCard struct {
 	UpdatedAt      time.Time    `json:"updated_at"`
 }
 
+// TokenCardDetails represents tokenized card payment details
+type TokenCardDetails struct {
+	CardID string `json:"card_id"` // Reference to stored card
+}
+
 // PaymentRequest represents a request to process a payment
 type PaymentRequest struct {
 	BusinessID      string                 `json:"business_id"`
@@ -82,6 +87,7 @@ type PaymentRequest struct {
 	Description     string                 `json:"description"`
 	CallbackURL     string                 `json:"callback_url"`
 	CardDetails     *Card                  `json:"card_details,omitempty"`
+	TokenCardDetails *TokenCardDetails     `json:"token_card_details,omitempty"`
 	NetBankingDetails *NetBanking          `json:"net_banking_details,omitempty"`
 	UPIDetails      *UPI                   `json:"upi_details,omitempty"`
 	WalletDetails   *Wallet                `json:"wallet_details,omitempty"`

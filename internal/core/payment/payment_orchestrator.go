@@ -21,6 +21,8 @@ type MockPaymentOrchestrator struct {
 	// Gateway instances for payment processing
 	jioPayGateway   PaymentGateway
 	easebuzzGateway PaymentGateway
+	// Simple storage for tokenized cards (for Phase 3C mock)
+	storedCards map[string][]*StoredCard // businessID -> cards
 }
 
 // NewMockPaymentOrchestrator creates a new mock payment orchestrator
@@ -28,6 +30,7 @@ func NewMockPaymentOrchestrator() PaymentOrchestrator {
 	return &MockPaymentOrchestrator{
 		jioPayGateway:   NewMockJioPayGateway(),
 		easebuzzGateway: NewMockEasebuzzGateway(),
+		storedCards:     make(map[string][]*StoredCard),
 	}
 }
 
@@ -38,6 +41,11 @@ func (o *MockPaymentOrchestrator) ProcessPayment(ctx context.Context, request Pa
 	fmt.Printf("Amount: %d %s\n", request.Amount, request.Currency)
 	fmt.Printf("Payment Method: %s\n", request.PaymentMethod)
 	fmt.Printf("Description: %s\n", request.Description)
+
+	// Handle token-based payments differently
+	if request.PaymentMethod == PaymentMethodTokenCard {
+		return o.ProcessTokenizedPayment(ctx, request)
+	}
 
 	// Validate request
 	if err := o.ValidatePaymentRequest(request); err != nil {
@@ -193,6 +201,203 @@ func (o *MockPaymentOrchestrator) TokenizeCard(ctx context.Context, request Toke
 	fmt.Println("=== ORCHESTRATOR: TokenizeCard Complete ===")
 
 	return response, nil
+}
+
+// ProcessTokenizedPayment handles payments using tokenized cards
+func (o *MockPaymentOrchestrator) ProcessTokenizedPayment(ctx context.Context, request PaymentRequest) (*PaymentResponse, error) {
+	fmt.Println("=== ORCHESTRATOR: ProcessTokenizedPayment Called ===")
+
+	// Validate token card details
+	if request.TokenCardDetails == nil {
+		fmt.Printf("❌ Token card details are nil\n")
+		return nil, fmt.Errorf("token_card_details are required for token card payments")
+	}
+
+	if request.TokenCardDetails.CardID == "" {
+		fmt.Printf("❌ Card ID is empty\n")
+		return nil, fmt.Errorf("card_id is required for token card payments")
+	}
+
+	fmt.Printf("📥 Card ID: %s\n", request.TokenCardDetails.CardID)
+
+	// Step 1: Retrieve stored card by card_id using wallet service
+	fmt.Println("🔍 Looking up stored card by ID...")
+	// Get business wallet to find the stored card
+	// This is a simplified approach - in production, you might have a direct method
+	storedCard, err := o.getStoredCardByID(request.BusinessID, request.TokenCardDetails.CardID)
+	if err != nil {
+		fmt.Printf("❌ Failed to find stored card: %v\n", err)
+		return nil, fmt.Errorf("invalid card_id or card not found: %w", err)
+	}
+
+	if !storedCard.IsActive {
+		fmt.Printf("❌ Card is inactive: %s\n", storedCard.CardID)
+		return nil, fmt.Errorf("card is inactive")
+	}
+
+	fmt.Printf("✅ Found stored card: %s %s ending in %s\n",
+		storedCard.CardCategory, storedCard.CardType, storedCard.LastFourDigits)
+	fmt.Printf("🏦 Gateway Used: %s\n", storedCard.GatewayUsed)
+	fmt.Printf("🎫 Token Available: %s\n", storedCard.Token[:10]+"...")
+
+	// Step 2: Get the specific gateway instance that was used for tokenization
+	selectedGateway := o.getGatewayInstance(storedCard.GatewayUsed)
+	if selectedGateway == nil {
+		return nil, fmt.Errorf("gateway instance not found: %s", storedCard.GatewayUsed)
+	}
+
+	// Step 3: Generate fresh cryptogram for this payment
+	fmt.Println("🔐 Generating fresh cryptogram from gateway...")
+	cryptogramRequest := CryptogramRequest{
+		Token:         storedCard.Token,
+		Amount:        request.Amount,
+		Currency:      request.Currency,
+		TransactionID: fmt.Sprintf("txn_%s_%s", time.Now().Format("20060102"), uuid.New().String()[:8]),
+		BusinessID:    request.BusinessID,
+		Metadata: map[string]any{
+			"payment_type": "tokenized",
+			"card_id":      storedCard.CardID,
+		},
+	}
+
+	cryptogramResponse, err := selectedGateway.GenerateCryptogram(ctx, cryptogramRequest)
+	if err != nil {
+		fmt.Printf("❌ Cryptogram generation failed: %v\n", err)
+		return nil, fmt.Errorf("failed to generate cryptogram: %w", err)
+	}
+
+	fmt.Printf("✅ Cryptogram generated: %s\n", cryptogramResponse.Cryptogram[:10]+"...")
+	fmt.Printf("⏰ Valid until: %s\n", cryptogramResponse.ExpiresAt.Format("15:04:05"))
+
+	// Step 4: Calculate fees (same as regular payments)
+	feeAmount := o.calculateMockFee(request.Amount, PaymentMethodCard) // Use card method for fee calc
+	fmt.Printf("💰 Calculated Fee: %d %s\n", feeAmount, request.Currency)
+
+	// Step 5: Prepare gateway payment request with token + cryptogram
+	gatewayRequest := GatewayPaymentRequest{
+		BusinessID:    request.BusinessID,
+		TransactionID: cryptogramRequest.TransactionID,
+		Amount:        request.Amount + feeAmount,
+		Currency:      request.Currency,
+		PaymentMethod: PaymentMethodCard, // Gateway sees this as card payment
+		Description:   request.Description,
+		CallbackURL:   request.CallbackURL,
+		Token:         storedCard.Token,
+		Cryptogram:    cryptogramResponse.Cryptogram,
+		Metadata: map[string]any{
+			"payment_type": "tokenized",
+			"card_id":      storedCard.CardID,
+			"original_metadata": request.Metadata,
+		},
+	}
+
+	// Step 6: Process payment with specific gateway
+	fmt.Printf("🚀 Processing payment with %s gateway (tokenized)...\n", storedCard.GatewayUsed)
+	gatewayResponse, err := selectedGateway.InitiatePayment(ctx, gatewayRequest)
+	if err != nil {
+		fmt.Printf("❌ Gateway payment failed: %v\n", err)
+		return nil, fmt.Errorf("gateway payment initiation failed: %w", err)
+	}
+
+	// Step 7: Create response
+	paymentID := uuid.New().String()
+	response := &PaymentResponse{
+		PaymentID:        paymentID,
+		Status:           gatewayResponse.Status,
+		Amount:           request.Amount,
+		FeeAmount:        feeAmount,
+		TotalAmount:      request.Amount + feeAmount,
+		Currency:         request.Currency,
+		PaymentMethod:    PaymentMethodTokenCard, // Return the original method
+		GatewayUsed:      storedCard.GatewayUsed,
+		GatewayPaymentID: gatewayResponse.GatewayPaymentID,
+		RedirectURL:      gatewayResponse.RedirectURL,
+		Message:          fmt.Sprintf("Tokenized payment initiated with %s", storedCard.GatewayUsed),
+		CreatedAt:        gatewayResponse.CreatedAt,
+		Metadata: map[string]any{
+			"payment_type":    "tokenized",
+			"card_id":         storedCard.CardID,
+			"card_last_four":  storedCard.LastFourDigits,
+			"gateway_used":    string(storedCard.GatewayUsed),
+			"original_metadata": request.Metadata,
+		},
+	}
+
+	fmt.Printf("✅ Tokenized payment initiated: %s\n", paymentID)
+	fmt.Printf("💳 Card: %s ending in %s\n", storedCard.CardType, storedCard.LastFourDigits)
+	fmt.Printf("🌐 Redirect URL: %s\n", response.RedirectURL)
+	fmt.Println("=== ORCHESTRATOR: ProcessTokenizedPayment Complete ===")
+
+	return response, nil
+}
+
+// getStoredCardByID retrieves a stored card by its ID from stored cards
+func (o *MockPaymentOrchestrator) getStoredCardByID(businessID, cardID string) (*StoredCard, error) {
+	fmt.Printf("🔍 Searching for card %s in business wallet...\n", cardID)
+
+	// For Phase 3C, we'll create some mock stored cards to simulate the functionality
+	// In production, this would be a database lookup
+	// TODO: DB call at this point, need a repository structure
+	mockStoredCards := o.generateMockStoredCards(businessID)
+
+	// Also check any real stored cards from tokenization process
+	if storedCards, exists := o.storedCards[businessID]; exists {
+		mockStoredCards = append(mockStoredCards, storedCards...)
+	}
+
+	// Search through stored cards to find the matching card_id
+	for _, card := range mockStoredCards {
+		if card.CardID == cardID {
+			fmt.Printf("✅ Found card: %s %s\n", card.CardType, card.LastFourDigits)
+			return card, nil
+		}
+	}
+
+	return nil, fmt.Errorf("card not found: %s", cardID)
+}
+
+// generateMockStoredCards creates mock stored cards for testing
+func (o *MockPaymentOrchestrator) generateMockStoredCards(businessID string) []*StoredCard {
+	return []*StoredCard{
+		{
+			CardID:         fmt.Sprintf("card_%s_001", businessID[:8]),
+			BusinessID:     businessID,
+			Token:          fmt.Sprintf("jio_tok_visa_%s", businessID[:8]),
+			LastFourDigits: "4532",
+			CardType:       CardTypeVisa,
+			CardCategory:   CardCategoryCredit,
+			ExpiryMonth:    "12",
+			ExpiryYear:     "25",
+			IssuerBank:     "HDFC Bank",
+			CardHolderName: "Business Account",
+			IsActive:       true,
+			GatewayUsed:    GatewayJioPay,
+			AddedAt:        Now().AddDate(0, -2, 0),
+			Metadata: map[string]any{
+				"nickname": "Primary Card",
+				"mock_data": true,
+			},
+		},
+		{
+			CardID:         fmt.Sprintf("card_%s_002", businessID[:8]),
+			BusinessID:     businessID,
+			Token:          fmt.Sprintf("eb_tok_master_%s", businessID[:8]),
+			LastFourDigits: "8765",
+			CardType:       CardTypeMastercard,
+			CardCategory:   CardCategoryDebit,
+			ExpiryMonth:    "08",
+			ExpiryYear:     "26",
+			IssuerBank:     "ICICI Bank",
+			CardHolderName: "Business Account",
+			IsActive:       true,
+			GatewayUsed:    GatewayEasebuzz,
+			AddedAt:        Now().AddDate(0, -1, -15),
+			Metadata: map[string]any{
+				"nickname": "Backup Card",
+				"mock_data": true,
+			},
+		},
+	}
 }
 
 // ValidatePaymentRequest validates a payment request

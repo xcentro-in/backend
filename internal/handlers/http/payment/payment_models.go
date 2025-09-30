@@ -25,9 +25,10 @@ type TokenizeRequest struct {
 type MakePaymentRequest struct {
 	Amount        int64                  `json:"amount"`
 	Currency      string                 `json:"currency"`
-	PaymentMethod string                 `json:"payment_method"` // card, netbanking, upi, wallet
+	PaymentMethod string                 `json:"payment_method"` // card, token-card, netbanking, upi, wallet
 	Description   string                 `json:"description"`
 	CardDetails   *CardDetails           `json:"card_details,omitempty"`
+	TokenDetails  *TokenCardDetails      `json:"token_details,omitempty"`
 	NetBanking    *NetBankingDetails     `json:"net_banking,omitempty"`
 	UPI           *UPIDetails            `json:"upi,omitempty"`
 	Wallet        *WalletDetails         `json:"wallet,omitempty"`
@@ -62,6 +63,11 @@ type UPIDetails struct {
 type WalletDetails struct {
 	WalletType string `json:"wallet_type"`
 	WalletID   string `json:"wallet_id"`
+}
+
+// TokenCardDetails represents tokenized card payment details
+type TokenCardDetails struct {
+	CardID string `json:"card_id"` // Reference to stored card (primary key)
 }
 
 // === RESPONSE MODELS ===

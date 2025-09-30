@@ -437,7 +437,7 @@ func (h *PaymentHandler) MakePayment(c echo.Context) error {
 
 	// Convert HTTP request to core domain request
 	coreRequest := payment.PaymentRequest{
-		BusinessID:    "business-123", // TODO: Extract from request context or JWT token
+		BusinessID:    "bid12345", // TODO: Extract from request context or JWT token
 		Amount:        req.Amount,
 		Currency:      payment.Currency(req.Currency),
 		PaymentMethod: payment.PaymentMethod(req.PaymentMethod),
@@ -504,7 +504,7 @@ func (h *PaymentHandler) validatePaymentRequest(req *MakePaymentRequest) error {
 
 	// Validate payment method
 	validMethods := map[string]bool{
-		"card": true, "netbanking": true, "upi": true, "wallet": true,
+		"card": true, "token-card": true, "netbanking": true, "upi": true, "wallet": true,
 	}
 	if !validMethods[req.PaymentMethod] {
 		return fmt.Errorf("invalid payment method: %s", req.PaymentMethod)
@@ -523,6 +523,13 @@ func (h *PaymentHandler) validatePaymentRequest(req *MakePaymentRequest) error {
 		}
 		if err := h.validateCardDetails(req.CardDetails); err != nil {
 			return fmt.Errorf("card validation failed: %v", err)
+		}
+	case "token-card":
+		if req.TokenDetails == nil {
+			return fmt.Errorf("token_details are required for token card payments")
+		}
+		if req.TokenDetails.CardID == "" {
+			return fmt.Errorf("card_id is required for token card payments")
 		}
 	case "netbanking":
 		if req.NetBanking == nil {
@@ -616,6 +623,12 @@ func (h *PaymentHandler) populatePaymentMethodDetails(coreReq *payment.PaymentRe
 				CardType:       payment.CardType(httpReq.CardDetails.CardType),
 				CardCategory:   payment.CardCategory(httpReq.CardDetails.CardCategory),
 				LastFourDigits: httpReq.CardDetails.LastFourDigits,
+			}
+		}
+	case "token-card":
+		if httpReq.TokenDetails != nil {
+			coreReq.TokenCardDetails = &payment.TokenCardDetails{
+				CardID: httpReq.TokenDetails.CardID,
 			}
 		}
 	case "netbanking":
