@@ -22,6 +22,10 @@ type MockPaymentOrchestrator struct {
 	jioPayGateway   PaymentGateway
 	easebuzzGateway PaymentGateway
 	// Simple storage for tokenized cards (for Phase 3C mock)
+	// TODO-DB-4.1-CRITICAL: Remove in-memory storage
+	// - Delete this map: storedCards map[string][]*StoredCard
+	// - All card storage should go through WalletService -> Repository
+	// - Orchestrator should be stateless
 	storedCards map[string][]*StoredCard // businessID -> cards
 }
 
@@ -62,9 +66,17 @@ func (o *MockPaymentOrchestrator) ProcessPayment(ctx context.Context, request Pa
 	}
 	fmt.Printf("🎯 Selected Gateway: %s\n", gateway)
 
+	// TODO-DB-4.1-CRITICAL: Update payment record with selected gateway
+	// - Call paymentRepo.UpdatePaymentGateway(ctx, request.PaymentID, gateway)
+	// - This records which gateway was selected for routing
+
 	// Mock fee calculation
 	feeAmount := o.calculateMockFee(request.Amount, request.PaymentMethod)
 	fmt.Printf("💰 Calculated Fee: %d %s\n", feeAmount, request.Currency)
+
+	// TODO-DB-4.1-CRITICAL: Update payment with fee breakdown
+	// - Call paymentRepo.UpdatePaymentFees(ctx, request.PaymentID, feeAmount, request.Amount + feeAmount)
+	// - Store fee_amount and total_amount for accounting
 
 	// Generate transaction IDs
 	transactionID := fmt.Sprintf("txn_%s_%s", time.Now().Format("20060102"), uuid.New().String()[:8])
@@ -97,7 +109,16 @@ func (o *MockPaymentOrchestrator) ProcessPayment(ctx context.Context, request Pa
 	// Call actual gateway
 	fmt.Printf("🚀 Calling %s gateway for payment initiation...\n", gateway)
 	gatewayResponse, err := selectedGateway.InitiatePayment(ctx, gatewayRequest)
+
+	// TODO-DB-4.1-CRITICAL: Update payment with gateway response
+	// - Call paymentRepo.UpdateGatewayPaymentID(ctx, paymentID, gatewayResponse.GatewayPaymentID, gatewayResponse.RedirectURL)
+	// - Store gateway's transaction ID for webhook matching
+	// - Store redirect URL if present (for 3DS/redirect flows)
+
 	if err != nil {
+		// TODO-DB-4.1-CRITICAL: Update payment status to failed
+		// - Call paymentRepo.UpdatePaymentStatus(ctx, paymentID, PaymentStatusFailed, err.Error())
+		// - Store failure reason in metadata for debugging
 		fmt.Printf("❌ Gateway call failed: %v\n", err)
 		return nil, fmt.Errorf("gateway payment initiation failed: %w", err)
 	}
@@ -118,6 +139,10 @@ func (o *MockPaymentOrchestrator) ProcessPayment(ctx context.Context, request Pa
 		CreatedAt:        gatewayResponse.CreatedAt,
 		Metadata:         request.Metadata,
 	}
+
+	// TODO-DB-4.1-CRITICAL: Update payment status to processing
+	// - Call paymentRepo.UpdatePaymentStatus(ctx, paymentID, PaymentStatusProcessing, "")
+	// - Payment is now pending gateway/bank processing
 
 	fmt.Printf("🚀 Payment processing initiated with %s gateway\n", gateway)
 	fmt.Printf("💳 Redirect URL: %s\n", response.RedirectURL)
@@ -197,6 +222,11 @@ func (o *MockPaymentOrchestrator) TokenizeCard(ctx context.Context, request Toke
 		// CreatedAt:      gatewayResponse.ExpiresAt.Add(-15 * time.Minute), // Mock created time
 	}
 
+	// TODO-DB-4.1-CRITICAL: Store tokenized card via WalletService
+	// - Remove in-memory storage that was at lines 127-135 (if still exists)
+	// - Call walletService.AddPaymentSource(request.BusinessID, storedCard)
+	// - WalletService will persist via storedCardRepo.CreateStoredCard()
+
 	fmt.Printf("✅ Card tokenization successful with %s\n", gateway)
 	fmt.Println("=== ORCHESTRATOR: TokenizeCard Complete ===")
 
@@ -225,10 +255,19 @@ func (o *MockPaymentOrchestrator) ProcessTokenizedPayment(ctx context.Context, r
 	// Get business wallet to find the stored card
 	// This is a simplified approach - in production, you might have a direct method
 	storedCard, err := o.getStoredCardByID(request.BusinessID, request.TokenCardDetails.CardID)
+
+	// TODO-DB-4.1-CRITICAL: Query stored card from database
+	// - Already has TODO at line 340+ in getStoredCardByID()
+	// - This method should call storedCardRepo.GetStoredCardByID()
+
 	if err != nil {
 		fmt.Printf("❌ Failed to find stored card: %v\n", err)
 		return nil, fmt.Errorf("invalid card_id or card not found: %w", err)
 	}
+
+	// TODO-DB-4.1-CRITICAL: Link payment to payment source
+	// - Call paymentRepo.UpdatePaymentSource(ctx, request.PaymentID, storedCard.CardID, PaymentSourceCard)
+	// - Records which stored card was used for this payment
 
 	if !storedCard.IsActive {
 		fmt.Printf("❌ Card is inactive: %s\n", storedCard.CardID)
@@ -294,6 +333,11 @@ func (o *MockPaymentOrchestrator) ProcessTokenizedPayment(ctx context.Context, r
 	// Step 6: Process payment with specific gateway
 	fmt.Printf("🚀 Processing payment with %s gateway (tokenized)...\n", storedCard.GatewayUsed)
 	gatewayResponse, err := selectedGateway.InitiatePayment(ctx, gatewayRequest)
+
+	// TODO-DB-4.1-CRITICAL: Update card last_used_at timestamp
+	// - Call storedCardRepo.UpdateLastUsedAt(ctx, storedCard.CardID)
+	// - Track card usage patterns for analytics
+
 	if err != nil {
 		fmt.Printf("❌ Gateway payment failed: %v\n", err)
 		return nil, fmt.Errorf("gateway payment initiation failed: %w", err)
@@ -337,7 +381,11 @@ func (o *MockPaymentOrchestrator) getStoredCardByID(businessID, cardID string) (
 
 	// For Phase 3C, we'll create some mock stored cards to simulate the functionality
 	// In production, this would be a database lookup
-	// TODO: DB call at this point, need a repository structure
+	// TODO-DB-4.1-CRITICAL: Query stored card from database
+	// - Replace mock data generation and in-memory lookup
+	// - Call storedCardRepo.GetStoredCardByID(ctx, cardID)
+	// - Return error if card not found or not active
+	// - Verify card belongs to requesting business_id for security
 	mockStoredCards := o.generateMockStoredCards(businessID)
 
 	// Also check any real stored cards from tokenization process

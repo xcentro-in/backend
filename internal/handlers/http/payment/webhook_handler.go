@@ -24,6 +24,11 @@ func NewWebhookHandler(orchestrator payment.PaymentOrchestrator) *WebhookHandler
 func (h *WebhookHandler) HandleJioPayWebhook(c echo.Context) error {
 	fmt.Println("=== WEBHOOK: JioPay Webhook Called ===")
 
+	// TODO-DB-4.1-CRITICAL: Query payment by gateway_payment_id
+	// - Parse gateway_payment_id from webhook payload
+	// - Call: paymentRepo.GetPaymentByGatewayPaymentID(ctx, gatewayPaymentID)
+	// - Verify payment exists and matches expected state
+
 	// TODO: Phase 3C Implementation
 	// 1. Parse JioPay webhook payload
 	// 2. Validate webhook signature using JioPay gateway
@@ -42,6 +47,17 @@ func (h *WebhookHandler) HandleJioPayWebhook(c echo.Context) error {
 
 	fmt.Printf("📥 JioPay Webhook Payload: %+v\n", payload)
 
+	// TODO-DB-4.1-CRITICAL: Update payment status from webhook
+	// - Map gateway status to PaymentStatus enum
+	// - Call: paymentRepo.UpdatePaymentStatus(ctx, payment.ID, newStatus, webhookData)
+	// - Store complete webhook payload in payment.metadata JSONB
+	// - Update payment.updated_at timestamp
+
+	// TODO-DB-4.1: Log webhook attempts for debugging
+	// - Create webhook_logs table (future phase)
+	// - Log all webhook attempts even if signature fails
+	// - Helps diagnose integration issues
+
 	// Mock webhook processing
 	fmt.Println("🔄 Processing JioPay webhook...")
 	fmt.Println("✅ JioPay webhook processed successfully (mock)")
@@ -56,6 +72,11 @@ func (h *WebhookHandler) HandleJioPayWebhook(c echo.Context) error {
 // HandleEasebuzzWebhook handles webhooks from Easebuzz gateway
 func (h *WebhookHandler) HandleEasebuzzWebhook(c echo.Context) error {
 	fmt.Println("=== WEBHOOK: Easebuzz Webhook Called ===")
+
+	// TODO-DB-4.1-CRITICAL: Query payment by gateway_payment_id
+	// - Parse gateway_payment_id (txnid) from webhook payload
+	// - Call: paymentRepo.GetPaymentByGatewayPaymentID(ctx, gatewayPaymentID)
+	// - Verify payment exists and matches expected state
 
 	// TODO: Phase 3C Implementation
 	// 1. Parse Easebuzz webhook payload
@@ -74,6 +95,17 @@ func (h *WebhookHandler) HandleEasebuzzWebhook(c echo.Context) error {
 	}
 
 	fmt.Printf("📥 Easebuzz Webhook Payload: %+v\n", payload)
+
+	// TODO-DB-4.1-CRITICAL: Update payment status from webhook
+	// - Map gateway status to PaymentStatus enum
+	// - Call: paymentRepo.UpdatePaymentStatus(ctx, payment.ID, newStatus, webhookData)
+	// - Store complete webhook payload in payment.metadata JSONB
+	// - Update payment.updated_at timestamp
+
+	// TODO-DB-4.1: Log webhook attempts for debugging
+	// - Create webhook_logs table (future phase)
+	// - Log all webhook attempts even if signature fails
+	// - Helps diagnose integration issues
 
 	// Mock webhook processing
 	fmt.Println("🔄 Processing Easebuzz webhook...")

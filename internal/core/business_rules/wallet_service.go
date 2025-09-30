@@ -19,6 +19,10 @@ type WalletService interface {
 // MockWalletService provides a mock implementation for business wallet operations
 type MockWalletService struct {
 	// In-memory storage for Phase 3B.1 (replace with database in later phases)
+	// TODO-DB-4.1-CRITICAL: Remove in-memory storage maps
+	// - Delete: storedCards map[string][]*payment.StoredCard
+	// - Delete: bankAccounts map[string][]*payment.BankAccount
+	// - All storage should go through repositories
 	storedCards map[string][]*payment.StoredCard // businessID -> cards
 	bankAccounts map[string][]*payment.BankAccount // businessID -> bank accounts
 	// Bank verification service for penny drop verification
@@ -26,6 +30,10 @@ type MockWalletService struct {
 }
 
 // NewMockWalletService creates a new mock wallet service
+// TODO-DB-4.1: Update constructor signature for Phase 4
+// - Rename to NewWalletService()
+// - Add parameters: storedCardRepo, bankAccountRepo, bankVerificationLogRepo
+// - Remove map initialization, initialize repo dependencies instead
 func NewMockWalletService() WalletService {
 	return &MockWalletService{
 		storedCards:             make(map[string][]*payment.StoredCard),
@@ -35,35 +43,55 @@ func NewMockWalletService() WalletService {
 }
 
 // GetBusinessWallet retrieves the complete business wallet with all payment sources
-// TODO: clean the logic here and move to DB in later phases
-// For now, returns mock data along with any real stored cards from tokenization
-// some part of it is similar to real life
-// need to take down mock data and see how it works
+// TODO-DB-4.1-CRITICAL: Replace mock data with database queries
+// - This method combines real stored data with mock data
+// - Phase 4.1: Mark all mock data generation for removal
+// - Phase 4.4: Replace with actual repository calls
 func (ws *MockWalletService) GetBusinessWallet(businessID string) (*payment.BusinessWallet, error) {
 	fmt.Println("=== WALLET SERVICE: GetBusinessWallet Called ===")
 	fmt.Printf("Business ID: %s\n", businessID)
 
 	// Get real stored cards (from tokenization) and combine with mock data
+	// TODO-DB-4.1-CRITICAL: Fetch stored cards from database
+	// - Replace in-memory map lookup: ws.storedCards[businessID]
+	// - Call: storedCardRepo.GetStoredCardsByBusinessID(ctx, businessID)
+	// - Filter for is_active = true
 	realStoredCards := ws.storedCards[businessID]
 	if realStoredCards == nil {
 		realStoredCards = make([]*payment.StoredCard, 0)
 	}
 
 	// Generate mock payment sources
+	// TODO-DB-4.1-CRITICAL: Remove mock stored cards generation
+	// - Delete call to ws.generateMockStoredCards(businessID)
+	// - All cards should come from database only
+	// - Keep this temporarily for Phase 4.1, remove in Phase 4.4
 	mockStoredCards := ws.generateMockStoredCards(businessID)
 
 	// Combine real and mock cards
 	storedCards := append(realStoredCards, mockStoredCards...)
 
 	// Get real bank accounts (from verification) and combine with mock data
+	// TODO-DB-4.1-CRITICAL: Fetch bank accounts from database
+	// - Replace in-memory map lookup: ws.bankAccounts[businessID]
+	// - Call: bankAccountRepo.GetBankAccountsByBusinessID(ctx, businessID)
+	// - Filter for is_active = true and is_verified = true
 	realBankAccounts := ws.bankAccounts[businessID]
 	if realBankAccounts == nil {
 		realBankAccounts = make([]*payment.BankAccount, 0)
 	}
 
 	// Generate mock bank accounts and combine with real ones
+	// TODO-DB-4.1-CRITICAL: Remove mock bank accounts generation
+	// - Delete call to ws.generateMockBankAccounts(businessID)
+	// - All accounts should come from database only
+	// - Keep this temporarily for Phase 4.1, remove in Phase 4.4
 	mockBankAccounts := ws.generateMockBankAccounts(businessID)
 	bankAccounts := append(realBankAccounts, mockBankAccounts...)
+
+	// TODO-DB-4.1-FUTURE: Add repository queries when features implemented
+	// - upiDetailRepo.GetUPIDetailsByBusinessID(ctx, businessID)
+	// - creditLineRepo.GetCreditLinesByBusinessID(ctx, businessID)
 	upiDetails := ws.generateMockUPIDetails(businessID)
 	creditLines := ws.generateMockCreditLines(businessID)
 
@@ -103,6 +131,11 @@ func (ws *MockWalletService) AddPaymentSource(businessID string, source payment.
 			}
 
 			// Add the card to storage
+			// TODO-DB-4.1-CRITICAL: Replace in-memory append with repository call
+			// - Remove: ws.storedCards[businessID] = append(...)
+			// - Call: storedCardRepo.CreateStoredCard(ctx, storedCard)
+			// - Repository will generate card_id via database UUID
+			// - Handle duplicate errors if card already exists
 			ws.storedCards[businessID] = append(ws.storedCards[businessID], storedCard)
 
 			fmt.Printf("💾 Stored card: %s %s ending in %s\n",
@@ -148,9 +181,22 @@ func (ws *MockWalletService) AddPaymentSource(businessID string, source payment.
 				},
 			}
 
+			// TODO-DB-4.1-CRITICAL: Create verification log BEFORE calling API
+			// - Call: bankVerificationLogRepo.CreateVerificationLog(ctx, logEntry)
+			// - logEntry.status = 'pending'
+			// - logEntry.request_id = verificationRequest.RequestID
+			// - logEntry.account_number_masked = maskAccountNumber()
+			// - This creates audit trail even if API call fails
+
 			// Call verification service (this simulates 3rd party API call)
-			ctx := context.Background() // TODO: Use proper context from request
+			ctx := context.Background() // TODO-DB-4.1: Use proper context from HTTP request
 			verificationResponse, err := ws.bankVerificationService.VerifyBankAccount(ctx, verificationRequest)
+
+			// TODO-DB-4.1-CRITICAL: Update verification log with response
+			// - Call: bankVerificationLogRepo.UpdateVerificationResult(ctx, requestID, response)
+			// - Update: status, verified_account_name, transaction_reference, verification_amount
+			// - Store complete response in metadata JSONB for audit
+
 			if err != nil {
 				fmt.Printf("❌ Bank verification failed: %v\n", err)
 				return fmt.Errorf("bank account verification failed: %w", err)
@@ -181,7 +227,11 @@ func (ws *MockWalletService) AddPaymentSource(businessID string, source payment.
 			bankAccount.Metadata["provider"] = string(verificationResponse.Provider)
 
 			// Step 6: Store verified bank account
-			// TODO: Replace with database storage in production
+			// TODO-DB-4.1-CRITICAL: Replace in-memory append with repository call
+			// - Remove: ws.bankAccounts[businessID] = append(...)
+			// - Call: bankAccountRepo.CreateBankAccount(ctx, bankAccount)
+			// - Link to verification log via verification_log_id
+			// - Repository will encrypt account_number and generate account_id
 			if ws.bankAccounts[businessID] == nil {
 				ws.bankAccounts[businessID] = make([]*payment.BankAccount, 0)
 			}
@@ -279,6 +329,9 @@ func (ws *MockWalletService) GetPaymentSource(businessID string, sourceID string
 
 // Helper methods to generate mock data
 
+// TODO-DB-4.1-CRITICAL: Mark for deletion in Phase 4.4
+// - generateMockStoredCards() - DELETE in Phase 4.4
+// - This is only for testing, should not be in production code
 func (ws *MockWalletService) generateMockStoredCards(businessID string) []*payment.StoredCard {
 	fmt.Printf("Mock Stored Cards\n")
 	return []*payment.StoredCard{
@@ -323,6 +376,9 @@ func (ws *MockWalletService) generateMockStoredCards(businessID string) []*payme
 	}
 }
 
+// TODO-DB-4.1-CRITICAL: Mark for deletion in Phase 4.4
+// - generateMockBankAccounts() - DELETE in Phase 4.4
+// - This is only for testing, should not be in production code
 func (ws *MockWalletService) generateMockBankAccounts(businessID string) []*payment.BankAccount {
 	fmt.Printf("Mock bank accs\n")
 
@@ -366,6 +422,9 @@ func (ws *MockWalletService) generateMockBankAccounts(businessID string) []*paym
 	}
 }
 
+// TODO-DB-4.1-CRITICAL: Mark for deletion in Phase 4.4
+// - generateMockUPIDetails() - DELETE in Phase 4.4
+// - This is only for testing, should not be in production code
 func (ws *MockWalletService) generateMockUPIDetails(businessID string) []*payment.UPIDetail {
 	fmt.Printf("Mock UPI Details\n")
 
@@ -399,6 +458,9 @@ func (ws *MockWalletService) generateMockUPIDetails(businessID string) []*paymen
 	}
 }
 
+// TODO-DB-4.1-CRITICAL: Mark for deletion in Phase 4.4
+// - generateMockCreditLines() - DELETE in Phase 4.4
+// - This is only for testing, should not be in production code
 func (ws *MockWalletService) generateMockCreditLines(businessID string) []*payment.CreditLine {
 	fmt.Printf("Mock Credit lines\n")
 
@@ -456,6 +518,10 @@ func (ws *MockWalletService) validateBankAccountDetails(bankAccount *payment.Ban
 }
 
 // checkDuplicateBankAccount checks if the account number already exists for the business
+// TODO-DB-4.1-CRITICAL: Check duplicates via database query
+// - Replace in-memory loop through ws.bankAccounts[businessID]
+// - Call: bankAccountRepo.CheckDuplicateAccount(ctx, businessID, accountNumber)
+// - Use account_number_hash for fast duplicate detection
 func (ws *MockWalletService) checkDuplicateBankAccount(businessID, accountNumber string) error {
 	existingAccounts := ws.bankAccounts[businessID]
 	if existingAccounts == nil {

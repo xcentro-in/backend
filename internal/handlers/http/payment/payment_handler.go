@@ -308,7 +308,7 @@ func (h *PaymentHandler) Tokenize(c echo.Context) error {
 
 	// Convert HTTP request to core domain request
 	coreRequest := payment.TokenizeRequest{
-		BusinessID: req.UserID, // TODO: Extract from JWT token in production
+		BusinessID: req.UserID, // TODO-DB-4.1: Extract from JWT token in production
 		CardDetails: payment.Card{
 			Number:         req.CardDetails.CardNumber,
 			ExpiryMonth:    req.CardDetails.ExpiryMonth,
@@ -325,6 +325,12 @@ func (h *PaymentHandler) Tokenize(c echo.Context) error {
 	fmt.Println("🔄 Calling Payment Orchestrator for complete tokenization...")
 	fmt.Println("⏳ This may take up to 60 seconds for JioPay 2-step process...")
 	tokenizeResponse, err := h.orchestrator.TokenizeCard(ctx, coreRequest)
+
+	// TODO-DB-4.1: Tokenized card already stored by orchestrator calling walletService
+	// - Orchestrator should call walletService.AddPaymentSource() with StoredCard
+	// - WalletService will persist via storedCardRepo.CreateStoredCard()
+	// - Verify this flow is working correctly in orchestrator
+
 	if err != nil {
 		fmt.Printf("❌ Tokenization failed: %v\n", err)
 		return h.handleTokenizationError(err)
@@ -435,9 +441,15 @@ func (h *PaymentHandler) MakePayment(c echo.Context) error {
 		feeCalculation.BaseAmount, feeCalculation.FeeAmount,
 		feeCalculation.TotalAmount, feeCalculation.Currency)
 
+	// TODO-DB-4.1-CRITICAL: Create initial payment record in database
+	// - Generate payment_id (UUID) via repository.CreatePayment()
+	// - Store: business_id, amount, currency, payment_method, status='pending', description, callback_url
+	// - Pass generated payment_id to orchestrator in coreRequest.PaymentID
+	// - This ensures every payment request is tracked from entry point
+
 	// Convert HTTP request to core domain request
 	coreRequest := payment.PaymentRequest{
-		BusinessID:    "bid12345", // TODO: Extract from request context or JWT token
+		BusinessID:    "bid12345", // TODO-DB-4.1: Extract BusinessID from JWT token claims
 		Amount:        req.Amount,
 		Currency:      payment.Currency(req.Currency),
 		PaymentMethod: payment.PaymentMethod(req.PaymentMethod),
@@ -452,6 +464,12 @@ func (h *PaymentHandler) MakePayment(c echo.Context) error {
 	// Call orchestrator to process payment
 	fmt.Println("🔄 Calling Payment Orchestrator...")
 	paymentResponse, err := h.orchestrator.ProcessPayment(c.Request().Context(), coreRequest)
+
+	// TODO-DB-4.1-CRITICAL: Payment status already updated by orchestrator
+	// - If orchestrator succeeded, payment status is now 'processing' or 'pending_redirect'
+	// - If orchestrator failed, payment status is 'failed' with error metadata
+	// - payment_id is already in paymentResponse, return to client
+
 	if err != nil {
 		fmt.Printf("❌ Orchestrator error: %v\n", err)
 		return c.JSON(http.StatusInternalServerError, map[string]any{
@@ -550,6 +568,12 @@ func (h *PaymentHandler) handleBankAccountAddition(ctx context.Context, c echo.C
 
 	// Call wallet service to add and verify bank account
 	err := h.walletService.AddPaymentSource(req.BusinessID, bankAccount)
+
+	// TODO-DB-4.1: Bank account storage handled inside walletService.AddPaymentSource()
+	// - WalletService creates bank_verification_log before calling verification API
+	// - WalletService stores bank account after successful verification
+	// - Both operations happen with repository calls inside WalletService
+
 	if err != nil {
 		fmt.Printf("❌ Bank account addition failed: %v\n", err)
 
