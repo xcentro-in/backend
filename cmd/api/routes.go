@@ -30,7 +30,7 @@ func registerV1PaymentRoutes(meta *serverMetaData, group *echo.Group) {
 	// Create payment services (Phase 2) with repository dependencies
 	orchestrator := corePayment.NewMockPaymentOrchestrator(paymentRepository, storedCardRepository)
 	feeCalculator := business_rules.NewMockFeeCalculator()
-	walletService := business_rules.NewMockWalletService(storedCardRepository, bankAccountRepository)
+	walletService := business_rules.NewMockWalletService(storedCardRepository, bankAccountRepository, meta.clients.txManager)
 
 	// Register payment routes with services
 	processPaymentGroup := group.Group("/process_payment")

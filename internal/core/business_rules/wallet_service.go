@@ -2,9 +2,13 @@ package business_rules
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"time"
+
+	"xcentro.in/internal/adapters/database/postgres/client"
 	"xcentro.in/internal/core/payment"
 )
 
@@ -30,6 +34,8 @@ type MockWalletService struct {
 	// Repository dependencies (Phase 4.2)
 	storedCardRepo  payment.StoredCardRepository
 	bankAccountRepo payment.BankAccountRepository
+	// Transaction manager (Phase 4.4)
+	txManager client.TxManager
 }
 
 // NewMockWalletService creates a new mock wallet service
@@ -37,13 +43,14 @@ type MockWalletService struct {
 // - Rename to NewWalletService()
 // - Add parameters: storedCardRepo, bankAccountRepo, bankVerificationLogRepo
 // - Remove map initialization, initialize repo dependencies instead
-func NewMockWalletService(storedCardRepo payment.StoredCardRepository, bankAccountRepo payment.BankAccountRepository) WalletService {
+func NewMockWalletService(storedCardRepo payment.StoredCardRepository, bankAccountRepo payment.BankAccountRepository, txManager client.TxManager) WalletService {
 	return &MockWalletService{
 		storedCards:             make(map[string][]*payment.StoredCard),
 		bankAccounts:            make(map[string][]*payment.BankAccount),
 		bankVerificationService: NewMockBankVerificationService(),
 		storedCardRepo:          storedCardRepo,
 		bankAccountRepo:         bankAccountRepo,
+		txManager:               txManager,
 	}
 }
 
@@ -176,13 +183,7 @@ func (ws *MockWalletService) AddPaymentSource(businessID string, source payment.
 				return err
 			}
 
-			// Step 2: Check for duplicate accounts
-			if err := ws.checkDuplicateBankAccount(businessID, bankAccount.AccountNumber); err != nil {
-				fmt.Printf("❌ Duplicate account check failed: %v\n", err)
-				return err
-			}
-
-			// Step 3: Perform penny drop verification
+			// Step 2: Perform penny drop verification (OUTSIDE transaction)
 			fmt.Println("🔄 Initiating penny drop verification...")
 			verificationRequest := BankVerificationRequest{
 				BusinessID:        businessID,
@@ -220,19 +221,20 @@ func (ws *MockWalletService) AddPaymentSource(businessID string, source payment.
 				return fmt.Errorf("bank account verification failed: %w", err)
 			}
 
-			// Step 4: Process verification results
+			// Step 3: Process verification results
 			if verificationResponse.Status != BankVerificationStatusSuccess {
 				fmt.Printf("❌ Verification unsuccessful: %s\n", verificationResponse.FailureReason)
 				return fmt.Errorf("bank account verification failed: %s", verificationResponse.FailureReason)
 			}
 
-			// Step 5: Update bank account with verification results
+			// Step 4: Update bank account with verification results
 			bankAccount.IsVerified = true
 			bankAccount.IsActive = true
 			bankAccount.AccountHolderName = verificationResponse.VerifiedAccountName // Use verified name
 			bankAccount.BankName = verificationResponse.BankName                     // Use verified bank details
 			bankAccount.BranchName = verificationResponse.BranchName
 			bankAccount.AddedAt = time.Now()
+			bankAccount.BusinessID = businessID
 
 			// Add verification metadata
 			if bankAccount.Metadata == nil {
@@ -244,18 +246,37 @@ func (ws *MockWalletService) AddPaymentSource(businessID string, source payment.
 			bankAccount.Metadata["transaction_reference"] = verificationResponse.TransactionReference
 			bankAccount.Metadata["provider"] = string(verificationResponse.Provider)
 
-			// Step 6: Store verified bank account
-			// TODO-DB-4.1-CRITICAL: Replace in-memory append with repository call
-			// - Remove: ws.bankAccounts[businessID] = append(...)
-			// - Call: bankAccountRepo.CreateBankAccount(ctx, bankAccount)
-			// - Link to verification log via verification_log_id
-			// - Repository will encrypt account_number and generate account_id
-			_ = ws.bankAccountRepo.CreateBankAccount(ctx, bankAccount)
+			// Step 5: Atomically check duplicate + create (IN TRANSACTION)
+			fmt.Println("💾 Storing verified bank account in database...")
+			err = ws.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
+				txBankAccountRepo := ws.bankAccountRepo.WithTx(tx)
+
+				// Compute SHA-256 hash for duplicate detection
+				hash := sha256.Sum256([]byte(bankAccount.AccountNumber))
+				accountNumberHash := hex.EncodeToString(hash[:])
+
+				// Check if duplicate exists (using unique index)
+				exists, err := txBankAccountRepo.CheckDuplicateAccount(ctx, businessID, accountNumberHash)
+				if err != nil {
+					return fmt.Errorf("failed to check duplicate account: %w", err)
+				}
+				if exists {
+					return fmt.Errorf("bank account already exists: %s", ws.maskAccountNumber(bankAccount.AccountNumber))
+				}
+
+				// Create bank account (hash computed inside CreateBankAccount as well)
+				return txBankAccountRepo.CreateBankAccount(ctx, bankAccount)
+			})
+
+			if err != nil {
+				fmt.Printf("❌ Failed to store bank account: %v\n", err)
+				return err
+			}
+
+			// Step 6: Update in-memory storage (temporary until Phase 4.5 cleanup)
 			if ws.bankAccounts[businessID] == nil {
 				ws.bankAccounts[businessID] = make([]*payment.BankAccount, 0)
 			}
-
-			// Add the verified bank account to storage
 			ws.bankAccounts[businessID] = append(ws.bankAccounts[businessID], bankAccount)
 
 			fmt.Printf("✅ Bank account verified and stored successfully\n")
