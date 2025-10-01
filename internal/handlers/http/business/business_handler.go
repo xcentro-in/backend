@@ -25,8 +25,9 @@ func RegisterBusinessRoutes(e *echo.Group, businessService business.BusinessServ
 	handler := NewBusinessHandler(businessService, authService)
 
 	businessGroup := e.Group("/business")
-	e.Use(authService.GetEchoAuthMiddleware())
-	e.Use(businessService.GetUserRolesMiddleware())
+	// Apply middleware to the business group, not the parent group
+	businessGroup.Use(authService.GetEchoAuthMiddleware())
+	businessGroup.Use(businessService.GetUserRolesMiddleware())
 
 	businessGroup.GET("/roles", handler.GetUserRoles)
 	businessGroup.GET("/kyb", handler.GetKYBStatus)
@@ -37,16 +38,22 @@ func RegisterBusinessRoutes(e *echo.Group, businessService business.BusinessServ
 func (h *BusinessHandler) CreateBusiness(c echo.Context) error {
 	var CreateBusinessDTO business.CreateBusinessDTO
 
-	roles := c.Get("userRoles").([]*business.BusinessUserRelation)
-	if len(roles) != 0 {
-		return c.JSON(403, map[string]interface{}{"message": "User is already associated with business", "data": nil})
+	ur := c.Get("userRoles")
+	if ur != nil {
+		return c.JSON(403, map[string]interface{}{"message": "User is already associated with a business", "data": ur})
 	}
 
 	if err := c.Bind(&CreateBusinessDTO); err != nil {
 		return c.JSON(400, map[string]string{"message": "Invalid request payload"})
 	}
 
-	bus, err := h.businessService.CreateBusinessByNameAndGSTIN(c.Request().Context(), c.Get("userId").(string), &CreateBusinessDTO)
+	userIdRaw := c.Get("userId")
+	if userIdRaw == nil {
+		return c.JSON(400, map[string]string{"message": "Unauthorised request"})
+	}
+	userId := userIdRaw.(string)
+
+	bus, err := h.businessService.CreateBusinessByNameAndGSTIN(c.Request().Context(), userId, &CreateBusinessDTO)
 	if err != nil {
 		h.logger.Errorf("Error creating business: %v", err)
 		return c.JSON(500, map[string]string{"message": "Failed to create business"})
@@ -58,13 +65,14 @@ func (h *BusinessHandler) CreateBusiness(c echo.Context) error {
 func (h *BusinessHandler) UpdateBusinessKYBData(c echo.Context) error {
 	var UpdateBusinessKYBDTO business.BusinessKYBDTO
 
-	roles := c.Get("userRoles").([]*business.BusinessUserRelation)
-	if len(roles) == 0 {
+	ur := c.Get("userRoles")
+	if ur == nil {
 		return c.JSON(403, map[string]interface{}{"message": "Create a business first", "data": nil})
 	}
 
-	if len(roles) > 0 {
-		return c.JSON(403, map[string]interface{}{"message": "User is already associated with another business", "data": nil})
+	roles := ur.([]*business.BusinessUserRelation)
+	if len(roles) == 0 {
+		return c.JSON(403, map[string]interface{}{"message": "User is not associated with any business", "data": nil})
 	}
 
 	if err := c.Bind(&UpdateBusinessKYBDTO); err != nil {
@@ -84,29 +92,36 @@ func (h *BusinessHandler) UpdateBusinessKYBData(c echo.Context) error {
 }
 
 func (h *BusinessHandler) GetUserRoles(c echo.Context) error {
-	roles := c.Get("userRoles").([]*business.BusinessUserRelation)
-	if len(roles) == 0 {
-		return c.JSON(403, map[string]interface{}{"message": "User roles not found", "data": nil})
+	ur := c.Get("userRoles")
+	if ur == nil {
+		return c.JSON(403, map[string]interface{}{"message": "Create a business first", "data": nil})
 	}
-
-	return c.JSON(200, map[string]interface{}{"message": "GetUserRoles endpoint", "data": roles})
+	roles := ur.([]*business.BusinessUserRelation)
+	return c.JSON(200, map[string]interface{}{"message": "Fetched user roles successfully", "data": roles})
 }
 
 func (h *BusinessHandler) GetKYBStatus(c echo.Context) error {
-	roles := c.Get("userRoles").([]*business.BusinessUserRelation)
-	if len(roles) != 0 {
-		return c.JSON(403, map[string]interface{}{"message": "KYB already completed", "data": nil})
+	ur := c.Get("userRoles")
+	if ur == nil {
+		return c.JSON(403, map[string]interface{}{"message": "Create a business first", "data": nil})
 	}
+	roles := ur.([]*business.BusinessUserRelation)
 
-	userId := c.Get("userId").(string)
-	if userId == "" {
+	userIdRaw := c.Get("userId")
+	if userIdRaw == nil {
 		return c.JSON(400, map[string]interface{}{"message": "Unauthorised request", "data": nil})
+	}
+	userId := userIdRaw.(string)
+
+	if !(len(roles) == 1 && roles[0].KybInitiated) {
+		return c.JSON(403, map[string]interface{}{"message": "kyb completed or unauthorized", "data": nil})
 	}
 
 	kybdata, err := h.businessService.GetUserKYBInitiatedStatus(c.Request().Context(), userId)
 	if err != nil {
+		h.logger.Errorf("handler: %v", err)
 		return c.JSON(500, map[string]interface{}{"message": "Failed to get KYB status", "data": nil})
 	}
 
-	return c.JSON(200, map[string]string{"message": "Fetched inprogress kyb data", "data": kybdata})
+	return c.JSON(200, map[string]interface{}{"message": "Fetched kyb data", "data": kybdata})
 }

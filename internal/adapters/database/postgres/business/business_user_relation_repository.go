@@ -2,6 +2,7 @@ package business
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 
 	"xcentro.in/internal/adapters/database/postgres/client"
@@ -51,7 +52,7 @@ func (r *PgBusinessUserRelationRepository) UpdateKYBInitiated(ctx context.Contex
 func (r *PgBusinessUserRelationRepository) FindByUser(ctx context.Context, userID string) ([]*business.BusinessUserRelation, error) {
 	query := `
 		SELECT 
-			user_id, bid, role, role_claim, added_at, kyb_initiated, updated_at
+			user_id, bid, role, role_claim, kyb_initiated
 		FROM xcentro.business_user_relation 
 		WHERE user_id = $1
 	`
@@ -69,8 +70,7 @@ func (r *PgBusinessUserRelationRepository) FindByUser(ctx context.Context, userI
 		var role, roleClaim string
 
 		err := rows.Scan(
-			&rel.UserID, &rel.BID, &role, &roleClaim,
-			&rel.AddedAt, &rel.KybInitiated, &rel.Timestamp,
+			&rel.UserID, &rel.BID, &role, &roleClaim, &rel.KybInitiated,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("error scanning business relation: %w", err)
@@ -203,42 +203,71 @@ func (r *PgBusinessUserRelationRepository) GetKYBInitiatedStatus(ctx context.Con
 	var kybData business.BusinessKYBData
 	var bus business.Business
 
-	// basically we need to write a join query, first we will get the bid from business_user_relation table.
-	// in that business table if income_tax_id is not null do another join with kyb_data to fetch the existing kyb data
+	// Use sql.NullString to safely scan nullable columns without null-scan errors.
+	// Note: add "database/sql" to imports for sql.NullString.
+	var (
+		nsBusIncomeTax sql.NullString
+		nsBusGstData   sql.NullString
+		nsCid          sql.NullString
+		nsCidData      sql.NullString
+		nsDocUrl       sql.NullString
+		nsBid          sql.NullString
+		nsName         sql.NullString
+		nsGstin        sql.NullString
+		nsKybStatus    sql.NullString
+		nsBusinessType sql.NullString
+		nsCountryCode  sql.NullString
+		nsCurrencyCode sql.NullString
+	)
+
 	query := `
-    SELECT
-        bus.income_tax_id AS bus_income_tax_id,
-        bus.gst_data      AS bus_gst_data,
-        kd.cid,
-        kd.cid_data,
-        kd.doc_url,
-        bus.bid,
-        bus.name,
-        bus.gstin,
-        bus.kyb_status,
-        bus.business_type,
-        bus.country_code,
-        bus.currency_code
-    FROM xcentro.business_user_relation bur
-    INNER JOIN xcentro.business bus ON bur.bid = bus.bid
-    LEFT JOIN xcentro.kyb_data kd ON bus.income_tax_id = kd.itid
-    WHERE bur.user_id = $1 AND bur.kyb_initiated = true
-    ORDER BY bur.updated_at DESC -- if you want a stable "most recent"
-    LIMIT 1
+	SELECT
+		bus.income_tax_id AS bus_income_tax_id,
+		bus.gst_data      AS bus_gst_data,
+		kd.company_id,
+		kd.company_id_data,
+		kd.business_deed,
+		bus.bid,
+		bus.name,
+		bus.gstin,
+		bus.kyb_status,
+		bus.business_type,
+		bus.country_code,
+		bus.currency_code
+	FROM xcentro.business_user_relation bur
+	INNER JOIN xcentro.business bus ON bur.bid = bus.bid
+	LEFT JOIN xcentro.kyb_data kd ON bus.income_tax_id = kd.income_tax_id
+	WHERE bur.user_id = $1 AND bur.kyb_initiated = true
+	ORDER BY bur.updated_at DESC
+	LIMIT 1
 	`
 
 	err := r.querier.QueryRow(ctx, query, uid).Scan(
-		&kybData.ITID, &kybData.ITIDData, &kybData.CID, &kybData.CIDData, &kybData.DocUrl,
-		&bus.BID, &bus.Name, &bus.GSTIN, &bus.GSTINData, &bus.ITID,
-		&bus.KybStatus, &bus.BusinessType, &bus.CountryCode, &bus.CurrencyCode,
+		&nsBusIncomeTax, &nsBusGstData, &nsCid, &nsCidData, &nsDocUrl,
+		&nsBid, &nsName, &nsGstin, &nsKybStatus, &nsBusinessType, &nsCountryCode, &nsCurrencyCode,
 	)
-
 	if err != nil {
 		return nil, nil, fmt.Errorf("error fetching KYB initiated status: %w", err)
 	}
 
+	// Map NullString values to your structs (empty string when NULL)
+	kybData.ITID = nsBusIncomeTax.String
+	kybData.ITIDData = nsBusGstData.String
+	kybData.CID = nsCid.String
+	kybData.CIDData = nsCidData.String
+	kybData.DocUrl = nsDocUrl.String
+
+	bus.BID = nsBid.String
+	bus.Name = nsName.String
+	bus.GSTIN = nsGstin.String
+	bus.KybStatus = shared.KYBstatus(nsKybStatus.String)
+	bus.BusinessType = shared.BusinessType(nsBusinessType.String)
+	bus.CountryCode = nsCountryCode.String
+	bus.CurrencyCode = nsCurrencyCode.String
+
+	// If KYB is explicitly "not started", return nils like before
 	if bus.KybStatus == shared.KYBNotStarted {
-		return nil, nil, nil // No KYB initiated
+		return nil, nil, nil
 	}
 
 	return &kybData, &bus, nil

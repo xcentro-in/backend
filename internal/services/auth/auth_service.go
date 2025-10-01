@@ -51,37 +51,49 @@ func (s *AuthService) ExtractAndValidateClaims(token *jwt.Token) (*jwt.Registere
 }
 
 func (s *AuthService) parseToken(c echo.Context, auth string) (interface{}, error) {
-	// The key lookup logic is defined as an inline function.
-	keyFunc := func(token *jwt.Token) (interface{}, error) {
+	// Parse the token first to get claims for debugging
+	token, err := jwt.ParseWithClaims(auth, &jwt.RegisteredClaims{}, func(token *jwt.Token) (interface{}, error) {
 		// Verify the token's signing algorithm.
 		if token.Method.Alg() != jwt.SigningMethodHS256.Name {
+			logger.Error("ERROR: unexpected jwt signing method=%v\n", token.Header["alg"])
 			return nil, fmt.Errorf("unexpected jwt signing method=%v", token.Header["alg"])
 		}
 
-		isrevoked, err := s.CheckIfTokenRevoked(c.Request().Context(), token.Claims.(*jwt.RegisteredClaims).Subject, auth)
+		// Get subject from claims for debugging
+		claims := token.Claims.(*jwt.RegisteredClaims)
+		fmt.Printf("Token subject: %s\n", claims.Subject)
+
+		// Check token revocation
+		isrevoked, err := s.CheckIfTokenRevoked(c.Request().Context(), claims.Subject, auth)
 		if err != nil {
+			logger.Error("ERROR: checking if token is revoked: %v\n", err)
 			return nil, err
 		}
 		if isrevoked {
+			logger.Error("ERROR: token is revoked\n")
 			return nil, fmt.Errorf("token is revoked")
 		}
 
+		logger.Info("Token validation successful, returning secret key\n")
 		return []byte(s.config.SecretKey), nil
-	}
+	})
 
-	// Parse the token.
-	token, err := jwt.ParseWithClaims(auth, &jwt.RegisteredClaims{}, keyFunc)
-
-	// Handle all errors by wrapping them in your custom ReplyError.
+	// Handle parsing errors
 	if err != nil {
+		fmt.Printf("ERROR: parsing jwt token: %v\n", err)
 		return nil, types.ReplyError{Msg: err.Error()}
 	}
 	if !token.Valid {
+		fmt.Printf("ERROR: invalid jwt token\n")
 		return nil, types.ReplyError{Msg: "invalid token"}
 	}
 
-	c.Set("userId", token.Claims.(*jwt.RegisteredClaims).Subject)
+	// Set userId in context
+	userId := token.Claims.(*jwt.RegisteredClaims).Subject
+	fmt.Printf("Setting userId in context: %s\n", userId)
+	c.Set("userId", userId)
 
+	fmt.Printf("parseToken completed successfully\n")
 	return token, nil
 }
 
@@ -89,6 +101,10 @@ func (s *AuthService) GetEchoAuthMiddleware() echo.MiddlewareFunc {
 	return echojwt.WithConfig(echojwt.Config{
 		ContextKey:     "token",
 		ParseTokenFunc: s.parseToken,
+		ErrorHandler: func(c echo.Context, err error) error {
+			fmt.Printf("JWT Middleware Error: %v\n", err)
+			return c.JSON(401, map[string]any{"message": "unauthorized", "data": nil})
+		},
 	})
 }
 

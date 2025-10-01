@@ -2,7 +2,6 @@ package business
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/labstack/echo/v4"
@@ -46,23 +45,28 @@ func (s *BusinessServiceImpl) GetUserRolesMiddleware() echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
 			userID := c.Get("userId").(string)
-			rel, _ := s.businessUserRelRepo.FindByUser(c.Request().Context(), userID)
-			c.Set("userRoles", rel)
+			rel, err := s.businessUserRelRepo.FindByUser(c.Request().Context(), userID)
+			if err != nil {
+				s.logger.Errorf("%v", err)
+			}
+			if len(rel) > 0 {
+				c.Set("userRoles", rel)
+			}
 			return next(c)
 		}
 	}
 }
 
-func (s *BusinessServiceImpl) GetUserKYBInitiatedStatus(ctx context.Context, uid string) (string, error) {
+func (s *BusinessServiceImpl) GetUserKYBInitiatedStatus(ctx context.Context, uid string) (*business.CreateBusinessDTO, error) {
 	kybData, bus, err := s.businessUserRelRepo.GetKYBInitiatedStatus(ctx, uid)
 	if err != nil {
-		return "", fmt.Errorf("error finding user-business relations: %w", err)
+		return nil, fmt.Errorf("error finding user-business relations: %w", err)
 	}
 	if bus == nil {
-		return "", nil
+		return nil, nil
 	}
 
-	dto := business.CreateBusinessDTO{
+	dto := &business.CreateBusinessDTO{
 		Name:         bus.Name,
 		GSTIN:        bus.GSTIN,
 		BusinessType: bus.BusinessType,
@@ -71,12 +75,7 @@ func (s *BusinessServiceImpl) GetUserKYBInitiatedStatus(ctx context.Context, uid
 		DocUrl:       kybData.DocUrl,
 	}
 
-	b, err := json.Marshal(dto)
-	if err != nil {
-		return "", fmt.Errorf("error marshalling response json: %w", err)
-	}
-
-	return string(b), nil
+	return dto, nil
 }
 
 func (s *BusinessServiceImpl) CreateBusinessByNameAndGSTIN(ctx context.Context, uid string, dto *business.CreateBusinessDTO) (*business.CreateBusinessDTO, error) {
@@ -94,16 +93,6 @@ func (s *BusinessServiceImpl) CreateBusinessByNameAndGSTIN(ctx context.Context, 
 		return nil, fmt.Errorf("business with GSTIN %s already exists", dto.GSTIN)
 	}
 
-	relations, err := s.businessUserRelRepo.FindByUser(ctx, uid)
-	if err != nil {
-		return nil, fmt.Errorf("error finding user-business relations: %w", err)
-	}
-
-	// Check if user is already associated with a business
-	if len(relations) > 0 {
-		return nil, fmt.Errorf("user is already associated with a business")
-	}
-
 	bus, err := s.businessRepo.CreateBusinessByNameAndGSTIN(ctx, dto.Name, dto.GSTIN)
 	if err != nil {
 		return nil, fmt.Errorf("error creating business: %w", err)
@@ -117,6 +106,8 @@ func (s *BusinessServiceImpl) CreateBusinessByNameAndGSTIN(ctx context.Context, 
 		UserID:       uid,
 		BID:          bus.BID,
 		KybInitiated: true,
+		Role:         shared.Support,
+		RoleClaim:    shared.Support,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("error updating KYB initiated status: %w", err)

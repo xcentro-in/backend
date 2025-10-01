@@ -43,11 +43,11 @@ func (r *PgBusinessRepository) FindByID(ctx context.Context, bid string) (*busin
 	var b business.Business
 	var gstData sql.NullString
 	var incomeTexID sql.NullString
-	var kybStatus, businessType string
+	var kybStatus, businessType sql.NullString
 
 	err := r.querier.QueryRow(ctx, query, bid).Scan(
 		&b.BID, &b.Name, &b.GSTIN, &gstData, &incomeTexID, &kybStatus,
-		&businessType, &b.CountryCode, &b.CurrencyCode,
+		&businessType,
 	)
 
 	if err != nil {
@@ -59,8 +59,8 @@ func (r *PgBusinessRepository) FindByID(ctx context.Context, bid string) (*busin
 
 	b.GSTINData = gstData.String
 	b.ITID = incomeTexID.String
-	b.KybStatus = shared.KYBstatus(kybStatus)
-	b.BusinessType = shared.BusinessType(businessType)
+	b.KybStatus = shared.KYBstatus(kybStatus.String)
+	b.BusinessType = shared.BusinessType(businessType.String)
 
 	return &b, nil
 }
@@ -70,7 +70,7 @@ func (r *PgBusinessRepository) FindByGSTIN(ctx context.Context, gstin string) (*
 	query := `
 		SELECT 
 			bid, name, gstin, gst_data, income_tax_id, kyb_status, 
-			business_type, country_code, currency_code
+			business_type
 		FROM xcentro.business 
 		WHERE gstin = $1
 	`
@@ -78,24 +78,25 @@ func (r *PgBusinessRepository) FindByGSTIN(ctx context.Context, gstin string) (*
 	var b business.Business
 	var gstData sql.NullString
 	var incomeTexID sql.NullString
-	var kybStatus, businessType string
+	var kybStatus sql.NullString
+	var businessType sql.NullString
 
 	err := r.querier.QueryRow(ctx, query, gstin).Scan(
 		&b.BID, &b.Name, &b.GSTIN, &gstData, &incomeTexID, &kybStatus,
-		&businessType, &b.CountryCode, &b.CurrencyCode,
+		&businessType,
 	)
 
 	if err != nil {
 		if err == pgx.ErrNoRows {
-			return nil, fmt.Errorf("business not found")
+			return nil, nil
 		}
 		return nil, fmt.Errorf("error finding business: %w", err)
 	}
 
 	b.GSTINData = gstData.String
 	b.ITID = incomeTexID.String
-	b.KybStatus = shared.KYBstatus(kybStatus)
-	b.BusinessType = shared.BusinessType(businessType)
+	b.KybStatus = shared.KYBstatus(kybStatus.String)
+	b.BusinessType = shared.BusinessType(businessType.String)
 
 	return &b, nil
 }

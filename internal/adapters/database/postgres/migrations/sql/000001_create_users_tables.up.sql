@@ -100,10 +100,10 @@ CREATE TABLE xcentro.user_identity (
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ
 );
-COMMENT ON TABLE xcentro.person_identity IS 'Externalized personal identity & compliance artifacts (tax_id, national_id, with associated metadata).';
-CREATE INDEX IF NOT EXISTS idx_person_identity_national_id ON xcentro.person_identity(national_id);
+COMMENT ON TABLE xcentro.user_identity IS 'Externalized personal identity & compliance artifacts (tax_id, national_id, with associated metadata).';
+CREATE INDEX IF NOT EXISTS idx_person_identity_national_id ON xcentro.user_identity(national_id);
 CREATE TRIGGER set_timestamp
-BEFORE UPDATE ON xcentro.person_identity
+BEFORE UPDATE ON xcentro.user_identity
 FOR EACH ROW
 EXECUTE PROCEDURE xcentro.trigger_set_timestamp();
 
