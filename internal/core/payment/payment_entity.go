@@ -84,6 +84,8 @@ type TokenCardDetails struct {
 
 // PaymentRequest represents a request to process a payment
 type PaymentRequest struct {
+	PaymentID       string                 `json:"payment_id,omitempty"` // Set by service layer after creating payment record
+	UserID          string                 `json:"user_id"`
 	BusinessID      string                 `json:"business_id"`
 	Amount          int64                  `json:"amount"`
 	Currency        Currency               `json:"currency"`

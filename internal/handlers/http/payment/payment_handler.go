@@ -10,21 +10,18 @@ import (
 	"github.com/labstack/echo/v4"
 	"xcentro.in/internal/core/business_rules"
 	"xcentro.in/internal/core/payment"
+	"xcentro.in/internal/services/payments"
 )
 
 // PaymentHandler handles payment-related HTTP requests
 type PaymentHandler struct {
-	orchestrator    payment.PaymentOrchestrator
-	feeCalculator   business_rules.FeeCalculator
-	walletService   business_rules.WalletService
+	paymentService *payments.PaymentService
 }
 
 // NewPaymentHandler creates a new payment handler
-func NewPaymentHandler(orchestrator payment.PaymentOrchestrator, feeCalculator business_rules.FeeCalculator, walletService business_rules.WalletService) *PaymentHandler {
+func NewPaymentHandler(paymentService *payments.PaymentService) *PaymentHandler {
 	return &PaymentHandler{
-		orchestrator:  orchestrator,
-		feeCalculator: feeCalculator,
-		walletService: walletService,
+		paymentService: paymentService,
 	}
 }
 
@@ -44,9 +41,9 @@ func (h *PaymentHandler) FetchWallet(c echo.Context) error {
 
 	fmt.Printf("📥 Request: Business ID: %s\n", req.BusinessID)
 
-	// Call wallet service to get business wallet information
-	fmt.Println("🔄 Calling Wallet Service...")
-	businessWallet, err := h.walletService.GetBusinessWallet(req.BusinessID)
+	// Call payment service to get business wallet information
+	fmt.Println("🔄 Calling Payment Service...")
+	businessWallet, err := h.paymentService.GetBusinessWallet(req.BusinessID)
 	if err != nil {
 		fmt.Printf("❌ Wallet service error: %v\n", err)
 		return c.JSON(http.StatusInternalServerError, map[string]any{
@@ -199,16 +196,16 @@ func (h *PaymentHandler) GetFeeRules(c echo.Context) error {
 	}
 	fmt.Println()
 
-	// Call fee calculator to get fee rules
-	fmt.Println("🔄 Calling Fee Calculator...")
+	// Call payment service to get fee rules
+	fmt.Println("🔄 Calling Payment Service...")
 
 	var rules []*business_rules.FeeRule
 	var err error
 
 	if req.PaymentMethod != "" {
-		rules, err = h.feeCalculator.GetFeeRules(payment.PaymentMethod(req.PaymentMethod))
+		rules, err = h.paymentService.GetFeeRules(payment.PaymentMethod(req.PaymentMethod))
 	} else {
-		rules, err = h.feeCalculator.GetAllFeeRules()
+		rules, err = h.paymentService.GetAllFeeRules()
 	}
 
 	if err != nil {
@@ -223,7 +220,7 @@ func (h *PaymentHandler) GetFeeRules(c echo.Context) error {
 	var feeCalculation *business_rules.FeeCalculation
 	if req.Amount > 0 && req.PaymentMethod != "" {
 		fmt.Println("💰 Calculating fee for provided amount...")
-		feeCalculation, err = h.feeCalculator.CalculateFee(
+		feeCalculation, err = h.paymentService.CalculateFee(
 			req.Amount,
 			payment.PaymentMethod(req.PaymentMethod),
 			payment.CardType(req.CardType),
@@ -321,15 +318,10 @@ func (h *PaymentHandler) Tokenize(c echo.Context) error {
 		},
 	}
 
-	// Call orchestrator for complete tokenization (blocking call)
-	fmt.Println("🔄 Calling Payment Orchestrator for complete tokenization...")
+	// Call payment service for complete tokenization (blocking call)
+	fmt.Println("🔄 Calling Payment Service for tokenization...")
 	fmt.Println("⏳ This may take up to 60 seconds for JioPay 2-step process...")
-	tokenizeResponse, err := h.orchestrator.TokenizeCard(ctx, coreRequest)
-
-	// TODO-DB-4.1: Tokenized card already stored by orchestrator calling walletService
-	// - Orchestrator should call walletService.AddPaymentSource() with StoredCard
-	// - WalletService will persist via storedCardRepo.CreateStoredCard()
-	// - Verify this flow is working correctly in orchestrator
+	tokenizeResponse, err := h.paymentService.TokenizeCard(ctx, coreRequest)
 
 	if err != nil {
 		fmt.Printf("❌ Tokenization failed: %v\n", err)
@@ -359,8 +351,8 @@ func (h *PaymentHandler) Tokenize(c echo.Context) error {
 		},
 	}
 
-	// Add to business wallet via wallet service
-	if err := h.walletService.AddPaymentSource(coreRequest.BusinessID, storedCard); err != nil {
+	// Add to business wallet via payment service
+	if err := h.paymentService.AddPaymentSource(coreRequest.BusinessID, storedCard); err != nil {
 		fmt.Printf("❌ Failed to store card in wallet: %v\n", err)
 		return c.JSON(http.StatusInternalServerError, map[string]any{
 			"error": "storage_failed",
@@ -417,39 +409,15 @@ func (h *PaymentHandler) MakePayment(c echo.Context) error {
 		})
 	}
 
-	// Calculate fees using business rules
-	// TODO: don't think we really need to do this here, as the orchestrator should handle it
-	// Jiopay doens't need fee calc
-	// easebuzz might need as there is no reseller model
-	// no idea how their reseller model is going to work
-	fmt.Println("💰 Calculating payment fees...")
-	feeCalculation, err := h.feeCalculator.CalculateFee(
-		req.Amount,
-		payment.PaymentMethod(req.PaymentMethod),
-		payment.CardType(getCardTypeFromRequest(&req)),
-		payment.CardCategory(getCardCategoryFromRequest(&req)),
-	)
-	if err != nil {
-		fmt.Printf("❌ Fee calculation error: %v\n", err)
-		return c.JSON(http.StatusInternalServerError, map[string]any{
-			"error": "fee_calculation_failed",
-			"message": "Failed to calculate payment fees",
-		})
-	}
-
-	fmt.Printf("💰 Fee calculated: Base: %d, Fee: %d, Total: %d %s\n",
-		feeCalculation.BaseAmount, feeCalculation.FeeAmount,
-		feeCalculation.TotalAmount, feeCalculation.Currency)
-
-	// TODO-DB-4.1-CRITICAL: Create initial payment record in database
-	// - Generate payment_id (UUID) via repository.CreatePayment()
-	// - Store: business_id, amount, currency, payment_method, status='pending', description, callback_url
-	// - Pass generated payment_id to orchestrator in coreRequest.PaymentID
-	// - This ensures every payment request is tracked from entry point
+	// Extract user_id and business_id from JWT token
+	// TODO: Implement proper JWT extraction from token claims
+	userID := "uid12345"      // TODO: Extract from JWT
+	businessID := "bid12345"  // TODO: Extract from JWT
 
 	// Convert HTTP request to core domain request
 	coreRequest := payment.PaymentRequest{
-		BusinessID:    "bid12345", // TODO-DB-4.1: Extract BusinessID from JWT token claims
+		UserID:        userID,
+		BusinessID:    businessID,
 		Amount:        req.Amount,
 		Currency:      payment.Currency(req.Currency),
 		PaymentMethod: payment.PaymentMethod(req.PaymentMethod),
@@ -461,17 +429,12 @@ func (h *PaymentHandler) MakePayment(c echo.Context) error {
 	// Add payment method specific details
 	h.populatePaymentMethodDetails(&coreRequest, &req)
 
-	// Call orchestrator to process payment
-	fmt.Println("🔄 Calling Payment Orchestrator...")
-	paymentResponse, err := h.orchestrator.ProcessPayment(c.Request().Context(), coreRequest)
-
-	// TODO-DB-4.1-CRITICAL: Payment status already updated by orchestrator
-	// - If orchestrator succeeded, payment status is now 'processing' or 'pending_redirect'
-	// - If orchestrator failed, payment status is 'failed' with error metadata
-	// - payment_id is already in paymentResponse, return to client
+	// Call payment service to process payment (creates record, calculates fees, calls orchestrator)
+	fmt.Println("🔄 Calling Payment Service...")
+	paymentResponse, err := h.paymentService.ProcessPayment(c.Request().Context(), coreRequest)
 
 	if err != nil {
-		fmt.Printf("❌ Orchestrator error: %v\n", err)
+		fmt.Printf("❌ Payment service error: %v\n", err)
 		return c.JSON(http.StatusInternalServerError, map[string]any{
 			"error": "payment_processing_failed",
 			"message": "Failed to process payment",
@@ -564,31 +527,17 @@ func (h *PaymentHandler) handleBankAccountAddition(ctx context.Context, c echo.C
 		AccountType:       payment.BankAccountType(req.BankAccountDetails.AccountType),
 	}
 
-	fmt.Println("🔄 Calling Wallet Service for bank account verification and addition...")
+	fmt.Println("🔄 Calling Payment Service for bank account verification and addition...")
 
-	// Call wallet service to add and verify bank account
-	err := h.walletService.AddPaymentSource(req.BusinessID, bankAccount)
-
-	// TODO-DB-4.1: Bank account storage handled inside walletService.AddPaymentSource()
-	// - WalletService creates bank_verification_log before calling verification API
-	// - WalletService stores bank account after successful verification
-	// - Both operations happen with repository calls inside WalletService
+	// Call payment service to add and verify bank account
+	err := h.paymentService.AddPaymentSource(req.BusinessID, bankAccount)
 
 	if err != nil {
 		fmt.Printf("❌ Bank account addition failed: %v\n", err)
 
-		// Check if it's a bank verification error
-		if bankVerifyErr, ok := err.(*business_rules.BankVerificationError); ok {
-			return c.JSON(http.StatusBadRequest, map[string]any{
-				"error": bankVerifyErr.Code,
-				"message": bankVerifyErr.Message,
-				"details": bankVerifyErr.Details,
-			})
-		}
-
 		return c.JSON(http.StatusInternalServerError, map[string]any{
 			"error": "internal_error",
-			"message": "Failed to add bank account",
+			"message": fmt.Sprintf("Failed to add bank account: %v", err),
 		})
 	}
 
@@ -927,8 +876,8 @@ func (h *PaymentHandler) handleTokenizationError(err error) error {
 }
 
 // RegisterPaymentRoutes registers all payment routes
-func RegisterPaymentRoutes(group *echo.Group, orchestrator payment.PaymentOrchestrator, feeCalculator business_rules.FeeCalculator, walletService business_rules.WalletService) {
-	handler := NewPaymentHandler(orchestrator, feeCalculator, walletService)
+func RegisterPaymentRoutes(group *echo.Group, paymentService *payments.PaymentService) {
+	handler := NewPaymentHandler(paymentService)
 
 	// Core payment operations
 	group.POST("/fetch_wallet", handler.FetchWallet)
@@ -938,6 +887,7 @@ func RegisterPaymentRoutes(group *echo.Group, orchestrator payment.PaymentOrches
 	group.POST("/add_payment_source", handler.AddPaymentSource)
 
 	// Webhook endpoints (Phase 3C)
-	webhookGroup := group.Group("/webhooks")
-	RegisterWebhookRoutes(webhookGroup, orchestrator)
+	// TODO: Webhooks still need orchestrator for now
+	// webhookGroup := group.Group("/webhooks")
+	// RegisterWebhookRoutes(webhookGroup, paymentService)
 }

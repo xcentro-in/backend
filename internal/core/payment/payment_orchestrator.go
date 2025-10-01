@@ -71,11 +71,16 @@ func (o *MockPaymentOrchestrator) ProcessPayment(ctx context.Context, request Pa
 	}
 	fmt.Printf("🎯 Selected Gateway: %s\n", gateway)
 
-	// Generate transaction IDs (payment_id should come from handler in Phase 4.4)
+	// Use payment_id provided by service layer (already exists in DB)
+	paymentID := request.PaymentID
+	if paymentID == "" {
+		return nil, fmt.Errorf("payment_id is required (should be set by service layer)")
+	}
+	fmt.Printf("🆔 Using Payment ID from service: %s\n", paymentID)
+
+	// Generate transaction ID for gateway
 	transactionID := fmt.Sprintf("txn_%s_%s", time.Now().Format("20060102"), uuid.New().String()[:8])
-	paymentID := uuid.New().String()
 	fmt.Printf("🆔 Generated Transaction ID: %s\n", transactionID)
-	fmt.Printf("🆔 Generated Payment ID: %s\n", paymentID)
 
 	// TODO-DB-4.1-CRITICAL: Update payment record with selected gateway
 	// - Call paymentRepo.UpdatePaymentGateway(ctx, paymentID, gateway)

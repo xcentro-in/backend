@@ -9,6 +9,7 @@ import (
 	"xcentro.in/internal/handlers/http/auth"
 	"xcentro.in/internal/handlers/http/payment"
 	authservice "xcentro.in/internal/services/auth"
+	"xcentro.in/internal/services/payments"
 	"xcentro.in/internal/services/user"
 )
 
@@ -27,14 +28,25 @@ func registerV1PaymentRoutes(meta *serverMetaData, group *echo.Group) {
 	storedCardRepository := paymentRepo.NewPgStoredCardRepository(meta.clients.db)
 	bankAccountRepository := paymentRepo.NewPgBankAccountRepository(meta.clients.db)
 
-	// Create payment services (Phase 2) with repository dependencies
+	// Create business rules services
 	orchestrator := corePayment.NewMockPaymentOrchestrator(paymentRepository, storedCardRepository)
 	feeCalculator := business_rules.NewMockFeeCalculator()
 	walletService := business_rules.NewMockWalletService(storedCardRepository, bankAccountRepository, meta.clients.txManager)
 
-	// Register payment routes with services
+	// Create payment service layer (Phase 4.4+)
+	paymentService := payments.NewPaymentService(
+		orchestrator,
+		paymentRepository,
+		storedCardRepository,
+		bankAccountRepository,
+		walletService,
+		feeCalculator,
+		meta.clients.txManager,
+	)
+
+	// Register payment routes with payment service
 	processPaymentGroup := group.Group("/process_payment")
-	payment.RegisterPaymentRoutes(processPaymentGroup, orchestrator, feeCalculator, walletService)
+	payment.RegisterPaymentRoutes(processPaymentGroup, paymentService)
 }
 
 func registerV1Routes(s *xcentroServer) {
