@@ -3,16 +3,19 @@ package main
 import (
 	"github.com/labstack/echo/v4"
 	"xcentro.in/internal/adapters/database/postgres/business"
+	payeeRepo "xcentro.in/internal/adapters/database/postgres/payee"
 	paymentRepo "xcentro.in/internal/adapters/database/postgres/payment"
 	userRepo "xcentro.in/internal/adapters/database/postgres/user"
 	"xcentro.in/internal/core/business_rules"
 	corePayment "xcentro.in/internal/core/payment"
 	"xcentro.in/internal/handlers/http/auth"
 	businessHandler "xcentro.in/internal/handlers/http/business"
+	"xcentro.in/internal/handlers/http/payee"
 	"xcentro.in/internal/handlers/http/payment"
 	userHandler "xcentro.in/internal/handlers/http/user"
 	authservice "xcentro.in/internal/services/auth"
 	businessSvc "xcentro.in/internal/services/business"
+	payeeSvc "xcentro.in/internal/services/payee"
 	"xcentro.in/internal/services/payments"
 	"xcentro.in/internal/services/user"
 )
@@ -75,6 +78,33 @@ func registerV1UserRoutes(meta *serverMetaData, group *echo.Group) {
 	userHandler.RegisterUserRoutes(group, userService, authService)
 }
 
+func registerV1PayeeRoutes(meta *serverMetaData, group *echo.Group) {
+	// Create payee repository instances
+	payeeBusinessRepo := payeeRepo.NewPgPayeeBusinessRepository(meta.clients.db)
+	payeeBankAccountRepo := payeeRepo.NewPgPayeeBankAccountRepository(meta.clients.db)
+	businessPayeeRelationRepo := payeeRepo.NewPgBusinessPayeeRelationRepository(meta.clients.db)
+
+	// Create verification services
+	gstVerificationSvc := business_rules.NewMockGSTVerificationService()
+	bankVerificationSvc := business_rules.NewMockBankVerificationService()
+	crossVerificationSvc := business_rules.NewMockCrossVerificationService()
+
+	// Create payee service
+	payeeService := payeeSvc.NewPayeeService(
+		payeeBusinessRepo,
+		payeeBankAccountRepo,
+		businessPayeeRelationRepo,
+		gstVerificationSvc,
+		bankVerificationSvc,
+		crossVerificationSvc,
+		meta.clients.txManager,
+	)
+
+	// Register payee routes
+	payeeGroup := group.Group("/payees")
+	payee.RegisterPayeeRoutes(payeeGroup, payeeService)
+}
+
 func registerV1Routes(s *xcentroServer) {
 	v1 := s.echo.Group("/v1")
 
@@ -96,6 +126,9 @@ func registerV1Routes(s *xcentroServer) {
 
 	// Business Routes
 	registerV1BusinessRoutes(&s.meta, v1)
+
+	// Payee Routes
+	registerV1PayeeRoutes(&s.meta, v1)
 }
 
 func registerRouters(s *xcentroServer) {
