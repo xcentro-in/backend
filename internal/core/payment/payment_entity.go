@@ -6,6 +6,7 @@ import "time"
 type Payment struct {
 	ID               string                 `json:"id"`
 	UserID           string                 `json:"user_id"`
+	BusinessID       string                 `json:"business_id"`
 	Amount           int64                  `json:"amount"` // Amount in smallest currency unit (paise for INR)
 	Currency         Currency               `json:"currency"`
 	PaymentMethod    PaymentMethod          `json:"payment_method"`

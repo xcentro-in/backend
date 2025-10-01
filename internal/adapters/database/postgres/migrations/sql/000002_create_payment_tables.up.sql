@@ -121,7 +121,7 @@ CREATE TABLE xcentro.payments (
 
     -- User/Business references
     user_id UUID REFERENCES xcentro.user_table(id) ON DELETE SET NULL,
-    business_id UUID REFERENCES xcentro.business(bid) ON DELETE SET NULL,
+    business_id UUID NOT NULL REFERENCES xcentro.business(bid) ON DELETE CASCADE,
 
     -- Payment details
     amount BIGINT NOT NULL CHECK (amount > 0),  -- Amount in smallest currency unit (paise for INR)
