@@ -1,6 +1,8 @@
 package auth
 
 import (
+	"context"
+	"fmt"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -10,6 +12,7 @@ import (
 	redis "xcentro.in/internal/adapters/cache/redis/client"
 	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/logger"
+	"xcentro.in/internal/shared/types"
 )
 
 type AuthService struct {
@@ -47,13 +50,45 @@ func (s *AuthService) ExtractAndValidateClaims(token *jwt.Token) (*jwt.Registere
 	return nil, nil
 }
 
+func (s *AuthService) parseToken(c echo.Context, auth string) (interface{}, error) {
+	// The key lookup logic is defined as an inline function.
+	keyFunc := func(token *jwt.Token) (interface{}, error) {
+		// Verify the token's signing algorithm.
+		if token.Method.Alg() != jwt.SigningMethodHS256.Name {
+			return nil, fmt.Errorf("unexpected jwt signing method=%v", token.Header["alg"])
+		}
+
+		isrevoked, err := s.CheckIfTokenRevoked(c.Request().Context(), token.Claims.(*jwt.RegisteredClaims).Subject, auth)
+		if err != nil {
+			return nil, err
+		}
+		if isrevoked {
+			return nil, fmt.Errorf("token is revoked")
+		}
+
+		return []byte(s.config.SecretKey), nil
+	}
+
+	// Parse the token.
+	token, err := jwt.ParseWithClaims(auth, &jwt.RegisteredClaims{}, keyFunc)
+
+	// Handle all errors by wrapping them in your custom ReplyError.
+	if err != nil {
+		return nil, types.ReplyError{Msg: err.Error()}
+	}
+	if !token.Valid {
+		return nil, types.ReplyError{Msg: "invalid token"}
+	}
+
+	c.Set("userId", token.Claims.(*jwt.RegisteredClaims).Subject)
+
+	return token, nil
+}
+
 func (s *AuthService) GetEchoAuthMiddleware() echo.MiddlewareFunc {
 	return echojwt.WithConfig(echojwt.Config{
-		SigningKey: []byte(s.config.SecretKey),
-		ContextKey: "token",
-		NewClaimsFunc: func(c echo.Context) jwt.Claims {
-			return &jwt.RegisteredClaims{}
-		},
+		ContextKey:     "token",
+		ParseTokenFunc: s.parseToken,
 	})
 }
 
@@ -73,4 +108,17 @@ func (s *AuthService) ComparePassword(hashedPassword, password string) error {
 
 func (s *AuthService) GetRedisClient() *redis.RedisClient {
 	return s.rclient
+}
+
+func (s *AuthService) CheckIfTokenRevoked(ctx context.Context, userid, token string) (bool, error) {
+	result := s.rclient.Client.HGet(ctx, "xcentro:user:"+userid+":token", token)
+	if result.Err() != nil {
+		return false, result.Err()
+	}
+	return result.Val() == "true", nil
+}
+
+func (s *AuthService) SetNewToken(ctx context.Context, userid string, token string) error {
+	result := s.rclient.Client.HSet(ctx, "xcentro:user:"+userid+":token", token, false)
+	return result.Err()
 }

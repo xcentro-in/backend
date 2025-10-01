@@ -19,8 +19,18 @@ type UserService interface {
 	GetUserByID(ctx context.Context, userID string) (*User, error)
 
 	// UpdateUserProfile updates user profile information
-	UpdateUserProfile(ctx context.Context, userID string, mobile, pan string) error
+	UpdateUserProfile(ctx context.Context, userID string, mobile, taxID string) error
 
-	// UpdateKYCStatus updates user's KYC status and data
-	UpdateKYCStatus(ctx context.Context, userID string, status shared.KYCStatus, kycData string) error
+	// KYC workflow methods
+	InitiateKYC(ctx context.Context, userID string, claimedRole shared.UserRole, taxID, nationalID string) error
+	UpdateKYCStatus(ctx context.Context, userID string, status shared.KYCStatus) error
+	GetUserKYCStatus(ctx context.Context, userID string) (string, error) // JSON response like business service
+
+	// Verification methods
+	VerifyEmail(ctx context.Context, userID, code string) error
+	VerifyMobile(ctx context.Context, userID, code string) error
+	SendVerificationCode(ctx context.Context, userID string, codeType shared.VerificationType) error
+
+	// Business role management
+	ClaimBusinessRole(ctx context.Context, userID, businessID string, role shared.UserRole) error
 }

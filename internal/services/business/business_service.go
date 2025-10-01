@@ -2,35 +2,36 @@ package business
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
-	"github.com/redis/go-redis/v9"
-	businessRepo "xcentro.in/internal/adapters/database/postgres/business"
+	"github.com/labstack/echo/v4"
+	redis "xcentro.in/internal/adapters/cache/redis/client"
 	"xcentro.in/internal/adapters/database/postgres/client"
-	"xcentro.in/internal/adapters/database/postgres/user"
 	"xcentro.in/internal/core/business"
 	"xcentro.in/internal/core/shared"
+	"xcentro.in/internal/core/user"
 	"xcentro.in/internal/shared/logger"
 )
 
 // BusinessServiceImpl provides business logic for business operations
 type BusinessServiceImpl struct {
-	businessRepo        *businessRepo.PgBusinessRepository
-	businessUserRelRepo *businessRepo.PgBusinessUserRelationRepository
-	userRepo            *user.PgUserRepository
+	businessRepo        business.BusinessRepository
+	businessUserRelRepo business.BusinessUserRelationRepository
+	userRepo            user.UserRepository
 	txManager           client.TxManager
-	rclient             *redis.Client
+	rclient             *redis.RedisClient
 	logger              *logger.Logger
 }
 
 // NewBusinessService creates a new business service with dependency injection
 func NewBusinessService(
-	businessRepo *businessRepo.PgBusinessRepository,
-	businessUserRelRepo *businessRepo.PgBusinessUserRelationRepository,
-	userRepo *user.PgUserRepository,
+	businessRepo business.BusinessRepository,
+	businessUserRelRepo business.BusinessUserRelationRepository,
+	userRepo user.UserRepository,
 	txManager client.TxManager,
-	rclient *redis.Client,
-) *BusinessServiceImpl {
+	rclient *redis.RedisClient,
+) business.BusinessService {
 	return &BusinessServiceImpl{
 		businessRepo:        businessRepo,
 		businessUserRelRepo: businessUserRelRepo,
@@ -41,38 +42,56 @@ func NewBusinessService(
 	}
 }
 
+func (s *BusinessServiceImpl) GetUserRolesMiddleware() echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			userID := c.Get("userId").(string)
+			rel, _ := s.businessUserRelRepo.FindByUser(c.Request().Context(), userID)
+			c.Set("userRoles", rel)
+			return next(c)
+		}
+	}
+}
+
 func (s *BusinessServiceImpl) GetUserKYBInitiatedStatus(ctx context.Context, uid string) (string, error) {
-	relations, err := s.businessUserRelRepo.FindByUser(ctx, uid)
+	kybData, bus, err := s.businessUserRelRepo.GetKYBInitiatedStatus(ctx, uid)
 	if err != nil {
 		return "", fmt.Errorf("error finding user-business relations: %w", err)
 	}
-
-	// If no relations found, KYB is not initiated
-	if len(relations) == 0 {
+	if bus == nil {
 		return "", nil
 	}
 
-	// Check if any relation has KYB initiated
-	if len(relations) == 1 && relations[0].KybInitiated {
-		return relations[0].BID, nil
+	dto := business.CreateBusinessDTO{
+		Name:         bus.Name,
+		GSTIN:        bus.GSTIN,
+		BusinessType: bus.BusinessType,
+		ITID:         kybData.ITID,
+		CID:          kybData.CID,
+		DocUrl:       kybData.DocUrl,
 	}
 
-	return "", nil
+	b, err := json.Marshal(dto)
+	if err != nil {
+		return "", fmt.Errorf("error marshalling response json: %w", err)
+	}
+
+	return string(b), nil
 }
 
-func (s *BusinessServiceImpl) CreateBusinessByNameAndGSTIN(ctx context.Context, name string, gstin string, uid string) (*business.Business, error) {
-	s.logger.Info("Creating business with name: %s and GSTIN: %s", name, gstin)
+func (s *BusinessServiceImpl) CreateBusinessByNameAndGSTIN(ctx context.Context, uid string, dto *business.CreateBusinessDTO) (*business.CreateBusinessDTO, error) {
+	s.logger.Info("Creating business with name: %s and GSTIN: %s", dto.Name, dto.GSTIN)
 
-	if name == "" || gstin == "" {
+	if dto.Name == "" || dto.GSTIN == "" {
 		return nil, fmt.Errorf("business name and GSTIN are required")
 	}
 
-	existingBusiness, err := s.businessRepo.FindByGSTIN(ctx, gstin)
+	existingBusiness, err := s.businessRepo.FindByGSTIN(ctx, dto.GSTIN)
 	if err != nil {
 		return nil, fmt.Errorf("error finding business by GSTIN: %w", err)
 	}
 	if existingBusiness != nil {
-		return nil, fmt.Errorf("business with GSTIN %s already exists", gstin)
+		return nil, fmt.Errorf("business with GSTIN %s already exists", dto.GSTIN)
 	}
 
 	relations, err := s.businessUserRelRepo.FindByUser(ctx, uid)
@@ -85,26 +104,34 @@ func (s *BusinessServiceImpl) CreateBusinessByNameAndGSTIN(ctx context.Context, 
 		return nil, fmt.Errorf("user is already associated with a business")
 	}
 
-	business, err := s.businessRepo.CreateBusinessByNameAndGSTIN(ctx, name, gstin)
+	bus, err := s.businessRepo.CreateBusinessByNameAndGSTIN(ctx, dto.Name, dto.GSTIN)
 	if err != nil {
 		return nil, fmt.Errorf("error creating business: %w", err)
 	}
 
-	if business == nil {
+	if bus == nil {
 		return nil, fmt.Errorf("failed to create business")
 	}
 
-	err = s.businessUserRelRepo.UpdateKYBInitiated(ctx, uid, business.BID, true)
+	err = s.businessUserRelRepo.AddUserToBusiness(ctx, &business.BusinessUserRelation{
+		UserID:       uid,
+		BID:          bus.BID,
+		KybInitiated: true,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("error updating KYB initiated status: %w", err)
 	}
 
-	cmd := s.rclient.HSet(ctx, "xcentro:user:verification:"+uid, "is_kyb_initiated", true)
+	cmd := s.rclient.Client.HSet(ctx, "xcentro:user:verification:"+uid, "is_kyb_initiated", true)
 	if err := cmd.Err(); err != nil {
 		return nil, fmt.Errorf("error setting Redis cache: %w", err)
 	}
 
-	return business, nil
+	return &business.CreateBusinessDTO{
+		Id:    bus.BID,
+		Name:  bus.Name,
+		GSTIN: bus.GSTIN,
+	}, nil
 }
 
 func (s *BusinessServiceImpl) UpdateBusinessKYBData(ctx context.Context, bdto *business.BusinessKYBDTO) error {
@@ -137,6 +164,19 @@ func (s *BusinessServiceImpl) UpdateBusinessKYBData(ctx context.Context, bdto *b
 
 	if err != nil {
 		return fmt.Errorf("error updating business KYB success data: %w", err)
+	}
+
+	return nil
+}
+
+func (s *BusinessServiceImpl) UpdateBusinessRoleClaim(ctx context.Context, uid, bid string, roleClaim shared.UserRole) error {
+	if uid == "" || bid == "" {
+		return fmt.Errorf("user ID and business ID are required")
+	}
+
+	err := s.businessUserRelRepo.UpdateUserRole(ctx, uid, bid, roleClaim)
+	if err != nil {
+		return fmt.Errorf("error updating role claim: %w", err)
 	}
 
 	return nil

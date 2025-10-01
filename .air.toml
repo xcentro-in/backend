@@ -1,0 +1,7 @@
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  bin = "./tmp/api"
+  cmd = "go build -o ./tmp/api ./cmd/api"
+  include_ext = ["go"]

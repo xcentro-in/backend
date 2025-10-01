@@ -62,25 +62,15 @@ func (ah AuthHandler) HandleSignup(c echo.Context) error {
 	}
 	signupReq.Password = hashedPassword
 
-	user, err := ah.userService.CreateUser(c.Request().Context(), signupReq)
+	_, err = ah.userService.CreateUser(c.Request().Context(), signupReq)
 	if err != nil {
 		logger.Errorf("Failed to create user %v", err)
 		return c.JSON(500, map[string]any{"message": "Failed to create user", "data": nil})
 	}
 
-	token, err := ah.authService.CreateAuthJWT(user.Id)
-	if err != nil {
-		logger.Errorf("Failed to create token %v", err)
-		return c.JSON(500, map[string]any{"message": "Failed to create token", "data": nil})
-	}
+	// TODO: create user and send email verification link
 
-	rclient := ah.authService.GetRedisClient()
-	result := rclient.Client.HSet(c.Request().Context(), "xcentro:"+user.Id, "token", token, "isrevoked", "false")
-	if(result.Err() != nil) {
-		logger.Errorf("Failed to store token in redis %v", result.Err())
-		return c.JSON(500, map[string]any{"message": "Failed to store token", "data": nil})
-	}
-	return c.JSON(201, map[string]any{"message": "User created successfully", "data": map[string]string{"token": token}})
+	return c.JSON(201, map[string]any{"message": "User created successfully", "data": nil})
 
 }
 
@@ -103,6 +93,12 @@ func (ah AuthHandler) HandleLogin(c echo.Context) error {
 		return c.JSON(500, map[string]any{"message": "Failed to get user by email", "data": nil})
 	}
 
+	// TODO: uncomment after email verification implementation
+	// if user.EmailVerified {
+	// 	logger.Error("Email not verified")
+	// 	return c.JSON(401, map[string]any{"message": "Email not verified", "data": nil})
+	// }
+
 	if user == nil || ah.authService.ComparePassword(user.PwdHash, loginReq.Password) != nil {
 		logger.Error("Invalid email or password")
 		return c.JSON(401, map[string]any{"message": "Invalid email or password", "data": nil})
@@ -114,8 +110,11 @@ func (ah AuthHandler) HandleLogin(c echo.Context) error {
 		return c.JSON(500, map[string]any{"message": "Failed to create token", "data": nil})
 	}
 
-	rclient := ah.authService.GetRedisClient()
-	rclient.Client.HSet(c.Request().Context(), "xcentro:"+user.Id, "token", token, "isrevoked", "false")
+	err = ah.authService.SetNewToken(c.Request().Context(), user.Id, token)
+	if err != nil {
+		logger.Errorf("Failed to store token %v", err)
+		return c.JSON(500, map[string]any{"message": "Failed to store token", "data": nil})
+	}
 
 	return c.JSON(200, map[string]any{"message": "Login successful", "data": map[string]string{"token": token}})
 }

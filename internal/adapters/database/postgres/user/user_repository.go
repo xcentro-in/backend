@@ -2,6 +2,7 @@ package user
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 
@@ -36,8 +37,8 @@ func (r *PgUserRepository) WithTx(tx client.Tx) user.UserRepository {
 // CreateUser creates a new user from auth payload
 func (r *PgUserRepository) CreateUser(ctx context.Context, authPayload auth.AuthPayload) (*user.User, error) {
 	query := `
-		INSERT INTO user_table (email, pwd_hash, mobile, pan, kyc_data)
-		VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO xcentro.user_table (email, pwd_hash, mobile, tax_id)
+		VALUES ($1, $2, $3, $4)
 		RETURNING id, email;
 	`
 
@@ -46,9 +47,8 @@ func (r *PgUserRepository) CreateUser(ctx context.Context, authPayload auth.Auth
 	err := r.querier.QueryRow(ctx, query,
 		authPayload.Email,
 		authPayload.Password,
-		"",   // mobile - empty initially
-		"",   // pan - empty initially
-		"{}", // kyc_data - empty initially
+		"",  // mobile - empty initially
+		nil, // tax_id - null initially
 	).Scan(
 		&u.Id,
 		&u.Email,
@@ -64,42 +64,61 @@ func (r *PgUserRepository) CreateUser(ctx context.Context, authPayload auth.Auth
 // GetUserByID retrieves a user by ID
 func (r *PgUserRepository) GetUserByID(ctx context.Context, userID string) (*user.User, error) {
 	query := `
-		SELECT id, email, mobile, pan, kyc_status, kyc_data, email_verified, mobile_verified, role
-		FROM user_table
+		SELECT id, email, mobile, tax_id, kyc_status, email_verified, mobile_verified
+		FROM xcentro.user_table
 		WHERE id = $1
 	`
 
 	var u user.User
-	var kycStatusInt int
-	var roleInt int
+	var kycStatusStr string
+	var taxID sql.NullString
 
 	err := r.querier.QueryRow(ctx, query, userID).Scan(
 		&u.Id,
 		&u.Email,
 		&u.Mobile,
-		&u.PAN,
-		&kycStatusInt,
-		&u.KycData,
+		&taxID,
+		&kycStatusStr,
 		&u.EmailVerified,
 		&u.MobileVerified,
-		&roleInt,
 	)
 
 	if err != nil {
 		return nil, fmt.Errorf("failed to get user by ID: %w", err)
 	}
 
-	u.KycStatus = shared.KYCStatus(kycStatusInt)
-	u.Role = shared.UserRole(roleInt)
+	u.TaxID = taxID.String
+	// Convert enum string to KYCStatus - assuming we'll have a helper
+	u.KycStatus = parseKYCStatus(kycStatusStr)
 
 	return &u, nil
+}
+
+// parseKYCStatus converts string enum to KYCStatus
+func parseKYCStatus(status string) shared.KYCStatus {
+	switch status {
+	case "kyc_not_started":
+		return shared.KYCNotStarted
+	case "kyc_in_progress":
+		return shared.KYCInProgress
+	case "kyc_completed":
+		return shared.KYCCompleted
+	case "kyc_verified":
+		return shared.KYCVerified
+	case "kyc_needs_update":
+		return shared.KYCNeedsUpdate
+	case "kyc_rejected":
+		return shared.KYCRejected
+	default:
+		return shared.KYCNotStarted
+	}
 }
 
 // GetUserByEmail retrieves a user by email
 func (r *PgUserRepository) GetUserByEmail(ctx context.Context, email string) (*user.User, error) {
 	query := `
 		SELECT id, pwd_hash
-		FROM user_table
+		FROM xcentro.user_table
 		WHERE email = $1
 	`
 
@@ -122,7 +141,7 @@ func (r *PgUserRepository) GetUserByEmail(ctx context.Context, email string) (*u
 
 // UpdateUserMobile updates user's mobile number
 func (r *PgUserRepository) UpdateUserMobile(ctx context.Context, userID, newMobile string) error {
-	query := `UPDATE users SET mobile = $1 WHERE id = $2`
+	query := `UPDATE xcentro.user_table SET mobile = $1 WHERE id = $2`
 
 	_, err := r.querier.Exec(ctx, query, newMobile, userID)
 	if err != nil {
@@ -132,13 +151,13 @@ func (r *PgUserRepository) UpdateUserMobile(ctx context.Context, userID, newMobi
 	return nil
 }
 
-// UpdateUserPAN updates user's PAN
-func (r *PgUserRepository) UpdateUserPAN(ctx context.Context, userID, newPAN string) error {
-	query := `UPDATE users SET pan = $1 WHERE id = $2`
+// UpdateUserTaxID updates user's tax ID reference
+func (r *PgUserRepository) UpdateUserTaxID(ctx context.Context, userID, newTaxID string) error {
+	query := `UPDATE xcentro.user_table SET tax_id = $1 WHERE id = $2`
 
-	_, err := r.querier.Exec(ctx, query, newPAN, userID)
+	_, err := r.querier.Exec(ctx, query, newTaxID, userID)
 	if err != nil {
-		return fmt.Errorf("failed to update user PAN: %w", err)
+		return fmt.Errorf("failed to update user tax ID: %w", err)
 	}
 
 	return nil
@@ -146,9 +165,10 @@ func (r *PgUserRepository) UpdateUserPAN(ctx context.Context, userID, newPAN str
 
 // UpdateUserKYCStatus updates user's KYC status
 func (r *PgUserRepository) UpdateUserKYCStatus(ctx context.Context, userID string, newStatus shared.KYCStatus) error {
-	query := `UPDATE users SET kyc_status = $1 WHERE id = $2`
+	statusStr := kycStatusToString(newStatus)
+	query := `UPDATE xcentro.user_table SET kyc_status = $1 WHERE id = $2`
 
-	_, err := r.querier.Exec(ctx, query, int(newStatus), userID)
+	_, err := r.querier.Exec(ctx, query, statusStr, userID)
 	if err != nil {
 		return fmt.Errorf("failed to update user KYC status: %w", err)
 	}
@@ -156,22 +176,125 @@ func (r *PgUserRepository) UpdateUserKYCStatus(ctx context.Context, userID strin
 	return nil
 }
 
-// UpdateUserKYCData updates user's KYC data
-func (r *PgUserRepository) UpdateUserKYCData(ctx context.Context, userID, kycData string) error {
-	query := `UPDATE users SET kyc_data = $1 WHERE id = $2`
+// kycStatusToString converts KYCStatus to string enum
+func kycStatusToString(status shared.KYCStatus) string {
+	switch status {
+	case shared.KYCNotStarted:
+		return "kyc_not_started"
+	case shared.KYCInProgress:
+		return "kyc_in_progress"
+	case shared.KYCCompleted:
+		return "kyc_completed"
+	case shared.KYCVerified:
+		return "kyc_verified"
+	case shared.KYCNeedsUpdate:
+		return "kyc_needs_update"
+	case shared.KYCRejected:
+		return "kyc_rejected"
+	default:
+		return "kyc_not_started"
+	}
+}
 
-	_, err := r.querier.Exec(ctx, query, kycData, userID)
+// UpsertUserIdentity creates or updates user identity data
+func (r *PgUserRepository) UpsertUserIdentity(ctx context.Context, identity *user.UserIdentity) error {
+	query := `
+		INSERT INTO xcentro.user_identity (tax_id, tax_id_data, national_id, national_id_data)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (tax_id)
+		DO UPDATE SET 
+			tax_id_data = $2,
+			national_id = $3,
+			national_id_data = $4
+	`
+
+	_, err := r.querier.Exec(ctx, query,
+		identity.TaxID, identity.TaxIDData, identity.NationalID, identity.NationalIDData,
+	)
+
 	if err != nil {
-		return fmt.Errorf("failed to update user KYC data: %w", err)
+		return fmt.Errorf("failed to upsert person identity: %w", err)
 	}
 
 	return nil
 }
 
+// GetUserIdentity retrieves user identity by tax ID
+func (r *PgUserRepository) GetUserIdentity(ctx context.Context, taxID string) (*user.UserIdentity, error) {
+	query := `
+		SELECT tax_id, tax_id_data, national_id, national_id_data
+		FROM xcentro.user_identity
+		WHERE tax_id = $1
+	`
+
+	var identity user.UserIdentity
+	var nationalID, taxIDData, nationalIDData sql.NullString
+
+	err := r.querier.QueryRow(ctx, query, taxID).Scan(
+		&identity.TaxID, &taxIDData, &nationalID, &nationalIDData,
+	)
+
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to get person identity: %w", err)
+	}
+
+	identity.TaxIDData = taxIDData.String
+	identity.NationalID = nationalID.String
+	identity.NationalIDData = nationalIDData.String
+
+	return &identity, nil
+}
+
+// GetUserKYCStatus retrieves user and their identity data for KYC status display
+func (r *PgUserRepository) GetUserKYCStatus(ctx context.Context, userID string) (*user.User, *user.UserIdentity, error) {
+	query := `
+		SELECT 
+			u.id, u.email, u.mobile, u.tax_id, u.kyc_status, u.email_verified, u.mobile_verified,
+			ui.tax_id, ui.tax_id_data, ui.national_id, ui.national_id_data
+		FROM xcentro.user_table u
+		LEFT JOIN xcentro.user_identity ui ON u.tax_id = ui.tax_id
+		WHERE u.id = $1
+	`
+
+	var u user.User
+	var userTaxID, piTaxID, piTaxIDData, piNationalID, piNationalIDData sql.NullString
+	var kycStatusStr string
+
+	err := r.querier.QueryRow(ctx, query, userID).Scan(
+		&u.Id, &u.Email, &u.Mobile, &userTaxID, &kycStatusStr, &u.EmailVerified, &u.MobileVerified,
+		&piTaxID, &piTaxIDData, &piNationalID, &piNationalIDData,
+	)
+
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil, fmt.Errorf("user not found")
+		}
+		return nil, nil, fmt.Errorf("failed to get user KYC status: %w", err)
+	}
+
+	u.TaxID = userTaxID.String
+	u.KycStatus = parseKYCStatus(kycStatusStr)
+
+	var userIdentity *user.UserIdentity
+	if piTaxID.Valid {
+		userIdentity = &user.UserIdentity{
+			TaxID:          piTaxID.String,
+			TaxIDData:      piTaxIDData.String,
+			NationalID:     piNationalID.String,
+			NationalIDData: piNationalIDData.String,
+		}
+	}
+
+	return &u, userIdentity, nil
+}
+
 // CreateVerificationCode creates a new verification code
 func (r *PgUserRepository) CreateVerificationCode(ctx context.Context, code *user.UserVerificationCodes) error {
 	query := `
-		INSERT INTO user_verification_codes (id, user_id, code, code_type, expires_at, created_at, used, retry_attempts)
+		INSERT INTO xcentro.user_verification_codes (id, user_id, code, code_type, expires_at, created_at, used, retry_attempts)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 	`
 
@@ -180,7 +303,7 @@ func (r *PgUserRepository) CreateVerificationCode(ctx context.Context, code *use
 		codeID,
 		code.UserID,
 		code.Code,
-		int(code.CodeType),
+		code.CodeType,
 		code.ExpiresAt,
 		code.CreatedAt,
 		code.Used,
@@ -200,18 +323,18 @@ func (r *PgUserRepository) VerifyVerificationCode(ctx context.Context, userID, c
 
 	// First, check if the code exists and is valid
 	checkQuery := `
-		SELECT id FROM user_verification_codes
+		SELECT id FROM xcentro.user_verification_codes
 		WHERE user_id = $1 AND code = $2 AND code_type = $3 AND used = false AND expires_at > NOW()
 	`
 
 	var codeID string
-	err := r.querier.QueryRow(ctx, checkQuery, userID, code, int(codeType)).Scan(&codeID)
+	err := r.querier.QueryRow(ctx, checkQuery, userID, code, codeType).Scan(&codeID)
 	if err != nil {
 		return false, nil // Code not found or invalid
 	}
 
 	// Mark the code as used
-	updateQuery := `UPDATE user_verification_codes SET used = true WHERE id = $1`
+	updateQuery := `UPDATE xcentro.user_verification_codes SET used = true WHERE id = $1`
 	_, err = r.querier.Exec(ctx, updateQuery, codeID)
 	if err != nil {
 		return false, fmt.Errorf("failed to mark verification code as used: %w", err)
@@ -221,9 +344,9 @@ func (r *PgUserRepository) VerifyVerificationCode(ctx context.Context, userID, c
 	var userUpdateQuery string
 	switch codeType {
 	case shared.EmailVerification:
-		userUpdateQuery = `UPDATE users SET email_verified = true WHERE id = $1`
+		userUpdateQuery = `UPDATE xcentro.user_table SET email_verified = true WHERE id = $1`
 	case shared.MobileVerification:
-		userUpdateQuery = `UPDATE users SET mobile_verified = true WHERE id = $1`
+		userUpdateQuery = `UPDATE xcentro.user_table SET mobile_verified = true WHERE id = $1`
 	}
 
 	if userUpdateQuery != "" {
@@ -238,7 +361,7 @@ func (r *PgUserRepository) VerifyVerificationCode(ctx context.Context, userID, c
 
 // CheckUserEmailVerified checks if user's email is verified
 func (r *PgUserRepository) CheckUserEmailVerified(ctx context.Context, userID string) (bool, error) {
-	query := `SELECT email_verified FROM users WHERE id = $1`
+	query := `SELECT email_verified FROM xcentro.user_table WHERE id = $1`
 
 	var verified bool
 	err := r.querier.QueryRow(ctx, query, userID).Scan(&verified)
@@ -251,7 +374,7 @@ func (r *PgUserRepository) CheckUserEmailVerified(ctx context.Context, userID st
 
 // CheckUserMobileVerified checks if user's mobile is verified
 func (r *PgUserRepository) CheckUserMobileVerified(ctx context.Context, userID string) (bool, error) {
-	query := `SELECT mobile_verified FROM users WHERE id = $1`
+	query := `SELECT mobile_verified FROM xcentro.user_table WHERE id = $1`
 
 	var verified bool
 	err := r.querier.QueryRow(ctx, query, userID).Scan(&verified)
@@ -264,7 +387,7 @@ func (r *PgUserRepository) CheckUserMobileVerified(ctx context.Context, userID s
 
 // CheckUserEmailMobileVerified checks if both email and mobile are verified
 func (r *PgUserRepository) CheckUserEmailMobileVerified(ctx context.Context, userID string) (bool, error) {
-	query := `SELECT email_verified AND mobile_verified FROM users WHERE id = $1`
+	query := `SELECT email_verified AND mobile_verified FROM xcentro.user_table WHERE id = $1`
 
 	var verified bool
 	err := r.querier.QueryRow(ctx, query, userID).Scan(&verified)

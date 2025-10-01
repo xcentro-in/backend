@@ -2,13 +2,17 @@ package main
 
 import (
 	"github.com/labstack/echo/v4"
+	"xcentro.in/internal/adapters/database/postgres/business"
 	paymentRepo "xcentro.in/internal/adapters/database/postgres/payment"
 	userRepo "xcentro.in/internal/adapters/database/postgres/user"
 	"xcentro.in/internal/core/business_rules"
 	corePayment "xcentro.in/internal/core/payment"
 	"xcentro.in/internal/handlers/http/auth"
+	businessHandler "xcentro.in/internal/handlers/http/business"
 	"xcentro.in/internal/handlers/http/payment"
+	userHandler "xcentro.in/internal/handlers/http/user"
 	authservice "xcentro.in/internal/services/auth"
+	businessSvc "xcentro.in/internal/services/business"
 	"xcentro.in/internal/services/payments"
 	"xcentro.in/internal/services/user"
 )
@@ -16,6 +20,7 @@ import (
 func registerV1AuthRoutes(meta *serverMetaData, group *echo.Group) {
 	userService := user.NewUserService(
 		userRepo.NewPgUserRepository(meta.clients.db),
+		business.NewPgBusinessUserRelationRepository(meta.clients.db),
 		meta.clients.txManager,
 	)
 	authService := authservice.NewAuthService(&meta.config.JWT, meta.clients.rcache)
@@ -49,6 +54,27 @@ func registerV1PaymentRoutes(meta *serverMetaData, group *echo.Group) {
 	payment.RegisterPaymentRoutes(processPaymentGroup, paymentService)
 }
 
+func registerV1BusinessRoutes(meta *serverMetaData, group *echo.Group) {
+	busSvc := businessSvc.NewBusinessService(business.NewPgBusinessRepository(meta.clients.db),
+		business.NewPgBusinessUserRelationRepository(meta.clients.db),
+		userRepo.NewPgUserRepository(meta.clients.db),
+		meta.clients.txManager,
+		meta.clients.rcache,
+	)
+	authService := authservice.NewAuthService(&meta.config.JWT, meta.clients.rcache)
+	businessHandler.RegisterBusinessRoutes(group, busSvc, authService)
+}
+
+func registerV1UserRoutes(meta *serverMetaData, group *echo.Group) {
+	userService := user.NewUserService(
+		userRepo.NewPgUserRepository(meta.clients.db),
+		business.NewPgBusinessUserRelationRepository(meta.clients.db),
+		meta.clients.txManager,
+	)
+	authService := authservice.NewAuthService(&meta.config.JWT, meta.clients.rcache)
+	userHandler.RegisterUserRoutes(group, userService, authService)
+}
+
 func registerV1Routes(s *xcentroServer) {
 	v1 := s.echo.Group("/v1")
 
@@ -66,7 +92,10 @@ func registerV1Routes(s *xcentroServer) {
 	registerV1PaymentRoutes(&s.meta, v1)
 
 	// User Routes
+	registerV1UserRoutes(&s.meta, v1)
+
 	// Business Routes
+	registerV1BusinessRoutes(&s.meta, v1)
 }
 
 func registerRouters(s *xcentroServer) {

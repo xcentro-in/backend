@@ -24,6 +24,9 @@ DROP TRIGGER IF EXISTS set_timestamp ON xcentro.user_table;
 DROP INDEX IF EXISTS xcentro.idx_user_verification_codes_user_id;
 DROP TABLE IF EXISTS xcentro.user_verification_codes;
 DROP TABLE IF EXISTS xcentro.user_table;
+DROP TRIGGER IF EXISTS set_timestamp ON xcentro.user_identity;
+DROP INDEX IF EXISTS xcentro.idx_user_identity_national_id;
+DROP TABLE IF EXISTS xcentro.user_identity;
 
 
 -- #############################################################################

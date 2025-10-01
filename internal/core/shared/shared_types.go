@@ -1,63 +1,64 @@
 package shared
 
-type KYCStatus uint8
+type KYCStatus string
 
 const (
-	KYCNotStarted KYCStatus = iota
-	KYCInReview
-	KYCNeedsUpdate
-	KYCVerified
-	KYCRejected
+	KYCNotStarted  KYCStatus = "kyc_not_started"
+	KYCInProgress  KYCStatus = "kyc_in_progress"
+	KYCCompleted   KYCStatus = "kyc_completed"
+	KYCVerified    KYCStatus = "kyc_verified"
+	KYCNeedsUpdate KYCStatus = "kyc_needs_update"
+	KYCRejected    KYCStatus = "kyc_rejected"
 )
 
-type UserRole uint8
+type UserRole string
 
 const (
-	Owner UserRole = iota
-	Admin
-	Finance
-	Support
+	Owner   UserRole = "owner"
+	Admin   UserRole = "admin"
+	Finance UserRole = "finance"
+	Support UserRole = "support"
 )
 
-type BusinessType uint8
+type BusinessType string
 
 const (
-	SoleProprietorship BusinessType = iota
-	Partnership
-	LimitedLiabilityPartnership
-	PrivateLimitedCompany
-	OnePersonCompany
-	Section8NonProfit
-	Trust
-	NGO
-	Society
-	CooperativeSociety
-	Other
+	SoleProprietorship          BusinessType = "sole_proprietorship"
+	Partnership                 BusinessType = "partnership"
+	LimitedLiabilityPartnership BusinessType = "limited_liability_partnership"
+	PrivateLimitedCompany       BusinessType = "private_limited_company"
+	OnePersonCompany            BusinessType = "one_person_company"
+	Section8NonProfit           BusinessType = "section_8_non_profit"
+	Trust                       BusinessType = "trust"
+	NGO                         BusinessType = "ngo"
+	Society                     BusinessType = "society"
+	CooperativeSociety          BusinessType = "cooperative_society"
+	Other                       BusinessType = "other"
 )
 
-type KYBstatus uint8
+type KYBstatus string
 
 const (
-	KYBNotStarted KYBstatus = iota
-	KYBInProgress
-	KYBCompleted
-	KYBNeedsUpdate
-	KYBVerified
-	KYBRejected
+	KYBNotStarted  KYBstatus = "kyc_not_started"
+	KYBInProgress  KYBstatus = "kyc_in_progress"
+	KYBCompleted   KYBstatus = "kyc_completed"
+	KYBVerified    KYBstatus = "kyc_verified"
+	KYBNeedsUpdate KYBstatus = "kyc_needs_update"
+	KYBRejected    KYBstatus = "kyc_rejected"
 )
 
-type VerificationType uint8
+type VerificationType string
 
 const (
-	EmailVerification VerificationType = iota
-	MobileVerification
+	EmailVerification  VerificationType = "email_verification"
+	MobileVerification VerificationType = "mobile_verification"
 )
 
-type SubscriptionType uint8
+type SubscriptionType string
 
 const (
-	FreePlan SubscriptionType = iota
-	BasicPlan
-	PremiumPlan
-	EnterprisePlan
+	FreePlan       SubscriptionType = "free_plan"
+	BasicPlan      SubscriptionType = "basic_plan"
+	PremiumPlan    SubscriptionType = "premium_plan"
+	EnterprisePlan SubscriptionType = "enterprise_plan"
 )

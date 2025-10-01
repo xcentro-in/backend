@@ -52,3 +52,13 @@ type BusinessKYBDTO struct {
 	CID          string              `json:"cid"`
 	DocUrl       string              `json:"docUrl"`
 }
+
+type CreateBusinessDTO struct {
+	Id           string              `json:"id"`
+	Name         string              `json:"name"`
+	GSTIN        string              `json:"gstin"`
+	BusinessType shared.BusinessType `json:"businessType"`
+	ITID         string              `json:"itid"`
+	CID          string              `json:"cid"`
+	DocUrl       string              `json:"docUrl"`
+}

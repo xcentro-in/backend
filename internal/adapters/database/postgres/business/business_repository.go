@@ -17,7 +17,7 @@ type PgBusinessRepository struct {
 }
 
 // NewPgBusinessRepository creates a new PostgreSQL business repository
-func NewPgBusinessRepository(db client.DB) *PgBusinessRepository {
+func NewPgBusinessRepository(db client.DB) business.BusinessRepository {
 	return &PgBusinessRepository{
 		querier: db,
 	}
@@ -43,7 +43,7 @@ func (r *PgBusinessRepository) FindByID(ctx context.Context, bid string) (*busin
 	var b business.Business
 	var gstData sql.NullString
 	var incomeTexID sql.NullString
-	var kybStatus, businessType int
+	var kybStatus, businessType string
 
 	err := r.querier.QueryRow(ctx, query, bid).Scan(
 		&b.BID, &b.Name, &b.GSTIN, &gstData, &incomeTexID, &kybStatus,
@@ -78,7 +78,7 @@ func (r *PgBusinessRepository) FindByGSTIN(ctx context.Context, gstin string) (*
 	var b business.Business
 	var gstData sql.NullString
 	var incomeTexID sql.NullString
-	var kybStatus, businessType int
+	var kybStatus, businessType string
 
 	err := r.querier.QueryRow(ctx, query, gstin).Scan(
 		&b.BID, &b.Name, &b.GSTIN, &gstData, &incomeTexID, &kybStatus,
@@ -121,52 +121,6 @@ func (r *PgBusinessRepository) CreateBusinessByNameAndGSTIN(ctx context.Context,
 	return &createdBusiness, nil
 }
 
-// Create creates a new business
-func (r *PgBusinessRepository) Create(ctx context.Context, bus *business.Business) error {
-	query := `
-		INSERT INTO xcentro.business 
-			(name, gstin, gst_data, income_tax_id, kyb_status, business_type, country_code, currency_code)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-		RETURNING bid
-	`
-
-	err := r.querier.QueryRow(ctx, query,
-		bus.Name, bus.GSTIN, bus.GSTINData, bus.ITID, int(bus.KybStatus),
-		int(bus.BusinessType), bus.CountryCode, bus.CurrencyCode,
-	).Scan(&bus.BID)
-
-	if err != nil {
-		return fmt.Errorf("error creating business: %w", err)
-	}
-
-	return nil
-}
-
-// Update updates an existing business
-func (r *PgBusinessRepository) Update(ctx context.Context, bus *business.Business) error {
-	query := `
-		UPDATE xcentro.business 
-		SET name = $2, gstin = $3, gst_data = $4, income_tax_id = $5, 
-			kyb_status = $6, business_type = $7, country_code = $8, currency_code = $9
-		WHERE bid = $1
-	`
-
-	result, err := r.querier.Exec(ctx, query,
-		bus.BID, bus.Name, bus.GSTIN, bus.GSTINData, bus.ITID,
-		int(bus.KybStatus), int(bus.BusinessType), bus.CountryCode, bus.CurrencyCode,
-	)
-
-	if err != nil {
-		return fmt.Errorf("error updating business: %w", err)
-	}
-
-	if result.RowsAffected() == 0 {
-		return fmt.Errorf("business not found")
-	}
-
-	return nil
-}
-
 func (r *PgBusinessRepository) AddKYBSuccessData(ctx context.Context, bus *business.Business) error {
 	query := `
 		UPDATE xcentro.business 
@@ -175,7 +129,7 @@ func (r *PgBusinessRepository) AddKYBSuccessData(ctx context.Context, bus *busin
 	`
 
 	result, err := r.querier.Exec(ctx, query,
-		bus.BID, int(bus.KybStatus), int(bus.BusinessType), bus.ITID,
+		bus.BID, bus.KybStatus, bus.BusinessType, bus.ITID,
 	)
 
 	if err != nil {
@@ -229,27 +183,4 @@ func (r *PgBusinessRepository) UpdateKYBData(ctx context.Context, bid string, ky
 	}
 
 	return kybData, nil
-}
-
-// UpdateSubscriptionStatus updates the subscription status for a business
-func (r *PgBusinessRepository) UpdateSubscriptionStatus(ctx context.Context, bid string, subData *business.BusinessSubscription) error {
-	query := `
-		INSERT INTO xcentro.subscription_status (bid, subscription_type, start_date, expiry_date)
-		VALUES ($1, $2, $3, $4)
-		ON CONFLICT (bid)
-		DO UPDATE SET 
-			subscription_type = $2, 
-			start_date = $3, 
-			expiry_date = $4
-	`
-
-	_, err := r.querier.Exec(ctx, query,
-		bid, int(subData.SubscriptionType), subData.StartedAt, subData.ValidTill,
-	)
-
-	if err != nil {
-		return fmt.Errorf("error updating subscription status: %w", err)
-	}
-
-	return nil
 }

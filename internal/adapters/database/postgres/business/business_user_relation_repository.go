@@ -15,7 +15,7 @@ type PgBusinessUserRelationRepository struct {
 }
 
 // NewPgBusinessUserRelationRepository creates a new PostgreSQL business user relation repository
-func NewPgBusinessUserRelationRepository(db client.DB) *PgBusinessUserRelationRepository {
+func NewPgBusinessUserRelationRepository(db client.DB) business.BusinessUserRelationRepository {
 	return &PgBusinessUserRelationRepository{
 		querier: db,
 	}
@@ -66,7 +66,7 @@ func (r *PgBusinessUserRelationRepository) FindByUser(ctx context.Context, userI
 
 	for rows.Next() {
 		var rel business.BusinessUserRelation
-		var role, roleClaim int
+		var role, roleClaim string
 
 		err := rows.Scan(
 			&rel.UserID, &rel.BID, &role, &roleClaim,
@@ -103,7 +103,7 @@ func (r *PgBusinessUserRelationRepository) FindByBusiness(ctx context.Context, b
 
 	for rows.Next() {
 		var rel business.BusinessUserRelation
-		var role, roleClaim int
+		var role, roleClaim string
 
 		err := rows.Scan(
 			&rel.UserID, &rel.BID, &role, &roleClaim,
@@ -130,8 +130,8 @@ func (r *PgBusinessUserRelationRepository) AddUserToBusiness(ctx context.Context
 	`
 
 	_, err := r.querier.Exec(ctx, query,
-		relation.UserID, relation.BID, int(relation.Role),
-		int(relation.RoleClaim), relation.KybInitiated,
+		relation.UserID, relation.BID, relation.Role,
+		relation.RoleClaim, relation.KybInitiated,
 	)
 
 	if err != nil {
@@ -149,9 +149,28 @@ func (r *PgBusinessUserRelationRepository) UpdateUserRole(ctx context.Context, u
 		WHERE user_id = $1 AND bid = $2
 	`
 
-	result, err := r.querier.Exec(ctx, query, userID, bid, int(newRole))
+	result, err := r.querier.Exec(ctx, query, userID, bid, newRole)
 	if err != nil {
 		return fmt.Errorf("error updating user role: %w", err)
+	}
+
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("user-business relation not found")
+	}
+
+	return nil
+}
+
+func (r *PgBusinessUserRelationRepository) UpdateRoleClaim(ctx context.Context, userID string, bid string, roleClaim shared.UserRole) error {
+	query := `
+		UPDATE xcentro.business_user_relation 
+		SET role_claim = $3 
+		WHERE user_id = $1 AND bid = $2
+	`
+
+	result, err := r.querier.Exec(ctx, query, userID, bid, roleClaim)
+	if err != nil {
+		return fmt.Errorf("error updating role claim: %w", err)
 	}
 
 	if result.RowsAffected() == 0 {
@@ -178,4 +197,49 @@ func (r *PgBusinessUserRelationRepository) RemoveUserFromBusiness(ctx context.Co
 	}
 
 	return nil
+}
+
+func (r *PgBusinessUserRelationRepository) GetKYBInitiatedStatus(ctx context.Context, uid string) (*business.BusinessKYBData, *business.Business, error) {
+	var kybData business.BusinessKYBData
+	var bus business.Business
+
+	// basically we need to write a join query, first we will get the bid from business_user_relation table.
+	// in that business table if income_tax_id is not null do another join with kyb_data to fetch the existing kyb data
+	query := `
+    SELECT
+        bus.income_tax_id AS bus_income_tax_id,
+        bus.gst_data      AS bus_gst_data,
+        kd.cid,
+        kd.cid_data,
+        kd.doc_url,
+        bus.bid,
+        bus.name,
+        bus.gstin,
+        bus.kyb_status,
+        bus.business_type,
+        bus.country_code,
+        bus.currency_code
+    FROM xcentro.business_user_relation bur
+    INNER JOIN xcentro.business bus ON bur.bid = bus.bid
+    LEFT JOIN xcentro.kyb_data kd ON bus.income_tax_id = kd.itid
+    WHERE bur.user_id = $1 AND bur.kyb_initiated = true
+    ORDER BY bur.updated_at DESC -- if you want a stable "most recent"
+    LIMIT 1
+	`
+
+	err := r.querier.QueryRow(ctx, query, uid).Scan(
+		&kybData.ITID, &kybData.ITIDData, &kybData.CID, &kybData.CIDData, &kybData.DocUrl,
+		&bus.BID, &bus.Name, &bus.GSTIN, &bus.GSTINData, &bus.ITID,
+		&bus.KybStatus, &bus.BusinessType, &bus.CountryCode, &bus.CurrencyCode,
+	)
+
+	if err != nil {
+		return nil, nil, fmt.Errorf("error fetching KYB initiated status: %w", err)
+	}
+
+	if bus.KybStatus == shared.KYBNotStarted {
+		return nil, nil, nil // No KYB initiated
+	}
+
+	return &kybData, &bus, nil
 }

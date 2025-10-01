@@ -1,11 +1,24 @@
 -- #############################################################################
 -- # Custom ENUM Types for Data Integrity
 -- #############################################################################
-CREATE TYPE xcentro.verification_type AS ENUM ('EMAIL_VERIFICATION', 'MOBILE_VERIFICATION');
-CREATE TYPE xcentro.kyc_status_enum AS ENUM ('NOT_STARTED', 'IN_REVIEW', 'NEEDS_UPDATE', 'VERIFIED', 'REJECTED');
-CREATE TYPE xcentro.user_role_enum AS ENUM ('OWNER', 'ADMIN', 'FINANCE', 'SUPPORT');
-CREATE TYPE xcentro.business_type_enum AS ENUM ('SOLE_PROPRIETORSHIP', 'PARTNERSHIP', 'LIMITED_LIABILITY_PARTNERSHIP', 'PRIVATE_LIMITED_COMPANY', 'ONE_PERSON_COMPANY', 'SECTION_8_NON_PROFIT', 'TRUST', 'NGO', 'SOCIETY', 'COOPERATIVE_SOCIETY', 'OTHER');
-CREATE TYPE xcentro.subscription_type_enum AS ENUM ('FREE_PLAN', 'BASIC_PLAN', 'PREMIUM_PLAN', 'ENTERPRISE_PLAN');
+-- Enum literals (snake_case) for consistency across DB + serialization layers.
+CREATE TYPE xcentro.verification_type AS ENUM ('email_verification', 'mobile_verification');
+CREATE TYPE xcentro.kyc_status_enum AS ENUM ('kyc_not_started', 'kyc_in_progress', 'kyc_completed', 'kyc_verified', 'kyc_needs_update', 'kyc_rejected');
+CREATE TYPE xcentro.user_role_enum AS ENUM ('owner', 'admin', 'finance', 'support');
+CREATE TYPE xcentro.business_type_enum AS ENUM (
+    'sole_proprietorship',
+    'partnership',
+    'limited_liability_partnership',
+    'private_limited_company',
+    'one_person_company',
+    'section_8_non_profit',
+    'trust',
+    'ngo',
+    'society',
+    'cooperative_society',
+    'other'
+);
+CREATE TYPE xcentro.subscription_type_enum AS ENUM ('free_plan', 'basic_plan', 'premium_plan', 'enterprise_plan');
 
 
 -- UUIDv7 Generator - Fast, Secure, RFC 9562 Compliant
@@ -77,6 +90,25 @@ COMMENT ON FUNCTION xcentro.trigger_set_timestamp() IS 'This trigger function au
 
 
 -- #############################################################################
+-- # User Identity / KYC (Externalized, Meaningful Names)
+-- #############################################################################
+CREATE TABLE xcentro.user_identity (
+    tax_id TEXT PRIMARY KEY,          -- e.g. PAN / generic tax identifier
+    tax_id_data JSONB,                -- structured data / verification payload for tax identifier
+    national_id TEXT UNIQUE,          -- e.g. Aadhaar / SSN / National Registry number (optional)
+    national_id_data JSONB,           -- structured data / verification payload for national id
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ
+);
+COMMENT ON TABLE xcentro.person_identity IS 'Externalized personal identity & compliance artifacts (tax_id, national_id, with associated metadata).';
+CREATE INDEX IF NOT EXISTS idx_person_identity_national_id ON xcentro.person_identity(national_id);
+CREATE TRIGGER set_timestamp
+BEFORE UPDATE ON xcentro.person_identity
+FOR EACH ROW
+EXECUTE PROCEDURE xcentro.trigger_set_timestamp();
+
+
+-- #############################################################################
 -- # User Entity
 -- #############################################################################
 
@@ -86,9 +118,8 @@ CREATE TABLE xcentro.user_table (
     email VARCHAR(254) UNIQUE NOT NULL,
     pwd_hash TEXT NOT NULL,
     mobile VARCHAR(20),
-    pan VARCHAR(10),
-    kyc_status xcentro.kyc_status_enum NOT NULL DEFAULT 'NOT_STARTED',
-    kyc_data JSONB,
+    tax_id TEXT REFERENCES xcentro.user_identity(tax_id), -- externalized PAN (generic tax identifier)
+    kyc_status xcentro.kyc_status_enum NOT NULL DEFAULT 'kyc_not_started',
     email_verified BOOLEAN DEFAULT FALSE,
     mobile_verified BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMPTZ DEFAULT NOW(),
@@ -131,7 +162,7 @@ CREATE TABLE xcentro.business (
     gstin VARCHAR(15) UNIQUE,
     gst_data JSONB,
     income_tax_id TEXT REFERENCES xcentro.kyb_data(income_tax_id),
-    kyb_status xcentro.kyc_status_enum DEFAULT 'NOT_STARTED',
+    kyb_status xcentro.kyc_status_enum DEFAULT 'kyc_not_started',
     business_type xcentro.business_type_enum,
     country_code VARCHAR(3),
     currency_code VARCHAR(3),
