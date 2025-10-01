@@ -54,6 +54,7 @@ Install Air for automatic code reloading during development:
 
 ```bash
 go install github.com/air-verse/air@latest
+echo 'export PATH=$PATH:$(go env GOPATH)/bin' >> ~/.bashrc
 ```
 
 ### 6. Start the Development Server
