@@ -77,7 +77,8 @@ go mod tidy
 - **Auth**: Authentication services (`internal/core/auth/`)
 - **Business**: Business entity management (`internal/core/business/`)
 - **Payment**: Payment processing with gateway orchestration (`internal/core/payment/`)
-- **Business Rules**: Cross-cutting business logic (fee calculation, wallet management, bank verification) (`internal/core/business_rules/`)
+- **Payee**: Payee management, GST verification, bank account verification (`internal/core/payee/`)
+- **Business Rules**: Cross-cutting business logic (fee calculation, wallet management, bank verification, GST verification, cross-verification) (`internal/core/business_rules/`)
 
 ### Data Flow Pattern
 1. HTTP Request → `internal/handlers/http/`
@@ -147,10 +148,13 @@ SERVER_PORT=8080
 - Auth domain: `internal/core/auth/`
 - Business domain: `internal/core/business/`
 - Payment domain: `internal/core/payment/`
+- Payee domain: `internal/core/payee/`
 - Business rules: `internal/core/business_rules/`
   - Fee calculator: `fee_calculator.go`
   - Wallet service: `wallet_service.go`
   - Bank verification: `bank_verification_service.go`, `mock_bank_verification.go`
+  - GST verification: `gst_verification_service.go`, `mock_gst_verification.go`
+  - Cross verification: `cross_verification_service.go`, `mock_cross_verification.go`
 
 ### API Layer
 - HTTP handlers: `internal/handlers/http/`
@@ -161,6 +165,7 @@ SERVER_PORT=8080
 - User service: `internal/services/user/`
 - Auth service: `internal/services/auth/`
 - Payment service: `internal/services/payments/`
+- Payee service: `internal/services/payee/`
 
 ### Payment Gateway Adapters
 - JioPay gateway: `internal/adapters/external/payment/jiopay/`
@@ -408,11 +413,224 @@ go test ./internal/adapters/external/payment/easebuzz/... -v
 go test ./internal/core/business_rules/... -v -run TestBankVerification
 ```
 
+## Payee Management System
+
+### Overview
+The payee management system allows businesses (customers) to onboard other businesses (payees) to send payments to. Payees are external businesses that are verified through GST lookup and bank account penny drop verification.
+
+**Key Principle**: A payee is uniquely identified by their GSTIN (GST Identification Number). Multiple customers can add the same payee, but each customer maintains their own display name and metadata for that payee.
+
+### Payee Architecture
+
+**Three-Table Normalized Design**:
+1. **`payee_business`** - Global canonical payee record (one per GSTIN)
+   - Stores GST-verified information (legal name, business type, address)
+   - Immutable data fetched from government GST API
+   - Shared across all customers who onboard this payee
+
+2. **`payee_bank_accounts`** - Bank accounts for payees (one-to-many)
+   - A payee can have multiple bank accounts (e.g., current account 1, 2, etc.)
+   - Verified via penny drop
+   - Account hash ensures no duplicate accounts per payee
+   - Encrypted account numbers for security
+
+3. **`business_payee_relation`** - Customer-specific payee metadata
+   - Links customer → payee → specific bank account
+   - Customer-specific fields: display name, contacts, notes, favorites, tags
+   - Composite primary key: `(business_id, payee_id, account_id)`
+   - Allows: Business A → Payee C → Account 1 AND Business B → Payee C → Account 2
+
+### Payee Database Schema
+
+```sql
+-- Verification status enum
+CREATE TYPE xcentro.verification_status_enum AS ENUM (
+    'pending', 'in_progress', 'success', 'failed'
+);
+
+-- Global canonical payee table
+CREATE TABLE xcentro.payee_business (
+    payee_id UUID PRIMARY KEY DEFAULT uuidv7(),
+    gstin VARCHAR(15) UNIQUE NOT NULL,
+    legal_name VARCHAR(500) NOT NULL,
+    business_type VARCHAR(100),
+    gst_status VARCHAR(50) NOT NULL,
+    -- Address, verification, metadata...
+);
+
+-- Payee bank accounts
+CREATE TABLE xcentro.payee_bank_accounts (
+    account_id UUID PRIMARY KEY DEFAULT uuidv7(),
+    payee_id UUID NOT NULL REFERENCES xcentro.payee_business(payee_id),
+    account_number_encrypted TEXT NOT NULL,
+    account_number_hash VARCHAR(64) NOT NULL,
+    -- Bank details, verification...
+    UNIQUE (payee_id, account_number_hash)
+);
+
+-- Customer-payee relationship
+CREATE TABLE xcentro.business_payee_relation (
+    business_id UUID NOT NULL REFERENCES xcentro.business(bid),
+    payee_id UUID NOT NULL REFERENCES xcentro.payee_business(payee_id),
+    account_id UUID NOT NULL REFERENCES xcentro.payee_bank_accounts(account_id),
+    display_name VARCHAR(255) NOT NULL,
+    -- Customer-specific metadata...
+    PRIMARY KEY (business_id, payee_id, account_id)
+);
+```
+
+### Payee Onboarding Flow
+
+**11-Step Process**:
+1. Validate input (GSTIN, account number, IFSC, etc.)
+2. Check if payee exists by GSTIN in `payee_business`
+3. If new payee:
+   - Verify GSTIN via GST API (AuthBridge)
+   - Create `payee_business` record with verified data
+4. Compute account hash (SHA-256)
+5. Check for duplicate bank account for this payee
+6. Verify bank account via penny drop (3rd party API)
+7. Cross-verify: Match GST legal name with bank account holder name
+8. Anti-money rotation check: Ensure payee account holder is NOT a director of customer business
+9. In atomic transaction:
+   - Create bank account record (if new)
+   - Create business-payee relation
+10. Return response with verification statuses
+11. Log audit trail
+
+### Payee API Endpoints
+
+All endpoints under `/v1/payees` prefix:
+
+```bash
+POST   /v1/payees                                      # Onboard new payee
+GET    /v1/payees                                      # List all payees for business
+GET    /v1/payees/:payee_id/accounts/:account_id      # Get payee details
+PUT    /v1/payees/:payee_id/accounts/:account_id      # Update payee metadata
+DELETE /v1/payees/:payee_id/accounts/:account_id      # Deactivate payee (soft delete)
+```
+
+### External Service Integrations
+
+**GST Verification Service**:
+- **Interface**: `GSTVerificationService` in `business_rules/gst_verification_service.go`
+- **Providers**: AuthBridge (production), Mock (development)
+- **Returns**: Legal name, business type, address, GST status, directors list
+- **Purpose**: Verify GSTIN is valid and fetch canonical business data
+
+**Bank Verification Service**:
+- **Interface**: `BankVerificationService` in `business_rules/bank_verification_service.go`
+- **Purpose**: Penny drop verification for bank accounts
+- **Reused** from payment module
+
+**Cross Verification Service**:
+- **Interface**: `CrossVerificationService` in `business_rules/cross_verification_service.go`
+- **Two methods**:
+  1. `VerifyGSTBankMatch()` - Fuzzy match GST legal name vs bank account holder name
+  2. `CheckMoneyRotation()` - Verify payee account holder is NOT customer business director
+- **Providers**: 3rd party APIs (future), Mock (current)
+
+### Example: Onboard Payee API
+
+```bash
+curl -X POST http://localhost:8080/v1/payees \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <JWT_TOKEN>" \
+  -d '{
+    "gstin": "29ABCDE1234F1Z5",
+    "account_number": "1234567890123456",
+    "ifsc_code": "HDFC0000123",
+    "account_holder_name": "ABC Industries Pvt Ltd",
+    "bank_name": "HDFC Bank",
+    "account_type": "current",
+    "account_label": "Primary Current Account",
+    "display_name": "ABC Corp",
+    "contact_email": "payments@abccorp.com",
+    "contact_phone": "+919876543210",
+    "notes": "Primary supplier"
+  }'
+```
+
+**Response**:
+```json
+{
+  "message": "Payee onboarded successfully",
+  "status": "success",
+  "data": {
+    "payee_id": "550e8400-e29b-41d4-a716-446655440000",
+    "account_id": "660e8400-e29b-41d4-a716-446655440001",
+    "gst_verification_status": "success",
+    "bank_verification_status": "success",
+    "cross_verification_status": "success",
+    "is_fully_verified": true,
+    "message": "Payee fully verified and added"
+  }
+}
+```
+
+### Security Features
+
+**Duplicate Prevention**:
+- GSTIN uniqueness enforced at database level
+- Account hash prevents duplicate bank accounts per payee
+- Relation composite key prevents duplicate customer-payee-account links
+
+**Data Encryption**:
+- Bank account numbers encrypted at rest (TODO: implement in Phase 5.5)
+- SHA-256 hashing for duplicate detection
+- Masked account numbers in API responses
+
+**Anti-Fraud**:
+- GST verification via government API
+- Bank penny drop verification
+- Name matching between GST and bank
+- Money rotation detection (director checks)
+
+**Audit Trail**:
+- `added_at`, `added_by` fields in relations
+- `last_used_at` tracking for payment history
+- Metadata fields for additional compliance data
+
+### Mock Services for Testing
+
+**Mock GST Verification**:
+- Returns hardcoded success response
+- 500ms delay simulation
+- Includes sample directors list for money rotation testing
+
+**Mock Cross Verification**:
+- Name matching: Always returns high match score (0.95)
+- Money rotation: Checks if "Kumar" appears in both names (for testing)
+- Realistic delays for testing
+
+### Important Notes
+
+**GSTIN Format**:
+- 15 characters: 2 (state) + 10 (PAN) + 1 (entity) + 1 (Z) + 1 (checksum)
+- Example: `29ABCDE1234F1Z5`
+
+**Multiple Accounts Per Payee**:
+- A payee can have multiple bank accounts
+- Customer A can use Payee C's Account 1
+- Customer B can use Payee C's Account 2
+- Both scenarios are supported
+
+**Soft Delete**:
+- Relations use `is_active` flag
+- Never hard delete (compliance requirement)
+- Deactivated payees don't appear in list queries
+
+**JWT Authentication**:
+- All endpoints require JWT authentication
+- `business_id` extracted from JWT claims
+- TODO: Currently hardcoded as "bid12345" (Phase 5.7)
+
 ## Documentation
 
 For detailed information, see:
 - **Payment Module**: `docs/payment_module.md` - Complete payment system documentation
 - **Business Module**: `docs/business_module.md` - Business entity management
+- **Payee Module**: `docs/payee_module.md` - Payee management system documentation
 - **Migrations**: `docs/migrations.md` - Database migration guide
 - **Folder Structure**: `docs/FOLDER_STRUCTURE.md` - Project architecture guide
 
