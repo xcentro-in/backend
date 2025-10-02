@@ -2,6 +2,7 @@ package user
 
 import (
 	"github.com/labstack/echo/v4"
+	"xcentro.in/internal/adapters/providers/authbridge"
 	"xcentro.in/internal/core/auth"
 	"xcentro.in/internal/core/user"
 	"xcentro.in/internal/shared/logger"
@@ -31,6 +32,7 @@ func RegisterUserRoutes(e *echo.Group, userService user.UserService, authService
 	userGroup.POST("/kyc", handler.InitiateKYC)
 	userGroup.GET("", handler.GetKYCStatus)
 	userGroup.POST("/claim-role", handler.ClaimBusinessRole)
+	userGroup.GET("/authbridge", handler.KYCHandler)
 }
 
 // VerifyMobile verifies user's mobile number using verification code
@@ -116,4 +118,26 @@ func (h *UserHandler) ClaimBusinessRole(c echo.Context) error {
 	}
 
 	return c.JSON(200, map[string]interface{}{"message": "Role claim updated successfully", "data": nil})
+}
+
+func (h *UserHandler) KYCHandler(c echo.Context) error {
+	client, err := authbridge.NewClient()
+
+	if err != nil {
+		h.logger.Errorf("Error creating authbridge client: %v", err)
+		return c.JSON(500, map[string]string{"message": "Failed to create authbridge client"})
+	}
+
+	/*
+	   First link generation then comes the status check
+	*/
+	//data, err := client.SearchDocument(authbridge.NewAadhaarLinkRequest("txn1", "", ""))
+	data, err := client.SearchDocument(authbridge.NewAadhaarStatusRequest("2N-LTF-989139"))
+
+	if err != nil {
+		h.logger.Errorf("Error searching document in authbridge: %v", err)
+		return c.JSON(500, map[string]string{"message": "Failed to search document in authbridge"})
+	}
+
+	return c.JSON(200, map[string]interface{}{"message": "Authbridge response", "data": data})
 }
