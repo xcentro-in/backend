@@ -197,13 +197,38 @@ func (h *PayeeHandler) GetPayees(c echo.Context) error {
 }
 
 // GetPayeeDetails handles GET /payees/:payee_id/accounts/:account_id - Get detailed payee information
-// TODO: Phase 6 - Implement polymorphic GetPayeeDetails handler
 func (h *PayeeHandler) GetPayeeDetails(c echo.Context) error {
 	fmt.Println("=== HANDLER: GetPayeeDetails API Called ===")
 
-	return c.JSON(http.StatusNotImplemented, map[string]any{
-		"error":   "not_implemented",
-		"message": "GetPayeeDetails not yet implemented for polymorphic payees (Phase 6)",
+	// Extract path parameters
+	payeeID := c.Param("payee_id")
+	accountID := c.Param("account_id")
+
+	fmt.Printf("📥 Path params: payee_id=%s, account_id=%s\n", payeeID, accountID)
+
+	// Extract business_id from JWT
+	// TODO: Extract from JWT token claims
+	businessID := "bid12345"
+	fmt.Printf("🔐 Business ID (from JWT): %s\n", businessID)
+
+	// Call payee service
+	fmt.Println("🔄 Calling Payee Service...")
+	details, err := h.payeeService.GetPayeeDetails(c.Request().Context(), businessID, payeeID, accountID)
+	if err != nil {
+		fmt.Printf("❌ Fetch error: %v\n", err)
+		return c.JSON(http.StatusNotFound, map[string]any{
+			"error":   "not_found",
+			"message": err.Error(),
+		})
+	}
+
+	fmt.Printf("✅ Payee details fetched: %s (Type: %s)\n", details.DisplayName, details.PayeeType)
+	fmt.Println("=== HANDLER: GetPayeeDetails Complete ===")
+
+	return c.JSON(http.StatusOK, map[string]any{
+		"message": "Payee details retrieved successfully",
+		"status":  "success",
+		"data":    details,
 	})
 }
 
