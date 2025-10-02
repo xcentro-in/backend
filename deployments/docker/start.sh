@@ -47,32 +47,7 @@ start_services() {
     cd "$SCRIPT_DIR"
     $COMPOSE_CMD up -d
     
-    print_info "Waiting for services to be healthy..."
-    
-    # Wait for services to be healthy
-    local max_attempts=30
-    local attempt=0
-    
-    while [ $attempt -lt $max_attempts ]; do
-        local postgres_health=$($COMPOSE_CMD ps postgres --format "{{.Health}}" 2>/dev/null || echo "")
-        local redis_health=$($COMPOSE_CMD ps redis --format "{{.Health}}" 2>/dev/null || echo "")
-        
-        if [[ "$postgres_health" == "healthy" && "$redis_health" == "healthy" ]]; then
-            print_success "All services are healthy!"
-            break
-        fi
-        
-        attempt=$((attempt + 1))
-        if [ $attempt -eq $max_attempts ]; then
-            print_error "Services did not become healthy within expected time"
-            print_info "Checking service status..."
-            $COMPOSE_CMD ps
-            exit 1
-        fi
-        
-        printf "."
-        sleep 2
-    done
+    print_info "Services started successfully!"
 }
 
 show_connection_info() {

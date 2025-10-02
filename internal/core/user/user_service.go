@@ -24,7 +24,7 @@ type UserService interface {
 	// KYC workflow methods
 	InitiateKYC(ctx context.Context, userID string, claimedRole shared.UserRole, taxID, nationalID string) error
 	UpdateKYCStatus(ctx context.Context, userID string, status shared.KYCStatus) error
-	GetUserKYCStatus(ctx context.Context, userID string) (string, error) // JSON response like business service
+	GetUserKYCStatus(ctx context.Context, userID string) (*UserResponseDTO, error) // JSON response like business service
 
 	// Verification methods
 	VerifyEmail(ctx context.Context, userID, code string) error

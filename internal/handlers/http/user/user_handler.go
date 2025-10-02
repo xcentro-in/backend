@@ -29,7 +29,7 @@ func RegisterUserRoutes(e *echo.Group, userService user.UserService, authService
 
 	userGroup.POST("/verify-mobile", handler.VerifyMobile)
 	userGroup.POST("/kyc", handler.InitiateKYC)
-	userGroup.GET("/kyc", handler.GetKYCStatus)
+	userGroup.GET("", handler.GetKYCStatus)
 	userGroup.POST("/claim-role", handler.ClaimBusinessRole)
 }
 

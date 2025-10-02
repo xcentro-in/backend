@@ -48,3 +48,14 @@ type ClaimRoleDTO struct {
 	BusinessID string          `json:"businessId" validate:"required"`
 	Role       shared.UserRole `json:"role" validate:"required"`
 }
+
+type UserResponseDTO struct {
+	Id             string           `json:"id"`
+	Email          string           `json:"email"`
+	Mobile         string           `json:"mobile"`
+	TaxID          string           `json:"taxId"`
+	NationalID     string           `json:"nationalId"`
+	KycStatus      shared.KYCStatus `json:"kycStatus"`
+	EmailVerified  bool             `json:"emailVerified"`
+	MobileVerified bool             `json:"mobileVerified"`
+}

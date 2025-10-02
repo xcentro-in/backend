@@ -2,7 +2,6 @@ package user
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"xcentro.in/internal/adapters/database/postgres/client"
@@ -225,25 +224,25 @@ func (s *UserServiceImpl) InitiateKYC(ctx context.Context, userID string, claime
 }
 
 // GetUserKYCStatus returns user KYC status and identity data as JSON (similar to business service)
-func (s *UserServiceImpl) GetUserKYCStatus(ctx context.Context, userID string) (string, error) {
+func (s *UserServiceImpl) GetUserKYCStatus(ctx context.Context, userID string) (*user.UserResponseDTO, error) {
 	s.logger.Info("Getting KYC status for user ID: %s", userID)
 
 	if userID == "" {
-		return "", fmt.Errorf("user ID is required")
+		return nil, fmt.Errorf("user ID is required")
 	}
 
 	userData, identityData, err := s.userRepo.GetUserKYCStatus(ctx, userID)
 	if err != nil {
-		return "", fmt.Errorf("failed to get user KYC status: %w", err)
+		return nil, fmt.Errorf("failed to get user KYC status: %w", err)
 	}
 
 	if userData == nil {
-		return "", fmt.Errorf("user not found")
+		return nil, fmt.Errorf("user not found")
 	}
 
 	// Check if KYC is in appropriate state (not completed or verified)
 	if userData.KycStatus == shared.KYCVerified || userData.KycStatus == shared.KYCCompleted {
-		return "", fmt.Errorf("KYC already completed and verified")
+		return nil, fmt.Errorf("KYC already completed and verified")
 	}
 
 	type response struct {
@@ -264,17 +263,18 @@ func (s *UserServiceImpl) GetUserKYCStatus(ctx context.Context, userID string) (
 		}
 	}
 
-	resp := response{
-		User:     userData,
-		Identity: identity,
+	resp := &user.UserResponseDTO{
+		Id:             userData.Id,
+		Email:          userData.Email,
+		Mobile:         userData.Mobile,
+		TaxID:          identity.TaxID,
+		NationalID:     identity.NationalID,
+		KycStatus:      userData.KycStatus,
+		EmailVerified:  userData.EmailVerified,
+		MobileVerified: userData.MobileVerified,
 	}
 
-	b, err := json.Marshal(resp)
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal response: %w", err)
-	}
-
-	return string(b), nil
+	return resp, nil
 }
 
 // VerifyEmail verifies user's email using verification code

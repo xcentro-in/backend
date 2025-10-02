@@ -49,13 +49,27 @@ create_redis_users() {
     }
     print_success "Redis application user '$REDIS_APP_USER' created with access to 'xcentro:*' keys"
     
+    # Persist ACL changes explicitly (Redis 7+). If this fails we warn but continue.
+    if docker exec xcentro-redis redis-cli --no-auth-warning -a "$REDIS_SUPERUSER_PASSWORD" ACL SAVE >/dev/null 2>&1; then
+        print_success "ACL rules persisted to aclfile"
+    else
+        print_warning "Failed to persist ACL rules (ACL SAVE). They may still persist if CONFIG REWRITE occurs."
+    fi
+
     # Disable the default user for security
     print_info "Disabling default Redis user for security..."
-    docker exec xcentro-redis redis-cli --no-auth-warning -a "$REDIS_SUPERUSER_PASSWORD" \
+    docker exec xcentro-redis redis-cli --no-auth-warning --user "$REDIS_SUPERUSER" -a "$REDIS_SUPERUSER_PASSWORD" \
         ACL SETUSER default off || {
         print_warning "Failed to disable default user, but continuing..."
     }
-    
+
+    # Persist ACL changes after disabling default user
+    if docker exec xcentro-redis redis-cli --no-auth-warning --user "$REDIS_SUPERUSER" -a "$REDIS_SUPERUSER_PASSWORD" ACL SAVE >/dev/null 2>&1; then
+        print_success "ACL rules updated and persisted after disabling default user"
+    else
+        print_warning "Failed to persist ACL rules after disabling default user"
+    fi
+
     print_success "Redis user setup completed"
 }
 
