@@ -82,7 +82,7 @@ func (s *PayeeService) OnboardPayee(ctx context.Context, req payee.OnboardPayeeR
 	case payee.PayeeTypeVendor:
 		return s.onboardVendor(ctx, req)
 	case payee.PayeeTypeGST:
-		return nil, fmt.Errorf("GST payee onboarding not yet implemented (Phase 3)")
+		return s.onboardGSTPayee(ctx, req)
 	case payee.PayeeTypeBiller:
 		return nil, fmt.Errorf("Biller onboarding not yet implemented (Phase 4)")
 	case payee.PayeeTypeEmployee:
@@ -108,25 +108,26 @@ func (s *PayeeService) onboardVendor(ctx context.Context, req payee.OnboardPayee
 
 	// Step 1: Validate input
 	fmt.Println("✅ Step 1: Validating input...")
-	if err := s.validateOnboardRequest(&req); err != nil {
+	if err := s.validateVendorRequest(&req); err != nil {
 		return nil, fmt.Errorf("validation failed: %w", err)
 	}
 
-	// Step 2: Check if payee already exists by GSTIN
-	fmt.Println("🔍 Step 2: Checking if payee already exists (by GSTIN)...")
-	existingPayee, err := s.payeeBusinessRepo.FindByGSTIN(ctx, req.GSTIN)
+	// Step 2: Check if vendor payee already exists by GSTIN
+	fmt.Println("🔍 Step 2: Checking if vendor payee already exists (by GSTIN)...")
+	existingVendor, err := s.payeeVendorRepo.FindByGSTIN(ctx, vendor.GSTIN)
 	if err != nil {
-		return nil, fmt.Errorf("failed to check existing payee: %w", err)
+		return nil, fmt.Errorf("failed to check existing vendor: %w", err)
 	}
 
-	var payeeBusiness *payee.PayeeBusiness
+	var payeeID string
+	var vendorPayee *payee.PayeeVendor
 
-	// Step 3: If payee doesn't exist, verify GST and create
-	if existingPayee == nil {
-		fmt.Println("🆕 Step 3: Payee not found, verifying GST and creating new payee business...")
+	// Step 3: If vendor doesn't exist, verify GST and create
+	if existingVendor == nil {
+		fmt.Println("🆕 Step 3: Vendor not found, verifying GST and creating new vendor payee...")
 
 		gstReq := business_rules.GSTVerificationRequest{
-			GSTIN:     req.GSTIN,
+			GSTIN:     vendor.GSTIN,
 			RequestID: fmt.Sprintf("onboard_%s_%d", req.BusinessID, time.Now().Unix()),
 		}
 
@@ -137,13 +138,26 @@ func (s *PayeeService) onboardVendor(ctx context.Context, req payee.OnboardPayee
 
 		fmt.Printf("✅ GST verified: %s (%s)\n", gstResp.LegalName, gstResp.Status)
 
-		// Create PayeeBusiness entity
-		payeeBusiness = &payee.PayeeBusiness{
-			GSTIN:                 req.GSTIN,
-			LegalName:             gstResp.LegalName,
-			BusinessType:          gstResp.BusinessType,
-			RegistrationDate:      &gstResp.RegistrationDate,
-			GSTStatus:             gstResp.Status,
+		// Create master entry first
+		payeeMaster := &payee.PayeeMaster{
+			PayeeType:   payee.PayeeTypeVendor,
+			DisplayName: req.DisplayName,
+			IsActive:    true,
+		}
+
+		if err := s.payeeMasterRepo.Create(ctx, payeeMaster); err != nil {
+			return nil, fmt.Errorf("failed to create payee master: %w", err)
+		}
+		payeeID = payeeMaster.PayeeID
+
+		// Create vendor payee entity
+		vendorPayee = &payee.PayeeVendor{
+			PayeeID:          payeeID,
+			GSTIN:            vendor.GSTIN,
+			LegalName:        gstResp.LegalName,
+			BusinessType:     gstResp.BusinessType,
+			RegistrationDate: &gstResp.RegistrationDate,
+			GSTStatus:        gstResp.Status,
 			PrimaryAddress: payee.Address{
 				BuildingName: gstResp.Address.BuildingName,
 				Street:       gstResp.Address.Street,
@@ -159,22 +173,23 @@ func (s *PayeeService) onboardVendor(ctx context.Context, req payee.OnboardPayee
 				"state_code": gstResp.StateCode,
 			},
 		}
-		*payeeBusiness.GSTVerifiedAt = time.Now()
+		*vendorPayee.GSTVerifiedAt = time.Now()
 
-		if err := s.payeeBusinessRepo.CreatePayeeBusiness(ctx, payeeBusiness); err != nil {
-			return nil, fmt.Errorf("failed to create payee business: %w", err)
+		if err := s.payeeVendorRepo.Create(ctx, vendorPayee); err != nil {
+			return nil, fmt.Errorf("failed to create vendor payee: %w", err)
 		}
 
-		fmt.Printf("✅ Payee business created with ID: %s\n", payeeBusiness.PayeeID)
+		fmt.Printf("✅ Vendor payee created with ID: %s\n", payeeID)
 	} else {
-		fmt.Printf("♻️  Step 3: Payee already exists (PayeeID: %s), reusing...\n", existingPayee.PayeeID)
-		payeeBusiness = existingPayee
+		fmt.Printf("♻️  Step 3: Vendor already exists (PayeeID: %s), reusing...\n", existingVendor.PayeeID)
+		payeeID = existingVendor.PayeeID
+		vendorPayee = existingVendor
 	}
 
 	// Step 4: Check if bank account already exists for this payee
 	fmt.Println("🔍 Step 4: Checking for duplicate bank account...")
-	accountHash := s.computeAccountHash(req.AccountNumber)
-	isDuplicate, err := s.payeeBankAccountRepo.CheckDuplicateAccount(ctx, payeeBusiness.PayeeID, accountHash)
+	accountHash := s.computeAccountHash(vendor.AccountNumber)
+	isDuplicate, err := s.payeeBankAccountRepo.CheckDuplicateAccount(ctx, payeeID, accountHash)
 	if err != nil {
 		return nil, fmt.Errorf("failed to check duplicate account: %w", err)
 	}
@@ -184,7 +199,7 @@ func (s *PayeeService) onboardVendor(ctx context.Context, req payee.OnboardPayee
 	if isDuplicate {
 		fmt.Println("♻️  Bank account already exists for this payee, fetching...")
 		// Find the existing account
-		accounts, err := s.payeeBankAccountRepo.FindByPayeeID(ctx, payeeBusiness.PayeeID)
+		accounts, err := s.payeeBankAccountRepo.FindByPayeeID(ctx, payeeID)
 		if err != nil {
 			return nil, fmt.Errorf("failed to fetch existing accounts: %w", err)
 		}
@@ -204,11 +219,11 @@ func (s *PayeeService) onboardVendor(ctx context.Context, req payee.OnboardPayee
 		bankReq := business_rules.BankVerificationRequest{
 			BusinessID:        req.BusinessID,
 			RequestID:         fmt.Sprintf("onboard_%s_%d", req.BusinessID, time.Now().Unix()),
-			AccountNumber:     req.AccountNumber,
-			IFSCCode:          req.IFSCCode,
-			AccountHolderName: req.AccountHolderName,
-			BankName:          req.BankName,
-			AccountType:       req.AccountType,
+			AccountNumber:     vendor.AccountNumber,
+			IFSCCode:          vendor.IFSCCode,
+			AccountHolderName: vendor.AccountHolderName,
+			BankName:          vendor.BankName,
+			AccountType:       vendor.AccountType,
 		}
 
 		bankResp, err := s.bankVerificationSvc.VerifyBankAccount(ctx, bankReq)
@@ -225,10 +240,10 @@ func (s *PayeeService) onboardVendor(ctx context.Context, req payee.OnboardPayee
 		// Step 6: Cross-verify GST name vs Bank name
 		fmt.Println("🔗 Step 6: Cross-verifying GST name vs Bank account name...")
 		crossReq := business_rules.CrossVerificationRequest{
-			GSTIN:           req.GSTIN,
-			GSTLegalName:    payeeBusiness.LegalName,
+			GSTIN:           vendor.GSTIN,
+			GSTLegalName:    vendorPayee.LegalName,
 			BankAccountName: bankResp.VerifiedAccountName,
-			BankIFSC:        req.IFSCCode,
+			BankIFSC:        vendor.IFSCCode,
 		}
 
 		crossResp, err := s.crossVerificationSvc.VerifyGSTBankMatch(ctx, crossReq)
@@ -247,8 +262,8 @@ func (s *PayeeService) onboardVendor(ctx context.Context, req payee.OnboardPayee
 
 		// Extract director names from GST data
 		var directorNames []string
-		if payeeBusiness.GSTData != nil {
-			if directors, ok := payeeBusiness.GSTData["directors"].([]business_rules.GSTDirector); ok {
+		if vendorPayee.GSTData != nil {
+			if directors, ok := vendorPayee.GSTData["directors"].([]business_rules.GSTDirector); ok {
 				for _, dir := range directors {
 					directorNames = append(directorNames, dir.Name)
 				}
@@ -274,13 +289,13 @@ func (s *PayeeService) onboardVendor(ctx context.Context, req payee.OnboardPayee
 
 		// Create PayeeBankAccount entity
 		bankAccount = &payee.PayeeBankAccount{
-			PayeeID:                  payeeBusiness.PayeeID,
-			AccountNumber:            req.AccountNumber,
+			PayeeID:                  payeeID,
+			AccountNumber:            vendor.AccountNumber,
 			AccountNumberHash:        accountHash,
-			IFSCCode:                 req.IFSCCode,
+			IFSCCode:                 vendor.IFSCCode,
 			BankName:                 bankResp.BankName,
 			BranchName:               bankResp.BranchName,
-			AccountType:              req.AccountType,
+			AccountType:              vendor.AccountType,
 			AccountHolderName:        bankResp.VerifiedAccountName,
 			IsVerified:               true,
 			VerifiedAt:               &time.Time{},
@@ -289,7 +304,7 @@ func (s *PayeeService) onboardVendor(ctx context.Context, req payee.OnboardPayee
 			NameMatchScore:           crossResp.MatchScore,
 			IsActive:                 true,
 			IsPrimary:                false, // Will check if this should be primary
-			AccountLabel:             req.AccountLabel,
+			AccountLabel:             vendor.AccountLabel,
 			VerificationData:         bankResp.Metadata,
 		}
 		*bankAccount.VerifiedAt = time.Now()
@@ -297,7 +312,7 @@ func (s *PayeeService) onboardVendor(ctx context.Context, req payee.OnboardPayee
 
 	// Step 8: Check if this should be the primary account
 	if bankAccount.AccountID == "" { // New account being created
-		existingAccounts, _ := s.payeeBankAccountRepo.FindByPayeeID(ctx, payeeBusiness.PayeeID)
+		existingAccounts, _ := s.payeeBankAccountRepo.FindByPayeeID(ctx, payeeID)
 		if len(existingAccounts) == 0 {
 			bankAccount.IsPrimary = true
 			fmt.Println("📌 Setting as primary account (first account for this payee)")
@@ -307,7 +322,7 @@ func (s *PayeeService) onboardVendor(ctx context.Context, req payee.OnboardPayee
 	// Step 9: Check if relation already exists
 	fmt.Println("🔍 Step 9: Checking if customer already has this payee-account relation...")
 	if bankAccount.AccountID != "" { // Account exists
-		relationExists, err := s.businessPayeeRelationRepo.RelationExists(ctx, req.BusinessID, payeeBusiness.PayeeID, bankAccount.AccountID)
+		relationExists, err := s.businessPayeeRelationRepo.RelationExists(ctx, req.BusinessID, payeeID, bankAccount.AccountID)
 		if err != nil {
 			return nil, fmt.Errorf("failed to check relation existence: %w", err)
 		}
@@ -337,7 +352,7 @@ func (s *PayeeService) onboardVendor(ctx context.Context, req payee.OnboardPayee
 		// Create relation
 		relation := &payee.BusinessPayeeRelation{
 			BusinessID:   req.BusinessID,
-			PayeeID:      payeeBusiness.PayeeID,
+			PayeeID:      payeeID,
 			AccountID:    accountID,
 			DisplayName:  req.DisplayName,
 			ContactEmail: req.ContactEmail,
@@ -364,13 +379,173 @@ func (s *PayeeService) onboardVendor(ctx context.Context, req payee.OnboardPayee
 
 	// Step 11: Return response
 	return &payee.OnboardPayeeResponse{
-		PayeeID:                 payeeBusiness.PayeeID,
+		PayeeID:                 payeeID,
 		AccountID:               accountID,
-		GSTVerificationStatus:   payeeBusiness.GSTVerificationStatus,
+		GSTVerificationStatus:   vendorPayee.GSTVerificationStatus,
 		BankVerificationStatus:  bankAccount.BankVerificationStatus,
 		CrossVerificationStatus: bankAccount.CrossVerificationStatus,
 		IsFullyVerified:         true,
 		Message:                 fmt.Sprintf("Payee '%s' successfully onboarded", req.DisplayName),
+	}, nil
+}
+
+// onboardGSTPayee handles GST payment payee onboarding (government virtual account)
+// Steps: Validate → Check duplicates → Create master + GST + virtual account entities → Create relation
+func (s *PayeeService) onboardGSTPayee(ctx context.Context, req payee.OnboardPayeeRequest) (*payee.OnboardPayeeResponse, error) {
+	fmt.Println("=== GST PAYEE ONBOARDING FLOW ===")
+
+	// Step 1: Validate GST-specific data
+	if err := s.validateGSTRequest(&req); err != nil {
+		return nil, err
+	}
+
+	gst := req.GST
+	var payeeID string
+	var virtualAccountID string
+
+	// Step 2: Check if the government GST payee exists (singleton pattern)
+	fmt.Println("🔍 Step 2: Checking if GST payee exists (singleton)...")
+
+	// Try to get the government payee (singleton)
+	existingGST, err := s.payeeGSTRepo.GetGovernmentPayee(ctx)
+	if err != nil && err.Error() != "government payee not found" {
+		return nil, fmt.Errorf("failed to check existing GST payee: %w", err)
+	}
+
+	if existingGST != nil {
+		// GST payee exists - reuse it
+		payeeID = existingGST.PayeeID
+		fmt.Printf("📋 GST payee exists with PayeeID: %s\n", payeeID)
+	} else {
+		// Create new GST payee (singleton)
+		fmt.Println("🆕 Creating new GST payee (singleton)...")
+
+		// Step 3: Create master entry first
+		payeeMaster := &payee.PayeeMaster{
+			PayeeType:   payee.PayeeTypeGST,
+			DisplayName: "GST Portal", // Standard name
+			IsActive:    true,
+		}
+		if err := s.payeeMasterRepo.Create(ctx, payeeMaster); err != nil {
+			return nil, fmt.Errorf("failed to create payee master: %w", err)
+		}
+		payeeID = payeeMaster.PayeeID
+		fmt.Printf("✅ Master entry created: PayeeID=%s\n", payeeID)
+
+		// Step 4: Create GST payee entity (no Create method - will be created by repository setup)
+		// The GST payee entity creation happens in database migration/setup
+		fmt.Println("✅ GST payee entity will use singleton pattern")
+	}
+
+	// Step 5: Check if virtual account for this tax period already exists
+	fmt.Printf("🔍 Step 5: Checking for virtual account (tax period: %s, FY: %s)...\n", gst.TaxPeriod, gst.FinancialYear)
+	existingVirtualAccounts, err := s.payeeGSTVirtualAccountRepo.FindByPayeeID(ctx, payeeID)
+	if err != nil && err.Error() != "no virtual accounts found" {
+		return nil, fmt.Errorf("failed to find virtual accounts: %w", err)
+	}
+
+	// Check if this specific tax period/FY virtual account exists
+	var existingVA *payee.PayeeGSTVirtualAccount
+	for _, va := range existingVirtualAccounts {
+		if va.TaxPeriod == gst.TaxPeriod && va.FinancialYear == gst.FinancialYear {
+			existingVA = va
+			break
+		}
+	}
+
+	if existingVA != nil {
+		// Virtual account exists for this period
+		fmt.Printf("📋 Virtual account exists for %s/%s\n", gst.TaxPeriod, gst.FinancialYear)
+
+		// Check if it's still valid
+		if time.Now().After(existingVA.ValidUntil) {
+			fmt.Println("⚠️ Existing virtual account expired, creating new one...")
+			// Create new virtual account for this period
+			newVirtualAccount := &payee.PayeeGSTVirtualAccount{
+				PayeeID:              payeeID,
+				VirtualAccountNumber: gst.VirtualAccountNumber,
+				IFSCCode:             gst.IFSCCode,
+				BankName:             gst.BankName,
+				TaxPeriod:            gst.TaxPeriod,
+				FinancialYear:        gst.FinancialYear,
+				TaxType:              gst.TaxType,
+				ValidFrom:            gst.ValidFrom,
+				ValidUntil:           gst.ValidUntil,
+				IsActive:             true,
+				ChallanDocumentURL:   gst.ChallanDocumentURL,
+			}
+			if err := s.payeeGSTVirtualAccountRepo.Create(ctx, newVirtualAccount); err != nil {
+				return nil, fmt.Errorf("failed to create new virtual account: %w", err)
+			}
+			virtualAccountID = newVirtualAccount.VirtualAccountID
+		} else {
+			fmt.Println("✅ Virtual account still valid, reusing...")
+			virtualAccountID = existingVA.VirtualAccountID
+		}
+	} else {
+		// Create new virtual account for this tax period
+		fmt.Printf("🆕 Creating new virtual account for %s/%s...\n", gst.TaxPeriod, gst.FinancialYear)
+		virtualAccount := &payee.PayeeGSTVirtualAccount{
+			PayeeID:              payeeID,
+			VirtualAccountNumber: gst.VirtualAccountNumber,
+			IFSCCode:             gst.IFSCCode,
+			BankName:             gst.BankName,
+			TaxPeriod:            gst.TaxPeriod,
+			FinancialYear:        gst.FinancialYear,
+			TaxType:              gst.TaxType,
+			ValidFrom:            gst.ValidFrom,
+			ValidUntil:           gst.ValidUntil,
+			IsActive:             true,
+			ChallanDocumentURL:   gst.ChallanDocumentURL,
+		}
+		if err := s.payeeGSTVirtualAccountRepo.Create(ctx, virtualAccount); err != nil {
+			return nil, fmt.Errorf("failed to create virtual account: %w", err)
+		}
+		virtualAccountID = virtualAccount.VirtualAccountID
+		fmt.Printf("✅ Virtual account created: %s\n", virtualAccountID)
+	}
+
+	// Step 6: Check if relation already exists
+	fmt.Println("🔍 Step 6: Checking if customer already has this GST payee relation...")
+	relationExists, err := s.businessPayeeRelationRepo.RelationExists(ctx, req.BusinessID, payeeID, virtualAccountID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to check relation existence: %w", err)
+	}
+	if relationExists {
+		return nil, fmt.Errorf("GST payee already added to your account for this tax period")
+	}
+
+	// Step 7: Create business-payee relation
+	fmt.Println("💾 Step 7: Creating business-payee relation...")
+	relation := &payee.BusinessPayeeRelation{
+		BusinessID:   req.BusinessID,
+		PayeeID:      payeeID,
+		AccountID:    virtualAccountID,
+		DisplayName:  req.DisplayName,
+		ContactEmail: req.ContactEmail,
+		ContactPhone: req.ContactPhone,
+		Notes:        req.Notes,
+		IsActive:     true,
+		IsFavorite:   false,
+		Tags:         []string{"gst", "tax"},
+		AddedBy:      "", // TODO: Extract from JWT
+	}
+
+	if err := s.businessPayeeRelationRepo.CreateRelation(ctx, relation); err != nil {
+		return nil, fmt.Errorf("failed to create relation: %w", err)
+	}
+
+	fmt.Println("✅ GST payee onboarding complete!")
+
+	// Step 8: Return response
+	return &payee.OnboardPayeeResponse{
+		PayeeID:                 payeeID,
+		AccountID:               virtualAccountID,
+		GSTVerificationStatus:   payee.VerificationStatusSuccess, // Government entity pre-verified
+		BankVerificationStatus:  payee.VerificationStatusSuccess, // Virtual account from challan pre-verified
+		CrossVerificationStatus: payee.VerificationStatusSuccess, // No cross-verification needed for govt
+		IsFullyVerified:         true,                            // Virtual accounts from challan are pre-verified
+		Message:                 fmt.Sprintf("GST payee '%s' successfully onboarded for %s/%s", req.DisplayName, gst.TaxPeriod, gst.FinancialYear),
 	}, nil
 }
 
@@ -381,54 +556,9 @@ func (s *PayeeService) GetPayeesByBusiness(ctx context.Context, businessID strin
 }
 
 // GetPayeeDetails retrieves detailed information about a specific payee
+// TODO: Phase 6 - Implement polymorphic GetPayeeDetails
 func (s *PayeeService) GetPayeeDetails(ctx context.Context, businessID, payeeID, accountID string) (*payee.PayeeDetailsResponse, error) {
-	fmt.Printf("[PayeeService] GetPayeeDetails called - BusinessID: %s, PayeeID: %s, AccountID: %s\n",
-		businessID, payeeID, accountID)
-
-	// Get relation
-	relation, err := s.businessPayeeRelationRepo.FindRelation(ctx, businessID, payeeID, accountID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to find relation: %w", err)
-	}
-
-	// Get payee business
-	payeeBusiness, err := s.payeeBusinessRepo.FindByID(ctx, payeeID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to find payee business: %w", err)
-	}
-
-	// Get bank account
-	bankAccount, err := s.payeeBankAccountRepo.FindByID(ctx, accountID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to find bank account: %w", err)
-	}
-
-	// Build response
-	return &payee.PayeeDetailsResponse{
-		PayeeID:                 payeeBusiness.PayeeID,
-		GSTIN:                   payeeBusiness.GSTIN,
-		LegalName:               payeeBusiness.LegalName,
-		BusinessType:            payeeBusiness.BusinessType,
-		GSTStatus:               payeeBusiness.GSTStatus,
-		AccountID:               bankAccount.AccountID,
-		MaskedAccount:           s.maskAccountNumber(bankAccount.AccountNumber),
-		BankName:                bankAccount.BankName,
-		IFSCCode:                bankAccount.IFSCCode,
-		AccountType:             string(bankAccount.AccountType),
-		AccountLabel:            bankAccount.AccountLabel,
-		IsVerified:              bankAccount.IsVerified,
-		DisplayName:             relation.DisplayName,
-		ContactEmail:            relation.ContactEmail,
-		ContactPhone:            relation.ContactPhone,
-		Notes:                   relation.Notes,
-		IsFavorite:              relation.IsFavorite,
-		Tags:                    relation.Tags,
-		GSTVerificationStatus:   string(payeeBusiness.GSTVerificationStatus),
-		BankVerificationStatus:  string(bankAccount.BankVerificationStatus),
-		CrossVerificationStatus: string(bankAccount.CrossVerificationStatus),
-		AddedAt:                 relation.AddedAt,
-		LastUsedAt:              relation.LastUsedAt,
-	}, nil
+	return nil, fmt.Errorf("GetPayeeDetails not yet implemented for polymorphic payees (Phase 6)")
 }
 
 // UpdatePayeeRelation updates customer-specific metadata for a payee
@@ -460,24 +590,76 @@ func (s *PayeeService) DeactivatePayee(ctx context.Context, businessID, payeeID,
 
 // Helper methods
 
-func (s *PayeeService) validateOnboardRequest(req *payee.OnboardPayeeRequest) error {
+// validateVendorRequest validates vendor-specific onboarding data
+func (s *PayeeService) validateVendorRequest(req *payee.OnboardPayeeRequest) error {
+	// Common validations
 	if req.BusinessID == "" {
 		return fmt.Errorf("business_id is required")
 	}
-	if req.GSTIN == "" || len(req.GSTIN) != 15 {
+	if req.DisplayName == "" {
+		return fmt.Errorf("display_name is required")
+	}
+
+	// Vendor-specific validations
+	if req.Vendor == nil {
+		return fmt.Errorf("vendor data is required for vendor payee type")
+	}
+
+	vendor := req.Vendor
+	if vendor.GSTIN == "" || len(vendor.GSTIN) != 15 {
 		return fmt.Errorf("invalid GSTIN (must be 15 characters)")
 	}
-	if req.AccountNumber == "" {
+	if vendor.AccountNumber == "" {
 		return fmt.Errorf("account_number is required")
 	}
-	if req.IFSCCode == "" || len(req.IFSCCode) != 11 {
+	if vendor.IFSCCode == "" || len(vendor.IFSCCode) != 11 {
 		return fmt.Errorf("invalid IFSC code (must be 11 characters)")
 	}
-	if req.AccountHolderName == "" {
+	if vendor.AccountHolderName == "" {
 		return fmt.Errorf("account_holder_name is required")
+	}
+	return nil
+}
+
+// validateGSTRequest validates GST payment-specific onboarding data
+func (s *PayeeService) validateGSTRequest(req *payee.OnboardPayeeRequest) error {
+	// Common validations
+	if req.BusinessID == "" {
+		return fmt.Errorf("business_id is required")
 	}
 	if req.DisplayName == "" {
 		return fmt.Errorf("display_name is required")
+	}
+
+	// GST-specific validations
+	if req.GST == nil {
+		return fmt.Errorf("gst data is required for GST payee type")
+	}
+
+	gst := req.GST
+	if gst.VirtualAccountNumber == "" {
+		return fmt.Errorf("virtual_account_number is required")
+	}
+	if gst.IFSCCode == "" || len(gst.IFSCCode) != 11 {
+		return fmt.Errorf("invalid IFSC code (must be 11 characters)")
+	}
+	if gst.BankName == "" {
+		return fmt.Errorf("bank_name is required")
+	}
+	if gst.TaxPeriod == "" {
+		return fmt.Errorf("tax_period is required (e.g., '2024-03')")
+	}
+	if gst.FinancialYear == "" {
+		return fmt.Errorf("financial_year is required (e.g., '2024-25')")
+	}
+	if gst.ValidFrom.IsZero() {
+		return fmt.Errorf("valid_from date is required")
+	}
+	if gst.ValidUntil.IsZero() {
+		return fmt.Errorf("valid_until date is required")
+	}
+	if gst.ChallanDocumentURL == "" {
+		return fmt.Errorf("challan_document_url is required")
 	}
 	return nil
 }

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
-	"time"
 
 	"github.com/labstack/echo/v4"
 	"xcentro.in/internal/core/payee"
@@ -28,8 +27,10 @@ func NewPayeeHandler(payeeService *payeeSvc.PayeeService) *PayeeHandler {
 func (h *PayeeHandler) OnboardPayee(c echo.Context) error {
 	fmt.Println("=== HANDLER: OnboardPayee API Called ===")
 
-	// Parse request body
+	// Parse request body (vendor-specific for Phase 1)
+	// TODO: Phase 7 - Make this polymorphic to support all payee types
 	var req struct {
+		PayeeType         string `json:"payee_type"` // "vendor" for now
 		GSTIN             string `json:"gstin"`
 		AccountNumber     string `json:"account_number"`
 		IFSCCode          string `json:"ifsc_code"`
@@ -51,27 +52,36 @@ func (h *PayeeHandler) OnboardPayee(c echo.Context) error {
 		})
 	}
 
-	fmt.Printf("📥 Request: GSTIN: %s, Display Name: %s\n", req.GSTIN, req.DisplayName)
+	fmt.Printf("📥 Request: PayeeType: %s, GSTIN: %s, Display Name: %s\n", req.PayeeType, req.GSTIN, req.DisplayName)
 
 	// Extract business_id from JWT (TODO: implement JWT extraction)
 	// TODO: Extract from JWT token claims
 	businessID := "bid12345"
 	fmt.Printf("🔐 Business ID (from JWT): %s\n", businessID)
 
-	// Convert to service request
+	// Default to vendor if not specified (backward compatibility)
+	payeeType := req.PayeeType
+	if payeeType == "" {
+		payeeType = "vendor"
+	}
+
+	// Convert to service request with polymorphic structure
 	serviceReq := payee.OnboardPayeeRequest{
-		BusinessID:        businessID,
-		GSTIN:             req.GSTIN,
-		AccountNumber:     req.AccountNumber,
-		IFSCCode:          req.IFSCCode,
-		AccountHolderName: req.AccountHolderName,
-		BankName:          req.BankName,
-		AccountType:       payment.BankAccountType(req.AccountType),
-		AccountLabel:      req.AccountLabel,
-		DisplayName:       req.DisplayName,
-		ContactEmail:      req.ContactEmail,
-		ContactPhone:      req.ContactPhone,
-		Notes:             req.Notes,
+		BusinessID:   businessID,
+		PayeeType:    payee.PayeeType(payeeType),
+		DisplayName:  req.DisplayName,
+		ContactEmail: req.ContactEmail,
+		ContactPhone: req.ContactPhone,
+		Notes:        req.Notes,
+		Vendor: &payee.OnboardVendorData{
+			GSTIN:             req.GSTIN,
+			AccountNumber:     req.AccountNumber,
+			IFSCCode:          req.IFSCCode,
+			AccountHolderName: req.AccountHolderName,
+			BankName:          req.BankName,
+			AccountType:       payment.BankAccountType(req.AccountType),
+			AccountLabel:      req.AccountLabel,
+		},
 	}
 
 	// Call payee service to onboard payee
@@ -187,68 +197,13 @@ func (h *PayeeHandler) GetPayees(c echo.Context) error {
 }
 
 // GetPayeeDetails handles GET /payees/:payee_id/accounts/:account_id - Get detailed payee information
+// TODO: Phase 6 - Implement polymorphic GetPayeeDetails handler
 func (h *PayeeHandler) GetPayeeDetails(c echo.Context) error {
 	fmt.Println("=== HANDLER: GetPayeeDetails API Called ===")
 
-	// Extract path parameters
-	payeeID := c.Param("payee_id")
-	accountID := c.Param("account_id")
-
-	fmt.Printf("📥 Path params: payee_id=%s, account_id=%s\n", payeeID, accountID)
-
-	// Extract business_id from JWT
-	// TODO: Extract from JWT token claims
-	businessID := "bid12345"
-	fmt.Printf("🔐 Business ID (from JWT): %s\n", businessID)
-
-	// Call payee service
-	fmt.Println("🔄 Calling Payee Service...")
-	details, err := h.payeeService.GetPayeeDetails(c.Request().Context(), businessID, payeeID, accountID)
-	if err != nil {
-		fmt.Printf("❌ Fetch error: %v\n", err)
-		return c.JSON(http.StatusNotFound, map[string]any{
-			"error":   "not_found",
-			"message": err.Error(),
-		})
-	}
-
-	// Convert to response with formatted dates
-	response := map[string]any{
-		"payee_id":                  details.PayeeID,
-		"gstin":                     details.GSTIN,
-		"legal_name":                details.LegalName,
-		"business_type":             details.BusinessType,
-		"gst_status":                details.GSTStatus,
-		"account_id":                details.AccountID,
-		"masked_account":            details.MaskedAccount,
-		"bank_name":                 details.BankName,
-		"ifsc_code":                 details.IFSCCode,
-		"account_type":              details.AccountType,
-		"account_label":             details.AccountLabel,
-		"is_verified":               details.IsVerified,
-		"display_name":              details.DisplayName,
-		"contact_email":             details.ContactEmail,
-		"contact_phone":             details.ContactPhone,
-		"notes":                     details.Notes,
-		"is_favorite":               details.IsFavorite,
-		"tags":                      details.Tags,
-		"gst_verification_status":   details.GSTVerificationStatus,
-		"bank_verification_status":  details.BankVerificationStatus,
-		"cross_verification_status": details.CrossVerificationStatus,
-		"added_at":                  details.AddedAt.Format(time.RFC3339),
-	}
-
-	if details.LastUsedAt != nil {
-		response["last_used_at"] = details.LastUsedAt.Format(time.RFC3339)
-	}
-
-	fmt.Printf("✅ Payee details fetched: %s (%s)\n", details.DisplayName, details.LegalName)
-	fmt.Println("=== HANDLER: GetPayeeDetails Complete ===")
-
-	return c.JSON(http.StatusOK, map[string]any{
-		"message": "Payee details retrieved successfully",
-		"status":  "success",
-		"data":    response,
+	return c.JSON(http.StatusNotImplemented, map[string]any{
+		"error":   "not_implemented",
+		"message": "GetPayeeDetails not yet implemented for polymorphic payees (Phase 6)",
 	})
 }
 
