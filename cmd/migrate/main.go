@@ -15,8 +15,8 @@ import (
 func main() {
 	// Parse command line flags
 	var (
-		action  = flag.String("action", "up", "Migration action: up, down, version, goto")
-		version = flag.String("version", "", "Target version (only for goto action)")
+		action  = flag.String("action", "up", "Migration action: up, down, version, goto, force")
+		version = flag.String("version", "", "Target version (for goto/force actions)")
 		path    = flag.String("path", "internal/adapters/database/postgres/migrations/sql", "Path to migration files")
 	)
 	flag.Parse()
@@ -78,13 +78,31 @@ func main() {
 		}
 		log.Infof("Successfully migrated to version %d", targetVersion)
 
+	case "force":
+		if *version == "" {
+			log.Error("Version flag is required for force action")
+			os.Exit(1)
+		}
+		targetVersion, err := strconv.Atoi(*version)
+		if err != nil {
+			log.Errorf("Invalid version number: %v", err)
+			os.Exit(1)
+		}
+		log.Warnf("Forcing migration version to %d (without running migrations)...", targetVersion)
+		if err := migrationService.Force(ctx, targetVersion); err != nil {
+			log.Errorf("Failed to force version %d: %v", targetVersion, err)
+			os.Exit(1)
+		}
+		log.Infof("Successfully forced version to %d", targetVersion)
+
 	default:
-		fmt.Printf("Usage: %s -action=<up|down|version|goto> [-version=<number>]\n", os.Args[0])
+		fmt.Printf("Usage: %s -action=<up|down|version|goto|force> [-version=<number>]\n", os.Args[0])
 		fmt.Println("Actions:")
 		fmt.Println("  up      - Run all pending up migrations")
 		fmt.Println("  down    - Run one down migration")
 		fmt.Println("  version - Show current migration version")
 		fmt.Println("  goto    - Migrate to specific version (requires -version flag)")
+		fmt.Println("  force   - Force migration version (for fixing dirty state, requires -version flag)")
 		os.Exit(1)
 	}
 }

@@ -94,6 +94,21 @@ func (m *MigrationService) MigrateToVersion(ctx context.Context, version uint) e
 	return nil
 }
 
+// Force sets the migration version without running migrations (for fixing dirty state)
+func (m *MigrationService) Force(ctx context.Context, version int) error {
+	migrator, err := m.createMigrator()
+	if err != nil {
+		return fmt.Errorf("failed to create migrator: %w", err)
+	}
+	defer migrator.Close()
+
+	if err := migrator.Force(version); err != nil {
+		return fmt.Errorf("failed to force version %d: %w", version, err)
+	}
+
+	return nil
+}
+
 // createMigrator creates a new migrate instance
 func (m *MigrationService) createMigrator() (*migrate.Migrate, error) {
 	// Convert relative path to absolute

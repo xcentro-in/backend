@@ -23,6 +23,14 @@ CREATE TYPE xcentro.verification_status_enum AS ENUM (
     'failed'
 );
 
+-- Bank account type enum (shared with payment module)
+CREATE TYPE xcentro.bank_account_type_enum AS ENUM (
+    'savings',
+    'current',
+    'cc',  -- Cash Credit
+    'od'   -- Overdraft
+);
+
 -- #############################################################################
 -- # Payee Master Table (Routing/Discrimination Table)
 -- #############################################################################

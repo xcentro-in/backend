@@ -16,5 +16,6 @@ DROP TABLE IF EXISTS xcentro.payee_vendor CASCADE;
 DROP TABLE IF EXISTS xcentro.payee_master CASCADE;
 
 -- Drop custom types
+DROP TYPE IF EXISTS xcentro.bank_account_type_enum CASCADE;
 DROP TYPE IF EXISTS xcentro.verification_status_enum CASCADE;
 DROP TYPE IF EXISTS xcentro.payee_type_enum CASCADE;
