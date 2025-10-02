@@ -79,26 +79,9 @@ func registerV1UserRoutes(meta *serverMetaData, group *echo.Group) {
 }
 
 func registerV1PayeeRoutes(meta *serverMetaData, group *echo.Group) {
-	// Create payee repository instances
-	payeeBusinessRepo := payeeRepo.NewPgPayeeBusinessRepository(meta.clients.db)
-	payeeBankAccountRepo := payeeRepo.NewPgPayeeBankAccountRepository(meta.clients.db)
-	businessPayeeRelationRepo := payeeRepo.NewPgBusinessPayeeRelationRepository(meta.clients.db)
-
-	// Create verification services
-	gstVerificationSvc := business_rules.NewMockGSTVerificationService()
-	bankVerificationSvc := business_rules.NewMockBankVerificationService()
-	crossVerificationSvc := business_rules.NewMockCrossVerificationService()
-
-	// Create payee service
-	payeeService := payeeSvc.NewPayeeService(
-		payeeBusinessRepo,
-		payeeBankAccountRepo,
-		businessPayeeRelationRepo,
-		gstVerificationSvc,
-		bankVerificationSvc,
-		crossVerificationSvc,
-		meta.clients.txManager,
-	)
+	// Use factory pattern to create PayeeService with all dependencies
+	factory := payeeSvc.NewPayeeServiceFactory(meta.clients.db, meta.clients.txManager)
+	payeeService := factory.NewPayeeService()
 
 	// Register payee routes
 	payeeGroup := group.Group("/payees")

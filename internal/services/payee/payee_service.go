@@ -13,19 +13,41 @@ import (
 )
 
 // PayeeService orchestrates the complete payee onboarding and management flow
+// Supports polymorphic payee types: Vendor, GST Payment, Biller, Employee
 type PayeeService struct {
-	payeeBusinessRepo         payee.PayeeBusinessRepository
+	// Master routing table
+	payeeMasterRepo payee.PayeeMasterRepository
+
+	// Type-specific repositories
+	payeeVendorRepo              payee.PayeeVendorRepository
+	payeeGSTRepo                 payee.PayeeGSTRepository
+	payeeGSTVirtualAccountRepo   payee.PayeeGSTVirtualAccountRepository
+	payeeBillerRepo              payee.PayeeBillerRepository
+	payeeBillerAccountRepo       payee.PayeeBillerAccountRepository
+	payeeEmployeeRepo            payee.PayeeEmployeeRepository
+
+	// Shared repositories
 	payeeBankAccountRepo      payee.PayeeBankAccountRepository
 	businessPayeeRelationRepo payee.BusinessPayeeRelationRepository
-	gstVerificationSvc        business_rules.GSTVerificationService
-	bankVerificationSvc       business_rules.BankVerificationService
-	crossVerificationSvc      business_rules.CrossVerificationService
-	txManager                 client.TxManager
+
+	// Verification services
+	gstVerificationSvc   business_rules.GSTVerificationService
+	bankVerificationSvc  business_rules.BankVerificationService
+	crossVerificationSvc business_rules.CrossVerificationService
+
+	// Transaction manager
+	txManager client.TxManager
 }
 
 // NewPayeeService creates a new payee service with all dependencies
 func NewPayeeService(
-	payeeBusinessRepo payee.PayeeBusinessRepository,
+	payeeMasterRepo payee.PayeeMasterRepository,
+	payeeVendorRepo payee.PayeeVendorRepository,
+	payeeGSTRepo payee.PayeeGSTRepository,
+	payeeGSTVirtualAccountRepo payee.PayeeGSTVirtualAccountRepository,
+	payeeBillerRepo payee.PayeeBillerRepository,
+	payeeBillerAccountRepo payee.PayeeBillerAccountRepository,
+	payeeEmployeeRepo payee.PayeeEmployeeRepository,
 	payeeBankAccountRepo payee.PayeeBankAccountRepository,
 	businessPayeeRelationRepo payee.BusinessPayeeRelationRepository,
 	gstVerificationSvc business_rules.GSTVerificationService,
@@ -34,22 +56,55 @@ func NewPayeeService(
 	txManager client.TxManager,
 ) *PayeeService {
 	return &PayeeService{
-		payeeBusinessRepo:         payeeBusinessRepo,
-		payeeBankAccountRepo:      payeeBankAccountRepo,
-		businessPayeeRelationRepo: businessPayeeRelationRepo,
-		gstVerificationSvc:        gstVerificationSvc,
-		bankVerificationSvc:       bankVerificationSvc,
-		crossVerificationSvc:      crossVerificationSvc,
-		txManager:                 txManager,
+		payeeMasterRepo:              payeeMasterRepo,
+		payeeVendorRepo:              payeeVendorRepo,
+		payeeGSTRepo:                 payeeGSTRepo,
+		payeeGSTVirtualAccountRepo:   payeeGSTVirtualAccountRepo,
+		payeeBillerRepo:              payeeBillerRepo,
+		payeeBillerAccountRepo:       payeeBillerAccountRepo,
+		payeeEmployeeRepo:            payeeEmployeeRepo,
+		payeeBankAccountRepo:         payeeBankAccountRepo,
+		businessPayeeRelationRepo:    businessPayeeRelationRepo,
+		gstVerificationSvc:           gstVerificationSvc,
+		bankVerificationSvc:          bankVerificationSvc,
+		crossVerificationSvc:         crossVerificationSvc,
+		txManager:                    txManager,
 	}
 }
 
-// OnboardPayee orchestrates the complete payee onboarding flow
-// Steps: Validate → Check duplicates → Verify GST → Verify Bank → Cross-verify → Money rotation check → Create entities
+// OnboardPayee orchestrates the complete payee onboarding flow (polymorphic)
+// Routes to type-specific onboarding methods based on PayeeType
 func (s *PayeeService) OnboardPayee(ctx context.Context, req payee.OnboardPayeeRequest) (*payee.OnboardPayeeResponse, error) {
-	fmt.Println("=== PAYEE SERVICE: OnboardPayee Called ===")
-	fmt.Printf("Business ID: %s, GSTIN: %s, Display Name: %s\n", req.BusinessID, req.GSTIN, req.DisplayName)
-	fmt.Printf("Account Number: ****%s, IFSC: %s\n", req.AccountNumber[len(req.AccountNumber)-4:], req.IFSCCode)
+	fmt.Printf("=== PAYEE SERVICE: OnboardPayee Called (Type: %s) ===\n", req.PayeeType)
+
+	// Route based on payee type
+	switch req.PayeeType {
+	case payee.PayeeTypeVendor:
+		return s.onboardVendor(ctx, req)
+	case payee.PayeeTypeGST:
+		return nil, fmt.Errorf("GST payee onboarding not yet implemented (Phase 3)")
+	case payee.PayeeTypeBiller:
+		return nil, fmt.Errorf("Biller onboarding not yet implemented (Phase 4)")
+	case payee.PayeeTypeEmployee:
+		return nil, fmt.Errorf("Employee onboarding not yet implemented (Phase 5)")
+	default:
+		return nil, fmt.Errorf("unsupported payee type: %s", req.PayeeType)
+	}
+}
+
+// onboardVendor handles vendor payee onboarding (GSTIN + bank account)
+// Steps: Validate → Check duplicates → Verify GST → Verify Bank → Cross-verify → Money rotation check → Create entities
+func (s *PayeeService) onboardVendor(ctx context.Context, req payee.OnboardPayeeRequest) (*payee.OnboardPayeeResponse, error) {
+	fmt.Println("=== PAYEE SERVICE: onboardVendor Called ===")
+
+	// Validate vendor-specific data
+	if req.Vendor == nil {
+		return nil, fmt.Errorf("vendor data is required for vendor payee type")
+	}
+
+	vendor := req.Vendor
+	fmt.Printf("Business ID: %s, GSTIN: %s, Display Name: %s\n", req.BusinessID, vendor.GSTIN, req.DisplayName)
+	fmt.Printf("Account Number: ****%s, IFSC: %s\n", vendor.AccountNumber[len(vendor.AccountNumber)-4:], vendor.IFSCCode)
 
 	// Step 1: Validate input
 	fmt.Println("✅ Step 1: Validating input...")

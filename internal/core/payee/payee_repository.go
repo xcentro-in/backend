@@ -6,23 +6,139 @@ import (
 	"xcentro.in/internal/adapters/database/postgres/client"
 )
 
-// PayeeBusinessRepository manages canonical payee business entities
-// Handles global payee records identified by GSTIN
-type PayeeBusinessRepository interface {
-	WithTx(tx client.Tx) PayeeBusinessRepository
+// ############################################################################
+// # Payee Master Repository
+// ############################################################################
+
+// PayeeMasterRepository manages the master routing table for all payees
+type PayeeMasterRepository interface {
+	WithTx(tx client.Tx) PayeeMasterRepository
 
 	// CRUD operations
-	CreatePayeeBusiness(ctx context.Context, payee *PayeeBusiness) error
-	FindByID(ctx context.Context, payeeID string) (*PayeeBusiness, error)
-	FindByGSTIN(ctx context.Context, gstin string) (*PayeeBusiness, error)
-	UpdatePayeeBusiness(ctx context.Context, payee *PayeeBusiness) error
+	Create(ctx context.Context, master *PayeeMaster) error
+	FindByID(ctx context.Context, payeeID string) (*PayeeMaster, error)
+	Update(ctx context.Context, master *PayeeMaster) error
+	Delete(ctx context.Context, payeeID string) error
 
-	// Search operations
-	SearchPayees(ctx context.Context, filters PayeeBusinessSearchFilters) ([]*PayeeBusiness, error)
+	// Query operations
+	FindByType(ctx context.Context, payeeType PayeeType, limit, offset int) ([]*PayeeMaster, error)
+	CountByType(ctx context.Context, payeeType PayeeType) (int, error)
 }
 
+// ############################################################################
+// # Vendor Payee Repository
+// ############################################################################
+
+// PayeeVendorRepository manages vendor payee entities (businesses with GSTIN)
+type PayeeVendorRepository interface {
+	WithTx(tx client.Tx) PayeeVendorRepository
+
+	// CRUD operations
+	Create(ctx context.Context, vendor *PayeeVendor) error
+	FindByID(ctx context.Context, payeeID string) (*PayeeVendor, error)
+	FindByGSTIN(ctx context.Context, gstin string) (*PayeeVendor, error)
+	Update(ctx context.Context, vendor *PayeeVendor) error
+
+	// Search operations
+	Search(ctx context.Context, filters VendorSearchFilters) ([]*PayeeVendor, error)
+}
+
+// ############################################################################
+// # GST Payee Repository
+// ############################################################################
+
+// PayeeGSTRepository manages GST payment payee (government singleton)
+type PayeeGSTRepository interface {
+	WithTx(tx client.Tx) PayeeGSTRepository
+
+	// Singleton operations
+	GetGovernmentPayee(ctx context.Context) (*PayeeGST, error)
+	Update(ctx context.Context, gst *PayeeGST) error
+}
+
+// PayeeGSTVirtualAccountRepository manages GST virtual bank accounts
+type PayeeGSTVirtualAccountRepository interface {
+	WithTx(tx client.Tx) PayeeGSTVirtualAccountRepository
+
+	// CRUD operations
+	Create(ctx context.Context, account *PayeeGSTVirtualAccount) error
+	FindByID(ctx context.Context, virtualAccountID string) (*PayeeGSTVirtualAccount, error)
+	FindByVirtualAccountNumber(ctx context.Context, virtualAccountNumber string) (*PayeeGSTVirtualAccount, error)
+	Update(ctx context.Context, account *PayeeGSTVirtualAccount) error
+
+	// Query operations
+	FindByPayeeID(ctx context.Context, payeeID string) ([]*PayeeGSTVirtualAccount, error)
+	FindByTaxPeriod(ctx context.Context, payeeID, taxPeriod string) (*PayeeGSTVirtualAccount, error)
+	FindByFinancialYear(ctx context.Context, payeeID, financialYear string) ([]*PayeeGSTVirtualAccount, error)
+	FindActiveAccounts(ctx context.Context, payeeID string) ([]*PayeeGSTVirtualAccount, error)
+
+	// Analytics
+	CountByFinancialYear(ctx context.Context, financialYear string) (int, error)
+}
+
+// ############################################################################
+// # Biller Payee Repository
+// ############################################################################
+
+// PayeeBillerRepository manages biller payee entities (BBPS system)
+type PayeeBillerRepository interface {
+	WithTx(tx client.Tx) PayeeBillerRepository
+
+	// CRUD operations
+	Create(ctx context.Context, biller *PayeeBiller) error
+	FindByID(ctx context.Context, payeeID string) (*PayeeBiller, error)
+	FindByBillerID(ctx context.Context, billerID string) (*PayeeBiller, error)
+	Update(ctx context.Context, biller *PayeeBiller) error
+
+	// Search operations
+	Search(ctx context.Context, filters BillerSearchFilters) ([]*PayeeBiller, error)
+	FindByCategory(ctx context.Context, category string) ([]*PayeeBiller, error)
+}
+
+// PayeeBillerAccountRepository manages customer-biller configurations
+type PayeeBillerAccountRepository interface {
+	WithTx(tx client.Tx) PayeeBillerAccountRepository
+
+	// CRUD operations
+	Create(ctx context.Context, account *PayeeBillerAccount) error
+	FindByID(ctx context.Context, billerAccountID string) (*PayeeBillerAccount, error)
+	Update(ctx context.Context, account *PayeeBillerAccount) error
+	Delete(ctx context.Context, billerAccountID string) error
+
+	// Query operations
+	FindByBusinessAndPayee(ctx context.Context, businessID, payeeID string) ([]*PayeeBillerAccount, error)
+	FindByBusiness(ctx context.Context, businessID string) ([]*PayeeBillerAccount, error)
+	CheckDuplicate(ctx context.Context, businessID, payeeID, mobileNumber string) (bool, error)
+
+	// Auto-fetch operations
+	FindAccountsForAutoFetch(ctx context.Context) ([]*PayeeBillerAccount, error)
+}
+
+// ############################################################################
+// # Employee Payee Repository
+// ############################################################################
+
+// PayeeEmployeeRepository manages employee payee entities (payroll)
+type PayeeEmployeeRepository interface {
+	WithTx(tx client.Tx) PayeeEmployeeRepository
+
+	// CRUD operations
+	Create(ctx context.Context, employee *PayeeEmployee) error
+	FindByID(ctx context.Context, payeeID string) (*PayeeEmployee, error)
+	FindByPAN(ctx context.Context, pan string) (*PayeeEmployee, error)
+	Update(ctx context.Context, employee *PayeeEmployee) error
+
+	// Search operations
+	Search(ctx context.Context, filters EmployeeSearchFilters) ([]*PayeeEmployee, error)
+	FindByBusiness(ctx context.Context, businessID string, filters EmployeeSearchFilters) ([]*PayeeEmployee, error)
+}
+
+// ############################################################################
+// # Bank Account Repository (Shared by Vendor + Employee)
+// ############################################################################
+
 // PayeeBankAccountRepository manages bank accounts for payees
-// Handles one-to-many relationship: one payee can have multiple bank accounts
+// Used by Vendor and Employee payee types (NOT by GST or Biller)
 type PayeeBankAccountRepository interface {
 	WithTx(tx client.Tx) PayeeBankAccountRepository
 
@@ -33,7 +149,6 @@ type PayeeBankAccountRepository interface {
 	UpdateBankAccount(ctx context.Context, account *PayeeBankAccount) error
 
 	// Duplicate detection
-	// Checks if account with same hash already exists for this payee
 	CheckDuplicateAccount(ctx context.Context, payeeID, accountHash string) (bool, error)
 
 	// Primary account management
@@ -41,8 +156,12 @@ type PayeeBankAccountRepository interface {
 	SetPrimaryAccount(ctx context.Context, accountID string) error
 }
 
+// ############################################################################
+// # Business-Payee Relation Repository (Polymorphic)
+// ############################################################################
+
 // BusinessPayeeRelationRepository manages customer-payee-account relationships
-// Handles many-to-many-to-many mapping: business → payee → account
+// Handles polymorphic many-to-many: business → payee → account (bank/virtual/biller)
 type BusinessPayeeRelationRepository interface {
 	WithTx(tx client.Tx) BusinessPayeeRelationRepository
 
@@ -58,10 +177,15 @@ type BusinessPayeeRelationRepository interface {
 
 	// Aggregations
 	GetPayeeCount(ctx context.Context, businessID string) (int, error)
+	GetPayeeCountByType(ctx context.Context, businessID string, payeeType PayeeType) (int, error)
 }
 
-// PayeeBusinessSearchFilters defines search criteria for payee businesses
-type PayeeBusinessSearchFilters struct {
+// ############################################################################
+// # Search Filter Structs
+// ############################################################################
+
+// VendorSearchFilters defines search criteria for vendor payees
+type VendorSearchFilters struct {
 	LegalName string // Partial match on legal name
 	GSTIN     string // Exact match on GSTIN
 	GSTStatus string // Active, Cancelled, Suspended
@@ -69,12 +193,32 @@ type PayeeBusinessSearchFilters struct {
 	Offset    int
 }
 
+// BillerSearchFilters defines search criteria for biller payees
+type BillerSearchFilters struct {
+	BillerName     string // Partial match on biller name
+	BillerCategory string // Exact match on category
+	BillerID       string // Exact match on biller ID
+	Limit          int
+	Offset         int
+}
+
+// EmployeeSearchFilters defines search criteria for employee payees
+type EmployeeSearchFilters struct {
+	FullName       string // Partial match on full name
+	PAN            string // Exact match on PAN
+	Department     string // Exact match on department
+	EmploymentType string // Exact match on employment type
+	Limit          int
+	Offset         int
+}
+
 // RelationSearchFilters defines search criteria for business-payee relations
 type RelationSearchFilters struct {
-	DisplayName string   // Partial match on display name
-	IsActive    *bool    // Filter by active status
-	IsFavorite  *bool    // Filter by favorite status
-	Tags        []string // Filter by tags (ANY match)
+	DisplayName string    // Partial match on display name
+	PayeeType   PayeeType // Filter by payee type
+	IsActive    *bool     // Filter by active status
+	IsFavorite  *bool     // Filter by favorite status
+	Tags        []string  // Filter by tags (ANY match)
 	Limit       int
 	Offset      int
 }

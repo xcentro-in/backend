@@ -151,44 +151,58 @@ func (r *PgBusinessPayeeRelationRepository) FindByBusiness(ctx context.Context, 
 	fmt.Printf("[PgBusinessPayeeRelationRepository] FindByBusiness called - BusinessID: %s\n", businessID)
 
 	query := `
-		SELECT business_id, payee_id, account_id,
-		       display_name, contact_email, contact_phone, notes,
-		       is_active, is_favorite, tags,
-		       added_at, added_by, last_used_at, updated_at, metadata
-		FROM xcentro.business_payee_relation
-		WHERE business_id = $1
+		SELECT r.business_id, r.payee_id, r.account_id,
+		       r.display_name, r.contact_email, r.contact_phone, r.notes,
+		       r.is_active, r.is_favorite, r.tags,
+		       r.added_at, r.added_by, r.last_used_at, r.updated_at, r.metadata
+		FROM xcentro.business_payee_relation r
 	`
+
+	// Join with payee_master if filtering by payee_type
+	if filters.PayeeType != "" {
+		query += `
+		INNER JOIN xcentro.payee_master m ON r.payee_id = m.payee_id
+		`
+	}
+
+	query += `WHERE r.business_id = $1`
 
 	args := []interface{}{businessID}
 	argIdx := 2
 
 	// Add filters
 	if filters.DisplayName != "" {
-		query += fmt.Sprintf(" AND display_name ILIKE $%d", argIdx)
+		query += fmt.Sprintf(" AND r.display_name ILIKE $%d", argIdx)
 		args = append(args, "%"+filters.DisplayName+"%")
 		argIdx++
 	}
 
+	if filters.PayeeType != "" {
+		query += fmt.Sprintf(" AND m.payee_type = $%d", argIdx)
+		args = append(args, filters.PayeeType)
+		argIdx++
+	}
+
 	if filters.IsActive != nil {
-		query += fmt.Sprintf(" AND is_active = $%d", argIdx)
+		query += fmt.Sprintf(" AND r.is_active = $%d", argIdx)
 		args = append(args, *filters.IsActive)
 		argIdx++
 	}
 
 	if filters.IsFavorite != nil {
-		query += fmt.Sprintf(" AND is_favorite = $%d", argIdx)
+		query += fmt.Sprintf(" AND r.is_favorite = $%d", argIdx)
 		args = append(args, *filters.IsFavorite)
 		argIdx++
 	}
 
 	if len(filters.Tags) > 0 {
-		query += fmt.Sprintf(" AND tags && $%d", argIdx) // Array overlap operator
+		query += fmt.Sprintf(" AND r.tags && $%d", argIdx) // Array overlap operator
 		args = append(args, pq.Array(filters.Tags))
 		argIdx++
 	}
 
 	// Add ordering and pagination
-	query += " ORDER BY is_favorite DESC, display_name ASC"
+	query += " ORDER BY r.is_favorite DESC, r.display_name ASC"
 
 	if filters.Limit > 0 {
 		query += fmt.Sprintf(" LIMIT $%d", argIdx)
@@ -373,6 +387,26 @@ func (r *PgBusinessPayeeRelationRepository) GetPayeeCount(ctx context.Context, b
 	err := r.querier.QueryRow(ctx, query, businessID).Scan(&count)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get payee count: %w", err)
+	}
+
+	return count, nil
+}
+
+// GetPayeeCountByType returns the count of active payees of a specific type for a business
+func (r *PgBusinessPayeeRelationRepository) GetPayeeCountByType(ctx context.Context, businessID string, payeeType payee.PayeeType) (int, error) {
+	fmt.Printf("[PgBusinessPayeeRelationRepository] GetPayeeCountByType called - BusinessID: %s, PayeeType: %s\n", businessID, payeeType)
+
+	query := `
+		SELECT COUNT(DISTINCT (r.payee_id, r.account_id))
+		FROM xcentro.business_payee_relation r
+		INNER JOIN xcentro.payee_master m ON r.payee_id = m.payee_id
+		WHERE r.business_id = $1 AND r.is_active = TRUE AND m.payee_type = $2
+	`
+
+	var count int
+	err := r.querier.QueryRow(ctx, query, businessID, payeeType).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get payee count by type: %w", err)
 	}
 
 	return count, nil
