@@ -10,19 +10,19 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"xcentro.in/internal/adapters/database/postgres/client"
 	"xcentro.in/internal/core/voucher"
 )
 
 // PostgresVoucherRepository implements the VoucherRepository interface using PostgreSQL
 type PostgresVoucherRepository struct {
-	db *pgxpool.Pool
+	querier client.Querier
 }
 
 // NewPostgresVoucherRepository creates a new PostgreSQL voucher repository
-func NewPostgresVoucherRepository(db *pgxpool.Pool) voucher.VoucherRepository {
+func NewPostgresVoucherRepository(db client.DB) voucher.VoucherRepository {
 	return &PostgresVoucherRepository{
-		db: db,
+		querier: db,
 	}
 }
 
@@ -76,7 +76,7 @@ func (r *PostgresVoucherRepository) CreateDraft(ctx context.Context, v *voucher.
 		return fmt.Errorf("failed to marshal metadata: %w", err)
 	}
 
-	_, err = r.db.Exec(ctx, query,
+	_, err = r.querier.Exec(ctx, query,
 		v.VoucherID, v.VoucherNumber, v.VoucherDate, v.FiscalYear, v.AccountingPeriod, v.VoucherType,
 		v.BusinessID, v.PayeeID, v.AccountID,
 		v.InvoiceNumber, v.InvoiceDate, v.InvoiceDueDate,
@@ -117,7 +117,7 @@ func (r *PostgresVoucherRepository) FinalizeVoucher(ctx context.Context, voucher
 		WHERE voucher_id = $1 AND status = $4
 	`
 
-	result, err := r.db.Exec(ctx, query, voucherID, voucher.StatusFinalized, paymentID, voucher.StatusDraft)
+	result, err := r.querier.Exec(ctx, query, voucherID, voucher.StatusFinalized, paymentID, voucher.StatusDraft)
 	if err != nil {
 		return fmt.Errorf("failed to finalize voucher: %w", err)
 	}
@@ -127,7 +127,7 @@ func (r *PostgresVoucherRepository) FinalizeVoucher(ctx context.Context, voucher
 		// Check if voucher exists
 		var exists bool
 		checkQuery := `SELECT EXISTS(SELECT 1 FROM xcentro.payment_vouchers WHERE voucher_id = $1)`
-		err = r.db.QueryRow(ctx, checkQuery, voucherID).Scan(&exists)
+		err = r.querier.QueryRow(ctx, checkQuery, voucherID).Scan(&exists)
 		if err != nil {
 			return fmt.Errorf("failed to check voucher existence: %w", err)
 		}
@@ -160,7 +160,7 @@ func (r *PostgresVoucherRepository) GetByID(ctx context.Context, voucherID uuid.
 		WHERE voucher_id = $1
 	`
 
-	row := r.db.QueryRow(ctx, query, voucherID)
+	row := r.querier.QueryRow(ctx, query, voucherID)
 	v, err := r.scanVoucher(row)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -192,7 +192,7 @@ func (r *PostgresVoucherRepository) GetByVoucherNumber(ctx context.Context, vouc
 		WHERE voucher_number = $1
 	`
 
-	row := r.db.QueryRow(ctx, query, voucherNumber)
+	row := r.querier.QueryRow(ctx, query, voucherNumber)
 	v, err := r.scanVoucher(row)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -225,7 +225,7 @@ func (r *PostgresVoucherRepository) GetByPaymentID(ctx context.Context, paymentI
 		ORDER BY voucher_number
 	`
 
-	rows, err := r.db.Query(ctx, query, paymentID)
+	rows, err := r.querier.Query(ctx, query, paymentID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query vouchers by payment_id: %w", err)
 	}
@@ -257,13 +257,13 @@ func (r *PostgresVoucherRepository) ListByBusiness(ctx context.Context, business
 	countQuery = countQuery[:strings.Index(countQuery, "ORDER BY")] // Remove ORDER BY and LIMIT
 
 	var total int64
-	err := r.db.QueryRow(ctx, countQuery, args[:len(args)-2]...).Scan(&total)
+	err := r.querier.QueryRow(ctx, countQuery, args[:len(args)-2]...).Scan(&total)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to count vouchers: %w", err)
 	}
 
 	// Get vouchers
-	rows, err := r.db.Query(ctx, querySQL, args...)
+	rows, err := r.querier.Query(ctx, querySQL, args...)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to query vouchers: %w", err)
 	}
@@ -355,7 +355,7 @@ func (r *PostgresVoucherRepository) Update(ctx context.Context, v *voucher.Vouch
 		return fmt.Errorf("failed to marshal metadata: %w", err)
 	}
 
-	result, err := r.db.Exec(ctx, query,
+	result, err := r.querier.Exec(ctx, query,
 		v.VoucherID,
 		v.VoucherDate,
 		v.InvoiceNumber,
@@ -414,7 +414,7 @@ func (r *PostgresVoucherRepository) UpdateERPStatus(ctx context.Context, voucher
 		return fmt.Errorf("failed to marshal erp_metadata: %w", err)
 	}
 
-	result, err := r.db.Exec(ctx, query, voucherID, status, referenceID, metadataJSON)
+	result, err := r.querier.Exec(ctx, query, voucherID, status, referenceID, metadataJSON)
 	if err != nil {
 		return fmt.Errorf("failed to update ERP status: %w", err)
 	}
@@ -436,7 +436,7 @@ func (r *PostgresVoucherRepository) GetNextVoucherNumber(ctx context.Context, bu
 	`
 
 	var nextNumber int
-	err := r.db.QueryRow(ctx, query, businessID, fiscalYear).Scan(&nextNumber)
+	err := r.querier.QueryRow(ctx, query, businessID, fiscalYear).Scan(&nextNumber)
 	if err != nil {
 		return 0, fmt.Errorf("failed to get next voucher number: %w", err)
 	}
@@ -469,7 +469,7 @@ func (r *PostgresVoucherRepository) GetDraftVouchers(ctx context.Context, busine
 
 	cutoffTime := time.Now().Add(-olderThan)
 
-	rows, err := r.db.Query(ctx, query, businessID, voucher.StatusDraft, cutoffTime)
+	rows, err := r.querier.Query(ctx, query, businessID, voucher.StatusDraft, cutoffTime)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query draft vouchers: %w", err)
 	}
@@ -514,7 +514,7 @@ func (r *PostgresVoucherRepository) GetVouchersForERPSync(ctx context.Context, l
 		LIMIT $5
 	`
 
-	rows, err := r.db.Query(ctx, query,
+	rows, err := r.querier.Query(ctx, query,
 		voucher.StatusFinalized,
 		voucher.StatusPosted,
 		voucher.ERPNotSynced,

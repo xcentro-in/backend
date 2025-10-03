@@ -8,19 +8,19 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"xcentro.in/internal/adapters/database/postgres/client"
 	"xcentro.in/internal/core/voucher"
 )
 
 // PostgresERPSyncQueueRepository implements the ERPSyncQueueRepository interface using PostgreSQL
 type PostgresERPSyncQueueRepository struct {
-	db *pgxpool.Pool
+	querier client.Querier
 }
 
 // NewPostgresERPSyncQueueRepository creates a new PostgreSQL ERP sync queue repository
-func NewPostgresERPSyncQueueRepository(db *pgxpool.Pool) voucher.ERPSyncQueueRepository {
+func NewPostgresERPSyncQueueRepository(db client.DB) voucher.ERPSyncQueueRepository {
 	return &PostgresERPSyncQueueRepository{
-		db: db,
+		querier: db,
 	}
 }
 
@@ -41,7 +41,7 @@ func (r *PostgresERPSyncQueueRepository) Enqueue(ctx context.Context, queueEntry
 		return fmt.Errorf("failed to marshal request_payload: %w", err)
 	}
 
-	_, err = r.db.Exec(ctx, query,
+	_, err = r.querier.Exec(ctx, query,
 		queueEntry.QueueID,
 		queueEntry.VoucherID,
 		queueEntry.SyncDirection,
@@ -74,7 +74,7 @@ func (r *PostgresERPSyncQueueRepository) Dequeue(ctx context.Context, limit int)
 		LIMIT $1
 	`
 
-	rows, err := r.db.Query(ctx, query, limit)
+	rows, err := r.querier.Query(ctx, query, limit)
 	if err != nil {
 		return nil, fmt.Errorf("failed to dequeue ERP sync entries: %w", err)
 	}
@@ -115,7 +115,7 @@ func (r *PostgresERPSyncQueueRepository) UpdateQueueStatus(ctx context.Context, 
 		return fmt.Errorf("failed to marshal response_payload: %w", err)
 	}
 
-	result, err := r.db.Exec(ctx, query, queueID, status, responsePayloadJSON, errorCode, errorMessage)
+	result, err := r.querier.Exec(ctx, query, queueID, status, responsePayloadJSON, errorCode, errorMessage)
 	if err != nil {
 		return fmt.Errorf("failed to update queue status: %w", err)
 	}
@@ -141,7 +141,7 @@ func (r *PostgresERPSyncQueueRepository) IncrementRetryCount(ctx context.Context
 		WHERE queue_id = $1
 	`
 
-	result, err := r.db.Exec(ctx, query, queueID, nextRetryAt)
+	result, err := r.querier.Exec(ctx, query, queueID, nextRetryAt)
 	if err != nil {
 		return fmt.Errorf("failed to increment retry count: %w", err)
 	}
@@ -167,7 +167,7 @@ func (r *PostgresERPSyncQueueRepository) GetByVoucher(ctx context.Context, vouch
 		ORDER BY created_at DESC
 	`
 
-	rows, err := r.db.Query(ctx, query, voucherID)
+	rows, err := r.querier.Query(ctx, query, voucherID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query queue entries by voucher: %w", err)
 	}
@@ -204,7 +204,7 @@ func (r *PostgresERPSyncQueueRepository) GetFailedEntries(ctx context.Context, l
 		LIMIT $1
 	`
 
-	rows, err := r.db.Query(ctx, query, limit)
+	rows, err := r.querier.Query(ctx, query, limit)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query failed queue entries: %w", err)
 	}

@@ -7,19 +7,19 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
+	"xcentro.in/internal/adapters/database/postgres/client"
 	"xcentro.in/internal/core/voucher"
 )
 
 // PostgresApprovalRepository implements the ApprovalRepository interface using PostgreSQL
 type PostgresApprovalRepository struct {
-	db *pgxpool.Pool
+	querier client.Querier
 }
 
 // NewPostgresApprovalRepository creates a new PostgreSQL approval repository
-func NewPostgresApprovalRepository(db *pgxpool.Pool) voucher.ApprovalRepository {
+func NewPostgresApprovalRepository(db client.DB) voucher.ApprovalRepository {
 	return &PostgresApprovalRepository{
-		db: db,
+		querier: db,
 	}
 }
 
@@ -34,7 +34,7 @@ func (r *PostgresApprovalRepository) CreateApproval(ctx context.Context, approva
 		)
 	`
 
-	_, err := r.db.Exec(ctx, query,
+	_, err := r.querier.Exec(ctx, query,
 		approval.ApprovalID,
 		approval.VoucherID,
 		approval.ApprovalLevel,
@@ -74,7 +74,7 @@ func (r *PostgresApprovalRepository) GetApprovalsByVoucher(ctx context.Context, 
 		ORDER BY approval_level
 	`
 
-	rows, err := r.db.Query(ctx, query, voucherID)
+	rows, err := r.querier.Query(ctx, query, voucherID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query approvals by voucher: %w", err)
 	}
@@ -106,7 +106,7 @@ func (r *PostgresApprovalRepository) UpdateApprovalAction(ctx context.Context, a
 		WHERE approval_id = $1 AND action = 'pending'
 	`
 
-	result, err := r.db.Exec(ctx, query, approvalID, action, remarks)
+	result, err := r.querier.Exec(ctx, query, approvalID, action, remarks)
 	if err != nil {
 		return fmt.Errorf("failed to update approval action: %w", err)
 	}
@@ -118,7 +118,7 @@ func (r *PostgresApprovalRepository) UpdateApprovalAction(ctx context.Context, a
 		var currentAction string
 		checkQuery := `SELECT EXISTS(SELECT 1 FROM xcentro.voucher_approvals WHERE approval_id = $1),
 		                COALESCE((SELECT action FROM xcentro.voucher_approvals WHERE approval_id = $1), '')`
-		err = r.db.QueryRow(ctx, checkQuery, approvalID).Scan(&exists, &currentAction)
+		err = r.querier.QueryRow(ctx, checkQuery, approvalID).Scan(&exists, &currentAction)
 		if err != nil {
 			return fmt.Errorf("failed to check approval existence: %w", err)
 		}
@@ -145,7 +145,7 @@ func (r *PostgresApprovalRepository) GetPendingApprovals(ctx context.Context, us
 		ORDER BY a.created_at
 	`
 
-	rows, err := r.db.Query(ctx, query, userID)
+	rows, err := r.querier.Query(ctx, query, userID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query pending approvals: %w", err)
 	}

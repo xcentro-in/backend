@@ -7,18 +7,22 @@ import (
 	"xcentro.in/internal/adapters/database/postgres/business"
 	paymentRepo "xcentro.in/internal/adapters/database/postgres/payment"
 	userRepo "xcentro.in/internal/adapters/database/postgres/user"
+	voucherRepo "xcentro.in/internal/adapters/database/postgres/voucher"
 	"xcentro.in/internal/core/business_rules"
 	corePayment "xcentro.in/internal/core/payment"
+	coreVoucher "xcentro.in/internal/core/voucher"
 	"xcentro.in/internal/handlers/http/auth"
 	businessHandler "xcentro.in/internal/handlers/http/business"
 	"xcentro.in/internal/handlers/http/payee"
 	"xcentro.in/internal/handlers/http/payment"
 	userHandler "xcentro.in/internal/handlers/http/user"
+	voucherHandler "xcentro.in/internal/handlers/http/voucher"
 	authservice "xcentro.in/internal/services/auth"
 	businessSvc "xcentro.in/internal/services/business"
 	payeeSvc "xcentro.in/internal/services/payee"
 	"xcentro.in/internal/services/payments"
 	"xcentro.in/internal/services/user"
+	voucherSvc "xcentro.in/internal/services/voucher"
 	"xcentro.in/internal/shared/logger"
 )
 
@@ -90,6 +94,28 @@ func registerV1PayeeRoutes(meta *serverMetaData, group *echo.Group) {
 	payee.RegisterPayeeRoutes(payeeGroup, payeeService)
 }
 
+func registerV1VoucherRoutes(meta *serverMetaData, group *echo.Group) {
+	// Create voucher repository instances
+	voucherRepository := voucherRepo.NewPostgresVoucherRepository(meta.clients.db)
+	approvalRepository := voucherRepo.NewPostgresApprovalRepository(meta.clients.db)
+	queueRepository := voucherRepo.NewPostgresERPSyncQueueRepository(meta.clients.db)
+
+	// Create voucher core service (domain logic)
+	voucherCoreService := coreVoucher.NewVoucherService(voucherRepository)
+
+	// Create voucher service layer (orchestration)
+	voucherService := voucherSvc.NewVoucherService(
+		voucherRepository,
+		approvalRepository,
+		queueRepository,
+		voucherCoreService,
+	)
+
+	// Register voucher routes
+	voucherGroup := group.Group("/vouchers")
+	voucherHandler.RegisterVoucherRoutes(voucherGroup, voucherService)
+}
+
 func registerV1Routes(s *xcentroServer) {
 	v1 := s.echo.Group("/v1")
 
@@ -130,6 +156,9 @@ func registerV1Routes(s *xcentroServer) {
 
 	// Payee Routes
 	registerV1PayeeRoutes(&s.meta, v1)
+
+	// Voucher Routes
+	registerV1VoucherRoutes(&s.meta, v1)
 }
 
 func registerRouters(s *xcentroServer) {
