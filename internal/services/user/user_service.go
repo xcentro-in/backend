@@ -2,10 +2,13 @@ package user
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"time"
 
 	"xcentro.in/internal/adapters/database/postgres/client"
 	userRepo "xcentro.in/internal/adapters/database/postgres/user"
+	"xcentro.in/internal/adapters/providers/authbridge"
 	"xcentro.in/internal/core/auth"
 	businessRepo "xcentro.in/internal/core/business"
 	"xcentro.in/internal/core/shared"
@@ -396,4 +399,159 @@ func (s *UserServiceImpl) ClaimBusinessRole(ctx context.Context, userID, busines
 
 	s.logger.Info("Role claim updated successfully for user %s in business %s", userID, businessID)
 	return nil
+}
+
+// GenerateAadhaarLink generates an Aadhaar verification link and stores transaction ID
+func (s *UserServiceImpl) GenerateAadhaarLink(ctx context.Context, userID string) (*user.AadhaarLinkResponse, error) {
+	s.logger.Info("Generating Aadhaar link for user ID: %s", userID)
+
+	if userID == "" {
+		return nil, fmt.Errorf("user ID is required")
+	}
+
+	// Get user data to ensure user exists and has tax ID
+	userData, err := s.userRepo.GetUserByID(ctx, userID)
+	if err != nil || userData == nil {
+		return nil, fmt.Errorf("user not found")
+	}
+
+	if userData.TaxID == "" {
+		return nil, fmt.Errorf("user must have tax ID (PAN) before Aadhaar verification")
+	}
+
+	// Check if user already has KYC completed/verified
+	if userData.KycStatus == shared.KYCCompleted || userData.KycStatus == shared.KYCVerified {
+		return nil, fmt.Errorf("KYC already completed or verified")
+	}
+
+	var result *user.AadhaarLinkResponse
+
+	err = s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
+		txUserRepo := s.userRepo.WithTx(tx)
+
+		// Create authbridge client
+		authClient, err := s.createAuthBridgeClient()
+		if err != nil {
+			return fmt.Errorf("failed to create authentication client: %w", err)
+		}
+
+		// Generate unique transaction ID for this request
+		transactionID := fmt.Sprintf("aadhaar_%s_%d", userID, time.Now().Unix())
+
+		// Create Aadhaar link request (empty callback and redirect URLs for now)
+		linkRequest := authbridge.NewAadhaarLinkRequest(transactionID, "", "")
+
+		// Call authbridge API
+		response, err := authClient.SearchDocument(linkRequest)
+		if err != nil {
+			return fmt.Errorf("failed to generate Aadhaar link: %w", err)
+		}
+
+		// Check response status
+		status, ok := response["status"].(float64)
+		if !ok || status != 1 {
+			return fmt.Errorf("Aadhaar link generation failed: invalid response status")
+		}
+
+		// Extract URL from response
+		data, ok := response["data"].(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("invalid response format: missing data")
+		}
+
+		url, ok := data["url"].(string)
+		if !ok || url == "" {
+			return fmt.Errorf("invalid response format: missing or empty URL")
+		}
+
+		// Extract transaction ID from response
+		tsTransID, ok := response["ts_trans_id"].(string)
+		if !ok || tsTransID == "" {
+			return fmt.Errorf("invalid response format: missing transaction ID")
+		}
+
+		// Store transaction ID in database
+		if err := txUserRepo.UpdateAadhaarTransactionID(ctx, userData.TaxID, tsTransID); err != nil {
+			return fmt.Errorf("failed to store transaction ID: %w", err)
+		}
+
+		s.logger.Info("Aadhaar link generated successfully for user %s, transaction ID: %s", userID, tsTransID)
+
+		result = &user.AadhaarLinkResponse{
+			URL:   url,
+			TxnID: tsTransID,
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		s.logger.Error("Failed to generate Aadhaar link: %v", err)
+		return nil, err
+	}
+
+	return result, nil
+}
+
+// CompleteAadhaarVerification completes the Aadhaar verification process
+func (s *UserServiceImpl) CompleteAadhaarVerification(ctx context.Context, userID string) error {
+	s.logger.Info("Completing Aadhaar verification for user ID: %s", userID)
+
+	if userID == "" {
+		return fmt.Errorf("user ID is required")
+	}
+
+	// Get user data
+	userData, err := s.userRepo.GetUserByID(ctx, userID)
+	if err != nil || userData == nil {
+		return fmt.Errorf("user not found")
+	}
+
+	if userData.TaxID == "" {
+		return fmt.Errorf("user must have tax ID (PAN) configured")
+	}
+
+	return s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
+		txUserRepo := s.userRepo.WithTx(tx)
+
+		// Get stored transaction ID
+		tsTransID, err := txUserRepo.GetAadhaarTransactionID(ctx, userID)
+		if err != nil {
+			return fmt.Errorf("failed to get transaction ID: %w", err)
+		}
+
+		// Create authbridge client
+		authClient, err := s.createAuthBridgeClient()
+		if err != nil {
+			return fmt.Errorf("failed to create authentication client: %w", err)
+		}
+
+		// Create status request
+		statusRequest := authbridge.NewAadhaarStatusRequest(tsTransID)
+
+		// Call authbridge API for status
+		response, err := authClient.SearchDocument(statusRequest)
+		if err != nil {
+			return fmt.Errorf("failed to get Aadhaar verification status: %w", err)
+		}
+
+		// Convert entire response to JSON and store it
+		responseJSON, err := json.Marshal(response)
+		if err != nil {
+			return fmt.Errorf("failed to marshal response data: %w", err)
+		}
+
+		// Update national ID data with the response
+		if err := txUserRepo.UpdateNationalIDData(ctx, userData.TaxID, string(responseJSON)); err != nil {
+			return fmt.Errorf("failed to update national ID data: %w", err)
+		}
+
+		s.logger.Info("Aadhaar verification completed successfully for user %s", userID)
+		return nil
+	})
+}
+
+// createAuthBridgeClient is a helper method to create authbridge client
+func (s *UserServiceImpl) createAuthBridgeClient() (*authbridge.AuthBridgeClient, error) {
+	return authbridge.NewClient()
 }

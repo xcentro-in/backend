@@ -10,11 +10,13 @@ type DocumentType int
 
 // Document type constants from TruthScreen API
 const (
-	PAN     DocumentType = 2
-	PAN_COM DocumentType = 523
-	GSTIN   DocumentType = 23
-	CIN     DocumentType = 15
-	AADHAAR DocumentType = 472 // Used for both LINK and STATUS actions
+	PAN         DocumentType = 2
+	PAN_COM     DocumentType = 523
+	PAN_GST     DocumentType = 455
+	PAN_AADHAAR DocumentType = 544
+	GSTIN       DocumentType = 23
+	CIN         DocumentType = 15
+	AADHAAR     DocumentType = 472 // Used for both LINK and STATUS actions
 )
 
 // DocumentInfo holds information about each document type including its endpoint
@@ -36,10 +38,20 @@ var DocumentRegistry = map[DocumentType]DocumentInfo{
 		Name:     "PAN_COM",
 		Endpoint: "https://www.truthscreen.com/v1/apicall/nid/panComprehensive",
 	},
+	PAN_GST: {
+		Type:     PAN_GST,
+		Name:     "PAN_GST",
+		Endpoint: "https://www.truthscreen.com/v1/apicall/business/pantogst",
+	},
+	PAN_AADHAAR: {
+		Type:     PAN_AADHAAR,
+		Name:     "PAN_AADHAAR",
+		Endpoint: "https://www.truthscreen.com/v1/apicall/employment/pan_aadhaar_linking",
+	},
 	GSTIN: {
 		Type:     GSTIN,
 		Name:     "GSTIN",
-		Endpoint: "https://www.truthscreen.com/api/v2.2/idsearch",
+		Endpoint: "https://www.truthscreen.com/v1/apicall/business/gstin",
 	},
 	CIN: {
 		Type:     CIN,
@@ -49,7 +61,7 @@ var DocumentRegistry = map[DocumentType]DocumentInfo{
 	AADHAAR: {
 		Type:     AADHAAR,
 		Name:     "AADHAAR",
-		Endpoint: "https://www.truthscreen.com/api/v1.0/eaadhaardigilocker/",
+		Endpoint: "https://www.truthscreen.com/api/v1.0/eaadhaardigilocker",
 	},
 }
 
@@ -59,6 +71,10 @@ type DocumentRequest interface {
 	Validate() error
 	ToJSON() (string, error)
 }
+
+// =============================================================================
+// PAN Document Types
+// =============================================================================
 
 // PANRequest represents the request structure for PAN document search
 type PANRequest struct {
@@ -82,10 +98,10 @@ func (r PANRequest) GetDocType() DocumentType {
 
 func (r PANRequest) Validate() error {
 	if r.DocNumber == "" {
-		return fmt.Errorf("docNumber is required for PAN search")
+		return fmt.Errorf("docNumber is required")
 	}
-	if len(r.DocNumber) != 10 {
-		return fmt.Errorf("PAN number must be 10 characters long")
+	if r.TransID == "" {
+		return fmt.Errorf("transID is required")
 	}
 	return nil
 }
@@ -98,65 +114,23 @@ func (r PANRequest) ToJSON() (string, error) {
 	return string(jsonBytes), nil
 }
 
-// GSTINRequest represents the request structure for GSTIN document search
-type GSTINRequest struct {
-	DocType   DocumentType `json:"docType"`
-	DocNumber string       `json:"docNumber"`
-	TransID   string       `json:"transID,omitempty"`
-	IsAsync   int          `json:"isAsync,omitempty"`
-	// GSTIN might have additional fields
-	StateCode string `json:"stateCode,omitempty"`
-}
-
-// NewGSTINRequest creates a new GSTINRequest with default DocType
-func NewGSTINRequest(docNumber, transID string, isAsync int) *GSTINRequest {
-	return &GSTINRequest{
-		DocType:   GSTIN,
-		DocNumber: docNumber,
-		TransID:   transID,
-		IsAsync:   isAsync,
-	}
-}
-
-func (r GSTINRequest) GetDocType() DocumentType {
-	return r.DocType
-}
-
-func (r GSTINRequest) Validate() error {
-	if r.DocNumber == "" {
-		return fmt.Errorf("docNumber is required for GSTIN search")
-	}
-	if len(r.DocNumber) != 15 {
-		return fmt.Errorf("GSTIN number must be 15 characters long")
-	}
-	return nil
-}
-
-func (r GSTINRequest) ToJSON() (string, error) {
-	jsonBytes, err := json.Marshal(r)
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal GSTIN request: %v", err)
-	}
-	return string(jsonBytes), nil
-}
+// =============================================================================
+// CIN Document Types
+// =============================================================================
 
 // CINRequest represents the request structure for CIN document search
 type CINRequest struct {
 	DocType   DocumentType `json:"docType"`
 	DocNumber string       `json:"docNumber"`
 	TransID   string       `json:"transID,omitempty"`
-	IsAsync   int          `json:"isAsync,omitempty"`
-	// CIN might have additional fields
-	CompanyName string `json:"companyName,omitempty"`
 }
 
 // NewCINRequest creates a new CINRequest with default DocType
-func NewCINRequest(docNumber, transID string, isAsync int) *CINRequest {
+func NewCINRequest(docNumber, transID string) *CINRequest {
 	return &CINRequest{
 		DocType:   CIN,
 		DocNumber: docNumber,
 		TransID:   transID,
-		IsAsync:   isAsync,
 	}
 }
 
@@ -166,7 +140,10 @@ func (r CINRequest) GetDocType() DocumentType {
 
 func (r CINRequest) Validate() error {
 	if r.DocNumber == "" {
-		return fmt.Errorf("docNumber is required for CIN search")
+		return fmt.Errorf("docNumber is required")
+	}
+	if r.TransID == "" {
+		return fmt.Errorf("transID is required")
 	}
 	return nil
 }
@@ -201,10 +178,10 @@ func (r PANCOMRequest) GetDocType() DocumentType {
 
 func (r PANCOMRequest) Validate() error {
 	if r.DocNumber == "" {
-		return fmt.Errorf("docNumber is required for Company PAN search")
+		return fmt.Errorf("docNumber is required")
 	}
-	if len(r.DocNumber) != 10 {
-		return fmt.Errorf("company PAN number must be 10 characters long")
+	if r.TransID == "" {
+		return fmt.Errorf("transID is required")
 	}
 	return nil
 }
@@ -217,6 +194,133 @@ func (r PANCOMRequest) ToJSON() (string, error) {
 	return string(jsonBytes), nil
 }
 
+// PANGSTRequest represents the request structure for PAN to GST document search
+type PANGSTRequest struct {
+	DocType   DocumentType `json:"doc_type"`
+	DocNumber string       `json:"doc_number"`
+	TransID   string       `json:"trans_id,omitempty"`
+}
+
+// NewPANGSTRequest creates a new PANGSTRequest with default DocType
+func NewPANGSTRequest(docNumber, transID string) *PANGSTRequest {
+	return &PANGSTRequest{
+		DocType:   PAN_GST,
+		DocNumber: docNumber,
+		TransID:   transID,
+	}
+}
+
+func (r PANGSTRequest) GetDocType() DocumentType {
+	return r.DocType
+}
+
+func (r PANGSTRequest) Validate() error {
+	if r.DocNumber == "" {
+		return fmt.Errorf("docNumber is required")
+	}
+	if r.TransID == "" {
+		return fmt.Errorf("transID is required")
+	}
+	return nil
+}
+
+func (r PANGSTRequest) ToJSON() (string, error) {
+	jsonBytes, err := json.Marshal(r)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal PAN to GST request: %v", err)
+	}
+	return string(jsonBytes), nil
+}
+
+// =============================================================================
+// GSTIN Document Types
+// =============================================================================
+
+// GSTINRequest represents the request structure for GSTIN document search
+type GSTINRequest struct {
+	DocType   DocumentType `json:"docType"`
+	DocNumber string       `json:"docNumber"`
+	TransID   string       `json:"transID,omitempty"`
+}
+
+// NewGSTINRequest creates a new GSTINRequest with default DocType
+func NewGSTINRequest(docNumber, transID string) *GSTINRequest {
+	return &GSTINRequest{
+		DocType:   GSTIN,
+		DocNumber: docNumber,
+		TransID:   transID,
+	}
+}
+
+func (r GSTINRequest) GetDocType() DocumentType {
+	return r.DocType
+}
+
+func (r GSTINRequest) Validate() error {
+	if r.DocNumber == "" {
+		return fmt.Errorf("docNumber is required")
+	}
+	if r.TransID == "" {
+		return fmt.Errorf("transID is required")
+	}
+	return nil
+}
+
+func (r GSTINRequest) ToJSON() (string, error) {
+	jsonBytes, err := json.Marshal(r)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal GSTIN request: %v", err)
+	}
+	return string(jsonBytes), nil
+}
+
+// PANAadhaarRequest represents the request structure for PAN to Aadhaar linking document search
+type PANAadhaarRequest struct {
+	DocType       DocumentType `json:"docType"`
+	PANNumber     string       `json:"pan_number"`
+	AadhaarNumber string       `json:"aadhaar_number"`
+	TransID       string       `json:"transID,omitempty"`
+}
+
+// NewPANAadhaarRequest creates a new PANAadhaarRequest with default DocType
+func NewPANAadhaarRequest(panNumber, aadhaarNumber, transID string) *PANAadhaarRequest {
+	return &PANAadhaarRequest{
+		DocType:       PAN_AADHAAR,
+		PANNumber:     panNumber,
+		AadhaarNumber: aadhaarNumber,
+		TransID:       transID,
+	}
+}
+
+func (r PANAadhaarRequest) GetDocType() DocumentType {
+	return r.DocType
+}
+
+func (r PANAadhaarRequest) Validate() error {
+	if r.PANNumber == "" {
+		return fmt.Errorf("panNumber is required")
+	}
+	if r.AadhaarNumber == "" {
+		return fmt.Errorf("aadhaarNumber is required")
+	}
+	if r.TransID == "" {
+		return fmt.Errorf("transID is required")
+	}
+	return nil
+}
+
+func (r PANAadhaarRequest) ToJSON() (string, error) {
+	jsonBytes, err := json.Marshal(r)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal PAN to Aadhaar request: %v", err)
+	}
+	return string(jsonBytes), nil
+}
+
+// =============================================================================
+// AADHAAR Document Types
+// =============================================================================
+
 // AadhaarLinkRequest represents the request structure for Aadhaar link generation
 type AadhaarLinkRequest struct {
 	DocType     DocumentType `json:"doc_type"`
@@ -228,12 +332,6 @@ type AadhaarLinkRequest struct {
 
 // NewAadhaarLinkRequest creates a new AadhaarLinkRequest with default DocType and action
 func NewAadhaarLinkRequest(transID, callbackURL, redirectURL string) *AadhaarLinkRequest {
-	// transID is required for creating a valid Aadhaar link request.
-	// callbackURL and redirectURL are optional — only set them if provided.
-	if transID == "" {
-		return nil
-	}
-
 	req := &AadhaarLinkRequest{
 		DocType: AADHAAR,
 		TransID: transID,
@@ -256,16 +354,7 @@ func (r AadhaarLinkRequest) GetDocType() DocumentType {
 
 func (r AadhaarLinkRequest) Validate() error {
 	if r.TransID == "" {
-		return fmt.Errorf("trans_id is required for Aadhaar link generation")
-	}
-	// if r.CallbackURL == "" {
-	// 	return fmt.Errorf("callback_url is required for Aadhaar link generation")
-	// }
-	// if r.RedirectURL == "" {
-	// 	return fmt.Errorf("redirect_url is required for Aadhaar link generation")
-	// }
-	if r.Action != "LINK" {
-		return fmt.Errorf("action must be 'LINK' for Aadhaar link generation")
+		return fmt.Errorf("transID is required")
 	}
 	return nil
 }
@@ -300,10 +389,7 @@ func (r AadhaarStatusRequest) GetDocType() DocumentType {
 
 func (r AadhaarStatusRequest) Validate() error {
 	if r.TSTransID == "" {
-		return fmt.Errorf("ts_trans_id is required for Aadhaar status check")
-	}
-	if r.Action != "STATUS" {
-		return fmt.Errorf("action must be 'STATUS' for Aadhaar status check")
+		return fmt.Errorf("tsTransID is required")
 	}
 	return nil
 }
@@ -315,6 +401,10 @@ func (r AadhaarStatusRequest) ToJSON() (string, error) {
 	}
 	return string(jsonBytes), nil
 }
+
+// =============================================================================
+// Shared Types and Configuration
+// =============================================================================
 
 // APIRequest represents the encrypted request body sent to API
 type APIRequest struct {
@@ -331,6 +421,10 @@ type Config struct {
 	Username string
 	Password string
 }
+
+// =============================================================================
+// Utility Functions
+// =============================================================================
 
 // GetEndpoint returns the endpoint for a specific document type
 func GetEndpoint(docType DocumentType) string {
@@ -353,43 +447,4 @@ func GetDocumentName(docType DocumentType) string {
 func IsValidDocumentType(docType DocumentType) bool {
 	_, exists := DocumentRegistry[docType]
 	return exists
-}
-
-// CreateDocumentRequest creates the appropriate request type based on document type
-// For Aadhaar operations, use the specific constructor functions instead
-func CreateDocumentRequest(docType DocumentType, docNumber, transID string, isAsync int) (DocumentRequest, error) {
-	if !IsValidDocumentType(docType) {
-		return nil, fmt.Errorf("unsupported document type: %d", docType)
-	}
-
-	switch docType {
-	case PAN:
-		return NewPANRequest(docNumber, transID), nil
-	case GSTIN:
-		return NewGSTINRequest(docNumber, transID, isAsync), nil
-	case CIN:
-		return NewCINRequest(docNumber, transID, isAsync), nil
-	case PAN_COM:
-		return NewPANCOMRequest(docNumber, transID), nil
-	case AADHAAR:
-		// For Aadhaar, users should use specific constructors since it requires different parameters
-		return nil, fmt.Errorf("for Aadhaar operations, use NewAadhaarLinkRequest or NewAadhaarStatusRequest directly")
-	default:
-		return nil, fmt.Errorf("unsupported document type: %d", docType)
-	}
-}
-
-// ValidateAndCreateRequest creates and validates a document request in one step
-// For Aadhaar operations, use the specific constructor functions instead
-func ValidateAndCreateRequest(docType DocumentType, docNumber, transID string, isAsync int) (DocumentRequest, error) {
-	req, err := CreateDocumentRequest(docType, docNumber, transID, isAsync)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := req.Validate(); err != nil {
-		return nil, fmt.Errorf("validation failed: %v", err)
-	}
-
-	return req, nil
 }

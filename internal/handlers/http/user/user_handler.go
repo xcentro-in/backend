@@ -33,6 +33,8 @@ func RegisterUserRoutes(e *echo.Group, userService user.UserService, authService
 	userGroup.GET("", handler.GetKYCStatus)
 	userGroup.POST("/claim-role", handler.ClaimBusinessRole)
 	userGroup.GET("/authbridge", handler.KYCHandler)
+	userGroup.POST("/aadhaar/generate-link", handler.GenerateAadhaarLink)
+	userGroup.POST("/aadhaar/complete-verification", handler.CompleteAadhaarVerification)
 }
 
 // VerifyMobile verifies user's mobile number using verification code
@@ -131,8 +133,8 @@ func (h *UserHandler) KYCHandler(c echo.Context) error {
 	/*
 	   First link generation then comes the status check
 	*/
-	//data, err := client.SearchDocument(authbridge.NewAadhaarLinkRequest("txn1", "", ""))
-	data, err := client.SearchDocument(authbridge.NewAadhaarStatusRequest("2N-LTF-989139"))
+	// data, err := client.SearchDocument(authbridge.NewAadhaarLinkRequest("txn1", "https://xlrewewjyrtacywbki5eg576xy0pqpmu.lambda-url.us-east-1.on.aws/", "http://localhost:8888/v1/aadhaar"))
+	data, err := client.SearchDocument(authbridge.NewAadhaarStatusRequest("20-BFE-282478"))
 
 	if err != nil {
 		h.logger.Errorf("Error searching document in authbridge: %v", err)
@@ -140,4 +142,56 @@ func (h *UserHandler) KYCHandler(c echo.Context) error {
 	}
 
 	return c.JSON(200, map[string]interface{}{"message": "Authbridge response", "data": data})
+}
+
+// GenerateAadhaarLink generates an Aadhaar verification link for the user
+func (h *UserHandler) GenerateAadhaarLink(c echo.Context) error {
+	userID := c.Get("userId").(string)
+	if userID == "" {
+		return c.JSON(400, map[string]string{"message": "Unauthorized request"})
+	}
+
+	linkResponse, err := h.userService.GenerateAadhaarLink(c.Request().Context(), userID)
+	if err != nil {
+		h.logger.Errorf("Error generating Aadhaar link for user %s: %v", userID, err)
+
+		// Handle specific error cases
+		if err.Error() == "KYC already completed or verified" {
+			return c.JSON(403, map[string]interface{}{"message": err.Error(), "data": nil})
+		}
+		if err.Error() == "user must have tax ID (PAN) before Aadhaar verification" {
+			return c.JSON(400, map[string]interface{}{"message": err.Error(), "data": nil})
+		}
+
+		return c.JSON(500, map[string]string{"message": "Failed to generate Aadhaar link"})
+	}
+
+	return c.JSON(200, map[string]interface{}{
+		"message": "Aadhaar verification link generated successfully",
+		"data":    linkResponse,
+	})
+}
+
+// CompleteAadhaarVerification completes the Aadhaar verification process
+func (h *UserHandler) CompleteAadhaarVerification(c echo.Context) error {
+	userID := c.Get("userId").(string)
+	if userID == "" {
+		return c.JSON(400, map[string]string{"message": "Unauthorized request"})
+	}
+
+	if err := h.userService.CompleteAadhaarVerification(c.Request().Context(), userID); err != nil {
+		h.logger.Errorf("Error completing Aadhaar verification for user %s: %v", userID, err)
+
+		// Handle specific error cases
+		if err.Error() == "failed to get transaction ID: no Aadhaar transaction ID found for user" {
+			return c.JSON(400, map[string]interface{}{"message": "No Aadhaar verification process initiated", "data": nil})
+		}
+
+		return c.JSON(500, map[string]string{"message": "Failed to complete Aadhaar verification"})
+	}
+
+	return c.JSON(200, map[string]interface{}{
+		"message": "Aadhaar verification completed successfully",
+		"data":    nil,
+	})
 }

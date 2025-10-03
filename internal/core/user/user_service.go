@@ -33,4 +33,8 @@ type UserService interface {
 
 	// Business role management
 	ClaimBusinessRole(ctx context.Context, userID, businessID string, role shared.UserRole) error
+
+	// Aadhaar verification methods
+	GenerateAadhaarLink(ctx context.Context, userID string) (*AadhaarLinkResponse, error)
+	CompleteAadhaarVerification(ctx context.Context, userID string) error
 }

@@ -199,17 +199,18 @@ func kycStatusToString(status shared.KYCStatus) string {
 // UpsertUserIdentity creates or updates user identity data
 func (r *PgUserRepository) UpsertUserIdentity(ctx context.Context, identity *user.UserIdentity) error {
 	query := `
-		INSERT INTO xcentro.user_identity (tax_id, tax_id_data, national_id, national_id_data)
-		VALUES ($1, $2, $3, $4)
+		INSERT INTO xcentro.user_identity (tax_id, tax_id_data, national_id, national_id_data, n_txn_id)
+		VALUES ($1, $2, $3, $4, $5)
 		ON CONFLICT (tax_id)
 		DO UPDATE SET 
 			tax_id_data = $2,
 			national_id = $3,
-			national_id_data = $4
+			national_id_data = $4,
+			n_txn_id = $5
 	`
 
 	_, err := r.querier.Exec(ctx, query,
-		identity.TaxID, identity.TaxIDData, identity.NationalID, identity.NationalIDData,
+		identity.TaxID, identity.TaxIDData, identity.NationalID, identity.NationalIDData, identity.NTxnID,
 	)
 
 	if err != nil {
@@ -222,16 +223,16 @@ func (r *PgUserRepository) UpsertUserIdentity(ctx context.Context, identity *use
 // GetUserIdentity retrieves user identity by tax ID
 func (r *PgUserRepository) GetUserIdentity(ctx context.Context, taxID string) (*user.UserIdentity, error) {
 	query := `
-		SELECT tax_id, tax_id_data, national_id, national_id_data
+		SELECT tax_id, tax_id_data, national_id, national_id_data, n_txn_id
 		FROM xcentro.user_identity
 		WHERE tax_id = $1
 	`
 
 	var identity user.UserIdentity
-	var nationalID, taxIDData, nationalIDData sql.NullString
+	var nationalID, taxIDData, nationalIDData, nTxnID sql.NullString
 
 	err := r.querier.QueryRow(ctx, query, taxID).Scan(
-		&identity.TaxID, &taxIDData, &nationalID, &nationalIDData,
+		&identity.TaxID, &taxIDData, &nationalID, &nationalIDData, &nTxnID,
 	)
 
 	if err != nil {
@@ -244,6 +245,7 @@ func (r *PgUserRepository) GetUserIdentity(ctx context.Context, taxID string) (*
 	identity.TaxIDData = taxIDData.String
 	identity.NationalID = nationalID.String
 	identity.NationalIDData = nationalIDData.String
+	identity.NTxnID = nTxnID.String
 
 	return &identity, nil
 }
@@ -253,19 +255,19 @@ func (r *PgUserRepository) GetUserKYCStatus(ctx context.Context, userID string) 
 	query := `
 		SELECT 
 			u.id, u.email, u.mobile, u.tax_id, u.kyc_status, u.email_verified, u.mobile_verified,
-			ui.tax_id, ui.tax_id_data, ui.national_id, ui.national_id_data
+			ui.tax_id, ui.tax_id_data, ui.national_id, ui.national_id_data, ui.n_txn_id
 		FROM xcentro.user_table u
 		LEFT JOIN xcentro.user_identity ui ON u.tax_id = ui.tax_id
 		WHERE u.id = $1
 	`
 
 	var u user.User
-	var userTaxID, piTaxID, piTaxIDData, piNationalID, piNationalIDData sql.NullString
+	var userTaxID, piTaxID, piTaxIDData, piNationalID, piNationalIDData, piNTxnID sql.NullString
 	var kycStatusStr string
 
 	err := r.querier.QueryRow(ctx, query, userID).Scan(
 		&u.Id, &u.Email, &u.Mobile, &userTaxID, &kycStatusStr, &u.EmailVerified, &u.MobileVerified,
-		&piTaxID, &piTaxIDData, &piNationalID, &piNationalIDData,
+		&piTaxID, &piTaxIDData, &piNationalID, &piNationalIDData, &piNTxnID,
 	)
 
 	if err != nil {
@@ -285,6 +287,7 @@ func (r *PgUserRepository) GetUserKYCStatus(ctx context.Context, userID string) 
 			TaxIDData:      piTaxIDData.String,
 			NationalID:     piNationalID.String,
 			NationalIDData: piNationalIDData.String,
+			NTxnID:         piNTxnID.String,
 		}
 	}
 
@@ -396,4 +399,71 @@ func (r *PgUserRepository) CheckUserEmailMobileVerified(ctx context.Context, use
 	}
 
 	return verified, nil
+}
+
+// UpdateAadhaarTransactionID updates the Aadhaar transaction ID for a user's identity
+func (r *PgUserRepository) UpdateAadhaarTransactionID(ctx context.Context, taxID, txnID string) error {
+	query := `
+		UPDATE xcentro.user_identity 
+		SET n_txn_id = $1, updated_at = NOW()
+		WHERE tax_id = $2
+	`
+
+	result, err := r.querier.Exec(ctx, query, txnID, taxID)
+	if err != nil {
+		return fmt.Errorf("failed to update Aadhaar transaction ID: %w", err)
+	}
+
+	rowsAffected := result.RowsAffected()
+	if rowsAffected == 0 {
+		return fmt.Errorf("no user identity found with tax ID: %s", taxID)
+	}
+
+	return nil
+}
+
+// GetAadhaarTransactionID retrieves the stored Aadhaar transaction ID by user ID
+func (r *PgUserRepository) GetAadhaarTransactionID(ctx context.Context, userID string) (string, error) {
+	query := `
+		SELECT ui.n_txn_id
+		FROM xcentro.user_table u
+		JOIN xcentro.user_identity ui ON u.tax_id = ui.tax_id
+		WHERE u.id = $1 AND ui.n_txn_id IS NOT NULL AND ui.n_txn_id != ''
+	`
+
+	var txnID sql.NullString
+	err := r.querier.QueryRow(ctx, query, userID).Scan(&txnID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", fmt.Errorf("no Aadhaar transaction ID found for user")
+		}
+		return "", fmt.Errorf("failed to get Aadhaar transaction ID: %w", err)
+	}
+
+	if !txnID.Valid || txnID.String == "" {
+		return "", fmt.Errorf("no Aadhaar transaction ID found for user")
+	}
+
+	return txnID.String, nil
+}
+
+// UpdateNationalIDData updates the national ID data (Aadhaar verification result)
+func (r *PgUserRepository) UpdateNationalIDData(ctx context.Context, taxID, nationalIDData string) error {
+	query := `
+		UPDATE xcentro.user_identity 
+		SET national_id_data = $1, updated_at = NOW()
+		WHERE tax_id = $2
+	`
+
+	result, err := r.querier.Exec(ctx, query, nationalIDData, taxID)
+	if err != nil {
+		return fmt.Errorf("failed to update national ID data: %w", err)
+	}
+
+	rowsAffected := result.RowsAffected()
+	if rowsAffected == 0 {
+		return fmt.Errorf("no user identity found with tax ID: %s", taxID)
+	}
+
+	return nil
 }

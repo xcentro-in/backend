@@ -97,6 +97,7 @@ CREATE TABLE xcentro.user_identity (
     tax_id_data JSONB,                -- structured data / verification payload for tax identifier
     national_id TEXT UNIQUE,          -- e.g. Aadhaar / SSN / National Registry number (optional)
     national_id_data JSONB,           -- structured data / verification payload for national id
+    n_txn_id TEXT,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ
 );

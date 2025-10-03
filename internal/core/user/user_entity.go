@@ -19,6 +19,7 @@ type UserIdentity struct {
 	TaxIDData      string `json:"taxIdData"`      // JSON metadata for tax ID
 	NationalID     string `json:"nationalId"`     // Aadhaar or equivalent national ID
 	NationalIDData string `json:"nationalIdData"` // JSON metadata for national ID
+	NTxnID         string `json:"nTxnId"`         // Transaction ID for Aadhaar verification
 }
 
 type User struct {
@@ -47,6 +48,17 @@ type VerifyMobileDTO struct {
 type ClaimRoleDTO struct {
 	BusinessID string          `json:"businessId" validate:"required"`
 	Role       shared.UserRole `json:"role" validate:"required"`
+}
+
+// AadhaarLinkResponse represents the response for Aadhaar link generation
+type AadhaarLinkResponse struct {
+	URL   string `json:"url"`
+	TxnID string `json:"txnId"`
+}
+
+// AadhaarVerificationCompleteDTO represents the request payload for completing Aadhaar verification
+type AadhaarVerificationCompleteDTO struct {
+	// No additional fields needed as we'll use the stored transaction ID
 }
 
 type UserResponseDTO struct {

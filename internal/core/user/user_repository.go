@@ -29,4 +29,9 @@ type UserRepository interface {
 	CheckUserEmailVerified(ctx context.Context, userID string) (bool, error)
 	CheckUserMobileVerified(ctx context.Context, userID string) (bool, error)
 	CheckUserEmailMobileVerified(ctx context.Context, userID string) (bool, error)
+
+	// Aadhaar verification methods
+	UpdateAadhaarTransactionID(ctx context.Context, taxID, txnID string) error
+	GetAadhaarTransactionID(ctx context.Context, userID string) (string, error)
+	UpdateNationalIDData(ctx context.Context, taxID, nationalIDData string) error
 }
