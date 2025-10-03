@@ -172,3 +172,16 @@ func (s *BusinessServiceImpl) UpdateBusinessRoleClaim(ctx context.Context, uid, 
 
 	return nil
 }
+
+func (s *BusinessServiceImpl) UpdateBusinessDeedDocumentKey(ctx context.Context, bid string, key string) error {
+	if bid == "" || key == "" {
+		return fmt.Errorf("business ID and document key are required")
+	}
+
+	err := s.businessRepo.UpdateBusinessDeedDocumentKey(ctx, bid, key)
+	if err != nil {
+		return fmt.Errorf("error updating business deed document path: %w", err)
+	}
+
+	return nil
+}

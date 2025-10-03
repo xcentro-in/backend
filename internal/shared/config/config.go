@@ -18,11 +18,25 @@ type Config struct {
 	Server            ServerConfig            `json:"server"`
 	Rcache            RedisConfig             `json:"rcache"`
 	JWT               JWTSecretConfig         `json:"jwt"`
+	S3                S3Config                `json:"s3"`
 }
 
 // JWTSecretConfig holds JWT secret configuration.
 type JWTSecretConfig struct {
 	SecretKey string `json:"secret_key" env:"JWT_SECRET_KEY" env-required:"true"`
+}
+
+// S3Config holds AWS S3 related configuration.
+// Access/Secret keys are optional if the environment uses IAM roles or other providers.
+type S3Config struct {
+	Bucket       string `json:"bucket" env:"S3_BUCKET" env-required:"true"`
+	Region       string `json:"region" env:"S3_REGION" env-required:"true"`
+	Endpoint     string `json:"endpoint" env:"S3_ENDPOINT"`             // optional custom endpoint (MinIO/localstack)
+	UsePathStyle bool   `json:"use_path_style" env:"S3_USE_PATH_STYLE"` // set true for MinIO/localstack
+	AccessKey    string `json:"-" env:"S3_ACCESS_KEY"`                  // optional static credentials
+	SecretKey    string `json:"-" env:"S3_SECRET_KEY"`
+	SessionToken string `json:"-" env:"S3_SESSION_TOKEN"`
+	Profile      string `json:"profile" env:"AWS_PROFILE"` // optional shared profile
 }
 
 // RedisConfig holds Redis cache configuration.

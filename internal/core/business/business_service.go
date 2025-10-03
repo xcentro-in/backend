@@ -11,5 +11,6 @@ type BusinessService interface {
 	GetUserKYBInitiatedStatus(ctx context.Context, uid string) (*CreateBusinessDTO, error)
 	CreateBusinessByNameAndGSTIN(ctx context.Context, uid string, dto *CreateBusinessDTO) (*CreateBusinessDTO, error)
 	UpdateBusinessKYBData(ctx context.Context, bdto *BusinessKYBDTO) error
+	UpdateBusinessDeedDocumentKey(ctx context.Context, bid string, key string) error
 	GetUserRolesMiddleware() echo.MiddlewareFunc
 }

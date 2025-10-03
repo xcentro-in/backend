@@ -64,7 +64,7 @@ func registerV1BusinessRoutes(meta *serverMetaData, group *echo.Group) {
 		meta.clients.rcache,
 	)
 	authService := authservice.NewAuthService(&meta.config.JWT, meta.clients.rcache)
-	businessHandler.RegisterBusinessRoutes(group, busSvc, authService)
+	businessHandler.RegisterBusinessRoutes(group, busSvc, authService, &meta.config.S3)
 }
 
 func registerV1UserRoutes(meta *serverMetaData, group *echo.Group) {

@@ -47,6 +47,7 @@ func (s *xcentroServer) registerGlobalMiddleware() {
 	s.echo.Use(middleware.RequestID())
 	s.echo.Use(middleware.Logger())
 	s.echo.Use(middleware.Recover())
+	s.echo.Use(middleware.CORS())
 }
 
 func (s *xcentroServer) loadConfig() {

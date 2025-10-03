@@ -185,3 +185,26 @@ func (r *PgBusinessRepository) UpdateKYBData(ctx context.Context, bid string, ky
 
 	return kybData, nil
 }
+
+func (r *PgBusinessRepository) UpdateBusinessDeedDocumentKey(ctx context.Context, bid string, key string) error {
+	query := `
+		UPDATE xcentro.kyb_data 
+		SET business_deed = $2 
+		WHERE income_tax_id = (
+			SELECT income_tax_id 
+			FROM xcentro.business 
+			WHERE bid = $1
+		)
+	`
+
+	result, err := r.querier.Exec(ctx, query, bid, key)
+	if err != nil {
+		return fmt.Errorf("error updating business deed document key: %w", err)
+	}
+
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("business not found or KYB data not available")
+	}
+
+	return nil
+}

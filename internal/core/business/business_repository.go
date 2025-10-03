@@ -14,6 +14,7 @@ type BusinessRepository interface {
 	CreateBusinessByNameAndGSTIN(ctx context.Context, name string, gstin string) (*Business, error)
 	AddKYBSuccessData(ctx context.Context, bus *Business) error
 	UpdateKYBData(ctx context.Context, bid string, kybData *BusinessKYBData) (*BusinessKYBData, error)
+	UpdateBusinessDeedDocumentKey(ctx context.Context, bid string, key string) error
 }
 
 // BusinessUserRelationRepository defines the interface for the relationship data.
