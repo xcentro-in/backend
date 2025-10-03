@@ -1064,7 +1064,7 @@ func (s *PayeeService) validateBillerRequest(req *payee.OnboardPayeeRequest) err
 	if len(biller.MobileNumber) != 10 {
 		return fmt.Errorf("invalid mobile_number (must be 10 digits)")
 	}
-	if biller.CustomerParams == nil || len(biller.CustomerParams) == 0 {
+	if len(biller.CustomerParams) == 0 {
 		return fmt.Errorf("customer_params is required (e.g., consumer_number)")
 	}
 	return nil
