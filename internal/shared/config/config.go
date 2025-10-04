@@ -19,6 +19,7 @@ type Config struct {
 	Rcache            RedisConfig             `json:"rcache"`
 	JWT               JWTSecretConfig         `json:"jwt"`
 	S3                S3Config                `json:"s3"`
+	SES               SESConfig               `json:"ses"`
 }
 
 // JWTSecretConfig holds JWT secret configuration.
@@ -37,6 +38,20 @@ type S3Config struct {
 	SecretKey    string `json:"-" env:"S3_SECRET_KEY"`
 	SessionToken string `json:"-" env:"S3_SESSION_TOKEN"`
 	Profile      string `json:"profile" env:"AWS_PROFILE"` // optional shared profile
+}
+
+// SESConfig holds AWS SES related configuration.
+// Access/Secret keys are optional if the environment uses IAM roles or other providers.
+type SESConfig struct {
+	DefaultFromEmail string `json:"default_from_email" env:"SES_DEFAULT_FROM_EMAIL" env-required:"true"`
+	DefaultFromName  string `json:"default_from_name" env:"SES_DEFAULT_FROM_NAME"`
+	DefaultConfigSet string `json:"default_config_set" env:"SES_DEFAULT_CONFIG_SET"`
+	Region           string `json:"region" env:"SES_REGION" env-required:"true"`
+	Endpoint         string `json:"endpoint" env:"SES_ENDPOINT"` // optional custom endpoint (localstack)
+	AccessKey        string `json:"-" env:"SES_ACCESS_KEY"`      // optional static credentials
+	SecretKey        string `json:"-" env:"SES_SECRET_KEY"`
+	SessionToken     string `json:"-" env:"SES_SESSION_TOKEN"`
+	Profile          string `json:"profile" env:"AWS_PROFILE"` // optional shared profile
 }
 
 // RedisConfig holds Redis cache configuration.

@@ -95,14 +95,24 @@ func main() {
 		}
 		log.Infof("Successfully forced version to %d", targetVersion)
 
+	case "drop":
+		log.Warn("DANGER: This will completely wipe all tables and data!")
+		log.Info("Running drop (wipe database)...")
+		if err := migrationService.Drop(ctx); err != nil {
+			log.Errorf("Failed to drop database: %v", err)
+			os.Exit(1)
+		}
+		log.Info("Database wiped successfully")
+
 	default:
-		fmt.Printf("Usage: %s -action=<up|down|version|goto|force> [-version=<number>]\n", os.Args[0])
+		fmt.Printf("Usage: %s -action=<up|down|version|goto|force|drop> [-version=<number>]\n", os.Args[0])
 		fmt.Println("Actions:")
 		fmt.Println("  up      - Run all pending up migrations")
 		fmt.Println("  down    - Run one down migration")
 		fmt.Println("  version - Show current migration version")
 		fmt.Println("  goto    - Migrate to specific version (requires -version flag)")
 		fmt.Println("  force   - Force migration version (for fixing dirty state, requires -version flag)")
+		fmt.Println("  drop    - DANGER: Completely wipe the database (removes all tables and data)")
 		os.Exit(1)
 	}
 }

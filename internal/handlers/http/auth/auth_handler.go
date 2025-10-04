@@ -62,15 +62,23 @@ func (ah AuthHandler) HandleSignup(c echo.Context) error {
 	}
 	signupReq.Password = hashedPassword
 
-	_, err = ah.userService.CreateUser(c.Request().Context(), signupReq)
+	user, err := ah.userService.CreateUser(c.Request().Context(), signupReq)
 	if err != nil {
 		logger.Errorf("Failed to create user %v", err)
 		return c.JSON(500, map[string]any{"message": "Failed to create user", "data": nil})
 	}
 
-	// TODO: create user and send email verification link
+	// Send email verification
+	err = ah.userService.SendEmailVerification(c.Request().Context(), user.Id)
+	if err != nil {
+		logger.Errorf("Failed to send email verification %v", err)
+		// Don't fail signup if email sending fails, just log the error
+	}
 
-	return c.JSON(201, map[string]any{"message": "User created successfully", "data": nil})
+	return c.JSON(201, map[string]any{
+		"message": "User created successfully. Please check your email for verification link.",
+		"data":    map[string]string{"userId": user.Id},
+	})
 
 }
 
@@ -93,11 +101,11 @@ func (ah AuthHandler) HandleLogin(c echo.Context) error {
 		return c.JSON(500, map[string]any{"message": "Failed to get user by email", "data": nil})
 	}
 
-	// TODO: uncomment after email verification implementation
-	// if user.EmailVerified {
-	// 	logger.Error("Email not verified")
-	// 	return c.JSON(401, map[string]any{"message": "Email not verified", "data": nil})
-	// }
+	// Check if email is verified
+	if !user.EmailVerified {
+		logger.Error("Email not verified")
+		return c.JSON(401, map[string]any{"message": "Email not verified. Please verify your email before logging in.", "data": nil})
+	}
 
 	if user == nil || ah.authService.ComparePassword(user.PwdHash, loginReq.Password) != nil {
 		logger.Error("Invalid email or password")

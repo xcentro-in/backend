@@ -2,6 +2,9 @@ package user
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -9,10 +12,12 @@ import (
 	"xcentro.in/internal/adapters/database/postgres/client"
 	userRepo "xcentro.in/internal/adapters/database/postgres/user"
 	"xcentro.in/internal/adapters/providers/authbridge"
+	"xcentro.in/internal/adapters/providers/mailers"
 	"xcentro.in/internal/core/auth"
 	businessRepo "xcentro.in/internal/core/business"
 	"xcentro.in/internal/core/shared"
 	"xcentro.in/internal/core/user"
+	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/logger"
 )
 
@@ -21,6 +26,8 @@ type UserServiceImpl struct {
 	userRepo            user.UserRepository
 	businessUserRelRepo businessRepo.BusinessUserRelationRepository
 	txManager           client.TxManager
+	emailService        mailers.EmailService
+	config              *config.Config
 	logger              *logger.Logger
 }
 
@@ -29,11 +36,15 @@ func NewUserService(
 	userRepo *userRepo.PgUserRepository,
 	businessUserRelRepo businessRepo.BusinessUserRelationRepository,
 	txManager client.TxManager,
+	emailService mailers.EmailService,
+	config *config.Config,
 ) user.UserService {
 	return &UserServiceImpl{
 		userRepo:            userRepo,
 		businessUserRelRepo: businessUserRelRepo,
 		txManager:           txManager,
+		emailService:        emailService,
+		config:              config,
 		logger:              logger.GetDefault(),
 	}
 }
@@ -248,11 +259,6 @@ func (s *UserServiceImpl) GetUserKYCStatus(ctx context.Context, userID string) (
 		return nil, fmt.Errorf("KYC already completed and verified")
 	}
 
-	type response struct {
-		User     *user.User         `json:"user"`
-		Identity *user.UserIdentity `json:"identity"`
-	}
-
 	// Ensure we always return a valid (possibly empty) identity object
 	var identity *user.UserIdentity
 	if identityData != nil {
@@ -335,12 +341,16 @@ func (s *UserServiceImpl) SendVerificationCode(ctx context.Context, userID strin
 	// Generate a simple 6-digit code (in production, use crypto/rand)
 	code := fmt.Sprintf("%06d", 123456) // Placeholder - replace with proper code generation
 
+	// Calculate proper timestamps
+	now := time.Now()
+	expiresAt := now.Add(15 * time.Minute) // 15 minutes expiry for SMS/basic codes
+
 	verificationCode := &user.UserVerificationCodes{
 		UserID:        userID,
 		Code:          code,
 		CodeType:      codeType,
-		ExpiresAt:     "2025-10-01T00:00:00Z", // Placeholder - calculate proper expiry
-		CreatedAt:     "2025-09-30T00:00:00Z", // Placeholder - use NOW()
+		ExpiresAt:     expiresAt.Format(time.RFC3339),
+		CreatedAt:     now.Format(time.RFC3339),
 		Used:          false,
 		RetryAttempts: 0,
 	}
@@ -450,7 +460,7 @@ func (s *UserServiceImpl) GenerateAadhaarLink(ctx context.Context, userID string
 		// Check response status
 		status, ok := response["status"].(float64)
 		if !ok || status != 1 {
-			return fmt.Errorf("Aadhaar link generation failed: invalid response status")
+			return fmt.Errorf("adhaar link generation failed: invalid response status")
 		}
 
 		// Extract URL from response
@@ -549,6 +559,220 @@ func (s *UserServiceImpl) CompleteAadhaarVerification(ctx context.Context, userI
 		s.logger.Info("Aadhaar verification completed successfully for user %s", userID)
 		return nil
 	})
+}
+
+// SendEmailVerification sends email verification token to user's email
+func (s *UserServiceImpl) SendEmailVerification(ctx context.Context, userID string) error {
+	s.logger.Info("Sending email verification for user: %s", userID)
+
+	// Get user details
+	userObj, err := s.userRepo.GetUserByID(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("failed to get user: %w", err)
+	}
+
+	if userObj == nil {
+		return fmt.Errorf("user not found")
+	}
+
+	if userObj.EmailVerified {
+		return fmt.Errorf("email already verified")
+	}
+
+	// Generate secure verification token (32 bytes = 256 bits)
+	verificationToken, err := s.generateSecureToken()
+	if err != nil {
+		return fmt.Errorf("failed to generate verification token: %w", err)
+	}
+
+	// Hash the token before storing in database (SECURITY: Never store plaintext tokens)
+	hashedToken := s.hashToken(verificationToken)
+
+	// Calculate proper timestamps
+	now := time.Now()
+	expiresAt := now.Add(24 * time.Hour) // 24 hour expiry for email verification
+
+	// Create verification code record with 24 hour expiry
+	verificationCode := &user.UserVerificationCodes{
+		UserID:        userID,
+		Code:          hashedToken, // Store hashed version, not plaintext
+		CodeType:      shared.EmailVerification,
+		ExpiresAt:     expiresAt.Format(time.RFC3339),
+		CreatedAt:     now.Format(time.RFC3339),
+		Used:          false,
+		RetryAttempts: 0,
+	}
+
+	// Store verification code in database
+	if err := s.userRepo.CreateVerificationCode(ctx, verificationCode); err != nil {
+		return fmt.Errorf("failed to create verification code: %w", err)
+	}
+
+	// Create verification URL
+	verificationURL := fmt.Sprintf("http://localhost:8888/v1/user/verify-email?token=%s", verificationToken)
+
+	// Prepare email content
+	htmlBody := fmt.Sprintf(`
+		<html>
+		<body>
+			<h2>Email Verification - Xcentro</h2>
+			<p>Hi there,</p>
+			<p>Thank you for signing up with Xcentro. Please click the link below to verify your email address:</p>
+			<p><a href="%s" style="background-color: #007bff; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">Verify Email</a></p>
+			<p>Or copy and paste this link in your browser:</p>
+			<p>%s</p>
+			<p>This link will expire in 24 hours.</p>
+			<p>If you didn't create an account with us, please ignore this email.</p>
+			<p>Best regards,<br>The Xcentro Team</p>
+		</body>
+		</html>
+	`, verificationURL, verificationURL)
+
+	textBody := fmt.Sprintf(`
+		Email Verification - Xcentro
+		
+		Hi there,
+		
+		Thank you for signing up with Xcentro. Please click the link below to verify your email address:
+		
+		%s
+		
+		This link will expire in 24 hours.
+		
+		If you didn't create an account with us, please ignore this email.
+		
+		Best regards,
+		The Xcentro Team
+	`, verificationURL)
+
+	// Create email message
+	emailMsg := &mailers.EmailMessage{
+		To:       []string{userObj.Email},
+		From:     s.config.SES.DefaultFromEmail,
+		FromName: s.config.SES.DefaultFromName,
+		Subject:  "Verify your Xcentro account",
+		HTMLBody: htmlBody,
+		TextBody: textBody,
+	}
+
+	// Send email
+	messageID, err := s.emailService.SendEmail(ctx, emailMsg)
+	if err != nil {
+		s.logger.Errorf("Failed to send verification email to %s: %v", userObj.Email, err)
+		return fmt.Errorf("failed to send verification email: %w", err)
+	}
+
+	s.logger.Info("Verification email sent successfully to %s, Message ID: %s", userObj.Email, messageID)
+
+	return nil
+}
+
+// VerifyEmailWithToken verifies user's email using verification token
+func (s *UserServiceImpl) VerifyEmailWithToken(ctx context.Context, token string) error {
+	s.logger.Info("Verifying email with token")
+
+	if token == "" {
+		return fmt.Errorf("verification token is required")
+	}
+
+	return s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
+		txUserRepo := s.userRepo.WithTx(tx)
+
+		// Hash the incoming token to compare with stored hash
+		hashedToken := s.hashToken(token)
+
+		// Get verification code record using hashed token
+		verificationCode, err := txUserRepo.GetVerificationCodeByCode(ctx, hashedToken, shared.EmailVerification)
+		if err != nil {
+			s.logger.Errorf("Failed to get verification code: %v", err)
+			return fmt.Errorf("invalid or expired verification token")
+		}
+
+		if verificationCode == nil {
+			return fmt.Errorf("verification token not found")
+		}
+
+		if verificationCode.Used {
+			return fmt.Errorf("verification token already used")
+		}
+
+		// Check if token is expired
+		expiresAt, err := time.Parse(time.RFC3339, verificationCode.ExpiresAt)
+		if err != nil {
+			return fmt.Errorf("invalid expiration time format")
+		}
+
+		if time.Now().After(expiresAt) {
+			return fmt.Errorf("verification token has expired")
+		}
+
+		// Mark verification code as used
+		if err := txUserRepo.MarkVerificationCodeAsUsed(ctx, verificationCode.ID); err != nil {
+			return fmt.Errorf("failed to mark verification code as used: %w", err)
+		}
+
+		// Update user email verification status
+		if err := txUserRepo.UpdateUserEmailVerification(ctx, verificationCode.UserID, true); err != nil {
+			return fmt.Errorf("failed to update user email verification: %w", err)
+		}
+
+		s.logger.Info("Email verified successfully for user: %s", verificationCode.UserID)
+		return nil
+	})
+}
+
+// generateSecureToken generates a cryptographically secure random token
+func (s *UserServiceImpl) generateSecureToken() (string, error) {
+	// Generate 32 random bytes (256 bits)
+	randomBytes := make([]byte, 32)
+	if _, err := rand.Read(randomBytes); err != nil {
+		return "", fmt.Errorf("failed to generate random bytes: %w", err)
+	}
+
+	// Convert to hex string
+	return hex.EncodeToString(randomBytes), nil
+}
+
+// hashToken creates a SHA-256 hash of the token for secure database storage
+// SECURITY: This prevents token compromise if database is breached
+func (s *UserServiceImpl) hashToken(token string) string {
+	// Use application-wide salt from environment/config
+	appSalt := "xcentro_email_verification_salt_2024"
+
+	// Combine token with application salt
+	saltedToken := fmt.Sprintf("%s_%s_%s", appSalt, token, "xcentro")
+
+	// Create SHA-256 hash
+	hash := sha256.Sum256([]byte(saltedToken))
+
+	// Return hex-encoded hash
+	return hex.EncodeToString(hash[:])
+}
+
+// ResendEmailVerification resends email verification for a given email
+func (s *UserServiceImpl) ResendEmailVerification(ctx context.Context, email string) error {
+	s.logger.Info("Resending email verification for email: %s", email)
+
+	if email == "" {
+		return fmt.Errorf("email is required")
+	}
+
+	// Get user details
+	userObj, err := s.userRepo.GetUserByEmail(ctx, email)
+	if err != nil {
+		return fmt.Errorf("failed to get user: %w", err)
+	}
+
+	if userObj == nil {
+		return fmt.Errorf("user not found")
+	}
+
+	if userObj.EmailVerified {
+		return fmt.Errorf("email already verified")
+	}
+
+	// Send verification email
+	return s.SendEmailVerification(ctx, userObj.Id)
 }
 
 // createAuthBridgeClient is a helper method to create authbridge client

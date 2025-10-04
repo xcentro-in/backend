@@ -109,6 +109,21 @@ func (m *MigrationService) Force(ctx context.Context, version int) error {
 	return nil
 }
 
+// Drop runs all down migrations to completely wipe the database
+func (m *MigrationService) Drop(ctx context.Context) error {
+	migrator, err := m.createMigrator()
+	if err != nil {
+		return fmt.Errorf("failed to create migrator: %w", err)
+	}
+	defer migrator.Close()
+
+	if err := migrator.Drop(); err != nil {
+		return fmt.Errorf("failed to drop database: %w", err)
+	}
+
+	return nil
+}
+
 // createMigrator creates a new migrate instance
 func (m *MigrationService) createMigrator() (*migrate.Migrate, error) {
 	// Convert relative path to absolute

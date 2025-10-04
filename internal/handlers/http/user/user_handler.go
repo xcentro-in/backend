@@ -26,6 +26,12 @@ func RegisterUserRoutes(e *echo.Group, userService user.UserService, authService
 	handler := NewUserHandler(userService, authService)
 
 	userGroup := e.Group("/user")
+
+	// Email verification routes don't require authentication
+	userGroup.GET("/verify-email", handler.VerifyEmail)
+	userGroup.POST("/resend-verification", handler.ResendEmailVerification)
+
+	// Protected routes requiring authentication
 	userGroup.Use(authService.GetEchoAuthMiddleware())
 
 	userGroup.POST("/verify-mobile", handler.VerifyMobile)
@@ -192,6 +198,66 @@ func (h *UserHandler) CompleteAadhaarVerification(c echo.Context) error {
 
 	return c.JSON(200, map[string]interface{}{
 		"message": "Aadhaar verification completed successfully",
+		"data":    nil,
+	})
+}
+
+// VerifyEmail verifies user's email using verification token
+func (h *UserHandler) VerifyEmail(c echo.Context) error {
+	token := c.QueryParam("token")
+	if token == "" {
+		return c.JSON(400, map[string]string{"message": "Verification token is required"})
+	}
+
+	if err := h.userService.VerifyEmailWithToken(c.Request().Context(), token); err != nil {
+		h.logger.Errorf("Error verifying email with token: %v", err)
+
+		// Handle specific error cases
+		switch err.Error() {
+		case "verification token not found":
+			return c.JSON(404, map[string]string{"message": "Invalid verification token"})
+		case "verification token already used":
+			return c.JSON(400, map[string]string{"message": "Verification token has already been used"})
+		case "verification token has expired":
+			return c.JSON(400, map[string]string{"message": "Verification token has expired"})
+		default:
+			return c.JSON(500, map[string]string{"message": "Failed to verify email"})
+		}
+	}
+
+	return c.JSON(200, map[string]interface{}{
+		"message": "Email verified successfully. You can now log in.",
+		"data":    nil,
+	})
+}
+
+// ResendEmailVerification resends email verification token
+func (h *UserHandler) ResendEmailVerification(c echo.Context) error {
+	var dto user.ResendVerificationDTO
+	if err := c.Bind(&dto); err != nil {
+		return c.JSON(400, map[string]string{"message": "Invalid request payload"})
+	}
+
+	if dto.Email == "" {
+		return c.JSON(400, map[string]string{"message": "Email is required"})
+	}
+
+	if err := h.userService.ResendEmailVerification(c.Request().Context(), dto.Email); err != nil {
+		h.logger.Errorf("Error resending email verification for %s: %v", dto.Email, err)
+
+		// Handle specific error cases
+		switch err.Error() {
+		case "user not found":
+			return c.JSON(404, map[string]string{"message": "User not found"})
+		case "email already verified":
+			return c.JSON(400, map[string]string{"message": "Email is already verified"})
+		default:
+			return c.JSON(500, map[string]string{"message": "Failed to resend verification email"})
+		}
+	}
+
+	return c.JSON(200, map[string]interface{}{
+		"message": "Verification email sent successfully. Please check your inbox.",
 		"data":    nil,
 	})
 }

@@ -1,8 +1,6 @@
 package main
 
 import (
-	"io"
-
 	"github.com/labstack/echo/v4"
 	"xcentro.in/internal/adapters/database/postgres/business"
 	paymentRepo "xcentro.in/internal/adapters/database/postgres/payment"
@@ -23,7 +21,6 @@ import (
 	"xcentro.in/internal/services/payments"
 	"xcentro.in/internal/services/user"
 	voucherSvc "xcentro.in/internal/services/voucher"
-	"xcentro.in/internal/shared/logger"
 )
 
 func registerV1AuthRoutes(meta *serverMetaData, group *echo.Group) {
@@ -31,6 +28,8 @@ func registerV1AuthRoutes(meta *serverMetaData, group *echo.Group) {
 		userRepo.NewPgUserRepository(meta.clients.db),
 		business.NewPgBusinessUserRelationRepository(meta.clients.db),
 		meta.clients.txManager,
+		meta.clients.emailService,
+		&meta.config,
 	)
 	authService := authservice.NewAuthService(&meta.config.JWT, meta.clients.rcache)
 	auth.RegisterAuthRoutes(group, userService, authService)
@@ -92,6 +91,8 @@ func registerV1UserRoutes(meta *serverMetaData, group *echo.Group) {
 		userRepo.NewPgUserRepository(meta.clients.db),
 		business.NewPgBusinessUserRelationRepository(meta.clients.db),
 		meta.clients.txManager,
+		meta.clients.emailService,
+		&meta.config,
 	)
 	authService := authservice.NewAuthService(&meta.config.JWT, meta.clients.rcache)
 	userHandler.RegisterUserRoutes(group, userService, authService)
@@ -134,22 +135,6 @@ func registerV1Routes(s *xcentroServer) {
 
 	// Health Check Endpoint
 	v1.GET("/health", func(c echo.Context) error {
-		return c.JSON(200, map[string]string{
-			"status": "ok",
-		})
-	})
-
-	v1.POST("/aadhaar", func(c echo.Context) error {
-		logger.Debugf("Headers: %v", c.Request().Header)
-		// body is of type io.ReadCloser
-		// i want to read the body and print it
-		body := c.Request().Body
-		defer body.Close()
-		bodyBytes, err := io.ReadAll(body)
-		if err != nil {
-			return err
-		}
-		logger.Debugf("Body: %s", bodyBytes)
 		return c.JSON(200, map[string]string{
 			"status": "ok",
 		})

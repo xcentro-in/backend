@@ -44,6 +44,16 @@ type VerifyMobileDTO struct {
 	Code string `json:"code" validate:"required"`
 }
 
+// VerifyEmailDTO represents the request payload for email verification
+type VerifyEmailDTO struct {
+	Token string `json:"token" validate:"required"`
+}
+
+// ResendVerificationDTO represents the request payload for resending verification email
+type ResendVerificationDTO struct {
+	Email string `json:"email" validate:"required,email"`
+}
+
 // ClaimRoleDTO represents the request payload for claiming a business role
 type ClaimRoleDTO struct {
 	BusinessID string          `json:"businessId" validate:"required"`

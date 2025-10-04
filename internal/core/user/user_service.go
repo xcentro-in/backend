@@ -31,6 +31,11 @@ type UserService interface {
 	VerifyMobile(ctx context.Context, userID, code string) error
 	SendVerificationCode(ctx context.Context, userID string, codeType shared.VerificationType) error
 
+	// Email verification specific methods
+	SendEmailVerification(ctx context.Context, userID string) error
+	VerifyEmailWithToken(ctx context.Context, token string) error
+	ResendEmailVerification(ctx context.Context, email string) error
+
 	// Business role management
 	ClaimBusinessRole(ctx context.Context, userID, businessID string, role shared.UserRole) error
 

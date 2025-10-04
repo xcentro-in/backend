@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -117,16 +118,23 @@ func parseKYCStatus(status string) shared.KYCStatus {
 // GetUserByEmail retrieves a user by email
 func (r *PgUserRepository) GetUserByEmail(ctx context.Context, email string) (*user.User, error) {
 	query := `
-		SELECT id, pwd_hash
+		SELECT id, email, pwd_hash, mobile, tax_id, kyc_status, email_verified, mobile_verified
 		FROM xcentro.user_table
 		WHERE email = $1
 	`
 
 	var u user.User
+	var mobile, taxID sql.NullString
 
 	err := r.querier.QueryRow(ctx, query, email).Scan(
 		&u.Id,
+		&u.Email,
 		&u.PwdHash,
+		&mobile,
+		&taxID,
+		&u.KycStatus,
+		&u.EmailVerified,
+		&u.MobileVerified,
 	)
 
 	if err != nil {
@@ -134,6 +142,14 @@ func (r *PgUserRepository) GetUserByEmail(ctx context.Context, email string) (*u
 			return nil, nil
 		}
 		return nil, fmt.Errorf("failed to get user by email: %w", err)
+	}
+
+	// Handle nullable fields
+	if mobile.Valid {
+		u.Mobile = mobile.String
+	}
+	if taxID.Valid {
+		u.TaxID = taxID.String
 	}
 
 	return &u, nil
@@ -463,6 +479,86 @@ func (r *PgUserRepository) UpdateNationalIDData(ctx context.Context, taxID, nati
 	rowsAffected := result.RowsAffected()
 	if rowsAffected == 0 {
 		return fmt.Errorf("no user identity found with tax ID: %s", taxID)
+	}
+
+	return nil
+}
+
+// GetVerificationCodeByCode retrieves verification code by hashed code and type
+func (r *PgUserRepository) GetVerificationCodeByCode(ctx context.Context, hashedCode string, codeType shared.VerificationType) (*user.UserVerificationCodes, error) {
+	query := `
+		SELECT id, user_id, code, code_type, expires_at, created_at, used, retry_attempts
+		FROM xcentro.user_verification_codes
+		WHERE code = $1 AND code_type = $2 AND used = false
+		ORDER BY created_at DESC
+		LIMIT 1
+	`
+
+	var vc user.UserVerificationCodes
+	var expiresAt, createdAt time.Time
+
+	err := r.querier.QueryRow(ctx, query, hashedCode, codeType).Scan(
+		&vc.ID,
+		&vc.UserID,
+		&vc.Code,
+		&vc.CodeType,
+		&expiresAt,
+		&createdAt,
+		&vc.Used,
+		&vc.RetryAttempts,
+	)
+
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("verification code not found")
+		}
+		return nil, fmt.Errorf("failed to get verification code: %w", err)
+	}
+
+	// Convert time.Time to string format
+	vc.ExpiresAt = expiresAt.Format(time.RFC3339)
+	vc.CreatedAt = createdAt.Format(time.RFC3339)
+
+	return &vc, nil
+}
+
+// MarkVerificationCodeAsUsed marks a verification code as used
+func (r *PgUserRepository) MarkVerificationCodeAsUsed(ctx context.Context, codeID string) error {
+	query := `
+		UPDATE xcentro.user_verification_codes
+		SET used = true
+		WHERE id = $1
+	`
+
+	result, err := r.querier.Exec(ctx, query, codeID)
+	if err != nil {
+		return fmt.Errorf("failed to mark verification code as used: %w", err)
+	}
+
+	rowsAffected := result.RowsAffected()
+	if rowsAffected == 0 {
+		return fmt.Errorf("verification code not found")
+	}
+
+	return nil
+}
+
+// UpdateUserEmailVerification updates user's email verification status
+func (r *PgUserRepository) UpdateUserEmailVerification(ctx context.Context, userID string, verified bool) error {
+	query := `
+		UPDATE xcentro.user_table
+		SET email_verified = $1, updated_at = NOW()
+		WHERE id = $2
+	`
+
+	result, err := r.querier.Exec(ctx, query, verified, userID)
+	if err != nil {
+		return fmt.Errorf("failed to update email verification status: %w", err)
+	}
+
+	rowsAffected := result.RowsAffected()
+	if rowsAffected == 0 {
+		return fmt.Errorf("user not found")
 	}
 
 	return nil

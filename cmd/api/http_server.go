@@ -8,14 +8,16 @@ import (
 	"github.com/labstack/echo/v4/middleware"
 	redis "xcentro.in/internal/adapters/cache/redis/client"
 	"xcentro.in/internal/adapters/database/postgres/client"
+	"xcentro.in/internal/adapters/providers/mailers"
 	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/logger"
 )
 
 type externalClients struct {
-	db        client.DB
-	txManager client.TxManager
-	rcache    *redis.RedisClient
+	db           client.DB
+	txManager    client.TxManager
+	rcache       *redis.RedisClient
+	emailService mailers.EmailService
 }
 
 type serverMetaData struct {
@@ -79,6 +81,15 @@ func (s *xcentroServer) registerClients() {
 	}
 	s.log.Info("Redis client created successfully")
 	s.meta.clients.rcache = redisClient
+
+	// Email service (SES)
+	emailService, err := mailers.NewSESClientFromConfig(s.meta.config.SES)
+	if err != nil {
+		s.log.Errorf("Failed to create email service: %v", err)
+		panic(err)
+	}
+	s.log.Info("Email service created successfully")
+	s.meta.clients.emailService = emailService
 }
 
 func (s *xcentroServer) registerRouters() {
