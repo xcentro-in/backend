@@ -3,6 +3,7 @@ package payment
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -14,6 +15,8 @@ type PaymentOrchestrator interface {
 	TokenizeCard(ctx context.Context, request TokenizeRequest) (*TokenizeResponse, error)
 	ValidatePaymentRequest(request PaymentRequest) error
 	SelectGateway(request PaymentRequest) (GatewayType, error)
+	// Voucher service dependency injection (Phase 6)
+	SetVoucherService(voucherService interface{})
 }
 
 // MockPaymentOrchestrator provides a mock implementation with detailed logging
@@ -30,6 +33,8 @@ type MockPaymentOrchestrator struct {
 	// Repository dependencies (Phase 4.2)
 	paymentRepo     PaymentRepository
 	storedCardRepo  StoredCardRepository
+	// Voucher service for finalization (Phase 6)
+	voucherService  interface{} // Will be voucher.VoucherService, using interface{} to avoid circular import
 }
 
 // NewMockPaymentOrchestrator creates a new mock payment orchestrator
@@ -160,6 +165,28 @@ func (o *MockPaymentOrchestrator) ProcessPayment(ctx context.Context, request Pa
 	// - Call paymentRepo.UpdatePaymentStatus(ctx, paymentID, PaymentStatusPending, "")
 	// - Payment is now pending gateway/bank processing
 	_ = o.paymentRepo.UpdatePaymentStatus(ctx, paymentID, PaymentStatusPending, nil)
+
+	// PHASE 6: Finalize vouchers after payment initiation succeeds
+	if len(request.VoucherIDs) > 0 && o.voucherService != nil {
+		fmt.Printf("📋 Finalizing %d voucher(s) linked to payment...\n", len(request.VoucherIDs))
+
+		finalizedVouchers, voucherErr := o.finalizeVouchers(ctx, paymentID, request.VoucherIDs)
+
+		if voucherErr != nil {
+			// Log error but don't fail payment (payment already succeeded)
+			fmt.Printf("⚠️  WARNING: Payment succeeded but voucher finalization had issues: %v\n", voucherErr)
+			response.VoucherStatus = "failed"
+			if response.Metadata == nil {
+				response.Metadata = make(map[string]any)
+			}
+			response.Metadata["voucher_error"] = voucherErr.Error()
+			response.VouchersFinalized = finalizedVouchers // Partial success list
+		} else {
+			fmt.Printf("✅ All %d voucher(s) finalized successfully\n", len(finalizedVouchers))
+			response.VoucherStatus = "finalized"
+			response.VouchersFinalized = finalizedVouchers
+		}
+	}
 
 	fmt.Printf("🚀 Payment processing initiated with %s gateway\n", gateway)
 	fmt.Printf("💳 Redirect URL: %s\n", response.RedirectURL)
@@ -651,4 +678,52 @@ func (o *MockPaymentOrchestrator) getGatewayInstance(gatewayType GatewayType) Pa
 	default:
 		return nil
 	}
+}
+
+// SetVoucherService injects the voucher service dependency (Phase 6)
+func (o *MockPaymentOrchestrator) SetVoucherService(voucherService interface{}) {
+	o.voucherService = voucherService
+	fmt.Println("✅ Voucher service injected into payment orchestrator")
+}
+
+// finalizeVouchers finalizes vouchers after payment success (Phase 6)
+func (o *MockPaymentOrchestrator) finalizeVouchers(ctx context.Context, paymentID string, voucherIDs []string) ([]string, error) {
+	if o.voucherService == nil {
+		return nil, fmt.Errorf("voucher service not initialized")
+	}
+
+	// Type assert to voucher service interface
+	// Using reflection to avoid circular import
+	type voucherServiceInterface interface {
+		FinalizeVoucherByID(ctx context.Context, voucherID string, paymentID string) error
+	}
+
+	voucherSvc, ok := o.voucherService.(voucherServiceInterface)
+	if !ok {
+		return nil, fmt.Errorf("invalid voucher service type")
+	}
+
+	finalizedVouchers := make([]string, 0, len(voucherIDs))
+	var finalizeErrors []string
+
+	for _, voucherID := range voucherIDs {
+		fmt.Printf("📄 Finalizing voucher: %s\n", voucherID)
+
+		err := voucherSvc.FinalizeVoucherByID(ctx, voucherID, paymentID)
+		if err != nil {
+			errMsg := fmt.Sprintf("voucher %s: %v", voucherID, err)
+			finalizeErrors = append(finalizeErrors, errMsg)
+			fmt.Printf("❌ Failed to finalize voucher %s: %v\n", voucherID, err)
+		} else {
+			finalizedVouchers = append(finalizedVouchers, voucherID)
+			fmt.Printf("✅ Voucher %s finalized\n", voucherID)
+		}
+	}
+
+	// Return partial success
+	if len(finalizeErrors) > 0 {
+		return finalizedVouchers, fmt.Errorf("finalization errors: %s", strings.Join(finalizeErrors, "; "))
+	}
+
+	return finalizedVouchers, nil
 }

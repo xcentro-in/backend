@@ -31,6 +31,9 @@ type VoucherService interface {
 
 	// EnqueueForERPSync adds a voucher to ERP sync queue
 	EnqueueForERPSync(ctx context.Context, voucherID uuid.UUID) error
+
+	// FinalizeVoucherByID is a convenience method that accepts string IDs (for payment integration)
+	FinalizeVoucherByID(ctx context.Context, voucherID string, paymentID string) error
 }
 
 // VoucherServiceImpl implements the VoucherService interface
@@ -446,6 +449,29 @@ func (s *VoucherServiceImpl) calculateSummary(vouchers []*voucher.Voucher) *Vouc
 
 	return summary
 }
+
+// FinalizeVoucherByID finalizes a voucher using string IDs (Phase 6: Payment integration)
+func (s *VoucherServiceImpl) FinalizeVoucherByID(ctx context.Context, voucherIDStr string, paymentIDStr string) error {
+	voucherID, err := uuid.Parse(voucherIDStr)
+	if err != nil {
+		return fmt.Errorf("invalid voucher_id: %w", err)
+	}
+
+	paymentID, err := uuid.Parse(paymentIDStr)
+	if err != nil {
+		return fmt.Errorf("invalid payment_id: %w", err)
+	}
+
+	req := &FinalizeVoucherRequest{
+		VoucherID: voucherID,
+		PaymentID: paymentID,
+	}
+
+	_, err = s.FinalizeVoucher(ctx, req)
+	return err
+}
+
+// Helper functions
 
 // maskAccountNumber masks account number for security (show last 4 digits only)
 func maskAccountNumber(accountNumber string) string {

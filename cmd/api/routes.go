@@ -47,7 +47,19 @@ func registerV1PaymentRoutes(meta *serverMetaData, group *echo.Group) {
 	feeCalculator := business_rules.NewMockFeeCalculator()
 	walletService := business_rules.NewMockWalletService(storedCardRepository, bankAccountRepository, meta.clients.txManager)
 
-	// Create payment service layer (Phase 4.4+)
+	// PHASE 6: Create voucher service for payment integration
+	voucherRepository := voucherRepo.NewPostgresVoucherRepository(meta.clients.db)
+	approvalRepository := voucherRepo.NewPostgresApprovalRepository(meta.clients.db)
+	queueRepository := voucherRepo.NewPostgresERPSyncQueueRepository(meta.clients.db)
+	voucherCoreService := coreVoucher.NewVoucherService(voucherRepository)
+	voucherService := voucherSvc.NewVoucherService(
+		voucherRepository,
+		approvalRepository,
+		queueRepository,
+		voucherCoreService,
+	)
+
+	// Create payment service layer (Phase 4.4+ / Phase 6)
 	paymentService := payments.NewPaymentService(
 		orchestrator,
 		paymentRepository,
@@ -56,6 +68,7 @@ func registerV1PaymentRoutes(meta *serverMetaData, group *echo.Group) {
 		walletService,
 		feeCalculator,
 		meta.clients.txManager,
+		voucherService, // PHASE 6: Inject voucher service
 	)
 
 	// Register payment routes with payment service

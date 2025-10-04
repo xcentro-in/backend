@@ -103,6 +103,15 @@ type Voucher struct {
 	ERPSyncAttempts int                    `json:"erp_sync_attempts"`
 	ERPMetadata     map[string]interface{} `json:"erp_metadata,omitempty"`
 
+	// Payout tracking (Phase 6)
+	PayoutStatus      string                 `json:"payout_status"`              // pending, initiated, completed, failed
+	PayoutInitiatedAt *time.Time             `json:"payout_initiated_at,omitempty"`
+	PayoutInitiatedBy *uuid.UUID             `json:"payout_initiated_by,omitempty"` // Operations user who initiated payout
+	PayoutCompletedAt *time.Time             `json:"payout_completed_at,omitempty"`
+	PayoutReferenceID string                 `json:"payout_reference_id,omitempty"` // Payout gateway txn ID
+	PayoutUTR         string                 `json:"payout_utr,omitempty"`          // Bank UTR number
+	PayoutMetadata    map[string]interface{} `json:"payout_metadata,omitempty"`
+
 	// General ledger codes
 	GLExpenseAccount string `json:"gl_expense_account,omitempty"` // e.g., 5000
 	GLBankAccount    string `json:"gl_bank_account,omitempty"`    // e.g., 1020

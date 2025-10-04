@@ -98,6 +98,8 @@ type PaymentRequest struct {
 	UPIDetails      *UPI                   `json:"upi_details,omitempty"`
 	WalletDetails   *Wallet                `json:"wallet_details,omitempty"`
 	Metadata        map[string]any `json:"metadata,omitempty"`
+	// Voucher integration (Phase 6)
+	VoucherIDs      []string       `json:"voucher_ids,omitempty"` // Draft voucher IDs to finalize on payment success
 }
 
 // PaymentResponse represents a response from payment processing
@@ -115,6 +117,9 @@ type PaymentResponse struct {
 	Message          string                 `json:"message"`
 	CreatedAt        time.Time              `json:"created_at"`
 	Metadata         map[string]any `json:"metadata,omitempty"`
+	// Voucher finalization results (Phase 6)
+	VouchersFinalized []string       `json:"vouchers_finalized,omitempty"` // Successfully finalized voucher IDs
+	VoucherStatus     string         `json:"voucher_status,omitempty"`     // "finalized", "partial", "failed"
 }
 
 // TokenizeRequest represents a request to tokenize a card

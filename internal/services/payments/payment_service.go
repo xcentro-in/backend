@@ -18,6 +18,7 @@ type PaymentService struct {
 	walletService   business_rules.WalletService
 	feeCalculator   business_rules.FeeCalculator
 	txManager       client.TxManager
+	voucherService  interface{} // voucher.VoucherService, using interface{} to avoid circular import (Phase 6)
 }
 
 // NewPaymentService creates a new payment service with all dependencies
@@ -29,8 +30,9 @@ func NewPaymentService(
 	walletService business_rules.WalletService,
 	feeCalculator business_rules.FeeCalculator,
 	txManager client.TxManager,
+	voucherService interface{}, // Phase 6: Voucher service for payment integration
 ) *PaymentService {
-	return &PaymentService{
+	s := &PaymentService{
 		orchestrator:    orchestrator,
 		paymentRepo:     paymentRepo,
 		storedCardRepo:  storedCardRepo,
@@ -38,7 +40,16 @@ func NewPaymentService(
 		walletService:   walletService,
 		feeCalculator:   feeCalculator,
 		txManager:       txManager,
+		voucherService:  voucherService,
 	}
+
+	// Inject voucher service into orchestrator (Phase 6)
+	if voucherService != nil {
+		orchestrator.SetVoucherService(voucherService)
+		fmt.Println("✅ Voucher service wired into payment orchestrator")
+	}
+
+	return s
 }
 
 // ProcessPayment orchestrates the complete payment flow

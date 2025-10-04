@@ -382,63 +382,89 @@ type BillVoucherRequest struct {
 
 ---
 
-### Phase 5: HTTP Handlers
+### ✅ Phase 5: HTTP Handlers & Routes (COMPLETED)
+**Status**: Completed on 2025-10-03
 **Priority**: Medium
 
-**Directory**: `internal/handlers/http/`
+**Directory**: `internal/handlers/http/voucher/`
 
-**Files to Create/Modify**:
-1. `voucher_handler.go`:
-   ```go
-   type VoucherHandler struct {
-       voucherService VoucherService
-   }
+**Files Created**:
+- ✅ `voucher_handler.go` - HTTP handlers for all voucher endpoints
+- ✅ `routes.go` - Route registration function
+- ✅ Updated `cmd/api/routes.go` - Wired voucher routes into API
 
-   func (h *VoucherHandler) CreateDraftVoucher(c echo.Context) error
-   func (h *VoucherHandler) GetVoucher(c echo.Context) error
-   func (h *VoucherHandler) ListVouchers(c echo.Context) error
-   func (h *VoucherHandler) FinalizeVoucher(c echo.Context) error
-   ```
+**API Endpoints Available**:
+```bash
+POST   /v1/vouchers/draft              # Create draft voucher
+POST   /v1/vouchers/multi              # Multi-bill payment vouchers
+GET    /v1/vouchers                    # List vouchers with filters
+GET    /v1/vouchers/reminders          # Get abandoned draft vouchers
+GET    /v1/vouchers/:id                # Get voucher details
+PUT    /v1/vouchers/:id/finalize       # Finalize voucher after payment
+```
 
-2. Update `cmd/api/routes.go`:
-   ```go
-   v1.POST("/vouchers/draft", voucherHandler.CreateDraftVoucher)
-   v1.GET("/vouchers", voucherHandler.ListVouchers)
-   v1.GET("/vouchers/:id", voucherHandler.GetVoucher)
-   v1.PUT("/vouchers/:id/finalize", voucherHandler.FinalizeVoucher)
-   ```
+**Repository Interface Fix**:
+- Changed from `*pgxpool.Pool` to `client.DB` interface
+- Applied to all 3 repositories (voucher, approval, queue)
+- Ensures consistency with payment module pattern
 
-**API Examples**: See [API Endpoints](#api-endpoints) section below.
+**Build Status**: ✅ Successful, no errors
 
 ---
 
-### Phase 6: Payment Integration
-**Priority**: High (Must be done with Phase 5)
+### Phase 6: Payment Integration (IN PROGRESS)
+**Status**: Planning complete, implementation in progress
+**Priority**: Critical
+**Started**: 2025-10-03
+
+**Objective**: Integrate voucher finalization into payment success flow
+
+**Key Design Decisions**:
+1. ✅ **No `payee_id` in payments table** - One payment can have multiple payees (multi-bill scenario)
+2. ✅ **Payout tracking in `payment_vouchers` table** - Payout is per-voucher, not per-payment
+3. ✅ **Use `voucher_ids[]` array only** - Handles both single and multi-voucher payments
+4. ✅ **Synchronous voucher finalization** - Finalize immediately after payment gateway response
+5. ⏳ **Payout API integration deferred** - Will be separate phase (Phase 7.5)
+6. ⏳ **Webhook integration deferred** - Will be part of webhook phase (Phase 8)
+7. ⏳ **Error handling deferred** - Will be dedicated phase for entire codebase
+
+**Database Changes**:
+- Migration `000005`: Add payout tracking columns to `payment_vouchers`
+  - `payout_status`, `payout_initiated_at`, `payout_completed_at`
+  - `payout_reference_id`, `payout_utr`, `payout_metadata`
 
 **Files to Modify**:
-1. `internal/services/payments/payment_orchestrator.go`:
-   - After successful payment, call `voucherService.FinalizeVoucher()`
-   - Update voucher with `payment_id`
+1. `internal/core/payment/payment_entity.go` - Add `voucher_ids[]` field
+2. `internal/core/payment/payment_orchestrator.go` - Add voucher finalization logic
+3. `internal/services/payments/payment_service.go` - Add voucher validation
+4. `internal/services/voucher/voucher_service.go` - Add helper method for string IDs
+5. `internal/core/voucher/voucher_entity.go` - Add payout tracking fields
+6. `cmd/api/routes.go` - Wire voucher service into payment service
 
-**Flow**:
-```go
-func (p *PaymentOrchestrator) ProcessPayment(ctx context.Context, req PaymentRequest) (*PaymentResponse, error) {
-    // ... existing payment logic ...
-
-    if paymentStatus == "success" {
-        // Finalize voucher(s) linked to this payment
-        if req.VoucherID != nil {
-            err := p.voucherService.FinalizeVoucher(ctx, *req.VoucherID, paymentID)
-            if err != nil {
-                // Log error but don't fail payment
-                p.logger.Errorf("Failed to finalize voucher: %v", err)
-            }
-        }
-    }
-
-    return response, nil
-}
+**Integration Flow**:
 ```
+1. Frontend: Create draft voucher(s) → Get voucher_ids[]
+2. Frontend: Submit payment with voucher_ids[]
+3. Backend: Validate vouchers exist and are draft
+4. Backend: Create payment record
+5. Backend: Process payment via gateway
+6. Backend: On success, finalize all vouchers synchronously
+7. Backend: Return response with voucher finalization status
+```
+
+**Payout Flow** (Operations Team):
+```sql
+-- Query pending payouts grouped by payee
+SELECT payee_id, SUM(net_amount), COUNT(voucher_id)
+FROM payment_vouchers
+WHERE payout_status = 'pending' AND status = 'finalized'
+GROUP BY payee_id;
+
+-- Initiate payout for each payee
+-- Update payout_status = 'initiated' → 'completed'
+```
+
+**Documentation**: See `docs/payment_voucher_integration.md` for detailed flow and design rationale
 
 ---
 
