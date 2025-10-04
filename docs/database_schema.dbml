@@ -1,0 +1,567 @@
+// XCentro Backend Database Schema
+// Generated from migrations 000001-000005
+// Schema: xcentro
+// Last updated: 2025-10-04 (Phase 6 Complete)
+
+// =============================================================================
+// ENUMS
+// =============================================================================
+
+Enum "verification_type" {
+  "email_verification"
+  "mobile_verification"
+}
+
+Enum "kyc_status_enum" {
+  "kyc_not_started"
+  "kyc_in_progress"
+  "kyc_completed"
+  "kyc_verified"
+  "kyc_needs_update"
+  "kyc_rejected"
+}
+
+Enum "user_role_enum" {
+  "owner"
+  "admin"
+  "finance"
+  "support"
+}
+
+Enum "business_type_enum" {
+  "sole_proprietorship"
+  "partnership"
+  "limited_liability_partnership"
+  "private_limited_company"
+  "one_person_company"
+  "section_8_non_profit"
+  "trust"
+  "ngo"
+  "society"
+  "cooperative_society"
+  "other"
+}
+
+Enum "subscription_type_enum" {
+  "free_plan"
+  "basic_plan"
+  "premium_plan"
+  "enterprise_plan"
+}
+
+Enum "payment_status_enum" {
+  "pending"
+  "success"
+  "failed"
+  "cancelled"
+}
+
+Enum "gateway_type_enum" {
+  "jiopay"
+  "easebuzz"
+}
+
+Enum "payment_method_enum" {
+  "card"
+  "token_card"
+  "net_banking"
+  "upi"
+  "wallet"
+}
+
+Enum "card_type_enum" {
+  "visa"
+  "mastercard"
+  "rupay"
+  "amex"
+  "diners"
+}
+
+Enum "card_category_enum" {
+  "credit"
+  "debit"
+  "corporate"
+}
+
+Enum "payment_source_type_enum" {
+  "card"
+  "bank_account"
+  "upi"
+  "credit_line"
+}
+
+Enum "currency_code_enum" {
+  "INR"
+  "USD"
+  "EUR"
+  "GBP"
+  "AED"
+}
+
+Enum "payee_type_enum" {
+  "vendor"
+  "gst_payment"
+  "biller"
+  "employee"
+}
+
+Enum "verification_status_enum" {
+  "pending"
+  "in_progress"
+  "success"
+  "failed"
+}
+
+Enum "bank_account_type_enum" {
+  "savings"
+  "current"
+  "cc"
+  "od"
+}
+
+// =============================================================================
+// USER & IDENTITY TABLES
+// =============================================================================
+
+Table "user_identity" {
+  "tax_id" text [pk, note: 'PAN or generic tax identifier']
+  "tax_id_data" jsonb
+  "national_id" text [unique, note: 'Aadhaar/SSN/National ID']
+  "national_id_data" jsonb
+  "n_txn_id" text
+  "created_at" timestamptz
+  "updated_at" timestamptz
+  Note: 'Personal identity & compliance artifacts (externalized KYC data)'
+}
+
+Table "user_table" {
+  "id" uuid [pk, default: `uuidv7()`]
+  "email" varchar(254) [unique, not null]
+  "pwd_hash" text [not null]
+  "mobile" varchar(20)
+  "tax_id" text [ref: > user_identity.tax_id]
+  "kyc_status" kyc_status_enum [not null, default: 'kyc_not_started']
+  "email_verified" boolean [default: false]
+  "mobile_verified" boolean [default: false]
+  "created_at" timestamptz [default: `NOW()`]
+  "updated_at" timestamptz
+  Note: 'User accounts, authentication, and KYC data'
+}
+
+Table "user_verification_codes" {
+  "id" uuid [pk, default: `uuidv7()`]
+  "user_id" uuid [ref: > user_table.id, note: 'ON DELETE CASCADE']
+  "code" text
+  "code_type" verification_type
+  "expires_at" timestamptz
+  "created_at" timestamptz [default: `NOW()`]
+  "used" boolean [default: false]
+  "retry_attempts" integer [default: 0]
+}
+
+// =============================================================================
+// BUSINESS TABLES
+// =============================================================================
+
+Table "kyb_data" {
+  "income_tax_id" text [pk]
+  "income_tax_id_data" jsonb
+  "company_id" text
+  "company_id_data" jsonb
+  "business_deed" text
+  Note: 'Know Your Business (KYB) identity and corporate data'
+}
+
+Table "business" {
+  "bid" uuid [pk, default: `uuidv7()`]
+  "name" text
+  "gstin" varchar(15) [unique]
+  "gst_data" jsonb
+  "income_tax_id" text [ref: > kyb_data.income_tax_id]
+  "kyb_status" kyc_status_enum [default: 'kyc_not_started']
+  "business_type" business_type_enum
+  "country_code" varchar(3)
+  "currency_code" varchar(3)
+  "updated_at" timestamptz
+  Note: 'Business entities and their KYB information'
+}
+
+Table "business_user_relation" {
+  "user_id" uuid [not null, ref: > user_table.id]
+  "bid" uuid [not null, ref: > business.bid]
+  "role" user_role_enum
+  "role_claim" user_role_enum
+  "kyb_initiated" boolean [default: false]
+  "added_at" timestamptz [default: `NOW()`]
+  "updated_at" timestamptz
+
+  indexes {
+    (user_id, bid) [pk]
+  }
+  Note: 'Maps users to businesses with specific roles'
+}
+
+Table "subscription_status" {
+  "bid" uuid [pk, ref: > business.bid, note: 'ON DELETE CASCADE']
+  "subscription_type" subscription_type_enum [not null]
+  "start_date" date
+  "expiry_date" date
+  Note: 'Tracks subscription status of businesses'
+}
+
+// =============================================================================
+// PAYMENT SYSTEM TABLES
+// =============================================================================
+
+Table "stored_cards" {
+  "card_id" uuid [pk, default: `uuidv7()`]
+  "business_id" uuid [not null, ref: > business.bid, note: 'ON DELETE CASCADE']
+  "token" text [not null, note: 'Gateway token - NOT actual card number']
+  "last_four_digits" varchar(4) [not null]
+  "card_type" card_type_enum [not null]
+  "card_category" card_category_enum [not null]
+  "expiry_month" varchar(2) [not null]
+  "expiry_year" varchar(4) [not null]
+  "issuer_bank" text
+  "card_holder_name" text
+  "is_active" boolean [default: true]
+  "gateway_used" gateway_type_enum [not null]
+  "added_at" timestamptz [default: `NOW()`]
+  "last_used_at" timestamptz
+  "metadata" jsonb
+
+  indexes {
+    (business_id, token) [unique, name: 'idx_stored_cards_token_unique']
+  }
+  Note: 'Tokenized card storage for recurring payments (PCI DSS compliant)'
+}
+
+Table "bank_accounts" {
+  "account_id" uuid [pk, default: `uuidv7()`]
+  "business_id" uuid [not null, ref: > business.bid, note: 'ON DELETE CASCADE']
+  "account_number_hash" varchar(64) [not null, note: 'SHA-256 hash for duplicate detection']
+  "account_number_encrypted" text [not null, note: 'AES-256-GCM encrypted']
+  "ifsc_code" varchar(11) [not null]
+  "account_holder_name" text [not null]
+  "bank_name" text
+  "branch_name" text
+  "account_type" varchar(20)
+  "is_verified" boolean [default: false]
+  "is_active" boolean [default: true]
+  "added_at" timestamptz [default: `NOW()`]
+  "metadata" jsonb [note: 'Penny drop verification details']
+
+  indexes {
+    (business_id, account_number_hash) [unique, name: 'idx_bank_accounts_unique']
+  }
+  Note: 'Bank accounts with encrypted account numbers for payment sources'
+}
+
+Table "payments" {
+  "payment_id" uuid [pk, default: `uuidv7()`]
+  "user_id" uuid [ref: > user_table.id, note: 'ON DELETE SET NULL']
+  "business_id" uuid [not null, ref: > business.bid, note: 'ON DELETE CASCADE']
+  "amount" bigint [not null, note: 'Amount in paise (INR smallest unit)']
+  "currency" currency_code_enum [not null, default: 'INR']
+  "payment_method" payment_method_enum [not null]
+  "status" payment_status_enum [not null, default: 'pending']
+  "description" text
+  "gateway_used" gateway_type_enum
+  "gateway_payment_id" text [unique, note: 'Gateway transaction ID for webhook lookup']
+  "callback_url" text
+  "redirect_url" text
+  "payment_source_id" uuid [note: 'Polymorphic ref to stored_cards or bank_accounts']
+  "payment_source_type" payment_source_type_enum
+  "fee_amount" bigint [default: 0]
+  "total_amount" bigint [not null, note: 'amount + fee_amount (GST inclusive)']
+  "metadata" jsonb [note: 'Gateway responses, payment attempts, failure reasons']
+  "created_at" timestamptz [default: `NOW()`]
+  "updated_at" timestamptz
+
+  indexes {
+    (gateway_payment_id) [unique, name: 'idx_payments_gateway_payment_id_unique', note: 'WHERE gateway_payment_id IS NOT NULL']
+  }
+  Note: 'Main payment transaction records with gateway routing and fee tracking'
+}
+
+// =============================================================================
+// PAYEE SYSTEM TABLES (Polymorphic Design)
+// =============================================================================
+
+Table "payee_master" {
+  "payee_id" uuid [pk, default: `uuidv7()`]
+  "payee_type" payee_type_enum [not null, note: 'Polymorphic discriminator']
+  "display_name" varchar(500) [not null]
+  "is_active" boolean [default: true]
+  "created_at" timestamptz [default: `NOW()`]
+  "updated_at" timestamptz
+  Note: 'Master routing table for all payee types (vendor, GST, biller, employee)'
+}
+
+Table "payee_vendor" {
+  "payee_id" uuid [pk, ref: - payee_master.payee_id, note: 'ON DELETE CASCADE']
+  "gstin" varchar(15) [unique, not null]
+  "legal_name" varchar(500) [not null]
+  "business_type" varchar(100)
+  "registration_date" date
+  "gst_status" varchar(50) [not null]
+  "building_name" varchar(255)
+  "street" varchar(255)
+  "city" varchar(100)
+  "state" varchar(100)
+  "pincode" varchar(10)
+  "gst_verification_status" verification_status_enum [default: 'pending']
+  "gst_verified_at" timestamptz
+  "gst_data" jsonb [note: 'Full GST API response including directors']
+  "created_at" timestamptz [default: `NOW()`]
+  "updated_at" timestamptz
+  "metadata" jsonb
+  Note: 'Vendor payees identified by GSTIN (businesses we pay)'
+}
+
+Table "payee_gst" {
+  "payee_id" uuid [pk, ref: - payee_master.payee_id, note: 'ON DELETE CASCADE']
+  "government_entity_name" varchar(255) [not null, default: 'Government of India - GST']
+  "gst_portal_url" varchar(500) [default: 'https://www.gst.gov.in']
+  "created_at" timestamptz [default: `NOW()`]
+  "updated_at" timestamptz
+  "metadata" jsonb
+  Note: 'Government GST payment entity (singleton - only one row)'
+}
+
+Table "payee_gst_virtual_accounts" {
+  "virtual_account_id" uuid [pk, default: `uuidv7()`]
+  "payee_id" uuid [not null, ref: > payee_master.payee_id, note: 'ON DELETE CASCADE']
+  "virtual_account_number" varchar(50) [unique, not null]
+  "ifsc_code" varchar(11) [not null]
+  "bank_name" varchar(255) [default: 'Government GST Collection Account']
+  "tax_period" varchar(20) [not null, note: 'e.g., Jan-2024, Q1-2024']
+  "financial_year" varchar(10) [not null]
+  "tax_type" varchar(50)
+  "valid_from" timestamptz [not null]
+  "valid_until" timestamptz [not null]
+  "is_active" boolean [default: true]
+  "challan_document_url" text [note: 'S3 URL of tax challan']
+  "uploaded_at" timestamptz
+  "created_at" timestamptz [default: `NOW()`]
+  "updated_at" timestamptz
+  "metadata" jsonb
+  Note: 'Virtual bank accounts for GST payments (generated monthly/quarterly)'
+}
+
+Table "payee_biller" {
+  "payee_id" uuid [pk, ref: - payee_master.payee_id, note: 'ON DELETE CASCADE']
+  "biller_id" varchar(100) [unique, not null]
+  "biller_name" varchar(500) [not null]
+  "biller_category" varchar(100) [not null, note: 'Electricity, Telecom, Water, Gas, etc.']
+  "biller_description" text
+  "bbps_biller_code" varchar(50)
+  "npci_registered" boolean [default: true]
+  "supports_adhoc" boolean [default: true]
+  "supports_recurring" boolean [default: false]
+  "payment_modes" "text[]"
+  "avg_processing_time_hours" int
+  "created_at" timestamptz [default: `NOW()`]
+  "updated_at" timestamptz
+  "metadata" jsonb
+  Note: 'BBPS system billers (electricity, telecom, water, etc.)'
+}
+
+Table "payee_biller_accounts" {
+  "biller_account_id" uuid [pk, default: `uuidv7()`]
+  "payee_id" uuid [not null, ref: > payee_master.payee_id, note: 'ON DELETE CASCADE']
+  "business_id" uuid [not null, ref: > business.bid, note: 'ON DELETE CASCADE']
+  "mobile_number" varchar(20) [not null]
+  "customer_params" jsonb [not null, note: 'Biller-specific parameters']
+  "auto_fetch_enabled" boolean [default: false]
+  "fetch_schedule" varchar(50)
+  "preferred_fetch_day" int
+  "last_bill_fetched_at" timestamptz
+  "last_bill_amount" bigint
+  "last_bill_due_date" date
+  "is_active" boolean [default: true]
+  "created_at" timestamptz [default: `NOW()`]
+  "updated_at" timestamptz
+  "metadata" jsonb
+
+  indexes {
+    (business_id, payee_id, mobile_number) [unique, name: 'unique_business_biller']
+  }
+  Note: 'Customer-biller configurations (pseudo-account for BBPS payments)'
+}
+
+Table "payee_employee" {
+  "payee_id" uuid [pk, ref: - payee_master.payee_id, note: 'ON DELETE CASCADE']
+  "employee_code" varchar(100)
+  "full_name" varchar(500) [not null]
+  "pan" varchar(10) [unique, not null, note: 'Permanent Account Number']
+  "email" varchar(254)
+  "phone" varchar(20)
+  "designation" varchar(200)
+  "department" varchar(200)
+  "date_of_joining" date
+  "employment_type" varchar(50)
+  "remuneration_doc_url" text [note: 'S3 URL (versioned at S3 level)']
+  "remuneration_doc_uploaded_at" timestamptz
+  "is_sensitive" boolean [default: true, note: 'Always true for employees']
+  "pan_verification_status" verification_status_enum [default: 'pending']
+  "pan_verified_at" timestamptz
+  "created_at" timestamptz [default: `NOW()`]
+  "updated_at" timestamptz
+  "metadata" jsonb
+  Note: 'Employee payees for payroll (individuals, not businesses)'
+}
+
+Table "payee_bank_accounts" {
+  "account_id" uuid [pk, default: `uuidv7()`]
+  "payee_id" uuid [not null, ref: > payee_master.payee_id, note: 'ON DELETE CASCADE']
+  "account_number_encrypted" text [not null, note: 'Encrypted (plaintext in Phase 5.3)']
+  "account_number_hash" varchar(64) [not null, note: 'SHA-256 for duplicate detection']
+  "ifsc_code" varchar(11) [not null]
+  "bank_name" varchar(255)
+  "branch_name" varchar(255)
+  "account_type" bank_account_type_enum [not null]
+  "account_holder_name" varchar(255) [not null]
+  "is_verified" boolean [default: false]
+  "verified_at" timestamptz
+  "bank_verification_status" verification_status_enum [default: 'pending']
+  "bank_verification_data" jsonb [note: 'Penny drop verification details']
+  "cross_verification_status" verification_status_enum [default: 'pending']
+  "name_match_score" "numeric(3,2)"
+  "is_active" boolean [default: true]
+  "is_primary" boolean [default: false]
+  "account_label" varchar(100)
+  "added_at" timestamptz [default: `NOW()`]
+  "updated_at" timestamptz
+  "metadata" jsonb
+
+  indexes {
+    (payee_id, account_number_hash) [unique, name: 'unique_payee_account']
+  }
+  Note: 'Bank accounts for vendor and employee payees (NOT for GST/Biller)'
+}
+
+Table "business_payee_relation" {
+  "business_id" uuid [not null, ref: > business.bid, note: 'ON DELETE CASCADE']
+  "payee_id" uuid [not null, ref: > payee_master.payee_id, note: 'ON DELETE CASCADE']
+  "account_id" uuid [not null, note: 'Polymorphic: bank/virtual/biller account']
+  "display_name" varchar(255) [not null, note: 'Customer-specific name']
+  "contact_email" varchar(254)
+  "contact_phone" varchar(20)
+  "notes" text
+  "is_active" boolean [default: true]
+  "is_favorite" boolean [default: false]
+  "tags" "text[]"
+  "type_specific_data" jsonb [note: 'Type-specific metadata']
+  "added_at" timestamptz [default: `NOW()`]
+  "added_by" uuid [ref: > user_table.id, note: 'ON DELETE SET NULL']
+  "last_used_at" timestamptz [note: 'Updated by payment system']
+  "updated_at" timestamptz
+  "metadata" jsonb
+
+  indexes {
+    (business_id, payee_id, account_id) [pk]
+  }
+  Note: 'Customer-payee relationships (polymorphic - all payee types)'
+}
+
+// =============================================================================
+// VOUCHER SYSTEM TABLES
+// =============================================================================
+
+Table "payment_vouchers" {
+  "voucher_id" uuid [pk, default: `uuidv7()`]
+  "voucher_number" varchar(50) [unique, not null, note: 'Format: PV-2024-00001']
+  "voucher_date" date [not null, default: `CURRENT_DATE`]
+  "fiscal_year" varchar(10) [not null, note: 'FY2024-25']
+  "accounting_period" varchar(7) [not null, note: '2024-04 (Apr 2024)']
+  "voucher_type" varchar(50) [not null, default: 'payment']
+  "business_id" uuid [not null, ref: > business.bid, note: 'ON DELETE CASCADE']
+  "payee_id" uuid [not null]
+  "account_id" uuid [not null]
+  "invoice_number" varchar(100)
+  "invoice_date" date
+  "invoice_due_date" date
+  "gross_amount" bigint [not null, note: 'Amount in paise']
+  "net_amount" bigint [not null, note: 'Amount after TDS/discounts']
+  "currency" varchar(3) [not null, default: 'INR']
+  "gst_amount" bigint [default: 0]
+  "gst_rate" "decimal(5,2)"
+  "cgst_amount" bigint [default: 0]
+  "sgst_amount" bigint [default: 0]
+  "igst_amount" bigint [default: 0]
+  "tds_amount" bigint [default: 0]
+  "tds_rate" "decimal(5,2)"
+  "tds_section" varchar(20) [note: 'e.g., 194C, 194J']
+  "fee_amount" bigint [default: 0]
+  "discount_amount" bigint [default: 0]
+  "financial_details" jsonb [note: 'Line items, HSN codes, tax breakdowns']
+  "attachments" jsonb [note: 'Invoice PDF, supporting docs']
+  "expense_category" varchar(100)
+  "description" text
+  "status" varchar(50) [not null, default: 'draft', note: 'draft→finalized→posted→synced']
+  "payment_id" uuid [ref: > payments.payment_id, note: 'ON DELETE RESTRICT, NULL when draft']
+  "erp_sync_status" varchar(50) [not null, default: 'not_synced']
+  "erp_reference_id" varchar(255) [note: 'ERP system voucher ID']
+  "erp_posting_date" date
+  "erp_last_sync_at" timestamptz
+  "erp_sync_attempts" int [default: 0]
+  "gl_expense_account" varchar(50)
+  "gl_bank_account" varchar(50)
+  "cost_center" varchar(50)
+  "erp_metadata" jsonb [note: 'Vendor-specific ERP fields']
+  "payout_status" varchar(50) [default: 'pending', note: 'pending→initiated→completed→failed']
+  "payout_initiated_at" timestamptz
+  "payout_initiated_by" uuid [ref: > user_table.id, note: 'Operations user']
+  "payout_completed_at" timestamptz
+  "payout_reference_id" varchar(255) [note: 'Payout gateway txn ID']
+  "payout_utr" varchar(100) [note: 'Bank UTR for reconciliation']
+  "payout_metadata" jsonb
+  "created_at" timestamptz [not null, default: `NOW()`]
+  "created_by_user_id" uuid [ref: > user_table.id, note: 'ON DELETE SET NULL']
+  "updated_at" timestamptz
+  "metadata" jsonb
+
+  indexes {
+    (business_id, payee_id, account_id) [name: 'fk_business_payee_relation']
+  }
+  Note: 'Payment vouchers for accounting and ERP integration (draft-first approach)'
+}
+
+// Composite FK constraint for payment_vouchers
+Ref: payment_vouchers.(business_id, payee_id, account_id) > business_payee_relation.(business_id, payee_id, account_id)
+
+Table "voucher_approvals" {
+  "approval_id" uuid [pk, default: `uuidv7()`]
+  "voucher_id" uuid [not null, ref: > payment_vouchers.voucher_id, note: 'ON DELETE CASCADE']
+  "approval_level" int [not null, note: '1, 2, 3 for multi-level']
+  "approver_user_id" uuid [not null, ref: > user_table.id, note: 'ON DELETE CASCADE']
+  "approver_role" varchar(50) [note: 'Manager, Finance Head, etc.']
+  "action" varchar(50) [not null, default: 'pending', note: 'pending, approved, rejected']
+  "action_timestamp" timestamptz
+  "remarks" text
+  "created_at" timestamptz [not null, default: `NOW()`]
+
+  indexes {
+    (voucher_id, approval_level) [unique]
+  }
+  Note: 'Multi-level approval workflow for vouchers'
+}
+
+Table "erp_sync_queue" {
+  "queue_id" uuid [pk, default: `uuidv7()`]
+  "voucher_id" uuid [not null, ref: > payment_vouchers.voucher_id, note: 'ON DELETE CASCADE']
+  "sync_direction" varchar(20) [not null, note: 'push, pull']
+  "queue_status" varchar(50) [not null, default: 'pending', note: 'pending→processing→completed→failed']
+  "retry_count" int [default: 0]
+  "max_retries" int [default: 3]
+  "next_retry_at" timestamptz
+  "request_payload" jsonb
+  "response_payload" jsonb
+  "error_code" varchar(100)
+  "error_message" text
+  "created_at" timestamptz [not null, default: `NOW()`]
+  "started_at" timestamptz
+  "completed_at" timestamptz
+  Note: 'Async queue for ERP synchronization workers'
+}
