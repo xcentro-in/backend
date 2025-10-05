@@ -41,6 +41,17 @@ const (
 	PaymentStatusCancelled PaymentStatus = "cancelled"
 )
 
+// SettlementStatus represents settlement status (Phase 7)
+// Tracks when gateway funds settle into XCentro escrow account
+type SettlementStatus string
+
+const (
+	SettlementStatusPending  SettlementStatus = "pending"  // Gateway accepted, awaiting settlement (T+0 to T+2)
+	SettlementStatusSettled  SettlementStatus = "settled"  // Funds settled into escrow
+	SettlementStatusFailed   SettlementStatus = "failed"   // Settlement failed
+	SettlementStatusRefunded SettlementStatus = "refunded" // Funds refunded to customer
+)
+
 // GatewayType represents different payment gateways
 type GatewayType string
 

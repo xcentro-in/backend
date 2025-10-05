@@ -229,3 +229,35 @@ type GetDraftRemindersResponse struct {
 	Count   int                 `json:"count"`
 	Message string              `json:"message"`
 }
+
+// RequestCancellationRequest represents request to cancel a voucher (Phase 7)
+type RequestCancellationRequest struct {
+	VoucherID uuid.UUID `json:"voucher_id"`
+	UserID    uuid.UUID `json:"user_id"` // Business user requesting cancellation
+	Reason    string    `json:"reason"`  // Cancellation reason
+}
+
+// RequestCancellationResponse represents response after requesting cancellation
+type RequestCancellationResponse struct {
+	VoucherID          uuid.UUID `json:"voucher_id"`
+	VoucherNumber      string    `json:"voucher_number"`
+	CancellationStatus string    `json:"cancellation_status"`
+	Message            string    `json:"message"`
+}
+
+// ApproveCancellationRequest represents request to approve or reject cancellation (Phase 7)
+type ApproveCancellationRequest struct {
+	VoucherID uuid.UUID `json:"voucher_id"`
+	UserID    uuid.UUID `json:"user_id"` // Operations/Finance user approving
+	Action    string    `json:"action"`  // "approve" or "reject"
+	Remarks   string    `json:"remarks,omitempty"`
+}
+
+// ApproveCancellationResponse represents response after approving/rejecting cancellation
+type ApproveCancellationResponse struct {
+	VoucherID          uuid.UUID `json:"voucher_id"`
+	VoucherNumber      string    `json:"voucher_number"`
+	CancellationStatus string    `json:"cancellation_status"`
+	RefundStatus       string    `json:"refund_status,omitempty"`
+	Message            string    `json:"message"`
+}

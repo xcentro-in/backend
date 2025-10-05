@@ -35,6 +35,26 @@ const (
 	VoucherTypeJournal VoucherType = "journal" // Journal voucher (future)
 )
 
+// CancellationStatus represents voucher cancellation state (Phase 7)
+type CancellationStatus string
+
+const (
+	CancellationStatusNotCancelled          CancellationStatus = "not_cancelled"
+	CancellationStatusCancellationRequested CancellationStatus = "cancellation_requested"
+	CancellationStatusCancelled             CancellationStatus = "cancelled"
+)
+
+// RefundStatus represents refund status for cancelled vouchers (Phase 7)
+type RefundStatus string
+
+const (
+	RefundStatusNotApplicable RefundStatus = "not_applicable"
+	RefundStatusPending       RefundStatus = "pending"
+	RefundStatusInitiated     RefundStatus = "initiated"
+	RefundStatusCompleted     RefundStatus = "completed"
+	RefundStatusFailed        RefundStatus = "failed"
+)
+
 // Voucher represents a payment voucher domain entity
 // It serves as the accounting document linking payments to ERP systems
 type Voucher struct {
@@ -111,6 +131,18 @@ type Voucher struct {
 	PayoutReferenceID string                 `json:"payout_reference_id,omitempty"` // Payout gateway txn ID
 	PayoutUTR         string                 `json:"payout_utr,omitempty"`          // Bank UTR number
 	PayoutMetadata    map[string]interface{} `json:"payout_metadata,omitempty"`
+
+	// Cancellation & refund tracking (Phase 7)
+	CancellationStatus      CancellationStatus     `json:"cancellation_status"`
+	CancellationRequestedAt *time.Time             `json:"cancellation_requested_at,omitempty"`
+	CancellationRequestedBy *uuid.UUID             `json:"cancellation_requested_by,omitempty"`
+	CancellationReason      string                 `json:"cancellation_reason,omitempty"`
+	CancellationApprovedAt  *time.Time             `json:"cancellation_approved_at,omitempty"`
+	CancellationApprovedBy  *uuid.UUID             `json:"cancellation_approved_by,omitempty"`
+	RefundStatus            RefundStatus           `json:"refund_status"`
+	RefundInitiatedAt       *time.Time             `json:"refund_initiated_at,omitempty"`
+	RefundReferenceID       string                 `json:"refund_reference_id,omitempty"`
+	RefundMetadata          map[string]interface{} `json:"refund_metadata,omitempty"`
 
 	// General ledger codes
 	GLExpenseAccount string `json:"gl_expense_account,omitempty"` // e.g., 5000

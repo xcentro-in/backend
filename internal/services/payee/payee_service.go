@@ -140,9 +140,8 @@ func (s *PayeeService) onboardVendor(ctx context.Context, req payee.OnboardPayee
 
 		// Create master entry first
 		payeeMaster := &payee.PayeeMaster{
-			PayeeType:   payee.PayeeTypeVendor,
-			DisplayName: req.DisplayName,
-			IsActive:    true,
+			PayeeType: payee.PayeeTypeVendor,
+			IsActive:  true,
 		}
 
 		if err := s.payeeMasterRepo.Create(ctx, payeeMaster); err != nil {
@@ -422,9 +421,8 @@ func (s *PayeeService) onboardGSTPayee(ctx context.Context, req payee.OnboardPay
 
 		// Step 3: Create master entry first
 		payeeMaster := &payee.PayeeMaster{
-			PayeeType:   payee.PayeeTypeGST,
-			DisplayName: "GST Portal", // Standard name
-			IsActive:    true,
+			PayeeType: payee.PayeeTypeGST,
+			IsActive:  true,
 		}
 		if err := s.payeeMasterRepo.Create(ctx, payeeMaster); err != nil {
 			return nil, fmt.Errorf("failed to create payee master: %w", err)
@@ -581,9 +579,8 @@ func (s *PayeeService) onboardBiller(ctx context.Context, req payee.OnboardPayee
 
 		// Step 3: Create master entry first
 		payeeMaster := &payee.PayeeMaster{
-			PayeeType:   payee.PayeeTypeBiller,
-			DisplayName: req.DisplayName, // Customer's preferred name for this biller
-			IsActive:    true,
+			PayeeType: payee.PayeeTypeBiller,
+			IsActive:  true,
 		}
 		if err := s.payeeMasterRepo.Create(ctx, payeeMaster); err != nil {
 			return nil, fmt.Errorf("failed to create payee master: %w", err)
@@ -713,9 +710,8 @@ func (s *PayeeService) onboardEmployee(ctx context.Context, req payee.OnboardPay
 
 		// Step 3: Create master entry first
 		payeeMaster := &payee.PayeeMaster{
-			PayeeType:   payee.PayeeTypeEmployee,
-			DisplayName: req.DisplayName,
-			IsActive:    true,
+			PayeeType: payee.PayeeTypeEmployee,
+			IsActive:  true,
 		}
 		if err := s.payeeMasterRepo.Create(ctx, payeeMaster); err != nil {
 			return nil, fmt.Errorf("failed to create payee master: %w", err)

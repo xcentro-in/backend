@@ -36,7 +36,7 @@ The system uses a normalized three-table design to efficiently handle shared pay
 
 ```
 ┌─────────────────┐
-│ payee_business  │ ← Global canonical payee (one per GSTIN)
+│ payee_master  │ ← Global canonical payee (one per GSTIN)
 └────────┬────────┘
          │ 1:N
          │
@@ -50,7 +50,7 @@ The system uses a normalized three-table design to efficiently handle shared pay
 └──────────────────────────────┘
 ```
 
-### 1. Payee Business Table (`payee_business`)
+### 1. Payee Business Table (`payee_master`)
 
 **Purpose**: Stores global, canonical payee information verified through GST API.
 
@@ -74,7 +74,7 @@ gst_status: Active
 **Purpose**: Stores verified bank accounts for each payee.
 
 **Characteristics**:
-- One-to-many relationship with payee_business
+- One-to-many relationship with payee_master
 - A payee can have multiple accounts (e.g., Current Account 1, Current Account 2)
 - Account hash prevents duplicates per payee
 - Encrypted account numbers
@@ -131,7 +131,7 @@ CREATE TYPE xcentro.verification_status_enum AS ENUM (
 -- ============================================
 -- Table 1: Payee Business (Global Canonical)
 -- ============================================
-CREATE TABLE xcentro.payee_business (
+CREATE TABLE xcentro.payee_master (
     -- Primary Key
     payee_id UUID PRIMARY KEY DEFAULT uuidv7(),
 
@@ -163,9 +163,9 @@ CREATE TABLE xcentro.payee_business (
 );
 
 -- Indexes
-CREATE INDEX idx_payee_business_gstin ON xcentro.payee_business(gstin);
-CREATE INDEX idx_payee_business_legal_name ON xcentro.payee_business(legal_name);
-CREATE INDEX idx_payee_business_gst_status ON xcentro.payee_business(gst_status);
+CREATE INDEX idx_payee_master_gstin ON xcentro.payee_master(gstin);
+CREATE INDEX idx_payee_master_legal_name ON xcentro.payee_master(legal_name);
+CREATE INDEX idx_payee_master_gst_status ON xcentro.payee_master(gst_status);
 
 -- ============================================
 -- Table 2: Payee Bank Accounts
@@ -175,7 +175,7 @@ CREATE TABLE xcentro.payee_bank_accounts (
     account_id UUID PRIMARY KEY DEFAULT uuidv7(),
 
     -- Foreign Key
-    payee_id UUID NOT NULL REFERENCES xcentro.payee_business(payee_id) ON DELETE CASCADE,
+    payee_id UUID NOT NULL REFERENCES xcentro.payee_master(payee_id) ON DELETE CASCADE,
 
     -- Bank Account Details (Encrypted)
     account_number_encrypted TEXT NOT NULL,
@@ -221,7 +221,7 @@ CREATE INDEX idx_payee_bank_accounts_primary ON xcentro.payee_bank_accounts(paye
 CREATE TABLE xcentro.business_payee_relation (
     -- Composite Primary Key
     business_id UUID NOT NULL REFERENCES xcentro.business(bid) ON DELETE CASCADE,
-    payee_id UUID NOT NULL REFERENCES xcentro.payee_business(payee_id) ON DELETE CASCADE,
+    payee_id UUID NOT NULL REFERENCES xcentro.payee_master(payee_id) ON DELETE CASCADE,
     account_id UUID NOT NULL REFERENCES xcentro.payee_bank_accounts(account_id) ON DELETE CASCADE,
 
     -- Customer-Specific Metadata
@@ -836,7 +836,7 @@ type MoneyRotationCheckResponse struct {
 
 **GSTIN Uniqueness**:
 ```sql
-ALTER TABLE xcentro.payee_business
+ALTER TABLE xcentro.payee_master
 ADD CONSTRAINT unique_gstin UNIQUE (gstin);
 ```
 

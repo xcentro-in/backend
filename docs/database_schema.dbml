@@ -291,11 +291,10 @@ Table "payments" {
 Table "payee_master" {
   "payee_id" uuid [pk, default: `uuidv7()`]
   "payee_type" payee_type_enum [not null, note: 'Polymorphic discriminator']
-  "display_name" varchar(500) [not null]
   "is_active" boolean [default: true]
   "created_at" timestamptz [default: `NOW()`]
   "updated_at" timestamptz
-  Note: 'Master routing table for all payee types (vendor, GST, biller, employee)'
+  Note: 'Master routing table for all payee types (vendor, GST, biller, employee) - Minimal routing table only'
 }
 
 Table "payee_vendor" {

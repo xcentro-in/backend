@@ -25,9 +25,15 @@ type Payment struct {
 	WalletDetails    *Wallet                `json:"wallet_details,omitempty"`
 	FeeAmount        int64                  `json:"fee_amount"`
 	TotalAmount      int64                  `json:"total_amount"` // Amount + Fee
-	Metadata         map[string]any `json:"metadata,omitempty"`
-	CreatedAt        time.Time              `json:"created_at"`
-	UpdatedAt        time.Time              `json:"updated_at"`
+	Metadata         map[string]any         `json:"metadata,omitempty"`
+	// Settlement tracking (Phase 7)
+	SettlementStatus      SettlementStatus       `json:"settlement_status"`
+	SettledAt             *time.Time             `json:"settled_at,omitempty"`
+	SettlementReferenceID string                 `json:"settlement_reference_id,omitempty"`
+	SettlementUTR         string                 `json:"settlement_utr,omitempty"`
+	SettlementMetadata    map[string]interface{} `json:"settlement_metadata,omitempty"`
+	CreatedAt             time.Time              `json:"created_at"`
+	UpdatedAt             time.Time              `json:"updated_at"`
 }
 
 // Card represents card payment details

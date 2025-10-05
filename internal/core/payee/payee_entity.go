@@ -54,12 +54,11 @@ type Address struct {
 // PayeeMaster represents the master routing entry for all payees
 // Thin table with minimal shared fields
 type PayeeMaster struct {
-	PayeeID     string    `json:"payee_id"`
-	PayeeType   PayeeType `json:"payee_type"`
-	DisplayName string    `json:"display_name"`
-	IsActive    bool      `json:"is_active"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	PayeeID   string    `json:"payee_id"`
+	PayeeType PayeeType `json:"payee_type"`
+	IsActive  bool      `json:"is_active"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // ############################################################################

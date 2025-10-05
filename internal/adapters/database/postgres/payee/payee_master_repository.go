@@ -32,15 +32,14 @@ func (r *PgPayeeMasterRepository) WithTx(tx client.Tx) payee.PayeeMasterReposito
 func (r *PgPayeeMasterRepository) Create(ctx context.Context, master *payee.PayeeMaster) error {
 	query := `
 		INSERT INTO xcentro.payee_master (
-			payee_id, payee_type, display_name, is_active
-		) VALUES ($1, $2, $3, $4)
+			payee_id, payee_type, is_active
+		) VALUES ($1, $2, $3)
 		RETURNING created_at, updated_at
 	`
 
 	err := r.querier.QueryRow(ctx, query,
 		master.PayeeID,
 		master.PayeeType,
-		master.DisplayName,
 		master.IsActive,
 	).Scan(&master.CreatedAt, &master.UpdatedAt)
 
@@ -54,7 +53,7 @@ func (r *PgPayeeMasterRepository) Create(ctx context.Context, master *payee.Paye
 // FindByID retrieves a payee master entry by ID
 func (r *PgPayeeMasterRepository) FindByID(ctx context.Context, payeeID string) (*payee.PayeeMaster, error) {
 	query := `
-		SELECT payee_id, payee_type, display_name, is_active, created_at, updated_at
+		SELECT payee_id, payee_type, is_active, created_at, updated_at
 		FROM xcentro.payee_master
 		WHERE payee_id = $1
 	`
@@ -63,7 +62,6 @@ func (r *PgPayeeMasterRepository) FindByID(ctx context.Context, payeeID string) 
 	err := r.querier.QueryRow(ctx, query, payeeID).Scan(
 		&master.PayeeID,
 		&master.PayeeType,
-		&master.DisplayName,
 		&master.IsActive,
 		&master.CreatedAt,
 		&master.UpdatedAt,
@@ -83,13 +81,12 @@ func (r *PgPayeeMasterRepository) FindByID(ctx context.Context, payeeID string) 
 func (r *PgPayeeMasterRepository) Update(ctx context.Context, master *payee.PayeeMaster) error {
 	query := `
 		UPDATE xcentro.payee_master
-		SET display_name = $2, is_active = $3
+		SET is_active = $2
 		WHERE payee_id = $1
 	`
 
 	result, err := r.querier.Exec(ctx, query,
 		master.PayeeID,
-		master.DisplayName,
 		master.IsActive,
 	)
 
@@ -128,7 +125,7 @@ func (r *PgPayeeMasterRepository) Delete(ctx context.Context, payeeID string) er
 // FindByType retrieves payee master entries by type with pagination
 func (r *PgPayeeMasterRepository) FindByType(ctx context.Context, payeeType payee.PayeeType, limit, offset int) ([]*payee.PayeeMaster, error) {
 	query := `
-		SELECT payee_id, payee_type, display_name, is_active, created_at, updated_at
+		SELECT payee_id, payee_type, is_active, created_at, updated_at
 		FROM xcentro.payee_master
 		WHERE payee_type = $1
 		ORDER BY created_at DESC
@@ -147,7 +144,6 @@ func (r *PgPayeeMasterRepository) FindByType(ctx context.Context, payeeType paye
 		err := rows.Scan(
 			&m.PayeeID,
 			&m.PayeeType,
-			&m.DisplayName,
 			&m.IsActive,
 			&m.CreatedAt,
 			&m.UpdatedAt,

@@ -34,6 +34,15 @@ type VoucherRepository interface {
 	// UpdateERPStatus updates the ERP sync status of a voucher
 	UpdateERPStatus(ctx context.Context, voucherID uuid.UUID, status ERPSyncStatus, referenceID string, metadata map[string]interface{}) error
 
+	// RequestCancellation requests cancellation of a voucher (Phase 7)
+	RequestCancellation(ctx context.Context, voucherID uuid.UUID, userID uuid.UUID, reason string, timestamp time.Time) error
+
+	// ApproveCancellation approves a cancellation request (Phase 7)
+	ApproveCancellation(ctx context.Context, voucherID uuid.UUID, userID uuid.UUID, timestamp time.Time, refundStatus RefundStatus) error
+
+	// RejectCancellation rejects a cancellation request (Phase 7)
+	RejectCancellation(ctx context.Context, voucherID uuid.UUID) error
+
 	// GetNextVoucherNumber generates the next sequential voucher number for a business and fiscal year
 	GetNextVoucherNumber(ctx context.Context, businessID uuid.UUID, fiscalYear string) (int, error)
 

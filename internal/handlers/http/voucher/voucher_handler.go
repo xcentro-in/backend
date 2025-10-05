@@ -281,6 +281,126 @@ func (h *VoucherHandler) GetDraftReminders(c echo.Context) error {
 	})
 }
 
+// RequestCancellation handles POST /vouchers/:id/cancel - Request voucher cancellation
+func (h *VoucherHandler) RequestCancellation(c echo.Context) error {
+	fmt.Println("=== HANDLER: RequestCancellation API Called ===")
+
+	// Parse voucher_id from path
+	voucherIDStr := c.Param("id")
+	voucherID, err := uuid.Parse(voucherIDStr)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "invalid_voucher_id",
+			"message": "Invalid voucher ID format",
+		})
+	}
+
+	// Parse request body
+	var req struct {
+		Reason string `json:"reason"`
+	}
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "invalid_request",
+			"message": "Invalid request body",
+		})
+	}
+
+	// Validate reason
+	if req.Reason == "" {
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "missing_reason",
+			"message": "Cancellation reason is required",
+		})
+	}
+
+	// TODO: Extract user_id from JWT
+	userID := uuid.MustParse("00000000-0000-0000-0000-000000000000") // Placeholder
+
+	fmt.Printf("📥 Voucher ID: %s, User ID: %s, Reason: %s\n", voucherID, userID, req.Reason)
+
+	// Call service
+	cancelReq := &voucherSvc.RequestCancellationRequest{
+		VoucherID: voucherID,
+		UserID:    userID,
+		Reason:    req.Reason,
+	}
+	resp, err := h.voucherService.RequestCancellation(c.Request().Context(), cancelReq)
+	if err != nil {
+		fmt.Printf("❌ Request cancellation error: %v\n", err)
+		return h.handleError(c, err)
+	}
+
+	fmt.Printf("✅ Cancellation requested for voucher: %s\n", resp.VoucherNumber)
+
+	return c.JSON(http.StatusOK, map[string]any{
+		"message": "Cancellation request submitted successfully",
+		"status":  "success",
+		"data":    resp,
+	})
+}
+
+// ApproveCancellation handles PUT /vouchers/:id/cancel/approve - Approve or reject cancellation
+func (h *VoucherHandler) ApproveCancellation(c echo.Context) error {
+	fmt.Println("=== HANDLER: ApproveCancellation API Called ===")
+
+	// Parse voucher_id from path
+	voucherIDStr := c.Param("id")
+	voucherID, err := uuid.Parse(voucherIDStr)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "invalid_voucher_id",
+			"message": "Invalid voucher ID format",
+		})
+	}
+
+	// Parse request body
+	var req struct {
+		Action  string `json:"action"`  // "approve" or "reject"
+		Remarks string `json:"remarks"` // Optional remarks
+	}
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "invalid_request",
+			"message": "Invalid request body",
+		})
+	}
+
+	// Validate action
+	if req.Action != "approve" && req.Action != "reject" {
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "invalid_action",
+			"message": "Action must be 'approve' or 'reject'",
+		})
+	}
+
+	// TODO: Extract user_id from JWT (operations/finance user)
+	userID := uuid.MustParse("00000000-0000-0000-0000-000000000000") // Placeholder
+
+	fmt.Printf("📥 Voucher ID: %s, User ID: %s, Action: %s\n", voucherID, userID, req.Action)
+
+	// Call service
+	approveReq := &voucherSvc.ApproveCancellationRequest{
+		VoucherID: voucherID,
+		UserID:    userID,
+		Action:    req.Action,
+		Remarks:   req.Remarks,
+	}
+	resp, err := h.voucherService.ApproveCancellation(c.Request().Context(), approveReq)
+	if err != nil {
+		fmt.Printf("❌ Approve cancellation error: %v\n", err)
+		return h.handleError(c, err)
+	}
+
+	fmt.Printf("✅ Cancellation %s for voucher: %s\n", req.Action, resp.VoucherNumber)
+
+	return c.JSON(http.StatusOK, map[string]any{
+		"message": fmt.Sprintf("Cancellation %s successfully", req.Action),
+		"status":  "success",
+		"data":    resp,
+	})
+}
+
 // Helper methods
 
 // parseFilters parses voucher filters from query parameters

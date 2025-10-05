@@ -250,7 +250,7 @@ SELECT
     ARRAY_AGG(v.voucher_number ORDER BY v.voucher_date) AS voucher_list,
     ARRAY_AGG(v.invoice_number ORDER BY v.voucher_date) AS invoice_list
 FROM xcentro.payment_vouchers v
-JOIN xcentro.payee_business pb ON v.payee_id = pb.payee_id
+JOIN xcentro.payee_master pb ON v.payee_id = pb.payee_id
 JOIN xcentro.payee_bank_accounts pba ON v.account_id = pba.account_id
 JOIN xcentro.payments p ON v.payment_id = p.payment_id
 WHERE p.status = 'success'
@@ -322,7 +322,7 @@ SELECT
     v.invoice_number,
     v.payout_reference_id
 FROM xcentro.payment_vouchers v
-JOIN xcentro.payee_business pb ON v.payee_id = pb.payee_id
+JOIN xcentro.payee_master pb ON v.payee_id = pb.payee_id
 JOIN xcentro.payee_bank_accounts pba ON v.account_id = pba.account_id
 WHERE v.payout_status = 'completed'
   AND v.payout_completed_at BETWEEN $1 AND $2
@@ -339,7 +339,7 @@ ORDER BY v.payout_completed_at DESC;
 |-------|---------|-------------|------------|
 | `payments` | Gateway transactions, escrow tracking | Finance Team | Payment reconciliation, refunds |
 | `payment_vouchers` | Accounting records, payout tracking, ERP sync | Operations + Accounting | Payout initiation, voucher posting |
-| `payee_business` | Vendor/employee master data | Vendor Management | Onboarding, GST verification |
+| `payee_master` | Vendor/employee master data | Vendor Management | Onboarding, GST verification |
 | `payee_bank_accounts` | Payee bank account details | Operations | Penny drop, payout destination |
 
 ### Why Voucher is the Payout Unit
