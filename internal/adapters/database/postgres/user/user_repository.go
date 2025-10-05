@@ -65,21 +65,24 @@ func (r *PgUserRepository) CreateUser(ctx context.Context, authPayload auth.Auth
 // GetUserByID retrieves a user by ID
 func (r *PgUserRepository) GetUserByID(ctx context.Context, userID string) (*user.User, error) {
 	query := `
-		SELECT id, email, mobile, tax_id, kyc_status, email_verified, mobile_verified
+		SELECT id, email, mobile, name, dob, tax_id, kyc_status, kyc_needed, email_verified, mobile_verified
 		FROM xcentro.user_table
 		WHERE id = $1
 	`
 
 	var u user.User
 	var kycStatusStr string
-	var taxID sql.NullString
+	var taxID, name, dob sql.NullString
 
 	err := r.querier.QueryRow(ctx, query, userID).Scan(
 		&u.Id,
 		&u.Email,
 		&u.Mobile,
+		&name,
+		&dob,
 		&taxID,
 		&kycStatusStr,
+		&u.KycNeeded,
 		&u.EmailVerified,
 		&u.MobileVerified,
 	)
@@ -89,7 +92,8 @@ func (r *PgUserRepository) GetUserByID(ctx context.Context, userID string) (*use
 	}
 
 	u.TaxID = taxID.String
-	// Convert enum string to KYCStatus - assuming we'll have a helper
+	u.Name = name.String
+	u.DOB = dob.String
 	u.KycStatus = parseKYCStatus(kycStatusStr)
 
 	return &u, nil
@@ -118,7 +122,7 @@ func parseKYCStatus(status string) shared.KYCStatus {
 // GetUserByEmail retrieves a user by email
 func (r *PgUserRepository) GetUserByEmail(ctx context.Context, email string) (*user.User, error) {
 	query := `
-		SELECT id, email, pwd_hash, mobile, tax_id, kyc_status, email_verified, mobile_verified
+		SELECT id, email, pwd_hash, mobile, tax_id, kyc_status, kyc_needed, email_verified, mobile_verified
 		FROM xcentro.user_table
 		WHERE email = $1
 	`
@@ -133,6 +137,7 @@ func (r *PgUserRepository) GetUserByEmail(ctx context.Context, email string) (*u
 		&mobile,
 		&taxID,
 		&u.KycStatus,
+		&u.KycNeeded,
 		&u.EmailVerified,
 		&u.MobileVerified,
 	)
@@ -269,8 +274,8 @@ func (r *PgUserRepository) GetUserIdentity(ctx context.Context, taxID string) (*
 // GetUserKYCStatus retrieves user and their identity data for KYC status display
 func (r *PgUserRepository) GetUserKYCStatus(ctx context.Context, userID string) (*user.User, *user.UserIdentity, error) {
 	query := `
-		SELECT 
-			u.id, u.email, u.mobile, u.tax_id, u.kyc_status, u.email_verified, u.mobile_verified,
+		SELECT
+			u.id, u.email, u.mobile, u.name, u.dob, u.tax_id, u.kyc_status, u.email_verified, u.mobile_verified,
 			ui.tax_id, ui.tax_id_data, ui.national_id, ui.national_id_data, ui.n_txn_id
 		FROM xcentro.user_table u
 		LEFT JOIN xcentro.user_identity ui ON u.tax_id = ui.tax_id
@@ -278,11 +283,11 @@ func (r *PgUserRepository) GetUserKYCStatus(ctx context.Context, userID string) 
 	`
 
 	var u user.User
-	var userTaxID, piTaxID, piTaxIDData, piNationalID, piNationalIDData, piNTxnID sql.NullString
+	var userTaxID, userName, userDOB, piTaxID, piTaxIDData, piNationalID, piNationalIDData, piNTxnID sql.NullString
 	var kycStatusStr string
 
 	err := r.querier.QueryRow(ctx, query, userID).Scan(
-		&u.Id, &u.Email, &u.Mobile, &userTaxID, &kycStatusStr, &u.EmailVerified, &u.MobileVerified,
+		&u.Id, &u.Email, &u.Mobile, &userName, &userDOB, &userTaxID, &kycStatusStr, &u.EmailVerified, &u.MobileVerified,
 		&piTaxID, &piTaxIDData, &piNationalID, &piNationalIDData, &piNTxnID,
 	)
 
@@ -294,6 +299,8 @@ func (r *PgUserRepository) GetUserKYCStatus(ctx context.Context, userID string) 
 	}
 
 	u.TaxID = userTaxID.String
+	u.Name = userName.String
+	u.DOB = userDOB.String
 	u.KycStatus = parseKYCStatus(kycStatusStr)
 
 	var userIdentity *user.UserIdentity
@@ -562,4 +569,119 @@ func (r *PgUserRepository) UpdateUserEmailVerification(ctx context.Context, user
 	}
 
 	return nil
+}
+
+// UpdateUserNameAndDOB updates user's name and date of birth
+func (r *PgUserRepository) UpdateUserNameAndDOB(ctx context.Context, userID, name, dob string) error {
+	query := `
+		UPDATE xcentro.user_table
+		SET name = $1, dob = $2, updated_at = NOW()
+		WHERE id = $3
+	`
+
+	result, err := r.querier.Exec(ctx, query, name, dob, userID)
+	if err != nil {
+		return fmt.Errorf("failed to update user name and DOB: %w", err)
+	}
+
+	rowsAffected := result.RowsAffected()
+	if rowsAffected == 0 {
+		return fmt.Errorf("user not found")
+	}
+
+	return nil
+}
+
+// UpdateTaxIDData updates the tax ID verification data (PAN_COM + PAN_AADHAAR combined)
+func (r *PgUserRepository) UpdateTaxIDData(ctx context.Context, taxID, taxIDData string) error {
+	query := `
+		UPDATE xcentro.user_identity
+		SET tax_id_data = $1, updated_at = NOW()
+		WHERE tax_id = $2
+	`
+
+	result, err := r.querier.Exec(ctx, query, taxIDData, taxID)
+	if err != nil {
+		return fmt.Errorf("failed to update tax ID data: %w", err)
+	}
+
+	rowsAffected := result.RowsAffected()
+	if rowsAffected == 0 {
+		return fmt.Errorf("no user identity found with tax ID: %s", taxID)
+	}
+
+	return nil
+}
+
+// UpdateUserPasswordHash updates user's password hash
+func (r *PgUserRepository) UpdateUserPasswordHash(ctx context.Context, userID, newPasswordHash string) error {
+	query := `
+		UPDATE xcentro.user_table
+		SET pwd_hash = $1, updated_at = NOW()
+		WHERE id = $2
+	`
+
+	result, err := r.querier.Exec(ctx, query, newPasswordHash, userID)
+	if err != nil {
+		return fmt.Errorf("failed to update password hash: %w", err)
+	}
+
+	rowsAffected := result.RowsAffected()
+	if rowsAffected == 0 {
+		return fmt.Errorf("user not found")
+	}
+
+	return nil
+}
+
+// CreateInvitedUser creates a new user for business invitation with all required fields
+func (r *PgUserRepository) CreateInvitedUser(ctx context.Context, email, passwordHash, name string, kycNeeded bool) (*user.User, error) {
+	query := `
+		INSERT INTO xcentro.user_table (email, pwd_hash, name, kyc_needed, email_verified)
+		VALUES ($1, $2, $3, $4, true)
+		RETURNING id, email, name, kyc_needed, kyc_status, email_verified, mobile_verified
+	`
+
+	var u user.User
+	var kycStatusStr string
+
+	err := r.querier.QueryRow(ctx, query,
+		email,
+		passwordHash,
+		name,
+		kycNeeded,
+	).Scan(
+		&u.Id,
+		&u.Email,
+		&u.Name,
+		&u.KycNeeded,
+		&kycStatusStr,
+		&u.EmailVerified,
+		&u.MobileVerified,
+	)
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to create invited user: %w", err)
+	}
+
+	u.KycStatus = parseKYCStatus(kycStatusStr)
+
+	return &u, nil
+}
+
+// CountBusinessRelations counts the number of business relations for a user (optimized with COUNT)
+func (r *PgUserRepository) CountBusinessRelations(ctx context.Context, userID string) (int, error) {
+	query := `
+		SELECT COUNT(*)
+		FROM xcentro.business_user_relation
+		WHERE user_id = $1
+	`
+
+	var count int
+	err := r.querier.QueryRow(ctx, query, userID).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("failed to count business relations: %w", err)
+	}
+
+	return count, nil
 }

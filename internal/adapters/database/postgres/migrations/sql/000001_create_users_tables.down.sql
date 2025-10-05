@@ -13,7 +13,7 @@ DROP INDEX IF EXISTS xcentro.idx_business_user_relation_bid;
 DROP INDEX IF EXISTS xcentro.idx_business_itid; -- legacy index name
 DROP INDEX IF EXISTS xcentro.idx_business_income_tax_id; -- current index name
 DROP TABLE IF EXISTS xcentro.business_user_relation;
-DROP TABLE IF EXISTS xcentro.business;
+DROP TABLE IF EXISTS xcentro.business CASCADE;
 DROP TABLE IF EXISTS xcentro.kyb_data;
 
 
@@ -23,7 +23,7 @@ DROP TABLE IF EXISTS xcentro.kyb_data;
 DROP TRIGGER IF EXISTS set_timestamp ON xcentro.user_table;
 DROP INDEX IF EXISTS xcentro.idx_user_verification_codes_user_id;
 DROP TABLE IF EXISTS xcentro.user_verification_codes;
-DROP TABLE IF EXISTS xcentro.user_table;
+DROP TABLE IF EXISTS xcentro.user_table CASCADE;
 DROP TRIGGER IF EXISTS set_timestamp ON xcentro.user_identity;
 DROP INDEX IF EXISTS xcentro.idx_user_identity_national_id;
 DROP TABLE IF EXISTS xcentro.user_identity;

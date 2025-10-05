@@ -37,4 +37,15 @@ type UserRepository interface {
 	UpdateAadhaarTransactionID(ctx context.Context, taxID, txnID string) error
 	GetAadhaarTransactionID(ctx context.Context, userID string) (string, error)
 	UpdateNationalIDData(ctx context.Context, taxID, nationalIDData string) error
+
+	// User onboarding methods
+	UpdateUserNameAndDOB(ctx context.Context, userID, name, dob string) error
+	UpdateTaxIDData(ctx context.Context, taxID, taxIDData string) error
+
+	// Password reset methods
+	UpdateUserPasswordHash(ctx context.Context, userID, newPasswordHash string) error
+
+	// Invited user methods
+	CreateInvitedUser(ctx context.Context, email, passwordHash, name string, kycNeeded bool) (*User, error)
+	CountBusinessRelations(ctx context.Context, userID string) (int, error)
 }

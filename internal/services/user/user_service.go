@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"time"
 
+	"golang.org/x/crypto/bcrypt"
 	"xcentro.in/internal/adapters/database/postgres/client"
 	userRepo "xcentro.in/internal/adapters/database/postgres/user"
 	"xcentro.in/internal/adapters/providers/authbridge"
@@ -17,8 +18,10 @@ import (
 	businessRepo "xcentro.in/internal/core/business"
 	"xcentro.in/internal/core/shared"
 	"xcentro.in/internal/core/user"
+	"xcentro.in/internal/services/verification"
 	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/logger"
+	"xcentro.in/internal/shared/types"
 )
 
 // UserServiceImpl provides business logic for user operations
@@ -27,6 +30,7 @@ type UserServiceImpl struct {
 	businessUserRelRepo businessRepo.BusinessUserRelationRepository
 	txManager           client.TxManager
 	emailService        mailers.EmailService
+	verificationService *verification.DocumentVerificationService
 	config              *config.Config
 	logger              *logger.Logger
 }
@@ -37,6 +41,7 @@ func NewUserService(
 	businessUserRelRepo businessRepo.BusinessUserRelationRepository,
 	txManager client.TxManager,
 	emailService mailers.EmailService,
+	verificationService *verification.DocumentVerificationService,
 	config *config.Config,
 ) user.UserService {
 	return &UserServiceImpl{
@@ -44,6 +49,7 @@ func NewUserService(
 		businessUserRelRepo: businessUserRelRepo,
 		txManager:           txManager,
 		emailService:        emailService,
+		verificationService: verificationService,
 		config:              config,
 		logger:              logger.GetDefault(),
 	}
@@ -163,400 +169,6 @@ func (s *UserServiceImpl) UpdateKYCStatus(ctx context.Context, userID string, st
 			return fmt.Errorf("failed to update KYC status: %w", err)
 		}
 
-		return nil
-	})
-}
-
-// InitiateKYC initiates KYC process by setting claimed role and creating identity records
-func (s *UserServiceImpl) InitiateKYC(ctx context.Context, userID string, claimedRole shared.UserRole, taxID, nationalID string) error {
-	s.logger.Info("Initiating KYC for user ID: %s with claimed role: %v", userID, claimedRole)
-
-	if userID == "" {
-		return fmt.Errorf("user ID is required")
-	}
-
-	if taxID == "" {
-		return fmt.Errorf("tax ID is required for KYC")
-	}
-
-	// Check current KYC status - should not allow if already completed or verified
-	currentUser, err := s.userRepo.GetUserByID(ctx, userID)
-	if err != nil {
-		return fmt.Errorf("failed to get user information: %w", err)
-	}
-
-	if currentUser.KycStatus == shared.KYCCompleted || currentUser.KycStatus == shared.KYCVerified {
-		return fmt.Errorf("KYC already completed or verified")
-	}
-
-	// Validate that owner/admin roles require KYC
-	if claimedRole != shared.Owner && claimedRole != shared.Admin {
-		return fmt.Errorf("KYC is only required for Owner and Admin roles")
-	}
-
-	return s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
-		txUserRepo := s.userRepo.WithTx(tx)
-		txBusinessUserRelRepo := s.businessUserRelRepo.WithTx(tx)
-
-		// Create or update user identity
-		identity := &user.UserIdentity{
-			TaxID:          taxID,
-			TaxIDData:      "{}", // Empty JSON initially
-			NationalID:     nationalID,
-			NationalIDData: "{}", // Empty JSON initially
-		}
-
-		if err := txUserRepo.UpsertUserIdentity(ctx, identity); err != nil {
-			return fmt.Errorf("failed to create user identity: %w", err)
-		}
-
-		// Update user to reference the identity and set KYC status
-		if err := txUserRepo.UpdateUserTaxID(ctx, userID, taxID); err != nil {
-			return fmt.Errorf("failed to link user to identity: %w", err)
-		}
-
-		if err := txUserRepo.UpdateUserKYCStatus(ctx, userID, shared.KYCInProgress); err != nil {
-			return fmt.Errorf("failed to update KYC status: %w", err)
-		}
-
-		// Find user's business relationships and update role claims
-		relations, err := txBusinessUserRelRepo.FindByUser(ctx, userID)
-		if err != nil {
-			return fmt.Errorf("failed to find user business relations: %w", err)
-		}
-
-		// Update role claim in all business relationships
-		for _, relation := range relations {
-			if err := txBusinessUserRelRepo.UpdateUserRole(ctx, userID, relation.BID, claimedRole); err != nil {
-				return fmt.Errorf("failed to update role claim for business %s: %w", relation.BID, err)
-			}
-		}
-
-		s.logger.Info("KYC initiated successfully for user %s", userID)
-		return nil
-	})
-}
-
-// GetUserKYCStatus returns user KYC status and identity data as JSON (similar to business service)
-func (s *UserServiceImpl) GetUserKYCStatus(ctx context.Context, userID string) (*user.UserResponseDTO, error) {
-	s.logger.Info("Getting KYC status for user ID: %s", userID)
-
-	if userID == "" {
-		return nil, fmt.Errorf("user ID is required")
-	}
-
-	userData, identityData, err := s.userRepo.GetUserKYCStatus(ctx, userID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get user KYC status: %w", err)
-	}
-
-	if userData == nil {
-		return nil, fmt.Errorf("user not found")
-	}
-
-	// Check if KYC is in appropriate state (not completed or verified)
-	if userData.KycStatus == shared.KYCVerified || userData.KycStatus == shared.KYCCompleted {
-		return nil, fmt.Errorf("KYC already completed and verified")
-	}
-
-	// Ensure we always return a valid (possibly empty) identity object
-	var identity *user.UserIdentity
-	if identityData != nil {
-		identity = identityData
-	} else {
-		identity = &user.UserIdentity{
-			TaxID:          "",
-			TaxIDData:      "{}",
-			NationalID:     "",
-			NationalIDData: "{}",
-		}
-	}
-
-	resp := &user.UserResponseDTO{
-		Id:             userData.Id,
-		Email:          userData.Email,
-		Mobile:         userData.Mobile,
-		TaxID:          identity.TaxID,
-		NationalID:     identity.NationalID,
-		KycStatus:      userData.KycStatus,
-		EmailVerified:  userData.EmailVerified,
-		MobileVerified: userData.MobileVerified,
-	}
-
-	return resp, nil
-}
-
-// VerifyEmail verifies user's email using verification code
-func (s *UserServiceImpl) VerifyEmail(ctx context.Context, userID, code string) error {
-	s.logger.Info("Verifying email for user ID: %s", userID)
-
-	verified, err := s.userRepo.VerifyVerificationCode(ctx, userID, code, shared.EmailVerification)
-	if err != nil {
-		return fmt.Errorf("failed to verify email code: %w", err)
-	}
-
-	if !verified {
-		return fmt.Errorf("invalid or expired verification code")
-	}
-
-	s.logger.Info("Email verified successfully for user %s", userID)
-	return nil
-}
-
-// VerifyMobile verifies user's mobile using verification code
-func (s *UserServiceImpl) VerifyMobile(ctx context.Context, userID, code string) error {
-	s.logger.Info("Verifying mobile for user ID: %s", userID)
-
-	if userID == "" {
-		return fmt.Errorf("user ID is required")
-	}
-
-	if code == "" {
-		return fmt.Errorf("verification code is required")
-	}
-
-	verified, err := s.userRepo.VerifyVerificationCode(ctx, userID, code, shared.MobileVerification)
-	if err != nil {
-		return fmt.Errorf("failed to verify mobile code: %w", err)
-	}
-
-	if !verified {
-		return fmt.Errorf("invalid or expired verification code")
-	}
-
-	s.logger.Info("Mobile verified successfully for user %s", userID)
-	return nil
-}
-
-// SendVerificationCode creates and stores a verification code (integration with external services would be separate)
-func (s *UserServiceImpl) SendVerificationCode(ctx context.Context, userID string, codeType shared.VerificationType) error {
-	s.logger.Info("Sending verification code for user ID: %s, type: %v", userID, codeType)
-
-	// Get user to validate
-	userData, err := s.userRepo.GetUserByID(ctx, userID)
-	if err != nil || userData == nil {
-		return fmt.Errorf("user not found")
-	}
-
-	// Generate a simple 6-digit code (in production, use crypto/rand)
-	code := fmt.Sprintf("%06d", 123456) // Placeholder - replace with proper code generation
-
-	// Calculate proper timestamps
-	now := time.Now()
-	expiresAt := now.Add(15 * time.Minute) // 15 minutes expiry for SMS/basic codes
-
-	verificationCode := &user.UserVerificationCodes{
-		UserID:        userID,
-		Code:          code,
-		CodeType:      codeType,
-		ExpiresAt:     expiresAt.Format(time.RFC3339),
-		CreatedAt:     now.Format(time.RFC3339),
-		Used:          false,
-		RetryAttempts: 0,
-	}
-
-	if err := s.userRepo.CreateVerificationCode(ctx, verificationCode); err != nil {
-		return fmt.Errorf("failed to create verification code: %w", err)
-	}
-
-	// TODO: Integrate with SMS/Email service to actually send the code
-	s.logger.Info("Verification code created (not sent - integration needed) for user %s", userID)
-	return nil
-}
-
-// ClaimBusinessRole allows user to claim a role in a business they initiated KYB for
-func (s *UserServiceImpl) ClaimBusinessRole(ctx context.Context, userID, businessID string, role shared.UserRole) error {
-	s.logger.Info("User %s claiming role %v in business %s", userID, role, businessID)
-
-	if userID == "" {
-		return fmt.Errorf("user ID is required")
-	}
-
-	if businessID == "" {
-		return fmt.Errorf("business ID is required")
-	}
-
-	if role == "" {
-		return fmt.Errorf("role is required")
-	}
-
-	// Check if user has initiated KYB for this business
-	relations, err := s.businessUserRelRepo.FindByUser(ctx, userID)
-	if err != nil {
-		return fmt.Errorf("failed to check business relations: %w", err)
-	}
-
-	var targetRelation *businessRepo.BusinessUserRelation
-	for _, rel := range relations {
-		if rel.BID == businessID && rel.KybInitiated {
-			targetRelation = rel
-			break
-		}
-	}
-
-	if targetRelation == nil {
-		return fmt.Errorf("user not associated with this business")
-	}
-
-	if !targetRelation.KybInitiated {
-		return fmt.Errorf("KYB not initiated for this business")
-	}
-
-	// Update role claim
-	if err := s.businessUserRelRepo.UpdateUserRole(ctx, userID, businessID, role); err != nil {
-		return fmt.Errorf("failed to update role claim: %w", err)
-	}
-
-	s.logger.Info("Role claim updated successfully for user %s in business %s", userID, businessID)
-	return nil
-}
-
-// GenerateAadhaarLink generates an Aadhaar verification link and stores transaction ID
-func (s *UserServiceImpl) GenerateAadhaarLink(ctx context.Context, userID string) (*user.AadhaarLinkResponse, error) {
-	s.logger.Info("Generating Aadhaar link for user ID: %s", userID)
-
-	if userID == "" {
-		return nil, fmt.Errorf("user ID is required")
-	}
-
-	// Get user data to ensure user exists and has tax ID
-	userData, err := s.userRepo.GetUserByID(ctx, userID)
-	if err != nil || userData == nil {
-		return nil, fmt.Errorf("user not found")
-	}
-
-	if userData.TaxID == "" {
-		return nil, fmt.Errorf("user must have tax ID (PAN) before Aadhaar verification")
-	}
-
-	// Check if user already has KYC completed/verified
-	if userData.KycStatus == shared.KYCCompleted || userData.KycStatus == shared.KYCVerified {
-		return nil, fmt.Errorf("KYC already completed or verified")
-	}
-
-	var result *user.AadhaarLinkResponse
-
-	err = s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
-		txUserRepo := s.userRepo.WithTx(tx)
-
-		// Create authbridge client
-		authClient, err := s.createAuthBridgeClient()
-		if err != nil {
-			return fmt.Errorf("failed to create authentication client: %w", err)
-		}
-
-		// Generate unique transaction ID for this request
-		transactionID := fmt.Sprintf("aadhaar_%s_%d", userID, time.Now().Unix())
-
-		// Create Aadhaar link request (empty callback and redirect URLs for now)
-		linkRequest := authbridge.NewAadhaarLinkRequest(transactionID, "", "")
-
-		// Call authbridge API
-		response, err := authClient.SearchDocument(linkRequest)
-		if err != nil {
-			return fmt.Errorf("failed to generate Aadhaar link: %w", err)
-		}
-
-		// Check response status
-		status, ok := response["status"].(float64)
-		if !ok || status != 1 {
-			return fmt.Errorf("adhaar link generation failed: invalid response status")
-		}
-
-		// Extract URL from response
-		data, ok := response["data"].(map[string]interface{})
-		if !ok {
-			return fmt.Errorf("invalid response format: missing data")
-		}
-
-		url, ok := data["url"].(string)
-		if !ok || url == "" {
-			return fmt.Errorf("invalid response format: missing or empty URL")
-		}
-
-		// Extract transaction ID from response
-		tsTransID, ok := response["ts_trans_id"].(string)
-		if !ok || tsTransID == "" {
-			return fmt.Errorf("invalid response format: missing transaction ID")
-		}
-
-		// Store transaction ID in database
-		if err := txUserRepo.UpdateAadhaarTransactionID(ctx, userData.TaxID, tsTransID); err != nil {
-			return fmt.Errorf("failed to store transaction ID: %w", err)
-		}
-
-		s.logger.Info("Aadhaar link generated successfully for user %s, transaction ID: %s", userID, tsTransID)
-
-		result = &user.AadhaarLinkResponse{
-			URL:   url,
-			TxnID: tsTransID,
-		}
-
-		return nil
-	})
-
-	if err != nil {
-		s.logger.Error("Failed to generate Aadhaar link: %v", err)
-		return nil, err
-	}
-
-	return result, nil
-}
-
-// CompleteAadhaarVerification completes the Aadhaar verification process
-func (s *UserServiceImpl) CompleteAadhaarVerification(ctx context.Context, userID string) error {
-	s.logger.Info("Completing Aadhaar verification for user ID: %s", userID)
-
-	if userID == "" {
-		return fmt.Errorf("user ID is required")
-	}
-
-	// Get user data
-	userData, err := s.userRepo.GetUserByID(ctx, userID)
-	if err != nil || userData == nil {
-		return fmt.Errorf("user not found")
-	}
-
-	if userData.TaxID == "" {
-		return fmt.Errorf("user must have tax ID (PAN) configured")
-	}
-
-	return s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
-		txUserRepo := s.userRepo.WithTx(tx)
-
-		// Get stored transaction ID
-		tsTransID, err := txUserRepo.GetAadhaarTransactionID(ctx, userID)
-		if err != nil {
-			return fmt.Errorf("failed to get transaction ID: %w", err)
-		}
-
-		// Create authbridge client
-		authClient, err := s.createAuthBridgeClient()
-		if err != nil {
-			return fmt.Errorf("failed to create authentication client: %w", err)
-		}
-
-		// Create status request
-		statusRequest := authbridge.NewAadhaarStatusRequest(tsTransID)
-
-		// Call authbridge API for status
-		response, err := authClient.SearchDocument(statusRequest)
-		if err != nil {
-			return fmt.Errorf("failed to get Aadhaar verification status: %w", err)
-		}
-
-		// Convert entire response to JSON and store it
-		responseJSON, err := json.Marshal(response)
-		if err != nil {
-			return fmt.Errorf("failed to marshal response data: %w", err)
-		}
-
-		// Update national ID data with the response
-		if err := txUserRepo.UpdateNationalIDData(ctx, userData.TaxID, string(responseJSON)); err != nil {
-			return fmt.Errorf("failed to update national ID data: %w", err)
-		}
-
-		s.logger.Info("Aadhaar verification completed successfully for user %s", userID)
 		return nil
 	})
 }
@@ -775,7 +387,599 @@ func (s *UserServiceImpl) ResendEmailVerification(ctx context.Context, email str
 	return s.SendEmailVerification(ctx, userObj.Id)
 }
 
-// createAuthBridgeClient is a helper method to create authbridge client
-func (s *UserServiceImpl) createAuthBridgeClient() (*authbridge.AuthBridgeClient, error) {
-	return authbridge.NewClient()
+// InitiateOnboarding initiates user onboarding with tax ID and national ID verification
+// User KYC is independent of business - this only verifies identity
+func (s *UserServiceImpl) InitiateOnboarding(
+	ctx context.Context,
+	userID, name, dob, taxID, nationalID string,
+) (*user.InitiateOnboardingResponseDTO, error) {
+	s.logger.Info("Initiating onboarding for user %s", userID)
+
+	// Input validation
+	if userID == "" {
+		return nil, types.NewInvalidKYCInputError("userID", "required")
+	}
+	if name == "" || dob == "" || taxID == "" || nationalID == "" {
+		return nil, types.NewInvalidKYCInputError("user details", "name, dob, taxID, and nationalID are required")
+	}
+
+	// Get current user
+	currentUser, err := s.userRepo.GetUserByID(ctx, userID)
+	if err != nil {
+		return nil, types.ErrUserNotFound
+	}
+
+	// Check if KYC already completed or verified
+	if currentUser.KycStatus == shared.KYCCompleted || currentUser.KycStatus == shared.KYCVerified {
+		return nil, types.ErrKYCAlreadyCompleted
+	}
+
+	var response *user.InitiateOnboardingResponseDTO
+
+	// Execute all operations in a transaction
+	err = s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
+		txUserRepo := s.userRepo.WithTx(tx)
+
+		// Step 1: Verify PAN via PAN_COM
+		s.logger.Info("Verifying PAN (tax ID) for user %s", userID)
+		panComTxnID := fmt.Sprintf("pancom_%s_%d", userID, time.Now().Unix())
+		panComResult, err := s.verificationService.VerifyPANCOM(ctx, taxID, panComTxnID)
+		if err != nil {
+			return types.NewVerificationFailedError("Tax ID", err.Error())
+		}
+
+		// Step 2: Verify PAN-Aadhaar link
+		s.logger.Info("Verifying Tax ID-National ID link for user %s", userID)
+		panAadhaarTxnID := fmt.Sprintf("panaadhaar_%s_%d", userID, time.Now().Unix())
+		panAadhaarResult, err := s.verificationService.VerifyPANAadhaar(ctx, taxID, nationalID, panAadhaarTxnID)
+		if err != nil {
+			return types.NewVerificationFailedError("Tax ID-National ID link", err.Error())
+		}
+
+		// Step 3: Combine verification data
+		taxIDVerificationData := &user.UserTaxIDVerificationData{
+			PANCOMData:     panComResult.PANCOMResponse,
+			PANAadhaarLink: panAadhaarResult,
+		}
+
+		taxIDDataJSON, err := json.Marshal(taxIDVerificationData)
+		if err != nil {
+			return fmt.Errorf("failed to marshal tax ID verification data: %w", err)
+		}
+
+		// Step 4: Create or update user identity
+		identity := &user.UserIdentity{
+			TaxID:          taxID,
+			TaxIDData:      string(taxIDDataJSON),
+			NationalID:     nationalID,
+			NationalIDData: "{}", // Will be populated after Aadhaar verification
+			NTxnID:         "",   // Will be set when generating Aadhaar link
+		}
+
+		if err := txUserRepo.UpsertUserIdentity(ctx, identity); err != nil {
+			return fmt.Errorf("failed to create user identity: %w", err)
+		}
+
+		// Step 5: Update user name, dob, and tax_id reference
+		if err := txUserRepo.UpdateUserNameAndDOB(ctx, userID, name, dob); err != nil {
+			return fmt.Errorf("failed to update user name and DOB: %w", err)
+		}
+
+		if err := txUserRepo.UpdateUserTaxID(ctx, userID, taxID); err != nil {
+			return fmt.Errorf("failed to link user to identity: %w", err)
+		}
+
+		// Step 6: Set KYC status to in_progress
+		if err := txUserRepo.UpdateUserKYCStatus(ctx, userID, shared.KYCInProgress); err != nil {
+			return fmt.Errorf("failed to update KYC status: %w", err)
+		}
+
+		// Step 7: Generate Aadhaar DigiLocker link
+		s.logger.Info("Generating Aadhaar verification link for user %s", userID)
+
+		// Create authbridge client for Aadhaar link generation
+		authClient, err := authbridge.NewClient()
+		if err != nil {
+			return fmt.Errorf("failed to create authentication client: %w", err)
+		}
+
+		// Generate unique transaction ID for Aadhaar
+		aadhaarTxnID := fmt.Sprintf("aadhaar_%s_%d", userID, time.Now().Unix())
+		linkRequest := authbridge.NewAadhaarLinkRequest(aadhaarTxnID, "", "")
+
+		// Call authbridge API
+		aadhaarResponse, err := authClient.SearchDocument(linkRequest)
+		if err != nil {
+			return fmt.Errorf("failed to generate Aadhaar link: %w", err)
+		}
+
+		// Extract URL and transaction ID from response
+		status, ok := aadhaarResponse["status"].(float64)
+		if !ok || status != 1 {
+			return fmt.Errorf("aadhaar link generation failed: invalid response status")
+		}
+
+		data, ok := aadhaarResponse["data"].(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("invalid aadhaar response format: missing data")
+		}
+
+		aadhaarURL, ok := data["url"].(string)
+		if !ok || aadhaarURL == "" {
+			return fmt.Errorf("invalid aadhaar response format: missing or empty URL")
+		}
+
+		tsTransID, ok := aadhaarResponse["ts_trans_id"].(string)
+		if !ok || tsTransID == "" {
+			return fmt.Errorf("invalid aadhaar response format: missing transaction ID")
+		}
+
+		// Step 8: Store Aadhaar transaction ID
+		if err := txUserRepo.UpdateAadhaarTransactionID(ctx, taxID, tsTransID); err != nil {
+			return fmt.Errorf("failed to store Aadhaar transaction ID: %w", err)
+		}
+
+		s.logger.Info("Onboarding initiated successfully for user %s", userID)
+
+		// Prepare response
+		response = &user.InitiateOnboardingResponseDTO{
+			Status:      shared.KYCInProgress,
+			AadhaarLink: aadhaarURL,
+			TxnID:       tsTransID,
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		s.logger.Error("Failed to initiate onboarding: %v", err)
+		return nil, err
+	}
+
+	return response, nil
+}
+
+// CompleteOnboarding completes the user onboarding after Aadhaar verification
+// User claims role in a specific business after identity verification
+func (s *UserServiceImpl) CompleteOnboarding(ctx context.Context, userID, businessID string, claimedRole shared.UserRole) error {
+	s.logger.Info("Completing onboarding for user %s in business %s with role %s", userID, businessID, claimedRole)
+
+	// Input validation
+	if userID == "" {
+		return types.NewInvalidKYCInputError("userID", "required")
+	}
+
+	// Get user data
+	userData, err := s.userRepo.GetUserByID(ctx, userID)
+	if err != nil || userData == nil {
+		return types.ErrUserNotFound
+	}
+
+	// Validate user has initiated onboarding
+	if userData.KycStatus != shared.KYCInProgress {
+		return fmt.Errorf("onboarding not initiated - please call initiate onboarding first")
+	}
+
+	if userData.TaxID == "" {
+		return fmt.Errorf("user must have tax ID configured")
+	}
+
+	// Check if user is invited (has existing business relations)
+	relationCount, err := s.userRepo.CountBusinessRelations(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("failed to check business relations: %w", err)
+	}
+
+	isInvitedUser := relationCount > 0
+
+	// For invited users, businessID and claimedRole are ignored
+	if !isInvitedUser {
+		// Non-invited users must provide businessID and role
+		if businessID == "" {
+			return types.NewInvalidKYCInputError("businessID", "required")
+		}
+		if claimedRole == "" {
+			return types.NewInvalidKYCInputError("claimedRole", "required")
+		}
+	}
+
+	return s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
+		txUserRepo := s.userRepo.WithTx(tx)
+		txBusinessUserRelRepo := s.businessUserRelRepo.WithTx(tx)
+
+		// Step 1: Get stored Aadhaar transaction ID
+		tsTransID, err := txUserRepo.GetAadhaarTransactionID(ctx, userID)
+		if err != nil {
+			return types.ErrAadhaarNotInitiated
+		}
+
+		// Step 2: Create authbridge client
+		authClient, err := authbridge.NewClient()
+		if err != nil {
+			return fmt.Errorf("failed to create authentication client: %w", err)
+		}
+
+		// Step 3: Call Aadhaar status API
+		s.logger.Info("Fetching Aadhaar verification status for user %s", userID)
+		statusRequest := authbridge.NewAadhaarStatusRequest(tsTransID)
+		aadhaarStatusResponse, err := authClient.SearchDocument(statusRequest)
+		if err != nil {
+			return types.NewVerificationFailedError("Aadhaar status", err.Error())
+		}
+
+		// Step 4: Convert response to JSON and store in national_id_data
+		responseJSON, err := json.Marshal(aadhaarStatusResponse)
+		if err != nil {
+			return fmt.Errorf("failed to marshal Aadhaar response: %w", err)
+		}
+
+		if err := txUserRepo.UpdateNationalIDData(ctx, userData.TaxID, string(responseJSON)); err != nil {
+			return fmt.Errorf("failed to update national ID data: %w", err)
+		}
+
+		// Step 5: Set KYC status to completed
+		if err := txUserRepo.UpdateUserKYCStatus(ctx, userID, shared.KYCCompleted); err != nil {
+			return fmt.Errorf("failed to update KYC status: %w", err)
+		}
+
+		// Step 6: Update role_claim ONLY for non-invited users
+		if !isInvitedUser {
+			if err := txBusinessUserRelRepo.UpdateRoleClaim(ctx, userID, businessID, claimedRole); err != nil {
+				return fmt.Errorf("failed to update role claim for business %s: %w", businessID, err)
+			}
+			s.logger.Info("Onboarding completed successfully - role claim %s set for user %s in business %s", claimedRole, userID, businessID)
+		} else {
+			s.logger.Info("Onboarding completed successfully for invited user %s - skipping role claim", userID)
+		}
+
+		return nil
+	})
+}
+
+// GetOnboardingStatus returns the current onboarding status for a user
+func (s *UserServiceImpl) GetOnboardingStatus(ctx context.Context, userID string) (*user.OnboardingStatusDTO, error) {
+	s.logger.Info("Getting onboarding status for user %s", userID)
+
+	if userID == "" {
+		return nil, types.NewInvalidKYCInputError("userID", "required")
+	}
+
+	userData, identityData, err := s.userRepo.GetUserKYCStatus(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get user onboarding status: %w", err)
+	}
+
+	if userData == nil {
+		return nil, types.ErrUserNotFound
+	}
+
+	// Prepare response DTO
+	response := &user.OnboardingStatusDTO{
+		UserID:         userData.Id,
+		Email:          userData.Email,
+		Name:           userData.Name,
+		DOB:            userData.DOB,
+		Mobile:         userData.Mobile,
+		TaxID:          "",
+		NationalID:     "",
+		KycStatus:      userData.KycStatus,
+		EmailVerified:  userData.EmailVerified,
+		MobileVerified: userData.MobileVerified,
+	}
+
+	// Add identity data if available
+	if identityData != nil {
+		response.TaxID = identityData.TaxID
+		response.NationalID = identityData.NationalID
+	}
+
+	return response, nil
+}
+
+// SendPasswordResetEmail sends password reset token to user's email
+// SECURITY: Always returns success to prevent email enumeration
+func (s *UserServiceImpl) SendPasswordResetEmail(ctx context.Context, email string) error {
+	s.logger.Info("Password reset requested for email: %s", email)
+
+	if email == "" {
+		// Still return nil to prevent enumeration
+		return nil
+	}
+
+	// Get user details - if not found, silently return success
+	userObj, err := s.userRepo.GetUserByEmail(ctx, email)
+	if err != nil || userObj == nil {
+		s.logger.Info("Password reset requested for non-existent email: %s", email)
+		// SECURITY: Return success even if user doesn't exist
+		return nil
+	}
+
+	// Generate secure verification token (32 bytes = 256 bits)
+	resetToken, err := s.generateSecureToken()
+	if err != nil {
+		s.logger.Errorf("Failed to generate reset token: %v", err)
+		// Return success to prevent information disclosure
+		return nil
+	}
+
+	// Hash the token before storing in database
+	hashedToken := s.hashToken(resetToken)
+
+	// Calculate timestamps - 1 hour expiry for password reset
+	now := time.Now()
+	expiresAt := now.Add(1 * time.Hour)
+
+	// Create verification code record
+	verificationCode := &user.UserVerificationCodes{
+		UserID:        userObj.Id,
+		Code:          hashedToken,
+		CodeType:      shared.PasswordReset,
+		ExpiresAt:     expiresAt.Format(time.RFC3339),
+		CreatedAt:     now.Format(time.RFC3339),
+		Used:          false,
+		RetryAttempts: 0,
+	}
+
+	// Store verification code in database
+	if err := s.userRepo.CreateVerificationCode(ctx, verificationCode); err != nil {
+		s.logger.Errorf("Failed to create password reset code: %v", err)
+		// Return success to prevent information disclosure
+		return nil
+	}
+
+	// Prepare email content with just the token
+	htmlBody := fmt.Sprintf(`
+		<html>
+		<body>
+			<h2>Password Reset - Xcentro</h2>
+			<p>Hi there,</p>
+			<p>We received a request to reset your password. Please use the following verification code:</p>
+			<p style="font-size: 20px; font-weight: bold; background-color: #f0f0f0; padding: 10px; border-radius: 5px; display: inline-block;">%s</p>
+			<p>This code will expire in 1 hour.</p>
+			<p>If you didn't request a password reset, please ignore this email and your password will remain unchanged.</p>
+			<p><strong>Security Note:</strong> Never share this code with anyone. Xcentro staff will never ask for your verification code.</p>
+			<p>Best regards,<br>The Xcentro Team</p>
+		</body>
+		</html>
+	`, resetToken)
+
+	textBody := fmt.Sprintf(`
+		Password Reset - Xcentro
+
+		Hi there,
+
+		We received a request to reset your password. Please use the following verification code:
+
+		%s
+
+		This code will expire in 1 hour.
+
+		If you didn't request a password reset, please ignore this email and your password will remain unchanged.
+
+		Security Note: Never share this code with anyone. Xcentro staff will never ask for your verification code.
+
+		Best regards,
+		The Xcentro Team
+	`, resetToken)
+
+	// Create email message
+	emailMsg := &mailers.EmailMessage{
+		To:       []string{userObj.Email},
+		From:     s.config.SES.DefaultFromEmail,
+		FromName: s.config.SES.DefaultFromName,
+		Subject:  "Reset your Xcentro password",
+		HTMLBody: htmlBody,
+		TextBody: textBody,
+	}
+
+	// Send email
+	messageID, err := s.emailService.SendEmail(ctx, emailMsg)
+	if err != nil {
+		s.logger.Errorf("Failed to send password reset email to %s: %v", userObj.Email, err)
+		// Return success to prevent information disclosure
+		return nil
+	}
+
+	s.logger.Info("Password reset email sent successfully to %s, Message ID: %s", userObj.Email, messageID)
+	return nil
+}
+
+// ResetPasswordWithToken resets user's password using verification token
+func (s *UserServiceImpl) ResetPasswordWithToken(ctx context.Context, token string, newPasswordHash string) error {
+	s.logger.Info("Resetting password with token")
+
+	if token == "" {
+		return fmt.Errorf("reset token is required")
+	}
+
+	if newPasswordHash == "" {
+		return fmt.Errorf("new password is required")
+	}
+
+	return s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
+		txUserRepo := s.userRepo.WithTx(tx)
+
+		// Hash the incoming token to compare with stored hash
+		hashedToken := s.hashToken(token)
+
+		// Get verification code record using hashed token
+		verificationCode, err := txUserRepo.GetVerificationCodeByCode(ctx, hashedToken, shared.PasswordReset)
+		if err != nil {
+			s.logger.Errorf("Failed to get password reset code: %v", err)
+			return fmt.Errorf("invalid or expired reset token")
+		}
+
+		if verificationCode == nil {
+			return fmt.Errorf("reset token not found")
+		}
+
+		if verificationCode.Used {
+			return fmt.Errorf("reset token already used")
+		}
+
+		// Check if token is expired
+		expiresAt, err := time.Parse(time.RFC3339, verificationCode.ExpiresAt)
+		if err != nil {
+			return fmt.Errorf("invalid expiration time format")
+		}
+
+		if time.Now().After(expiresAt) {
+			return fmt.Errorf("reset token has expired")
+		}
+
+		// Mark verification code as used
+		if err := txUserRepo.MarkVerificationCodeAsUsed(ctx, verificationCode.ID); err != nil {
+			return fmt.Errorf("failed to mark reset code as used: %w", err)
+		}
+
+		// Update user password hash
+		if err := txUserRepo.UpdateUserPasswordHash(ctx, verificationCode.UserID, newPasswordHash); err != nil {
+			return fmt.Errorf("failed to update password: %w", err)
+		}
+
+		s.logger.Info("Password reset successfully for user: %s", verificationCode.UserID)
+		return nil
+	})
+}
+
+// generateRandomPassword generates a cryptographically secure random password
+func (s *UserServiceImpl) generateRandomPassword() (string, error) {
+	const (
+		length     = 16
+		lowerChars = "abcdefghijklmnopqrstuvwxyz"
+		upperChars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+		digitChars = "0123456789"
+		symbolChars = "!@#$%^&*"
+		allChars   = lowerChars + upperChars + digitChars + symbolChars
+	)
+
+	password := make([]byte, length)
+
+	// Ensure at least one character from each category
+	categories := []string{lowerChars, upperChars, digitChars, symbolChars}
+	for i := 0; i < 4; i++ {
+		category := categories[i]
+		randomIndex := make([]byte, 1)
+		if _, err := rand.Read(randomIndex); err != nil {
+			return "", fmt.Errorf("failed to generate random byte: %w", err)
+		}
+		password[i] = category[int(randomIndex[0])%len(category)]
+	}
+
+	// Fill remaining characters randomly from all characters
+	for i := 4; i < length; i++ {
+		randomIndex := make([]byte, 1)
+		if _, err := rand.Read(randomIndex); err != nil {
+			return "", fmt.Errorf("failed to generate random byte: %w", err)
+		}
+		password[i] = allChars[int(randomIndex[0])%len(allChars)]
+	}
+
+	// Shuffle the password to randomize character positions
+	for i := length - 1; i > 0; i-- {
+		randomIndex := make([]byte, 1)
+		if _, err := rand.Read(randomIndex); err != nil {
+			return "", fmt.Errorf("failed to generate random byte: %w", err)
+		}
+		j := int(randomIndex[0]) % (i + 1)
+		password[i], password[j] = password[j], password[i]
+	}
+
+	return string(password), nil
+}
+
+// CreateInvitedUser creates a new user for business invitation (email-first to avoid deadlock)
+func (s *UserServiceImpl) CreateInvitedUser(ctx context.Context, email, name string, kycNeeded bool) (*user.User, error) {
+	s.logger.Info("Creating invited user with email: %s", email)
+
+	// Input validation
+	if email == "" || name == "" {
+		return nil, fmt.Errorf("email and name are required")
+	}
+
+	// Check if user already exists
+	existingUser, err := s.userRepo.GetUserByEmail(ctx, email)
+	if err != nil {
+		s.logger.Errorf("failed to check existing user: %v", err)
+		return nil, fmt.Errorf("failed to check existing user: %w", err)
+	}
+	if existingUser != nil {
+		return nil, fmt.Errorf("user with email %s already exists", email)
+	}
+
+	// Generate random password
+	randomPassword, err := s.generateRandomPassword()
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate random password: %w", err)
+	}
+
+	// IMPORTANT: Send email FIRST before creating user (to avoid deadlock)
+	htmlBody := fmt.Sprintf(`
+		<html>
+		<body>
+			<h2>Welcome to Xcentro!</h2>
+			<p>Hi %s,</p>
+			<p>You have been invited to join a business on Xcentro platform.</p>
+			<p>Your temporary login credentials are:</p>
+			<p><strong>Email:</strong> %s</p>
+			<p><strong>Temporary Password:</strong> <code style="background-color: #f0f0f0; padding: 5px 10px; border-radius: 3px;">%s</code></p>
+			<p><strong>⚠️ IMPORTANT:</strong> Please reset your password immediately after logging in for security purposes.</p>
+			<p>If you didn't expect this invitation, please contact the business administrator.</p>
+			<p>Best regards,<br>The Xcentro Team</p>
+		</body>
+		</html>
+	`, name, email, randomPassword)
+
+	textBody := fmt.Sprintf(`
+		Welcome to Xcentro!
+
+		Hi %s,
+
+		You have been invited to join a business on Xcentro platform.
+
+		Your temporary login credentials are:
+		Email: %s
+		Temporary Password: %s
+
+		⚠️ IMPORTANT: Please reset your password immediately after logging in for security purposes.
+
+		If you didn't expect this invitation, please contact the business administrator.
+
+		Best regards,
+		The Xcentro Team
+	`, name, email, randomPassword)
+
+	emailMsg := &mailers.EmailMessage{
+		To:       []string{email},
+		From:     s.config.SES.DefaultFromEmail,
+		FromName: s.config.SES.DefaultFromName,
+		Subject:  "You've been invited to Xcentro",
+		HTMLBody: htmlBody,
+		TextBody: textBody,
+	}
+
+	// Send email
+	messageID, err := s.emailService.SendEmail(ctx, emailMsg)
+	if err != nil {
+		s.logger.Errorf("Failed to send invitation email to %s: %v", email, err)
+		return nil, fmt.Errorf("failed to send invitation email: %w", err)
+	}
+
+	s.logger.Info("Invitation email sent successfully to %s, Message ID: %s", email, messageID)
+
+	// Hash the password
+	hashedPasswordBytes, err := bcrypt.GenerateFromPassword([]byte(randomPassword), bcrypt.DefaultCost)
+	if err != nil {
+		return nil, fmt.Errorf("failed to hash password: %w", err)
+	}
+	hashedPassword := string(hashedPasswordBytes)
+
+	// Create user with hashed password
+	createdUser, err := s.userRepo.CreateInvitedUser(ctx, email, hashedPassword, name, kycNeeded)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create invited user: %w", err)
+	}
+
+	s.logger.Info("Invited user created successfully with ID: %s", createdUser.Id)
+	return createdUser, nil
 }

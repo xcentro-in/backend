@@ -2,10 +2,10 @@ package user
 
 import (
 	"github.com/labstack/echo/v4"
-	"xcentro.in/internal/adapters/providers/authbridge"
 	"xcentro.in/internal/core/auth"
 	"xcentro.in/internal/core/user"
 	"xcentro.in/internal/shared/logger"
+	"xcentro.in/internal/shared/types"
 )
 
 type UserHandler struct {
@@ -27,179 +27,19 @@ func RegisterUserRoutes(e *echo.Group, userService user.UserService, authService
 
 	userGroup := e.Group("/user")
 
-	// Email verification routes don't require authentication
+	// Public routes - don't require authentication
 	userGroup.GET("/verify-email", handler.VerifyEmail)
 	userGroup.POST("/resend-verification", handler.ResendEmailVerification)
+	userGroup.GET("/forgot-password", handler.ForgotPassword)
+	userGroup.POST("/reset-password", handler.ResetPassword)
 
 	// Protected routes requiring authentication
 	userGroup.Use(authService.GetEchoAuthMiddleware())
 
-	userGroup.POST("/verify-mobile", handler.VerifyMobile)
-	userGroup.POST("/kyc", handler.InitiateKYC)
-	userGroup.GET("", handler.GetKYCStatus)
-	userGroup.POST("/claim-role", handler.ClaimBusinessRole)
-	userGroup.GET("/authbridge", handler.KYCHandler)
-	userGroup.POST("/aadhaar/generate-link", handler.GenerateAadhaarLink)
-	userGroup.POST("/aadhaar/complete-verification", handler.CompleteAadhaarVerification)
-}
-
-// VerifyMobile verifies user's mobile number using verification code
-func (h *UserHandler) VerifyMobile(c echo.Context) error {
-	var dto user.VerifyMobileDTO
-	if err := c.Bind(&dto); err != nil {
-		return c.JSON(400, map[string]string{"message": "Invalid request payload"})
-	}
-
-	userID := c.Get("userId").(string)
-	if userID == "" {
-		return c.JSON(400, map[string]string{"message": "Unauthorized request"})
-	}
-
-	if err := h.userService.VerifyMobile(c.Request().Context(), userID, dto.Code); err != nil {
-		h.logger.Errorf("Error verifying mobile for user %s: %v", userID, err)
-		return c.JSON(400, map[string]string{"message": err.Error()})
-	}
-
-	return c.JSON(200, map[string]interface{}{"message": "Mobile verified successfully", "data": nil})
-}
-
-// InitiateKYC initiates KYC process for the user
-func (h *UserHandler) InitiateKYC(c echo.Context) error {
-	var kycDTO user.CreateUserKYCCTO
-	if err := c.Bind(&kycDTO); err != nil {
-		return c.JSON(400, map[string]string{"message": "Invalid request payload"})
-	}
-
-	userID := c.Get("userId").(string)
-	if userID == "" {
-		return c.JSON(400, map[string]string{"message": "Unauthorized request"})
-	}
-
-	if err := h.userService.InitiateKYC(c.Request().Context(), userID, kycDTO.ClaimedRole, kycDTO.TaxID, kycDTO.NationalID); err != nil {
-		h.logger.Errorf("Error initiating KYC for user %s: %v", userID, err)
-		if err.Error() == "KYC already completed or verified" {
-			return c.JSON(403, map[string]interface{}{"message": err.Error(), "data": nil})
-		}
-		return c.JSON(400, map[string]string{"message": err.Error()})
-	}
-
-	return c.JSON(200, map[string]interface{}{"message": "KYC process initiated successfully", "data": nil})
-}
-
-// GetKYCStatus gets user's KYC status and identity information
-func (h *UserHandler) GetKYCStatus(c echo.Context) error {
-	userID := c.Get("userId").(string)
-	if userID == "" {
-		return c.JSON(400, map[string]string{"message": "Unauthorized request"})
-	}
-
-	kycData, err := h.userService.GetUserKYCStatus(c.Request().Context(), userID)
-	if err != nil {
-		h.logger.Errorf("Error getting KYC status for user %s: %v", userID, err)
-		if err.Error() == "KYC already completed and verified" {
-			return c.JSON(403, map[string]interface{}{"message": err.Error(), "data": nil})
-		}
-		return c.JSON(500, map[string]string{"message": "Failed to get KYC status"})
-	}
-
-	return c.JSON(200, map[string]interface{}{"message": "Fetched KYC status", "data": kycData})
-}
-
-// ClaimBusinessRole allows user to claim a role in a business they initiated KYB for
-func (h *UserHandler) ClaimBusinessRole(c echo.Context) error {
-	var dto user.ClaimRoleDTO
-	if err := c.Bind(&dto); err != nil {
-		return c.JSON(400, map[string]string{"message": "Invalid request payload"})
-	}
-
-	userID := c.Get("userId").(string)
-	if userID == "" {
-		return c.JSON(400, map[string]string{"message": "Unauthorized request"})
-	}
-
-	if err := h.userService.ClaimBusinessRole(c.Request().Context(), userID, dto.BusinessID, dto.Role); err != nil {
-		h.logger.Errorf("Error claiming role for user %s in business %s: %v", userID, dto.BusinessID, err)
-		if err.Error() == "User not associated with this business" || err.Error() == "KYB not initiated for this business" {
-			return c.JSON(403, map[string]interface{}{"message": err.Error(), "data": nil})
-		}
-		return c.JSON(500, map[string]string{"message": err.Error()})
-	}
-
-	return c.JSON(200, map[string]interface{}{"message": "Role claim updated successfully", "data": nil})
-}
-
-func (h *UserHandler) KYCHandler(c echo.Context) error {
-	client, err := authbridge.NewClient()
-
-	if err != nil {
-		h.logger.Errorf("Error creating authbridge client: %v", err)
-		return c.JSON(500, map[string]string{"message": "Failed to create authbridge client"})
-	}
-
-	/*
-	   First link generation then comes the status check
-	*/
-	// data, err := client.SearchDocument(authbridge.NewAadhaarLinkRequest("txn1", "https://xlrewewjyrtacywbki5eg576xy0pqpmu.lambda-url.us-east-1.on.aws/", "http://localhost:8888/v1/aadhaar"))
-	data, err := client.SearchDocument(authbridge.NewAadhaarStatusRequest("20-BFE-282478"))
-
-	if err != nil {
-		h.logger.Errorf("Error searching document in authbridge: %v", err)
-		return c.JSON(500, map[string]string{"message": "Failed to search document in authbridge"})
-	}
-
-	return c.JSON(200, map[string]interface{}{"message": "Authbridge response", "data": data})
-}
-
-// GenerateAadhaarLink generates an Aadhaar verification link for the user
-func (h *UserHandler) GenerateAadhaarLink(c echo.Context) error {
-	userID := c.Get("userId").(string)
-	if userID == "" {
-		return c.JSON(400, map[string]string{"message": "Unauthorized request"})
-	}
-
-	linkResponse, err := h.userService.GenerateAadhaarLink(c.Request().Context(), userID)
-	if err != nil {
-		h.logger.Errorf("Error generating Aadhaar link for user %s: %v", userID, err)
-
-		// Handle specific error cases
-		if err.Error() == "KYC already completed or verified" {
-			return c.JSON(403, map[string]interface{}{"message": err.Error(), "data": nil})
-		}
-		if err.Error() == "user must have tax ID (PAN) before Aadhaar verification" {
-			return c.JSON(400, map[string]interface{}{"message": err.Error(), "data": nil})
-		}
-
-		return c.JSON(500, map[string]string{"message": "Failed to generate Aadhaar link"})
-	}
-
-	return c.JSON(200, map[string]interface{}{
-		"message": "Aadhaar verification link generated successfully",
-		"data":    linkResponse,
-	})
-}
-
-// CompleteAadhaarVerification completes the Aadhaar verification process
-func (h *UserHandler) CompleteAadhaarVerification(c echo.Context) error {
-	userID := c.Get("userId").(string)
-	if userID == "" {
-		return c.JSON(400, map[string]string{"message": "Unauthorized request"})
-	}
-
-	if err := h.userService.CompleteAadhaarVerification(c.Request().Context(), userID); err != nil {
-		h.logger.Errorf("Error completing Aadhaar verification for user %s: %v", userID, err)
-
-		// Handle specific error cases
-		if err.Error() == "failed to get transaction ID: no Aadhaar transaction ID found for user" {
-			return c.JSON(400, map[string]interface{}{"message": "No Aadhaar verification process initiated", "data": nil})
-		}
-
-		return c.JSON(500, map[string]string{"message": "Failed to complete Aadhaar verification"})
-	}
-
-	return c.JSON(200, map[string]interface{}{
-		"message": "Aadhaar verification completed successfully",
-		"data":    nil,
-	})
+	// User onboarding endpoints
+	userGroup.POST("/onboard/initiate", handler.InitiateOnboarding)
+	userGroup.POST("/onboard/complete", handler.CompleteOnboarding)
+	userGroup.GET("/onboard/status", handler.GetOnboardingStatus)
 }
 
 // VerifyEmail verifies user's email using verification token
@@ -258,6 +98,181 @@ func (h *UserHandler) ResendEmailVerification(c echo.Context) error {
 
 	return c.JSON(200, map[string]interface{}{
 		"message": "Verification email sent successfully. Please check your inbox.",
+		"data":    nil,
+	})
+}
+
+// InitiateOnboarding initiates user onboarding process (identity verification only)
+func (h *UserHandler) InitiateOnboarding(c echo.Context) error {
+	var dto user.InitiateOnboardingDTO
+	if err := c.Bind(&dto); err != nil {
+		return c.JSON(400, map[string]string{"message": "Invalid request payload"})
+	}
+
+	userID := c.Get("userId").(string)
+	if userID == "" {
+		return c.JSON(401, map[string]string{"message": "Unauthorized request"})
+	}
+
+	response, err := h.userService.InitiateOnboarding(
+		c.Request().Context(),
+		userID,
+		dto.Name,
+		dto.DOB,
+		dto.TaxID,
+		dto.NationalID,
+	)
+
+	if err != nil {
+		h.logger.Errorf("Error initiating onboarding for user %s: %v", userID, err)
+
+		// Handle typed errors
+		if userErr, ok := err.(*types.UserError); ok {
+			switch userErr.Code {
+			case types.ErrCodeKYCAlreadyCompleted:
+				return c.JSON(400, map[string]interface{}{"message": userErr.Error(), "code": userErr.Code})
+			case types.ErrCodeInvalidKYCInput:
+				return c.JSON(400, map[string]interface{}{"message": userErr.Error(), "code": userErr.Code})
+			case types.ErrCodeVerificationFailed:
+				return c.JSON(400, map[string]interface{}{"message": userErr.Error(), "code": userErr.Code})
+			case types.ErrCodeUserNotFound:
+				return c.JSON(404, map[string]interface{}{"message": userErr.Error(), "code": userErr.Code})
+			}
+		}
+
+		return c.JSON(500, map[string]string{"message": "Failed to initiate onboarding"})
+	}
+
+	return c.JSON(200, map[string]interface{}{
+		"message": "Onboarding initiated successfully",
+		"data":    response,
+	})
+}
+
+// CompleteOnboarding completes the user onboarding after Aadhaar verification
+// User claims role in specific business after identity verification
+func (h *UserHandler) CompleteOnboarding(c echo.Context) error {
+	var dto user.CompleteOnboardingDTO
+	if err := c.Bind(&dto); err != nil {
+		return c.JSON(400, map[string]string{"message": "Invalid request payload"})
+	}
+
+	userID := c.Get("userId").(string)
+	if userID == "" {
+		return c.JSON(401, map[string]string{"message": "Unauthorized request"})
+	}
+
+	err := h.userService.CompleteOnboarding(c.Request().Context(), userID, dto.BusinessID, dto.ClaimedRole)
+	if err != nil {
+		h.logger.Errorf("Error completing onboarding for user %s: %v", userID, err)
+
+		// Handle typed errors
+		if userErr, ok := err.(*types.UserError); ok {
+			switch userErr.Code {
+			case types.ErrCodeAadhaarNotInitiated:
+				return c.JSON(400, map[string]interface{}{"message": userErr.Error(), "code": userErr.Code})
+			case types.ErrCodeVerificationFailed:
+				return c.JSON(400, map[string]interface{}{"message": userErr.Error(), "code": userErr.Code})
+			case types.ErrCodeUserNotFound:
+				return c.JSON(404, map[string]interface{}{"message": userErr.Error(), "code": userErr.Code})
+			case types.ErrCodeInvalidKYCInput:
+				return c.JSON(400, map[string]interface{}{"message": userErr.Error(), "code": userErr.Code})
+			}
+		}
+
+		return c.JSON(500, map[string]string{"message": "Failed to complete onboarding"})
+	}
+
+	return c.JSON(200, map[string]interface{}{
+		"message": "Onboarding completed successfully",
+		"data":    map[string]string{"status": "kyc_completed"},
+	})
+}
+
+// GetOnboardingStatus returns the current onboarding status
+func (h *UserHandler) GetOnboardingStatus(c echo.Context) error {
+	userID := c.Get("userId").(string)
+	if userID == "" {
+		return c.JSON(401, map[string]string{"message": "Unauthorized request"})
+	}
+
+	statusData, err := h.userService.GetOnboardingStatus(c.Request().Context(), userID)
+	if err != nil {
+		h.logger.Errorf("Error getting onboarding status for user %s: %v", userID, err)
+
+		// Handle typed errors
+		if userErr, ok := err.(*types.UserError); ok {
+			switch userErr.Code {
+			case types.ErrCodeUserNotFound:
+				return c.JSON(404, map[string]interface{}{"message": userErr.Error(), "code": userErr.Code})
+			}
+		}
+
+		return c.JSON(500, map[string]string{"message": "Failed to get onboarding status"})
+	}
+
+	return c.JSON(200, map[string]interface{}{
+		"message": "Onboarding status fetched successfully",
+		"data":    statusData,
+	})
+}
+
+// ForgotPassword sends password reset email to user
+func (h *UserHandler) ForgotPassword(c echo.Context) error {
+	email := c.QueryParam("email")
+	if email == "" {
+		return c.JSON(400, map[string]string{"message": "Email is required"})
+	}
+
+	// Service always returns success to prevent email enumeration
+	if err := h.userService.SendPasswordResetEmail(c.Request().Context(), email); err != nil {
+		h.logger.Errorf("Error sending password reset email: %v", err)
+		// Still return success to prevent information disclosure
+	}
+
+	return c.JSON(200, map[string]interface{}{
+		"message": "If the email is registered, a password reset code has been sent. Please check your inbox.",
+		"data":    nil,
+	})
+}
+
+// ResetPassword resets user password using token and new password
+func (h *UserHandler) ResetPassword(c echo.Context) error {
+	var dto user.ResetPasswordDTO
+	if err := c.Bind(&dto); err != nil {
+		return c.JSON(400, map[string]string{"message": "Invalid request payload"})
+	}
+
+	if dto.Token == "" || dto.NewPassword == "" {
+		return c.JSON(400, map[string]string{"message": "Token and new password are required"})
+	}
+
+	// Hash the new password before passing to service
+	hashedPassword, err := h.authService.HashPassword(dto.NewPassword)
+	if err != nil {
+		h.logger.Errorf("Error hashing password: %v", err)
+		return c.JSON(500, map[string]string{"message": "Failed to process password"})
+	}
+
+	// Reset password with token
+	if err := h.userService.ResetPasswordWithToken(c.Request().Context(), dto.Token, hashedPassword); err != nil {
+		h.logger.Errorf("Error resetting password: %v", err)
+
+		// Handle specific error cases
+		switch err.Error() {
+		case "reset token not found", "invalid or expired reset token":
+			return c.JSON(404, map[string]string{"message": "Invalid or expired reset token"})
+		case "reset token already used":
+			return c.JSON(400, map[string]string{"message": "Reset token has already been used"})
+		case "reset token has expired":
+			return c.JSON(400, map[string]string{"message": "Reset token has expired"})
+		default:
+			return c.JSON(500, map[string]string{"message": "Failed to reset password"})
+		}
+	}
+
+	return c.JSON(200, map[string]interface{}{
+		"message": "Password reset successfully. You can now log in with your new password.",
 		"data":    nil,
 	})
 }

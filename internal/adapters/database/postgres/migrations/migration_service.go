@@ -117,8 +117,25 @@ func (m *MigrationService) Drop(ctx context.Context) error {
 	}
 	defer migrator.Close()
 
-	if err := migrator.Drop(); err != nil {
-		return fmt.Errorf("failed to drop database: %w", err)
+	// Get current version to know how many down migrations to run
+	version, dirty, err := migrator.Version()
+	if err != nil && err != migrate.ErrNilVersion {
+		return fmt.Errorf("failed to get current version: %w", err)
+	}
+
+	// If database is dirty, we cannot proceed safely
+	if dirty {
+		return fmt.Errorf("database is in dirty state (version %d), please fix with 'force' command first", version)
+	}
+
+	// Run all down migrations by stepping down from current version to 0
+	// This ensures all .down.sql files are executed in reverse order
+	if version > 0 {
+		// Steps with negative value runs down migrations
+		// We need to run 'version' number of down migrations to reach version 0
+		if err := migrator.Steps(-int(version)); err != nil && err != migrate.ErrNoChange {
+			return fmt.Errorf("failed to run all down migrations: %w", err)
+		}
 	}
 
 	return nil

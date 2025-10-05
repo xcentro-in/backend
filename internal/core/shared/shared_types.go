@@ -52,6 +52,7 @@ type VerificationType string
 const (
 	EmailVerification  VerificationType = "email_verification"
 	MobileVerification VerificationType = "mobile_verification"
+	PasswordReset      VerificationType = "password_reset"
 )
 
 type SubscriptionType string

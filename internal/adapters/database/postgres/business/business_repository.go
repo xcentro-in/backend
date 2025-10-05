@@ -188,11 +188,11 @@ func (r *PgBusinessRepository) UpdateKYBData(ctx context.Context, bid string, ky
 
 func (r *PgBusinessRepository) UpdateBusinessDeedDocumentKey(ctx context.Context, bid string, key string) error {
 	query := `
-		UPDATE xcentro.kyb_data 
-		SET business_deed = $2 
+		UPDATE xcentro.kyb_data
+		SET business_deed = $2
 		WHERE income_tax_id = (
-			SELECT income_tax_id 
-			FROM xcentro.business 
+			SELECT income_tax_id
+			FROM xcentro.business
 			WHERE bid = $1
 		)
 	`
@@ -207,4 +207,75 @@ func (r *PgBusinessRepository) UpdateBusinessDeedDocumentKey(ctx context.Context
 	}
 
 	return nil
+}
+
+// UpdateGSTData updates the GST data JSONB for a business
+func (r *PgBusinessRepository) UpdateGSTData(ctx context.Context, bid string, gstDataJSON string) error {
+	query := `
+		UPDATE xcentro.business
+		SET gst_data = $2::jsonb
+		WHERE bid = $1
+	`
+
+	result, err := r.querier.Exec(ctx, query, bid, gstDataJSON)
+	if err != nil {
+		return fmt.Errorf("error updating GST data: %w", err)
+	}
+
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("business not found")
+	}
+
+	return nil
+}
+
+// GetBusinessWithKYBData retrieves both business and KYB data in a single query
+func (r *PgBusinessRepository) GetBusinessWithKYBData(ctx context.Context, bid string) (*business.Business, *business.BusinessKYBData, error) {
+	query := `
+		SELECT
+			b.bid, b.name, b.gstin, b.gst_data, b.income_tax_id,
+			b.kyb_status, b.business_type, b.country_code, b.currency_code,
+			k.income_tax_id, k.income_tax_id_data, k.company_id, k.company_id_data, k.business_deed
+		FROM xcentro.business b
+		LEFT JOIN xcentro.kyb_data k ON b.income_tax_id = k.income_tax_id
+		WHERE b.bid = $1
+	`
+
+	var b business.Business
+	var kybData business.BusinessKYBData
+	var gstData, incomeTexID, kybStatus, businessType sql.NullString
+	var countryCode, currencyCode sql.NullString
+	var kybITID, kybITIDData, kybCID, kybCIDData, kybDocUrl sql.NullString
+
+	err := r.querier.QueryRow(ctx, query, bid).Scan(
+		&b.BID, &b.Name, &b.GSTIN, &gstData, &incomeTexID,
+		&kybStatus, &businessType, &countryCode, &currencyCode,
+		&kybITID, &kybITIDData, &kybCID, &kybCIDData, &kybDocUrl,
+	)
+
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil, fmt.Errorf("business not found")
+		}
+		return nil, nil, fmt.Errorf("error finding business with KYB data: %w", err)
+	}
+
+	b.GSTINData = gstData.String
+	b.ITID = incomeTexID.String
+	b.KybStatus = shared.KYBstatus(kybStatus.String)
+	b.BusinessType = shared.BusinessType(businessType.String)
+	b.CountryCode = countryCode.String
+	b.CurrencyCode = currencyCode.String
+
+	// KYB data might be null if not yet created
+	if kybITID.Valid {
+		kybData.ITID = kybITID.String
+		kybData.ITIDData = kybITIDData.String
+		kybData.CID = kybCID.String
+		kybData.CIDData = kybCIDData.String
+		kybData.DocUrl = kybDocUrl.String
+		return &b, &kybData, nil
+	}
+
+	return &b, nil, nil
 }

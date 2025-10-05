@@ -21,25 +21,23 @@ type UserService interface {
 	// UpdateUserProfile updates user profile information
 	UpdateUserProfile(ctx context.Context, userID string, mobile, taxID string) error
 
-	// KYC workflow methods
-	InitiateKYC(ctx context.Context, userID string, claimedRole shared.UserRole, taxID, nationalID string) error
+	// UpdateKYCStatus updates user's KYC status
 	UpdateKYCStatus(ctx context.Context, userID string, status shared.KYCStatus) error
-	GetUserKYCStatus(ctx context.Context, userID string) (*UserResponseDTO, error) // JSON response like business service
-
-	// Verification methods
-	VerifyEmail(ctx context.Context, userID, code string) error
-	VerifyMobile(ctx context.Context, userID, code string) error
-	SendVerificationCode(ctx context.Context, userID string, codeType shared.VerificationType) error
 
 	// Email verification specific methods
 	SendEmailVerification(ctx context.Context, userID string) error
 	VerifyEmailWithToken(ctx context.Context, token string) error
 	ResendEmailVerification(ctx context.Context, email string) error
 
-	// Business role management
-	ClaimBusinessRole(ctx context.Context, userID, businessID string, role shared.UserRole) error
+	// User onboarding methods
+	InitiateOnboarding(ctx context.Context, userID, name, dob, taxID, nationalID string) (*InitiateOnboardingResponseDTO, error)
+	CompleteOnboarding(ctx context.Context, userID, businessID string, claimedRole shared.UserRole) error
+	GetOnboardingStatus(ctx context.Context, userID string) (*OnboardingStatusDTO, error)
 
-	// Aadhaar verification methods
-	GenerateAadhaarLink(ctx context.Context, userID string) (*AadhaarLinkResponse, error)
-	CompleteAadhaarVerification(ctx context.Context, userID string) error
+	// Password reset methods
+	SendPasswordResetEmail(ctx context.Context, email string) error
+	ResetPasswordWithToken(ctx context.Context, token string, newPasswordHash string) error
+
+	// Invited user methods
+	CreateInvitedUser(ctx context.Context, email, name string, kycNeeded bool) (*User, error)
 }

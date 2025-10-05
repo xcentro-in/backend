@@ -62,3 +62,41 @@ type CreateBusinessDTO struct {
 	CID          string              `json:"cid"`
 	DocUrl       string              `json:"docUrl"`
 }
+
+// New onboarding DTOs
+type OnboardingInitResponse struct {
+	BID         string                 `json:"bid"`
+	Name        string                 `json:"name"`
+	GSTIN       string                 `json:"gstin"`
+	GSTData     map[string]interface{} `json:"gstData,omitempty"`
+	KYBStatus   shared.KYBstatus       `json:"kybStatus"`
+	Message     string                 `json:"message"`
+}
+
+type CompleteKYBRequest struct {
+	BID          string              `json:"bid"`
+	BusinessType shared.BusinessType `json:"businessType"`
+	ITID         string              `json:"itid"` // Income Tax ID (PAN)
+	CID          string              `json:"cid,omitempty"` // Company ID (CIN) - required for certain business types
+}
+
+type CompleteKYBResponse struct {
+	BID               string           `json:"bid"`
+	KYBStatus         shared.KYBstatus `json:"kybStatus"`
+	RequiresDeedUpload bool            `json:"requiresDeedUpload"`
+	UploadURL         string           `json:"uploadUrl,omitempty"`
+	Message           string           `json:"message"`
+}
+
+type OnboardingStatusResponse struct {
+	BID                string              `json:"bid,omitempty"`
+	Name               string              `json:"name,omitempty"`
+	GSTIN              string              `json:"gstin,omitempty"`
+	BusinessType       shared.BusinessType `json:"businessType,omitempty"`
+	ITID               string              `json:"itid,omitempty"`
+	CID                string              `json:"cid,omitempty"`
+	KYBStatus          shared.KYBstatus    `json:"kybStatus"`
+	KYBInitiated       bool                `json:"kybInitiated"`
+	RequiresDeedUpload bool                `json:"requiresDeedUpload"`
+	HasDeedUploaded    bool                `json:"hasDeedUploaded"`
+}

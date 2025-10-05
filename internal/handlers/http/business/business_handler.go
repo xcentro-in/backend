@@ -8,131 +8,49 @@ import (
 	"xcentro.in/internal/adapters/providers/fileupload"
 	"xcentro.in/internal/core/auth"
 	"xcentro.in/internal/core/business"
+	"xcentro.in/internal/core/shared"
+	"xcentro.in/internal/core/user"
 	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/logger"
+	"xcentro.in/internal/shared/types"
 )
 
 type BusinessHandler struct {
 	businessService business.BusinessService
 	authService     auth.AuthService
+	userService     user.UserService
 	S3Config        *config.S3Config
 	logger          *logger.Logger
 }
 
-func NewBusinessHandler(businessService business.BusinessService, authService auth.AuthService, s3Config *config.S3Config) *BusinessHandler {
+func NewBusinessHandler(businessService business.BusinessService, authService auth.AuthService, userService user.UserService, s3Config *config.S3Config) *BusinessHandler {
 	return &BusinessHandler{
 		businessService: businessService,
 		authService:     authService,
+		userService:     userService,
 		S3Config:        s3Config,
 		logger:          logger.GetDefault(),
 	}
 }
 
-func RegisterBusinessRoutes(e *echo.Group, businessService business.BusinessService, authService auth.AuthService, s3Config *config.S3Config) {
-	handler := NewBusinessHandler(businessService, authService, s3Config)
+func RegisterBusinessRoutes(e *echo.Group, businessService business.BusinessService, authService auth.AuthService, userService user.UserService, s3Config *config.S3Config) {
+	handler := NewBusinessHandler(businessService, authService, userService, s3Config)
 
 	businessGroup := e.Group("/business")
 	// Apply middleware to the business group, not the parent group
 	businessGroup.Use(authService.GetEchoAuthMiddleware())
 	businessGroup.Use(businessService.GetUserRolesMiddleware())
 
-	businessGroup.POST("", handler.CreateBusiness)
-	businessGroup.GET("/roles", handler.GetUserRoles)
-	businessGroup.GET("/kyb", handler.GetKYBStatus)
-	businessGroup.POST("/kyb", handler.UpdateBusinessKYBData)
-	businessGroup.GET("/kyb/upload", handler.UploadKYBDocuments)
-	businessGroup.POST("/kyb/confirm-upload", handler.ConfirmKYBDocumentsUpload)
-}
+	// Onboarding routes
+	onboardingGroup := businessGroup.Group("/onboard")
+	onboardingGroup.POST("/init", handler.InitiateOnboarding)
+	onboardingGroup.POST("/complete", handler.CompleteOnboarding)
+	onboardingGroup.GET("/status", handler.GetOnboardingStatus)
+	onboardingGroup.GET("/upload", handler.UploadKYBDocuments)
+	onboardingGroup.POST("/confirm-upload", handler.ConfirmKYBDocumentsUpload)
 
-func (h *BusinessHandler) CreateBusiness(c echo.Context) error {
-	var CreateBusinessDTO business.CreateBusinessDTO
-
-	ur := c.Get("userRoles")
-	if ur != nil {
-		return c.JSON(403, map[string]interface{}{"message": "User is already associated with a business", "data": ur})
-	}
-
-	if err := c.Bind(&CreateBusinessDTO); err != nil {
-		return c.JSON(400, map[string]string{"message": "Invalid request payload"})
-	}
-
-	userIdRaw := c.Get("userId")
-	if userIdRaw == nil {
-		return c.JSON(400, map[string]string{"message": "Unauthorised request"})
-	}
-	userId := userIdRaw.(string)
-
-	bus, err := h.businessService.CreateBusinessByNameAndGSTIN(c.Request().Context(), userId, &CreateBusinessDTO)
-	if err != nil {
-		h.logger.Errorf("Error creating business: %v", err)
-		return c.JSON(500, map[string]string{"message": "Failed to create business"})
-	}
-
-	return c.JSON(201, map[string]interface{}{"message": "Business created successfully", "data": bus})
-}
-
-func (h *BusinessHandler) UpdateBusinessKYBData(c echo.Context) error {
-	var UpdateBusinessKYBDTO business.BusinessKYBDTO
-
-	ur := c.Get("userRoles")
-	if ur == nil {
-		return c.JSON(403, map[string]interface{}{"message": "Create a business first", "data": nil})
-	}
-
-	roles := ur.([]*business.BusinessUserRelation)
-	if len(roles) == 0 {
-		return c.JSON(403, map[string]interface{}{"message": "User is not associated with any business", "data": nil})
-	}
-
-	if err := c.Bind(&UpdateBusinessKYBDTO); err != nil {
-		return c.JSON(400, map[string]string{"message": "Invalid request payload"})
-	}
-
-	if !(len(roles) == 1 && roles[0].KybInitiated && roles[0].BID == UpdateBusinessKYBDTO.BID) {
-		return c.JSON(403, map[string]interface{}{"message": "User is unauthorised to update the business kyb", "data": nil})
-	}
-
-	if err := h.businessService.UpdateBusinessKYBData(c.Request().Context(), &UpdateBusinessKYBDTO); err != nil {
-		h.logger.Errorf("Error updating business KYB data: %v", err)
-		return c.JSON(500, map[string]string{"message": "Failed to update business KYB data"})
-	}
-
-	return c.JSON(200, map[string]interface{}{"message": "Business KYB data updated successfully", "data": nil})
-}
-
-func (h *BusinessHandler) GetUserRoles(c echo.Context) error {
-	ur := c.Get("userRoles")
-	if ur == nil {
-		return c.JSON(403, map[string]interface{}{"message": "Create a business first", "data": nil})
-	}
-	roles := ur.([]*business.BusinessUserRelation)
-	return c.JSON(200, map[string]interface{}{"message": "Fetched user roles successfully", "data": roles})
-}
-
-func (h *BusinessHandler) GetKYBStatus(c echo.Context) error {
-	ur := c.Get("userRoles")
-	if ur == nil {
-		return c.JSON(403, map[string]interface{}{"message": "Create a business first", "data": nil})
-	}
-	roles := ur.([]*business.BusinessUserRelation)
-
-	userIdRaw := c.Get("userId")
-	if userIdRaw == nil {
-		return c.JSON(400, map[string]interface{}{"message": "Unauthorised request", "data": nil})
-	}
-	userId := userIdRaw.(string)
-
-	if !(len(roles) == 1 && roles[0].KybInitiated) {
-		return c.JSON(403, map[string]interface{}{"message": "kyb completed or unauthorized", "data": nil})
-	}
-
-	kybdata, err := h.businessService.GetUserKYBInitiatedStatus(c.Request().Context(), userId)
-	if err != nil {
-		h.logger.Errorf("handler: %v", err)
-		return c.JSON(500, map[string]interface{}{"message": "Failed to get KYB status", "data": nil})
-	}
-
-	return c.JSON(200, map[string]interface{}{"message": "Fetched kyb data", "data": kybdata})
+	// Invite user route
+	businessGroup.POST("/invite-user", handler.InviteUser)
 }
 
 func (h *BusinessHandler) UploadKYBDocuments(c echo.Context) error {
@@ -195,4 +113,304 @@ func (h *BusinessHandler) ConfirmKYBDocumentsUpload(c echo.Context) error {
 	}
 
 	return c.JSON(200, map[string]interface{}{"message": "Confirmed KYB documents upload successfully", "data": map[string]interface{}{"url": fileurl}})
+}
+
+// ============================================================================
+// New Onboarding Handlers
+// ============================================================================
+
+// InitiateOnboarding creates a new business and starts the KYB process
+func (h *BusinessHandler) InitiateOnboarding(c echo.Context) error {
+	// Check if user already has business relations
+	ur := c.Get("userRoles")
+	if ur != nil {
+		roles := ur.([]*business.BusinessUserRelation)
+		if len(roles) > 0 {
+			return c.JSON(403, map[string]interface{}{
+				"error":   "USER_ALREADY_ASSOCIATED",
+				"message": "User is already associated with a business",
+			})
+		}
+	}
+
+	// Parse request
+	type InitRequest struct {
+		Name  string `json:"name"`
+		GSTIN string `json:"gstin"`
+	}
+
+	var req InitRequest
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(400, map[string]interface{}{
+			"error":   "INVALID_INPUT",
+			"message": "Invalid request payload",
+		})
+	}
+
+	// Get user ID from context
+	userIDRaw := c.Get("userId")
+	if userIDRaw == nil {
+		return c.JSON(401, map[string]interface{}{
+			"error":   "UNAUTHORIZED",
+			"message": "User not authenticated",
+		})
+	}
+	userID := userIDRaw.(string)
+
+	// Initiate onboarding
+	response, err := h.businessService.InitiateOnboarding(c.Request().Context(), userID, req.Name, req.GSTIN)
+	if err != nil {
+		h.logger.Errorf("Error initiating onboarding: %v", err)
+
+		// Return appropriate error response based on error type
+		return h.handleBusinessError(c, err)
+	}
+
+	return c.JSON(201, map[string]interface{}{
+		"message": "Business created successfully",
+		"data":    response,
+	})
+}
+
+// CompleteOnboarding completes the KYB process with business details
+func (h *BusinessHandler) CompleteOnboarding(c echo.Context) error {
+	// Parse request
+	var req business.CompleteKYBRequest
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(400, map[string]interface{}{
+			"error":   "INVALID_INPUT",
+			"message": "Invalid request payload",
+		})
+	}
+
+	// Get user ID from context
+	userIDRaw := c.Get("userId")
+	if userIDRaw == nil {
+		return c.JSON(401, map[string]interface{}{
+			"error":   "UNAUTHORIZED",
+			"message": "User not authenticated",
+		})
+	}
+	userID := userIDRaw.(string)
+
+	// Complete KYB
+	response, err := h.businessService.CompleteKYB(c.Request().Context(), userID, &req)
+	if err != nil {
+		h.logger.Errorf("Error completing KYB: %v", err)
+		return h.handleBusinessError(c, err)
+	}
+
+	return c.JSON(200, map[string]interface{}{
+		"message": "KYB completed successfully",
+		"data":    response,
+	})
+}
+
+// GetOnboardingStatus retrieves the current onboarding status for the user
+func (h *BusinessHandler) GetOnboardingStatus(c echo.Context) error {
+	// Get user ID from context
+	userIDRaw := c.Get("userId")
+	if userIDRaw == nil {
+		return c.JSON(401, map[string]interface{}{
+			"error":   "UNAUTHORIZED",
+			"message": "User not authenticated",
+		})
+	}
+	userID := userIDRaw.(string)
+
+	// Get onboarding status
+	status, err := h.businessService.GetOnboardingStatus(c.Request().Context(), userID)
+	if err != nil {
+		h.logger.Errorf("Error fetching onboarding status: %v", err)
+		return c.JSON(500, map[string]interface{}{
+			"error":   "INTERNAL_ERROR",
+			"message": "Failed to fetch onboarding status",
+		})
+	}
+
+	return c.JSON(200, map[string]interface{}{
+		"message": "Onboarding status retrieved successfully",
+		"data":    status,
+	})
+}
+
+// InviteUser invites a user to a business (only admin/owner can invite)
+func (h *BusinessHandler) InviteUser(c echo.Context) error {
+	// Parse request
+	type InviteRequest struct {
+		BID       string          `json:"bid"`
+		Email     string          `json:"email"`
+		Name      string          `json:"name"`
+		Role      shared.UserRole `json:"role"`
+		KycNeeded bool            `json:"kycNeeded"`
+	}
+
+	var req InviteRequest
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(400, map[string]interface{}{
+			"error":   "INVALID_INPUT",
+			"message": "Invalid request payload",
+		})
+	}
+
+	// Validate input
+	if req.BID == "" || req.Email == "" || req.Name == "" || req.Role == "" {
+		return c.JSON(400, map[string]interface{}{
+			"error":   "INVALID_INPUT",
+			"message": "BID, email, name, and role are required",
+		})
+	}
+
+	// Validate role is valid
+	validRoles := []shared.UserRole{shared.Owner, shared.Admin, shared.Finance, shared.Support}
+	isValidRole := false
+	for _, validRole := range validRoles {
+		if req.Role == validRole {
+			isValidRole = true
+			break
+		}
+	}
+	if !isValidRole {
+		return c.JSON(400, map[string]interface{}{
+			"error":   "INVALID_INPUT",
+			"message": "Invalid role. Must be one of: owner, admin, finance, support",
+		})
+	}
+
+	// Get user ID from context (for authentication check)
+	userIDRaw := c.Get("userId")
+	if userIDRaw == nil {
+		return c.JSON(401, map[string]interface{}{
+			"error":   "UNAUTHORIZED",
+			"message": "User not authenticated",
+		})
+	}
+
+	// Get user roles
+	ur := c.Get("userRoles")
+	if ur == nil {
+		return c.JSON(403, map[string]interface{}{
+			"error":   "FORBIDDEN",
+			"message": "No business association found",
+		})
+	}
+	roles := ur.([]*business.BusinessUserRelation)
+
+	// Find the role for this specific business
+	var userRole shared.UserRole
+	var hasAccess bool
+	for _, rel := range roles {
+		if rel.BID == req.BID {
+			userRole = rel.Role
+			hasAccess = true
+			break
+		}
+	}
+
+	if !hasAccess {
+		return c.JSON(403, map[string]interface{}{
+			"error":   "FORBIDDEN",
+			"message": "You don't have access to this business",
+		})
+	}
+
+	// Only admin or owner can invite users
+	if userRole != shared.Owner && userRole != shared.Admin {
+		return c.JSON(403, map[string]interface{}{
+			"error":   "FORBIDDEN",
+			"message": "Only business owners and admins can invite users",
+		})
+	}
+
+	// Admin cannot invite another owner (only owner can invite owner)
+	if userRole == shared.Admin && req.Role == shared.Owner {
+		return c.JSON(403, map[string]interface{}{
+			"error":   "FORBIDDEN",
+			"message": "Only business owners can invite other owners",
+		})
+	}
+
+	// Create invited user
+	createdUser, err := h.userService.CreateInvitedUser(c.Request().Context(), req.Email, req.Name, req.KycNeeded)
+	if err != nil {
+		h.logger.Errorf("Error creating invited user: %v", err)
+		return c.JSON(500, map[string]interface{}{
+			"error":   "INTERNAL_ERROR",
+			"message": fmt.Sprintf("Failed to create invited user: %v", err),
+		})
+	}
+
+	// Add user to business with specified role
+	relation := &business.BusinessUserRelation{
+		UserID:       createdUser.Id,
+		BID:          req.BID,
+		Role:         req.Role,
+		RoleClaim:    req.Role,
+		KybInitiated: false,
+	}
+
+	err = h.businessService.AddUserToBusiness(c.Request().Context(), relation)
+	if err != nil {
+		h.logger.Errorf("Error adding user to business: %v", err)
+		return c.JSON(500, map[string]interface{}{
+			"error":   "INTERNAL_ERROR",
+			"message": "Failed to add user to business",
+		})
+	}
+
+	return c.JSON(201, map[string]interface{}{
+		"message": "User invited successfully. Invitation email sent.",
+		"data": map[string]interface{}{
+			"userId": createdUser.Id,
+			"email":  createdUser.Email,
+			"name":   createdUser.Name,
+		},
+	})
+}
+
+// handleBusinessError handles typed business errors and returns appropriate HTTP responses
+func (h *BusinessHandler) handleBusinessError(c echo.Context, err error) error {
+	// Check if it's a BusinessError type
+	if bizErr, ok := err.(*types.BusinessError); ok {
+		switch bizErr.Code {
+		case types.ErrCodeUserAlreadyAssociated:
+			return c.JSON(403, map[string]interface{}{
+				"error":   bizErr.Code,
+				"message": bizErr.Message,
+			})
+		case types.ErrCodeBusinessAlreadyExists:
+			return c.JSON(409, map[string]interface{}{
+				"error":   bizErr.Code,
+				"message": bizErr.Message,
+				"details": bizErr.Details,
+			})
+		case types.ErrCodeUnauthorizedKYB, types.ErrCodeKYBNotInitiated:
+			return c.JSON(403, map[string]interface{}{
+				"error":   bizErr.Code,
+				"message": bizErr.Message,
+			})
+		case types.ErrCodeKYBAlreadyCompleted:
+			return c.JSON(400, map[string]interface{}{
+				"error":   bizErr.Code,
+				"message": bizErr.Message,
+			})
+		case types.ErrCodeInvalidBusinessType, types.ErrCodeInvalidInput:
+			return c.JSON(400, map[string]interface{}{
+				"error":   bizErr.Code,
+				"message": bizErr.Message,
+				"details": bizErr.Details,
+			})
+		default:
+			return c.JSON(500, map[string]interface{}{
+				"error":   bizErr.Code,
+				"message": bizErr.Message,
+			})
+		}
+	}
+
+	// Generic error
+	return c.JSON(500, map[string]interface{}{
+		"error":   "INTERNAL_ERROR",
+		"message": err.Error(),
+	})
 }

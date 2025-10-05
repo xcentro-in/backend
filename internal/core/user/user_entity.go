@@ -27,26 +27,56 @@ type User struct {
 	Email          string           `json:"email"`
 	PwdHash        string           `json:"-"`
 	Mobile         string           `json:"mobile"`
+	Name           string           `json:"name"`
+	DOB            string           `json:"dob"`
 	TaxID          string           `json:"taxId"` // Reference to person_identity.tax_id
+	KycStatus      shared.KYCStatus `json:"kycStatus"`
+	KycNeeded      bool             `json:"kycNeeded"`
+	EmailVerified  bool             `json:"emailVerified"`
+	MobileVerified bool             `json:"mobileVerified"`
+}
+
+// InitiateOnboardingDTO represents the request payload for initiating user onboarding
+// User KYC is independent of business - identity verification only
+type InitiateOnboardingDTO struct {
+	Name       string `json:"name" validate:"required"`
+	DOB        string `json:"dob" validate:"required"` // Format: YYYY-MM-DD
+	TaxID      string `json:"taxId" validate:"required"`
+	NationalID string `json:"nationalId" validate:"required"`
+}
+
+// CompleteOnboardingDTO represents the request payload for completing onboarding
+// After identity verification, user claims role in a specific business
+type CompleteOnboardingDTO struct {
+	BusinessID  string          `json:"businessId" validate:"required"`
+	ClaimedRole shared.UserRole `json:"claimedRole" validate:"required"`
+}
+
+// OnboardingStatusDTO represents the response for onboarding status
+type OnboardingStatusDTO struct {
+	UserID         string           `json:"userId"`
+	Email          string           `json:"email"`
+	Name           string           `json:"name"`
+	DOB            string           `json:"dob"`
+	Mobile         string           `json:"mobile"`
+	TaxID          string           `json:"taxId"`
+	NationalID     string           `json:"nationalId"`
 	KycStatus      shared.KYCStatus `json:"kycStatus"`
 	EmailVerified  bool             `json:"emailVerified"`
 	MobileVerified bool             `json:"mobileVerified"`
 }
 
-type CreateUserKYCCTO struct {
-	ClaimedRole shared.UserRole `json:"claimedRole"`
-	TaxID       string          `json:"taxId"`
-	NationalID  string          `json:"nationalId"`
+// InitiateOnboardingResponseDTO represents the response after initiating onboarding
+type InitiateOnboardingResponseDTO struct {
+	Status      shared.KYCStatus `json:"status"`
+	AadhaarLink string           `json:"aadhaarLink"`
+	TxnID       string           `json:"txnId"`
 }
 
-// VerifyMobileDTO represents the request payload for mobile verification
-type VerifyMobileDTO struct {
-	Code string `json:"code" validate:"required"`
-}
-
-// VerifyEmailDTO represents the request payload for email verification
-type VerifyEmailDTO struct {
-	Token string `json:"token" validate:"required"`
+// UserTaxIDVerificationData combines PAN verification results for storage in tax_id_data
+type UserTaxIDVerificationData struct {
+	PANCOMData     map[string]interface{} `json:"pan_com_data"`
+	PANAadhaarLink map[string]interface{} `json:"pan_aadhaar_link_data"`
 }
 
 // ResendVerificationDTO represents the request payload for resending verification email
@@ -54,30 +84,13 @@ type ResendVerificationDTO struct {
 	Email string `json:"email" validate:"required,email"`
 }
 
-// ClaimRoleDTO represents the request payload for claiming a business role
-type ClaimRoleDTO struct {
-	BusinessID string          `json:"businessId" validate:"required"`
-	Role       shared.UserRole `json:"role" validate:"required"`
+// ForgotPasswordDTO represents the request payload for forgot password
+type ForgotPasswordDTO struct {
+	Email string `json:"email" validate:"required,email"`
 }
 
-// AadhaarLinkResponse represents the response for Aadhaar link generation
-type AadhaarLinkResponse struct {
-	URL   string `json:"url"`
-	TxnID string `json:"txnId"`
-}
-
-// AadhaarVerificationCompleteDTO represents the request payload for completing Aadhaar verification
-type AadhaarVerificationCompleteDTO struct {
-	// No additional fields needed as we'll use the stored transaction ID
-}
-
-type UserResponseDTO struct {
-	Id             string           `json:"id"`
-	Email          string           `json:"email"`
-	Mobile         string           `json:"mobile"`
-	TaxID          string           `json:"taxId"`
-	NationalID     string           `json:"nationalId"`
-	KycStatus      shared.KYCStatus `json:"kycStatus"`
-	EmailVerified  bool             `json:"emailVerified"`
-	MobileVerified bool             `json:"mobileVerified"`
+// ResetPasswordDTO represents the request payload for reset password
+type ResetPasswordDTO struct {
+	Token       string `json:"token" validate:"required"`
+	NewPassword string `json:"newPassword" validate:"required,min=8"`
 }

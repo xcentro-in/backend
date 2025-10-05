@@ -8,9 +8,16 @@ import (
 
 // BusinessService defines the business logic interface for business operations
 type BusinessService interface {
-	GetUserKYBInitiatedStatus(ctx context.Context, uid string) (*CreateBusinessDTO, error)
-	CreateBusinessByNameAndGSTIN(ctx context.Context, uid string, dto *CreateBusinessDTO) (*CreateBusinessDTO, error)
-	UpdateBusinessKYBData(ctx context.Context, bdto *BusinessKYBDTO) error
+	// Utility methods
 	UpdateBusinessDeedDocumentKey(ctx context.Context, bid string, key string) error
 	GetUserRolesMiddleware() echo.MiddlewareFunc
+
+	// Onboarding flow methods
+	InitiateOnboarding(ctx context.Context, uid string, name string, gstin string) (*OnboardingInitResponse, error)
+	CompleteKYB(ctx context.Context, uid string, req *CompleteKYBRequest) (*CompleteKYBResponse, error)
+	GetOnboardingStatus(ctx context.Context, uid string) (*OnboardingStatusResponse, error)
+	ValidateOnboardingEligibility(ctx context.Context, uid string) error
+
+	// User management methods
+	AddUserToBusiness(ctx context.Context, relation *BusinessUserRelation) error
 }

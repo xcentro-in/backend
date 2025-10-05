@@ -3,6 +3,7 @@ package auth
 import (
 	"github.com/labstack/echo/v4"
 	"xcentro.in/internal/core/auth"
+	"xcentro.in/internal/core/business"
 	"xcentro.in/internal/core/user"
 	"xcentro.in/internal/shared/logger"
 )
@@ -11,19 +12,21 @@ func placeHolderFn(c echo.Context) error { return c.String(200, "This is a place
 
 // create two functions one for login and one for signup
 type AuthHandler struct {
-	userService user.UserService
-	authService auth.AuthService
+	userService     user.UserService
+	authService     auth.AuthService
+	businessService business.BusinessService
 }
 
-func NewAuthHandler(userService user.UserService, authService auth.AuthService) *AuthHandler {
+func NewAuthHandler(userService user.UserService, authService auth.AuthService, businessService business.BusinessService) *AuthHandler {
 	return &AuthHandler{
-		userService: userService,
-		authService: authService,
+		userService:     userService,
+		authService:     authService,
+		businessService: businessService,
 	}
 }
 
-func RegisterAuthRoutes(e *echo.Group, userService user.UserService, authService auth.AuthService) {
-	authHandler := NewAuthHandler(userService, authService)
+func RegisterAuthRoutes(e *echo.Group, userService user.UserService, authService auth.AuthService, businessService business.BusinessService) {
+	authHandler := NewAuthHandler(userService, authService, businessService)
 
 	authGroup := e.Group("/auth")
 	/**
@@ -124,5 +127,45 @@ func (ah AuthHandler) HandleLogin(c echo.Context) error {
 		return c.JSON(500, map[string]any{"message": "Failed to store token", "data": nil})
 	}
 
-	return c.JSON(200, map[string]any{"message": "Login successful", "data": map[string]string{"token": token}})
+	// Get user's onboarding status
+	onboardingStatus, err := ah.businessService.GetOnboardingStatus(c.Request().Context(), user.Id)
+	if err != nil {
+		logger.Errorf("Failed to get onboarding status %v", err)
+		// Don't fail login if we can't get onboarding status, just log the error
+		onboardingStatus = nil
+	}
+
+	// Build user state
+	userState := map[string]any{
+		"hasActiveRoles":      false,
+		"kybStatus":          "kyc_not_started",
+		"requiresOnboarding": true,
+		"businessCount":      0,
+		"kycNeeded":          user.KycNeeded,
+	}
+
+	if onboardingStatus != nil {
+		userState["kybStatus"] = onboardingStatus.KYBStatus
+		userState["kybInitiated"] = onboardingStatus.KYBInitiated
+
+		// If user has started onboarding
+		if onboardingStatus.KYBInitiated {
+			userState["businessCount"] = 1
+			userState["requiresOnboarding"] = onboardingStatus.KYBStatus != "kyc_completed" && onboardingStatus.KYBStatus != "kyc_verified"
+
+			// Add business details if available
+			if onboardingStatus.BID != "" {
+				userState["businessId"] = onboardingStatus.BID
+				userState["businessName"] = onboardingStatus.Name
+			}
+		}
+	}
+
+	return c.JSON(200, map[string]any{
+		"message": "Login successful",
+		"data": map[string]any{
+			"token":     token,
+			"userState": userState,
+		},
+	})
 }
