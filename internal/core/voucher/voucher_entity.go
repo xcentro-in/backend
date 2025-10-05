@@ -55,6 +55,18 @@ const (
 	RefundStatusFailed        RefundStatus = "failed"
 )
 
+// PayoutStatus represents payout status for vouchers (Phase 9)
+type PayoutStatus string
+
+const (
+	PayoutStatusPending      PayoutStatus = "pending"       // Awaiting payout
+	PayoutStatusInitiated    PayoutStatus = "initiated"     // Payout initiated with provider
+	PayoutStatusProcessing   PayoutStatus = "processing"    // Provider is processing
+	PayoutStatusCompleted    PayoutStatus = "completed"     // Payout completed
+	PayoutStatusFailed       PayoutStatus = "failed"        // Payout failed
+	PayoutStatusNeedsAttention PayoutStatus = "needs_attention" // Manual intervention needed
+)
+
 // Voucher represents a payment voucher domain entity
 // It serves as the accounting document linking payments to ERP systems
 type Voucher struct {

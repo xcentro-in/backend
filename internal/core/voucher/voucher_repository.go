@@ -43,6 +43,9 @@ type VoucherRepository interface {
 	// RejectCancellation rejects a cancellation request (Phase 7)
 	RejectCancellation(ctx context.Context, voucherID uuid.UUID) error
 
+	// UpdatePayoutStatus updates the payout status of a voucher (Phase 9)
+	UpdatePayoutStatus(ctx context.Context, voucherID string, status PayoutStatus, utr string) error
+
 	// GetNextVoucherNumber generates the next sequential voucher number for a business and fiscal year
 	GetNextVoucherNumber(ctx context.Context, businessID uuid.UUID, fiscalYear string) (int, error)
 

@@ -168,11 +168,14 @@ type TransferStatus struct {
 type TransferStatusType string
 
 const (
-	TransferStatusPending    TransferStatusType = "pending"    // Created, awaiting approval
-	TransferStatusProcessing TransferStatusType = "processing" // Approved, being processed by bank
-	TransferStatusCompleted  TransferStatusType = "completed"  // Successfully credited to beneficiary
-	TransferStatusFailed     TransferStatusType = "failed"     // Transfer failed
-	TransferStatusCancelled  TransferStatusType = "cancelled"  // Transfer cancelled
+	TransferStatusPendingApproval TransferStatusType = "pending_approval" // Awaiting manual approval (> ₹2L)
+	TransferStatusApproved        TransferStatusType = "approved"         // Approved, ready to initiate
+	TransferStatusInitiated       TransferStatusType = "initiated"        // Sent to Castler, awaiting webhook
+	TransferStatusProcessing      TransferStatusType = "processing"       // Castler confirmed processing (from webhook)
+	TransferStatusCompleted       TransferStatusType = "completed"        // Successfully completed (from webhook)
+	TransferStatusFailed          TransferStatusType = "failed"           // Failed (from webhook)
+	TransferStatusCancelled       TransferStatusType = "cancelled"        // Cancelled by ops
+	TransferStatusTimeout         TransferStatusType = "timeout"          // No webhook received (needs investigation)
 )
 
 // PayoutProviderError represents provider-specific errors

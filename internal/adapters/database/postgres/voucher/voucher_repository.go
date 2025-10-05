@@ -870,3 +870,25 @@ func (r *PostgresVoucherRepository) buildFilterQuery(businessID uuid.UUID, filte
 
 	return baseQuery, args
 }
+
+// UpdatePayoutStatus updates the payout status of a voucher (Phase 9)
+func (r *PostgresVoucherRepository) UpdatePayoutStatus(ctx context.Context, voucherID string, status voucher.PayoutStatus, utr string) error {
+	query := `
+		UPDATE xcentro.payment_vouchers
+		SET payout_status = $2,
+		    payout_reference = $3,
+		    updated_at = NOW()
+		WHERE voucher_id = $1
+	`
+
+	result, err := r.querier.Exec(ctx, query, voucherID, status, utr)
+	if err != nil {
+		return fmt.Errorf("failed to update payout status: %w", err)
+	}
+
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("voucher not found: %s", voucherID)
+	}
+
+	return nil
+}

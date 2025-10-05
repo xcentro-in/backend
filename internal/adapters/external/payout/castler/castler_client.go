@@ -142,7 +142,7 @@ func (c *CastlerClient) CreateTransferRequest(ctx context.Context, req *payout.C
 	}
 
 	// Map Castler response to domain response
-	status := payout.TransferStatusPending
+	status := payout.TransferStatusApproved // Castler creates in pending state
 	if castlerResp.Status == "processing" {
 		status = payout.TransferStatusProcessing
 	}
@@ -212,7 +212,7 @@ func (c *CastlerClient) GetTransferStatus(ctx context.Context, providerTransferI
 	}
 
 	// Map Castler status to domain status
-	status := payout.TransferStatusPending
+	status := payout.TransferStatusInitiated // After approval, it's initiated
 	switch castlerResp.Status {
 	case "processing":
 		status = payout.TransferStatusProcessing

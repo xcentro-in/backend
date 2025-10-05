@@ -55,7 +55,7 @@ func (m *PayoutProviderMapping) CanRetryOnboarding() bool {
 }
 
 // PayoutTransferRequest represents a payout transfer request (for audit/tracking)
-// This will be used in Phase 9 for the transfer requests table
+// Maps to xcentro.payout_transfer_requests table
 type PayoutTransferRequest struct {
 	TransferRequestID string // UUID stored as string
 	VoucherID         string // UUID stored as string
@@ -73,17 +73,32 @@ type PayoutTransferRequest struct {
 	Narration    string
 	TransferMode string
 
-	// Status tracking
-	Status           TransferStatusType
+	// Approval workflow
 	RequiresApproval bool
 	ApprovalMode     ApprovalMode
 	ApprovedBy       string // UUID stored as string
 	ApprovedAt       *time.Time
-	CompletedAt      *time.Time
-	FailedAt         *time.Time
-	FailureReason    string
-	UTR              string
-	ProviderMetadata map[string]interface{}
+
+	// Status tracking (webhook-driven)
+	Status       TransferStatusType
+	InitiatedAt  *time.Time
+	ProcessingAt *time.Time
+	CompletedAt  *time.Time
+	FailedAt     *time.Time
+	FailureReason string
+	UTR          string
+
+	// Retry tracking (placeholder for future)
+	RetryCount    int
+	MaxRetries    int
+	NextRetryAt   *time.Time
+	LastRetryAt   *time.Time
+
+	// Webhook tracking
+	LastWebhookAt     *time.Time
+	WebhookTimeoutAt  *time.Time
+	WebhookHistory    []map[string]interface{} // Array of webhook payloads
+	ProviderMetadata  map[string]interface{}
 
 	// Audit
 	CreatedAt time.Time
@@ -106,5 +121,45 @@ func (t *PayoutTransferRequest) IsApproved() bool {
 
 // CanBeApproved returns true if transfer is pending approval
 func (t *PayoutTransferRequest) CanBeApproved() bool {
-	return t.RequiresApproval && t.Status == TransferStatusPending && !t.IsApproved()
+	return t.RequiresApproval && t.Status == TransferStatusPendingApproval && !t.IsApproved()
+}
+
+// PayoutConfiguration represents payout system configuration
+// Maps to xcentro.payout_configuration table
+type PayoutConfiguration struct {
+	ConfigID   string  // UUID stored as string
+	BusinessID *string // UUID stored as string, NULL = global default
+
+	// Auto-approval settings
+	AutoApprovalEnabled bool
+	AutoApprovalLimit   int64 // Amount in paise
+
+	// Transfer preferences
+	PreferredTransferMode string // NEFT, RTGS, IMPS
+
+	// Retry settings (placeholder for future)
+	MaxRetryAttempts      int
+	RetryDelayMinutes     int
+	RetryBackoffMultiplier float64
+
+	// Webhook timeout
+	WebhookTimeoutMinutes int
+
+	// Worker settings
+	BatchSize     int
+	WorkerEnabled bool
+
+	// Audit
+	CreatedAt time.Time
+	UpdatedAt *time.Time
+}
+
+// IsGlobalConfig returns true if this is the global default configuration
+func (c *PayoutConfiguration) IsGlobalConfig() bool {
+	return c.BusinessID == nil
+}
+
+// ShouldAutoApprove returns true if amount is within auto-approval limit
+func (c *PayoutConfiguration) ShouldAutoApprove(amount int64) bool {
+	return c.AutoApprovalEnabled && amount <= c.AutoApprovalLimit
 }
