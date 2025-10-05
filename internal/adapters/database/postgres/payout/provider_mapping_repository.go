@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"xcentro.in/internal/adapters/database/postgres/client"
 	"xcentro.in/internal/core/payout"
@@ -66,7 +65,7 @@ func (r *PostgresProviderMappingRepository) Create(ctx context.Context, mapping 
 }
 
 // GetByPayeeAndProvider retrieves mapping for a specific payee+account+provider
-func (r *PostgresProviderMappingRepository) GetByPayeeAndProvider(ctx context.Context, payeeID uuid.UUID, accountID uuid.UUID, provider payout.ProviderType) (*payout.PayoutProviderMapping, error) {
+func (r *PostgresProviderMappingRepository) GetByPayeeAndProvider(ctx context.Context, payeeID string, accountID string, provider payout.ProviderType) (*payout.PayoutProviderMapping, error) {
 	query := `
 		SELECT mapping_id, payee_id, account_id, provider,
 		       provider_beneficiary_id, provider_account_id,
@@ -90,7 +89,7 @@ func (r *PostgresProviderMappingRepository) GetByPayeeAndProvider(ctx context.Co
 }
 
 // GetByPayeeAndAccount retrieves all provider mappings for a payee+account
-func (r *PostgresProviderMappingRepository) GetByPayeeAndAccount(ctx context.Context, payeeID uuid.UUID, accountID uuid.UUID) ([]*payout.PayoutProviderMapping, error) {
+func (r *PostgresProviderMappingRepository) GetByPayeeAndAccount(ctx context.Context, payeeID string, accountID string) ([]*payout.PayoutProviderMapping, error) {
 	query := `
 		SELECT mapping_id, payee_id, account_id, provider,
 		       provider_beneficiary_id, provider_account_id,
@@ -130,7 +129,7 @@ func (r *PostgresProviderMappingRepository) GetByPayeeAndAccount(ctx context.Con
 }
 
 // GetActiveMapping retrieves the active provider mapping for a payee+account
-func (r *PostgresProviderMappingRepository) GetActiveMapping(ctx context.Context, payeeID uuid.UUID, accountID uuid.UUID) (*payout.PayoutProviderMapping, error) {
+func (r *PostgresProviderMappingRepository) GetActiveMapping(ctx context.Context, payeeID string, accountID string) (*payout.PayoutProviderMapping, error) {
 	query := `
 		SELECT mapping_id, payee_id, account_id, provider,
 		       provider_beneficiary_id, provider_account_id,
@@ -156,7 +155,7 @@ func (r *PostgresProviderMappingRepository) GetActiveMapping(ctx context.Context
 }
 
 // UpdateOnboardingStatus updates the onboarding status of a mapping
-func (r *PostgresProviderMappingRepository) UpdateOnboardingStatus(ctx context.Context, mappingID uuid.UUID, status payout.OnboardingStatus, providerBeneficiaryID string, providerAccountID string, metadata map[string]interface{}) error {
+func (r *PostgresProviderMappingRepository) UpdateOnboardingStatus(ctx context.Context, mappingID string, status payout.OnboardingStatus, providerBeneficiaryID string, providerAccountID string, metadata map[string]interface{}) error {
 	query := `
 		UPDATE xcentro.payee_provider_mappings
 		SET onboarding_status = $2,
@@ -187,7 +186,7 @@ func (r *PostgresProviderMappingRepository) UpdateOnboardingStatus(ctx context.C
 }
 
 // UpdateOnboardingError records an onboarding failure
-func (r *PostgresProviderMappingRepository) UpdateOnboardingError(ctx context.Context, mappingID uuid.UUID, errorCode string, errorMessage string) error {
+func (r *PostgresProviderMappingRepository) UpdateOnboardingError(ctx context.Context, mappingID string, errorCode string, errorMessage string) error {
 	query := `
 		UPDATE xcentro.payee_provider_mappings
 		SET onboarding_status = 'failed',
@@ -283,7 +282,7 @@ func (r *PostgresProviderMappingRepository) GetFailedOnboardings(ctx context.Con
 }
 
 // UpdateLastSyncedAt updates the last sync timestamp
-func (r *PostgresProviderMappingRepository) UpdateLastSyncedAt(ctx context.Context, mappingID uuid.UUID, timestamp time.Time) error {
+func (r *PostgresProviderMappingRepository) UpdateLastSyncedAt(ctx context.Context, mappingID string, timestamp time.Time) error {
 	query := `
 		UPDATE xcentro.payee_provider_mappings
 		SET last_synced_at = $2,

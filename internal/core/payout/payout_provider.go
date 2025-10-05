@@ -2,8 +2,6 @@ package payout
 
 import (
 	"context"
-
-	"github.com/google/uuid"
 )
 
 // PayoutProvider defines the interface for payout provider integrations (Castler, Razorpay, Bank APIs)
@@ -53,8 +51,8 @@ const (
 // OnboardBeneficiaryRequest represents payee onboarding request
 type OnboardBeneficiaryRequest struct {
 	// Payee identification
-	PayeeID   uuid.UUID
-	AccountID uuid.UUID
+	PayeeID   string // UUID stored as string
+	AccountID string // UUID stored as string
 
 	// Bank account details
 	AccountNumber     string
@@ -64,9 +62,9 @@ type OnboardBeneficiaryRequest struct {
 	AccountType       string // savings, current
 
 	// Business details (for vendors)
-	GSTIN      string // Optional - only for vendors
-	LegalName  string // From GST verification
-	PAN        string // Optional - for employees
+	GSTIN     string // Optional - only for vendors
+	LegalName string // From GST verification
+	PAN       string // Optional - for employees
 
 	// Contact details
 	Email string
@@ -107,7 +105,7 @@ const (
 // CreateTransferRequest represents payout transfer initiation
 type CreateTransferRequest struct {
 	// Voucher reference
-	VoucherID uuid.UUID
+	VoucherID string // UUID stored as string
 
 	// Beneficiary
 	ProviderBeneficiaryID string
@@ -142,8 +140,8 @@ type CreateTransferResponse struct {
 // ApproveTransferRequest represents transfer approval request (for two-step providers)
 type ApproveTransferRequest struct {
 	ProviderTransferID string
-	ApprovedBy         uuid.UUID // Operations user ID
-	Remarks            string    // Optional approval remarks
+	ApprovedBy         string // Operations user ID (UUID as string)
+	Remarks            string // Optional approval remarks
 }
 
 // ApproveTransferResponse represents provider's approval response

@@ -3,8 +3,6 @@ package payout
 import (
 	"context"
 	"time"
-
-	"github.com/google/uuid"
 )
 
 // PayoutProviderMappingRepository defines the interface for provider mapping persistence
@@ -13,21 +11,21 @@ type PayoutProviderMappingRepository interface {
 	Create(ctx context.Context, mapping *PayoutProviderMapping) error
 
 	// GetByPayeeAndProvider retrieves mapping for a specific payee+account+provider
-	GetByPayeeAndProvider(ctx context.Context, payeeID uuid.UUID, accountID uuid.UUID, provider ProviderType) (*PayoutProviderMapping, error)
+	GetByPayeeAndProvider(ctx context.Context, payeeID string, accountID string, provider ProviderType) (*PayoutProviderMapping, error)
 
 	// GetByPayeeAndAccount retrieves all provider mappings for a payee+account
 	// Returns mappings for all providers (Castler, Razorpay, etc.)
-	GetByPayeeAndAccount(ctx context.Context, payeeID uuid.UUID, accountID uuid.UUID) ([]*PayoutProviderMapping, error)
+	GetByPayeeAndAccount(ctx context.Context, payeeID string, accountID string) ([]*PayoutProviderMapping, error)
 
 	// GetActiveMapping retrieves the active provider mapping for a payee+account
 	// Returns the first active mapping (typically Castler, fallback to Razorpay)
-	GetActiveMapping(ctx context.Context, payeeID uuid.UUID, accountID uuid.UUID) (*PayoutProviderMapping, error)
+	GetActiveMapping(ctx context.Context, payeeID string, accountID string) (*PayoutProviderMapping, error)
 
 	// UpdateOnboardingStatus updates the onboarding status of a mapping
-	UpdateOnboardingStatus(ctx context.Context, mappingID uuid.UUID, status OnboardingStatus, providerBeneficiaryID string, providerAccountID string, metadata map[string]interface{}) error
+	UpdateOnboardingStatus(ctx context.Context, mappingID string, status OnboardingStatus, providerBeneficiaryID string, providerAccountID string, metadata map[string]interface{}) error
 
 	// UpdateOnboardingError records an onboarding failure
-	UpdateOnboardingError(ctx context.Context, mappingID uuid.UUID, errorCode string, errorMessage string) error
+	UpdateOnboardingError(ctx context.Context, mappingID string, errorCode string, errorMessage string) error
 
 	// GetPendingOnboardings retrieves mappings that need onboarding (for worker)
 	GetPendingOnboardings(ctx context.Context, limit int) ([]*PayoutProviderMapping, error)
@@ -36,7 +34,7 @@ type PayoutProviderMappingRepository interface {
 	GetFailedOnboardings(ctx context.Context, limit int, olderThan time.Duration) ([]*PayoutProviderMapping, error)
 
 	// UpdateLastSyncedAt updates the last sync timestamp
-	UpdateLastSyncedAt(ctx context.Context, mappingID uuid.UUID, timestamp time.Time) error
+	UpdateLastSyncedAt(ctx context.Context, mappingID string, timestamp time.Time) error
 }
 
 // PayoutTransferRepository defines the interface for transfer request persistence (Phase 9)
@@ -45,22 +43,22 @@ type PayoutTransferRepository interface {
 	Create(ctx context.Context, transfer *PayoutTransferRequest) error
 
 	// GetByID retrieves a transfer request by ID
-	GetByID(ctx context.Context, transferRequestID uuid.UUID) (*PayoutTransferRequest, error)
+	GetByID(ctx context.Context, transferRequestID string) (*PayoutTransferRequest, error)
 
 	// GetByVoucherID retrieves all transfer requests for a voucher
-	GetByVoucherID(ctx context.Context, voucherID uuid.UUID) ([]*PayoutTransferRequest, error)
+	GetByVoucherID(ctx context.Context, voucherID string) ([]*PayoutTransferRequest, error)
 
 	// UpdateStatus updates the transfer status
-	UpdateStatus(ctx context.Context, transferRequestID uuid.UUID, status TransferStatusType, utr string, metadata map[string]interface{}) error
+	UpdateStatus(ctx context.Context, transferRequestID string, status TransferStatusType, utr string, metadata map[string]interface{}) error
 
 	// ApproveTransfer records transfer approval
-	ApproveTransfer(ctx context.Context, transferRequestID uuid.UUID, approvedBy uuid.UUID, approvalMode ApprovalMode, timestamp time.Time) error
+	ApproveTransfer(ctx context.Context, transferRequestID string, approvedBy string, approvalMode ApprovalMode, timestamp time.Time) error
 
 	// MarkCompleted marks transfer as completed
-	MarkCompleted(ctx context.Context, transferRequestID uuid.UUID, utr string, completedAt time.Time) error
+	MarkCompleted(ctx context.Context, transferRequestID string, utr string, completedAt time.Time) error
 
 	// MarkFailed marks transfer as failed
-	MarkFailed(ctx context.Context, transferRequestID uuid.UUID, failureReason string, failedAt time.Time) error
+	MarkFailed(ctx context.Context, transferRequestID string, failureReason string, failedAt time.Time) error
 
 	// GetPendingApprovals retrieves transfers pending approval (for operations dashboard)
 	GetPendingApprovals(ctx context.Context, limit int) ([]*PayoutTransferRequest, error)

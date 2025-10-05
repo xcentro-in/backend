@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"xcentro.in/internal/adapters/database/postgres/client"
 	"xcentro.in/internal/core/business_rules"
 	"xcentro.in/internal/core/payee"
+	"xcentro.in/internal/core/payout"
 )
 
 // PayeeService orchestrates the complete payee onboarding and management flow
@@ -29,6 +31,10 @@ type PayeeService struct {
 	// Shared repositories
 	payeeBankAccountRepo      payee.PayeeBankAccountRepository
 	businessPayeeRelationRepo payee.BusinessPayeeRelationRepository
+
+	// Payout provider integration (Phase 8)
+	providerMappingRepo payout.PayoutProviderMappingRepository
+	payoutProvider      payout.PayoutProvider
 
 	// Verification services
 	gstVerificationSvc   business_rules.GSTVerificationService
@@ -50,6 +56,8 @@ func NewPayeeService(
 	payeeEmployeeRepo payee.PayeeEmployeeRepository,
 	payeeBankAccountRepo payee.PayeeBankAccountRepository,
 	businessPayeeRelationRepo payee.BusinessPayeeRelationRepository,
+	providerMappingRepo payout.PayoutProviderMappingRepository,
+	payoutProvider payout.PayoutProvider,
 	gstVerificationSvc business_rules.GSTVerificationService,
 	bankVerificationSvc business_rules.BankVerificationService,
 	crossVerificationSvc business_rules.CrossVerificationService,
@@ -65,6 +73,8 @@ func NewPayeeService(
 		payeeEmployeeRepo:            payeeEmployeeRepo,
 		payeeBankAccountRepo:         payeeBankAccountRepo,
 		businessPayeeRelationRepo:    businessPayeeRelationRepo,
+		providerMappingRepo:          providerMappingRepo,
+		payoutProvider:               payoutProvider,
 		gstVerificationSvc:           gstVerificationSvc,
 		bankVerificationSvc:          bankVerificationSvc,
 		crossVerificationSvc:         crossVerificationSvc,
@@ -376,7 +386,51 @@ func (s *PayeeService) onboardVendor(ctx context.Context, req payee.OnboardPayee
 
 	fmt.Println("✅ Payee onboarding complete!")
 
-	// Step 11: Return response
+	// Step 11: Onboard to payout provider (Phase 8)
+	fmt.Println("🚀 Step 11: Onboarding payee to payout provider (Castler)...")
+
+	onboardReq := &payout.OnboardBeneficiaryRequest{
+		PayeeID:           payeeID,
+		AccountID:         accountID,
+		AccountNumber:     vendor.AccountNumber,
+		IFSCCode:          vendor.IFSCCode,
+		AccountHolderName: bankAccount.AccountHolderName,
+		BankName:          bankAccount.BankName,
+		AccountType:       string(vendor.AccountType),
+		GSTIN:             vendor.GSTIN,
+		LegalName:         vendorPayee.LegalName,
+		Email:             req.ContactEmail,
+		Phone:             req.ContactPhone,
+	}
+
+	onboardResp, err := s.payoutProvider.OnboardBeneficiary(ctx, onboardReq)
+	if err != nil {
+		// Log error but don't fail payee creation
+		fmt.Printf("⚠️  Warning: Provider onboarding failed: %v\n", err)
+	} else {
+		// Store provider mapping
+		now := time.Now()
+		mapping := &payout.PayoutProviderMapping{
+			MappingID:             uuid.New().String(),
+			PayeeID:               payeeID,
+			AccountID:             accountID,
+			Provider:              s.payoutProvider.GetProviderType(),
+			ProviderBeneficiaryID: onboardResp.ProviderBeneficiaryID,
+			ProviderAccountID:     onboardResp.ProviderAccountID,
+			OnboardingStatus:      payout.OnboardingStatus(onboardResp.Status),
+			OnboardedAt:           &now,
+			ProviderMetadata:      onboardResp.Metadata,
+			CreatedAt:             time.Now(),
+		}
+
+		if err := s.providerMappingRepo.Create(ctx, mapping); err != nil {
+			fmt.Printf("⚠️  Warning: Failed to save provider mapping: %v\n", err)
+		} else {
+			fmt.Printf("✅ Provider onboarding complete: %s\n", onboardResp.ProviderBeneficiaryID)
+		}
+	}
+
+	// Step 12: Return response
 	return &payee.OnboardPayeeResponse{
 		PayeeID:                 payeeID,
 		AccountID:               accountID,
@@ -851,6 +905,50 @@ func (s *PayeeService) onboardEmployee(ctx context.Context, req payee.OnboardPay
 	}
 
 	fmt.Println("✅ Employee payee onboarding complete!")
+
+	// Step 11.5: Onboard to payout provider (Phase 8)
+	fmt.Println("🚀 Step 11.5: Onboarding employee to payout provider (Castler)...")
+
+	onboardReq := &payout.OnboardBeneficiaryRequest{
+		PayeeID:           payeeID,
+		AccountID:         bankAccount.AccountID,
+		AccountNumber:     employee.AccountNumber,
+		IFSCCode:          employee.IFSCCode,
+		AccountHolderName: bankAccount.AccountHolderName,
+		BankName:          bankAccount.BankName,
+		AccountType:       string(employee.AccountType),
+		PAN:               employee.PAN,
+		LegalName:         employee.FullName,
+		Email:             employee.Email,
+		Phone:             employee.Phone,
+	}
+
+	onboardResp, err := s.payoutProvider.OnboardBeneficiary(ctx, onboardReq)
+	if err != nil {
+		// Log error but don't fail payee creation
+		fmt.Printf("⚠️  Warning: Provider onboarding failed: %v\n", err)
+	} else {
+		// Store provider mapping
+		now := time.Now()
+		mapping := &payout.PayoutProviderMapping{
+			MappingID:             uuid.New().String(),
+			PayeeID:               payeeID,
+			AccountID:             bankAccount.AccountID,
+			Provider:              s.payoutProvider.GetProviderType(),
+			ProviderBeneficiaryID: onboardResp.ProviderBeneficiaryID,
+			ProviderAccountID:     onboardResp.ProviderAccountID,
+			OnboardingStatus:      payout.OnboardingStatus(onboardResp.Status),
+			OnboardedAt:           &now,
+			ProviderMetadata:      onboardResp.Metadata,
+			CreatedAt:             time.Now(),
+		}
+
+		if err := s.providerMappingRepo.Create(ctx, mapping); err != nil {
+			fmt.Printf("⚠️  Warning: Failed to save provider mapping: %v\n", err)
+		} else {
+			fmt.Printf("✅ Provider onboarding complete: %s\n", onboardResp.ProviderBeneficiaryID)
+		}
+	}
 
 	// Step 12: Return response
 	return &payee.OnboardPayeeResponse{

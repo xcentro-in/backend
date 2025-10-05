@@ -3,6 +3,8 @@ package payee
 import (
 	"xcentro.in/internal/adapters/database/postgres/client"
 	payeeRepo "xcentro.in/internal/adapters/database/postgres/payee"
+	payoutRepo "xcentro.in/internal/adapters/database/postgres/payout"
+	"xcentro.in/internal/adapters/external/payout/castler"
 	"xcentro.in/internal/core/business_rules"
 )
 
@@ -34,6 +36,16 @@ func (f *PayeeServiceFactory) NewPayeeService() *PayeeService {
 	payeeBankAccountRepo := payeeRepo.NewPgPayeeBankAccountRepository(f.db)
 	businessPayeeRelationRepo := payeeRepo.NewPgBusinessPayeeRelationRepository(f.db)
 
+	// Create payout provider repositories (Phase 8)
+	providerMappingRepo := payoutRepo.NewPostgresProviderMappingRepository(f.db)
+
+	// Create payout provider client (Castler - TODO: make configurable)
+	castlerClient := castler.NewCastlerClient(
+		"https://api.castler.in", // TODO: from config
+		"dummy-api-key",          // TODO: from config
+		"dummy-secret-key",       // TODO: from config
+	)
+
 	// Create verification services (mock implementations for now)
 	gstVerificationSvc := business_rules.NewMockGSTVerificationService()
 	bankVerificationSvc := business_rules.NewMockBankVerificationService()
@@ -50,6 +62,8 @@ func (f *PayeeServiceFactory) NewPayeeService() *PayeeService {
 		payeeEmployeeRepo,
 		payeeBankAccountRepo,
 		businessPayeeRelationRepo,
+		providerMappingRepo,
+		castlerClient,
 		gstVerificationSvc,
 		bankVerificationSvc,
 		crossVerificationSvc,
