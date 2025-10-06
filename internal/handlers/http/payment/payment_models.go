@@ -235,3 +235,60 @@ type ErrorResponse struct {
 	Error   string `json:"error"`
 	Message string `json:"message"`
 }
+
+// === PHASE 10: PAYMENT SOURCE SELECTION MODELS ===
+
+// GetPaymentSourcesWithFeesRequest represents the request for Phase 10
+type GetPaymentSourcesWithFeesRequest struct {
+	BusinessID     string `json:"business_id"`
+	PaymentContext string `json:"payment_context"` // vendor_payment, gst_payment, bill_payment, payroll
+	BaseAmount     int64  `json:"base_amount"`     // Amount in paise
+}
+
+// GetPaymentSourcesWithFeesResponse represents the response for Phase 10
+type GetPaymentSourcesWithFeesResponse struct {
+	BusinessID     string                           `json:"business_id"`
+	PaymentContext string                           `json:"payment_context"`
+	BaseAmount     int64                            `json:"base_amount"`
+	Sources        []PaymentSourceWithFeesResponse  `json:"sources"`
+}
+
+// PaymentSourceWithFeesResponse represents a payment source with fee breakdown
+type PaymentSourceWithFeesResponse struct {
+	// Source identification
+	SourceID        string  `json:"source_id"`
+	SourceType      string  `json:"source_type"`
+	PaymentMethod   string  `json:"payment_method"`
+	DisplayName     string  `json:"display_name"`
+
+	// Card-specific fields
+	CardType        *string `json:"card_type,omitempty"`
+	CardCategory    *string `json:"card_category,omitempty"`
+	LastFourDigits  string  `json:"last_four_digits,omitempty"`
+
+	// Bank account specific
+	LastFiveDigits  string  `json:"last_five_digits,omitempty"`
+	BankName        string  `json:"bank_name,omitempty"`
+	IFSCCode        string  `json:"ifsc_code,omitempty"`
+
+	// UPI specific
+	UPIAddress      string  `json:"upi_address,omitempty"`
+
+	// Restriction information
+	IsAllowed          bool   `json:"is_allowed"`
+	RestrictionReason  string `json:"restriction_reason,omitempty"`
+
+	// Fee breakdown (only for allowed sources)
+	FeeBreakdown       *FeeBreakdownResponse `json:"fee_breakdown,omitempty"`
+}
+
+// FeeBreakdownResponse represents fee calculation with GST
+type FeeBreakdownResponse struct {
+	BaseAmount            int64   `json:"base_amount"`
+	ConvenienceFee        int64   `json:"convenience_fee"`
+	ConvenienceFeeGST     int64   `json:"convenience_fee_gst"`
+	TotalFee              int64   `json:"total_fee"`
+	TotalAmount           int64   `json:"total_amount"`
+	ConvenienceFeePercent float64 `json:"convenience_fee_percent"`
+	GSTPercent            float64 `json:"gst_percent"`
+}

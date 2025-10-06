@@ -15,13 +15,15 @@ import (
 
 // PaymentHandler handles payment-related HTTP requests
 type PaymentHandler struct {
-	paymentService *payments.PaymentService
+	paymentService       *payments.PaymentService
+	paymentSourceService *payments.PaymentSourceService // Phase 10
 }
 
 // NewPaymentHandler creates a new payment handler
-func NewPaymentHandler(paymentService *payments.PaymentService) *PaymentHandler {
+func NewPaymentHandler(paymentService *payments.PaymentService, paymentSourceService *payments.PaymentSourceService) *PaymentHandler {
 	return &PaymentHandler{
-		paymentService: paymentService,
+		paymentService:       paymentService,
+		paymentSourceService: paymentSourceService,
 	}
 }
 
@@ -875,9 +877,132 @@ func (h *PaymentHandler) handleTokenizationError(err error) error {
 	}
 }
 
+// GetPaymentSourcesWithFees handles POST /process_payment/get_payment_sources_with_fees (Phase 10)
+func (h *PaymentHandler) GetPaymentSourcesWithFees(c echo.Context) error {
+	fmt.Println("=== HANDLER: GetPaymentSourcesWithFees API Called (Phase 10) ===")
+
+	// Parse request body
+	var req GetPaymentSourcesWithFeesRequest
+	if err := c.Bind(&req); err != nil {
+		fmt.Printf("❌ Error binding request: %v\n", err)
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "invalid_request",
+			"message": "Invalid request body",
+		})
+	}
+
+	fmt.Printf("📥 Request: Business ID: %s, Context: %s, Amount: %d\n",
+		req.BusinessID, req.PaymentContext, req.BaseAmount)
+
+	// Validate payment context
+	paymentContext := payment.PaymentContext(req.PaymentContext)
+	if !paymentContext.IsValid() {
+		fmt.Printf("❌ Invalid payment context: %s\n", req.PaymentContext)
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "invalid_payment_context",
+			"message": fmt.Sprintf("Invalid payment context: %s. Valid contexts: vendor_payment, gst_payment, bill_payment, payroll", req.PaymentContext),
+		})
+	}
+
+	// Validate base amount
+	if req.BaseAmount <= 0 {
+		fmt.Printf("❌ Invalid base amount: %d\n", req.BaseAmount)
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "invalid_amount",
+			"message": "Base amount must be greater than 0",
+		})
+	}
+
+	// Call payment source service
+	fmt.Println("🔄 Calling Payment Source Service...")
+	ctx, cancel := context.WithTimeout(c.Request().Context(), 10*time.Second)
+	defer cancel()
+
+	response, err := h.paymentSourceService.GetPaymentSourcesWithFees(
+		ctx,
+		req.BusinessID,
+		paymentContext,
+		req.BaseAmount,
+	)
+	if err != nil {
+		fmt.Printf("❌ Payment source service error: %v\n", err)
+		return c.JSON(http.StatusInternalServerError, map[string]any{
+			"error":   "service_error",
+			"message": "Failed to retrieve payment sources with fees",
+		})
+	}
+
+	// Convert to API response format
+	apiResponse := convertPaymentSourcesResponse(response)
+
+	fmt.Printf("✅ Payment sources fetched successfully\n")
+	fmt.Printf("📊 Total sources: %d\n", len(response.Sources))
+	fmt.Println("=== HANDLER: GetPaymentSourcesWithFees Complete ===")
+
+	return c.JSON(http.StatusOK, map[string]any{
+		"message":  "Payment sources with fees retrieved successfully",
+		"endpoint": "POST /v1/process_payment/get_payment_sources_with_fees",
+		"status":   "success",
+		"data":     apiResponse,
+	})
+}
+
+// convertPaymentSourcesResponse converts service response to API response
+func convertPaymentSourcesResponse(serviceResp *payments.GetPaymentSourcesResponse) *GetPaymentSourcesWithFeesResponse {
+	apiSources := make([]PaymentSourceWithFeesResponse, 0, len(serviceResp.Sources))
+
+	for _, source := range serviceResp.Sources {
+		apiSource := PaymentSourceWithFeesResponse{
+			SourceID:          source.SourceID,
+			SourceType:        string(source.SourceType),
+			PaymentMethod:     string(source.PaymentMethod),
+			DisplayName:       source.DisplayName,
+			LastFourDigits:    source.LastFourDigits,
+			LastFiveDigits:    source.LastFiveDigits,
+			BankName:          source.BankName,
+			IFSCCode:          source.IFSCCode,
+			UPIAddress:        source.UPIAddress,
+			IsAllowed:         source.IsAllowed,
+			RestrictionReason: source.RestrictionReason,
+		}
+
+		// Convert card type/category pointers
+		if source.CardType != nil {
+			cardType := string(*source.CardType)
+			apiSource.CardType = &cardType
+		}
+		if source.CardCategory != nil {
+			cardCategory := string(*source.CardCategory)
+			apiSource.CardCategory = &cardCategory
+		}
+
+		// Convert fee breakdown if present
+		if source.FeeBreakdown != nil {
+			apiSource.FeeBreakdown = &FeeBreakdownResponse{
+				BaseAmount:            source.FeeBreakdown.BaseAmount,
+				ConvenienceFee:        source.FeeBreakdown.ConvenienceFee,
+				ConvenienceFeeGST:     source.FeeBreakdown.ConvenienceFeeGST,
+				TotalFee:              source.FeeBreakdown.TotalFee,
+				TotalAmount:           source.FeeBreakdown.TotalAmount,
+				ConvenienceFeePercent: source.FeeBreakdown.ConvenienceFeePercent,
+				GSTPercent:            source.FeeBreakdown.GSTPercent,
+			}
+		}
+
+		apiSources = append(apiSources, apiSource)
+	}
+
+	return &GetPaymentSourcesWithFeesResponse{
+		BusinessID:     serviceResp.BusinessID,
+		PaymentContext: string(serviceResp.PaymentContext),
+		BaseAmount:     serviceResp.BaseAmount,
+		Sources:        apiSources,
+	}
+}
+
 // RegisterPaymentRoutes registers all payment routes
-func RegisterPaymentRoutes(group *echo.Group, paymentService *payments.PaymentService) {
-	handler := NewPaymentHandler(paymentService)
+func RegisterPaymentRoutes(group *echo.Group, paymentService *payments.PaymentService, paymentSourceService *payments.PaymentSourceService) {
+	handler := NewPaymentHandler(paymentService, paymentSourceService)
 
 	// Core payment operations
 	group.POST("/fetch_wallet", handler.FetchWallet)
@@ -885,6 +1010,9 @@ func RegisterPaymentRoutes(group *echo.Group, paymentService *payments.PaymentSe
 	group.POST("/tokenize", handler.Tokenize)
 	group.POST("/make_payment", handler.MakePayment)
 	group.POST("/add_payment_source", handler.AddPaymentSource)
+
+	// Phase 10: Payment source selection with context-aware fees
+	group.POST("/get_payment_sources_with_fees", handler.GetPaymentSourcesWithFees)
 
 	// Webhook endpoints (Phase 3C)
 	// TODO: Webhooks still need orchestrator for now

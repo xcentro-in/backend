@@ -41,12 +41,8 @@ func (r *PostgresFeeRulesRepository) GetFeeRule(
 			AND is_active = true
 			AND effective_from <= NOW()
 			AND (effective_until IS NULL OR effective_until > NOW())
-			AND (
-				(card_type = $2 AND card_category = $3) OR  -- Exact match
-				(card_type = $2 AND card_category IS NULL) OR  -- Card type only
-				(card_type IS NULL AND card_category = $3) OR  -- Category only
-				(card_type IS NULL AND card_category IS NULL)  -- Generic
-			)
+			AND (card_type IS NOT DISTINCT FROM $2)
+			AND (card_category IS NOT DISTINCT FROM $3)
 		ORDER BY
 			priority DESC,
 			(card_type IS NOT NULL)::int DESC,          -- Prefer specific card type
@@ -57,17 +53,28 @@ func (r *PostgresFeeRulesRepository) GetFeeRule(
 	var rule business_rules.FeeRule
 	var ruleID, paymentMethodStr, cardTypeStr, cardCategoryStr, feeTypeStr string
 	var cardTypeNullable, cardCategoryNullable *string
+	var percentageFeeNullable *float64
+	var minFeeNullable, maxFeeNullable *int64
 
-	err := r.querier.QueryRow(ctx, query, method, cardType, cardCategory).Scan(
+	// Convert pointers to interface{} for SQL query (nil or value)
+	var cardTypeParam, cardCategoryParam interface{}
+	if cardType != nil {
+		cardTypeParam = string(*cardType)
+	}
+	if cardCategory != nil {
+		cardCategoryParam = string(*cardCategory)
+	}
+
+	err := r.querier.QueryRow(ctx, query, method, cardTypeParam, cardCategoryParam).Scan(
 		&ruleID,
 		&paymentMethodStr,
 		&cardTypeNullable,
 		&cardCategoryNullable,
 		&feeTypeStr,
-		&rule.PercentageFee,
+		&percentageFeeNullable,
 		&rule.FixedFee,
-		&rule.MinFee,
-		&rule.MaxFee,
+		&minFeeNullable,
+		&maxFeeNullable,
 		&rule.GSTPercentage,
 		&rule.GSTApplicable,
 		&rule.Priority,
@@ -93,6 +100,17 @@ func (r *PostgresFeeRulesRepository) GetFeeRule(
 	if cardCategoryNullable != nil {
 		cardCategoryStr = *cardCategoryNullable
 		rule.CardCategory = payment.CardCategory(cardCategoryStr)
+	}
+
+	// Handle nullable percentage_fee, min_fee and max_fee
+	if percentageFeeNullable != nil {
+		rule.PercentageFee = *percentageFeeNullable
+	}
+	if minFeeNullable != nil {
+		rule.MinFee = *minFeeNullable
+	}
+	if maxFeeNullable != nil {
+		rule.MaxFee = *maxFeeNullable
 	}
 
 	rule.IsActive = true

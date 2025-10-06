@@ -31,6 +31,12 @@ type FeeCalculator interface {
 	GetAllFeeRules() ([]*FeeRule, error)
 }
 
+// DatabaseFeeCalculator defines the interface for fee calculation with GST (Phase 10)
+type DatabaseFeeCalculator interface {
+	CalculateWithTax(ctx context.Context, amount int64, method payment.PaymentMethod, cardType *payment.CardType, cardCategory *payment.CardCategory) (*FeeCalculationWithTax, error)
+	GetFeeRule(ctx context.Context, method payment.PaymentMethod, cardType *payment.CardType, cardCategory *payment.CardCategory) (*FeeRule, error)
+}
+
 // FeeRulesRepository defines the interface for fee rules persistence
 type FeeRulesRepository interface {
 	// GetFeeRule fetches the most specific matching rule for a payment method
@@ -329,4 +335,90 @@ func getMockFeeRules() []*FeeRule {
 			Priority:      5,
 		},
 	}
+}
+
+// PostgresDatabaseFeeCalculator implements DatabaseFeeCalculator using database-backed rules
+type PostgresDatabaseFeeCalculator struct {
+	repo FeeRulesRepository
+}
+
+// NewDatabaseFeeCalculator creates a new database-backed fee calculator
+func NewDatabaseFeeCalculator(repo FeeRulesRepository) DatabaseFeeCalculator {
+	return &PostgresDatabaseFeeCalculator{
+		repo: repo,
+	}
+}
+
+// GetFeeRule fetches the applicable fee rule from the database
+func (calc *PostgresDatabaseFeeCalculator) GetFeeRule(
+	ctx context.Context,
+	method payment.PaymentMethod,
+	cardType *payment.CardType,
+	cardCategory *payment.CardCategory,
+) (*FeeRule, error) {
+	return calc.repo.GetFeeRule(ctx, method, cardType, cardCategory)
+}
+
+// CalculateWithTax calculates fee with GST breakdown for Phase 10
+func (calc *PostgresDatabaseFeeCalculator) CalculateWithTax(
+	ctx context.Context,
+	amount int64,
+	method payment.PaymentMethod,
+	cardType *payment.CardType,
+	cardCategory *payment.CardCategory,
+) (*FeeCalculationWithTax, error) {
+	// Fetch applicable rule from database
+	rule, err := calc.repo.GetFeeRule(ctx, method, cardType, cardCategory)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get fee rule: %w", err)
+	}
+
+	if rule == nil {
+		return nil, fmt.Errorf("no fee rule found for payment method %s", method)
+	}
+
+	// Calculate base convenience fee
+	var convenienceFee int64
+	switch rule.FeeType {
+	case payment.FeeTypePercentage:
+		convenienceFee = int64(float64(amount) * rule.PercentageFee / 100)
+
+	case payment.FeeTypeFixed:
+		convenienceFee = rule.FixedFee
+
+	case payment.FeeTypePercentagePlus:
+		percentagePart := int64(float64(amount) * rule.PercentageFee / 100)
+		convenienceFee = percentagePart + rule.FixedFee
+
+	default:
+		return nil, fmt.Errorf("unsupported fee type: %s", rule.FeeType)
+	}
+
+	// Apply min/max fee limits
+	if rule.MinFee > 0 && convenienceFee < rule.MinFee {
+		convenienceFee = rule.MinFee
+	}
+	if rule.MaxFee > 0 && convenienceFee > rule.MaxFee {
+		convenienceFee = rule.MaxFee
+	}
+
+	// Calculate GST on convenience fee
+	var convenienceFeeGST int64
+	if rule.GSTApplicable {
+		convenienceFeeGST = int64(float64(convenienceFee) * rule.GSTPercentage / 100)
+	}
+
+	totalFee := convenienceFee + convenienceFeeGST
+	totalAmount := amount + totalFee
+
+	return &FeeCalculationWithTax{
+		BaseAmount:            amount,
+		ConvenienceFee:        convenienceFee,
+		ConvenienceFeeGST:     convenienceFeeGST,
+		TotalFee:              totalFee,
+		TotalAmount:           totalAmount,
+		ConvenienceFeePercent: rule.PercentageFee,
+		GSTPercent:            rule.GSTPercentage,
+		AppliedRule:           rule,
+	}, nil
 }

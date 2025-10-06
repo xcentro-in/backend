@@ -68,6 +68,13 @@ func registerV1PaymentRoutes(meta *serverMetaData, group *echo.Group) {
 	feeCalculator := business_rules.NewMockFeeCalculator()
 	walletService := business_rules.NewMockWalletService(storedCardRepository, bankAccountRepository, meta.clients.txManager)
 
+	// Phase 10: Create database-backed fee calculator
+	feeRulesRepository := paymentRepo.NewPostgresFeeRulesRepository(meta.clients.db)
+	databaseFeeCalculator := business_rules.NewDatabaseFeeCalculator(feeRulesRepository)
+
+	// Phase 10: Create payment source service
+	paymentSourceService := payments.NewPaymentSourceService(walletService, databaseFeeCalculator)
+
 	// PHASE 6: Create voucher service for payment integration
 	voucherRepository := voucherRepo.NewPostgresVoucherRepository(meta.clients.db)
 	approvalRepository := voucherRepo.NewPostgresApprovalRepository(meta.clients.db)
@@ -92,9 +99,9 @@ func registerV1PaymentRoutes(meta *serverMetaData, group *echo.Group) {
 		voucherService, // PHASE 6: Inject voucher service
 	)
 
-	// Register payment routes with payment service
+	// Register payment routes with payment service (Phase 10: Added paymentSourceService)
 	processPaymentGroup := group.Group("/process_payment")
-	payment.RegisterPaymentRoutes(processPaymentGroup, paymentService)
+	payment.RegisterPaymentRoutes(processPaymentGroup, paymentService, paymentSourceService)
 }
 
 func registerV1BusinessRoutes(meta *serverMetaData, group *echo.Group) {

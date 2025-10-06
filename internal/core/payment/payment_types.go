@@ -5,8 +5,8 @@ type PaymentMethod string
 
 const (
 	PaymentMethodCard       PaymentMethod = "card"
-	PaymentMethodTokenCard  PaymentMethod = "token-card"
-	PaymentMethodNetBanking PaymentMethod = "netbanking"
+	PaymentMethodTokenCard  PaymentMethod = "token_card"
+	PaymentMethodNetBanking PaymentMethod = "net_banking"
 	PaymentMethodUPI        PaymentMethod = "upi"
 	PaymentMethodWallet     PaymentMethod = "wallet"
 )
