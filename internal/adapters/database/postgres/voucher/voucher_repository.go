@@ -892,3 +892,60 @@ func (r *PostgresVoucherRepository) UpdatePayoutStatus(ctx context.Context, vouc
 
 	return nil
 }
+
+// GetVouchersReadyForPayout retrieves vouchers ready for payout processing (Phase 9)
+// Returns finalized, paid, non-cancelled vouchers with payout_status = 'pending'
+func (r *PostgresVoucherRepository) GetVouchersReadyForPayout(ctx context.Context, limit int) ([]*voucher.Voucher, error) {
+	query := `
+		SELECT
+			voucher_id, voucher_number, voucher_date, fiscal_year, accounting_period, voucher_type,
+			business_id, payee_id, account_id,
+			invoice_number, invoice_date, invoice_due_date,
+			gross_amount, net_amount, currency,
+			gst_amount, gst_rate, cgst_amount, sgst_amount, igst_amount,
+			tds_amount, tds_rate, tds_section,
+			fee_amount, discount_amount,
+			financial_details, attachments,
+			expense_category, description,
+			status, payment_id,
+			erp_sync_status, erp_reference_id, erp_posting_date, erp_last_sync_at, erp_sync_attempts, erp_metadata,
+			payout_status, payout_initiated_at, payout_initiated_by, payout_completed_at, payout_reference_id, payout_utr, payout_metadata,
+			cancellation_status, cancellation_requested_at, cancellation_requested_by, cancellation_reason,
+			cancellation_approved_at, cancellation_approved_by, refund_status, refund_metadata,
+			gl_expense_account, gl_bank_account, cost_center,
+			created_at, created_by_user_id, updated_at, metadata
+		FROM xcentro.payment_vouchers
+		WHERE status = $1
+			AND payment_id IS NOT NULL
+			AND cancellation_status = $2
+			AND payout_status = $3
+		ORDER BY voucher_date ASC, created_at ASC
+		LIMIT $4
+	`
+
+	rows, err := r.querier.Query(ctx, query,
+		voucher.StatusFinalized,
+		voucher.CancellationStatusNotCancelled,
+		voucher.PayoutStatusPending,
+		limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query vouchers ready for payout: %w", err)
+	}
+	defer rows.Close()
+
+	var vouchers []*voucher.Voucher
+	for rows.Next() {
+		v, err := r.scanVoucherRow(rows)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan voucher row: %w", err)
+		}
+		vouchers = append(vouchers, v)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating voucher rows: %w", err)
+	}
+
+	return vouchers, nil
+}

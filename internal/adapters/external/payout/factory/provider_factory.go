@@ -5,84 +5,64 @@ import (
 
 	"xcentro.in/internal/adapters/external/payout/castler"
 	"xcentro.in/internal/core/payout"
+	"xcentro.in/internal/shared/config"
 )
 
-// PayoutProviderConfig holds configuration for payout providers
-type PayoutProviderConfig struct {
-	// Castler configuration
-	CastlerBaseURL   string
-	CastlerAPIKey    string
-	CastlerSecretKey string
-
-	// Razorpay configuration (future)
-	RazorpayBaseURL string
-	RazorpayKeyID   string
-	RazorpaySecret  string
-
-	// Default provider
-	DefaultProvider payout.ProviderType
-}
-
-// PayoutProviderFactory creates payout provider instances
+// PayoutProviderFactory creates payout provider instances based on provider type
 type PayoutProviderFactory struct {
-	config *PayoutProviderConfig
+	config *config.Config
+	// Cache provider instances (singleton pattern)
+	castlerClient *castler.CastlerClient
+	// Add other providers here in future (e.g., razorpayClient)
 }
 
-// NewPayoutProviderFactory creates a new provider factory
-func NewPayoutProviderFactory(config *PayoutProviderConfig) *PayoutProviderFactory {
+// NewPayoutProviderFactory creates a new factory with configuration
+func NewPayoutProviderFactory(cfg *config.Config) *PayoutProviderFactory {
 	return &PayoutProviderFactory{
-		config: config,
+		config: cfg,
 	}
 }
 
-// GetProvider returns a payout provider instance for the specified type
+// GetProvider returns a payout provider instance based on provider type
 func (f *PayoutProviderFactory) GetProvider(providerType payout.ProviderType) (payout.PayoutProvider, error) {
 	switch providerType {
 	case payout.ProviderCastler:
-		return castler.NewCastlerClient(
-			f.config.CastlerBaseURL,
-			f.config.CastlerAPIKey,
-			f.config.CastlerSecretKey,
-		), nil
+		return f.getCastlerClient(), nil
 
-	case payout.ProviderRazorpay:
-		// TODO: Implement Razorpay client in future
-		return nil, fmt.Errorf("Razorpay provider not yet implemented")
-
-	case payout.ProviderBankAPI:
-		// TODO: Implement direct bank API client in future
-		return nil, fmt.Errorf("Bank API provider not yet implemented")
+	// Future providers:
+	// case payout.ProviderRazorpay:
+	// 	return f.getRazorpayClient(), nil
 
 	default:
-		return nil, fmt.Errorf("unknown provider type: %s", providerType)
+		return nil, fmt.Errorf("unsupported payout provider: %s", providerType)
 	}
 }
 
-// GetDefaultProvider returns the configured default provider
-func (f *PayoutProviderFactory) GetDefaultProvider() (payout.PayoutProvider, error) {
-	if f.config.DefaultProvider == "" {
-		f.config.DefaultProvider = payout.ProviderCastler // Default to Castler
+// getCastlerClient returns cached Castler client or creates new one
+func (f *PayoutProviderFactory) getCastlerClient() *castler.CastlerClient {
+	if f.castlerClient == nil {
+		// Get Castler configuration from app config
+		baseURL := f.config.Castler.BaseURL
+		apiKey := f.config.Castler.APIKey
+		secretKey := f.config.Castler.SecretKey
+
+		f.castlerClient = castler.NewCastlerClient(baseURL, apiKey, secretKey)
 	}
-	return f.GetProvider(f.config.DefaultProvider)
+	return f.castlerClient
 }
 
-// GetProviderWithFallback returns the primary provider, falling back to secondary if primary fails
-func (f *PayoutProviderFactory) GetProviderWithFallback(primaryType payout.ProviderType) (payout.PayoutProvider, error) {
-	// Try primary provider first
-	provider, err := f.GetProvider(primaryType)
-	if err == nil {
-		return provider, nil
+// GetAllProviders returns all available providers (useful for multi-provider fallback)
+func (f *PayoutProviderFactory) GetAllProviders() []payout.PayoutProvider {
+	providers := []payout.PayoutProvider{
+		f.getCastlerClient(),
+		// Add other providers here
 	}
+	return providers
+}
 
-	// Fallback logic: Castler → Razorpay → Bank API
-	switch primaryType {
-	case payout.ProviderCastler:
-		// Fallback to Razorpay
-		return f.GetProvider(payout.ProviderRazorpay)
-	case payout.ProviderRazorpay:
-		// Fallback to Bank API
-		return f.GetProvider(payout.ProviderBankAPI)
-	default:
-		return nil, fmt.Errorf("no fallback available for provider: %s", primaryType)
-	}
+// GetPreferredProvider returns the preferred provider based on business rules
+// Priority: Castler > Razorpay (add more logic as needed)
+func (f *PayoutProviderFactory) GetPreferredProvider() (payout.PayoutProvider, error) {
+	// For MVP, always use Castler as preferred provider
+	return f.getCastlerClient(), nil
 }

@@ -78,7 +78,7 @@ CREATE TABLE xcentro.payout_transfer_requests (
 -- Payout configuration (auto-approval limits, retry settings, etc.)
 CREATE TABLE xcentro.payout_configuration (
     config_id UUID PRIMARY KEY DEFAULT uuidv7(),
-    business_id UUID REFERENCES xcentro.business(bid) ON DELETE CASCADE,  -- NULL = global default
+    business_id UUID REFERENCES xcentro.business(bid) ON DELETE CASCADE,  -- NULL = global, specific UUID = per-business
 
     -- Auto-approval settings
     auto_approval_enabled BOOLEAN NOT NULL DEFAULT true,

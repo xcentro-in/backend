@@ -54,6 +54,10 @@ type VoucherRepository interface {
 
 	// GetVouchersForERPSync retrieves vouchers that need ERP synchronization
 	GetVouchersForERPSync(ctx context.Context, limit int) ([]*Voucher, error)
+
+	// GetVouchersReadyForPayout retrieves vouchers ready for payout processing (Phase 9)
+	// Returns finalized, paid, non-cancelled vouchers with payout_status = 'pending'
+	GetVouchersReadyForPayout(ctx context.Context, limit int) ([]*Voucher, error)
 }
 
 // VoucherFilters defines filter criteria for listing vouchers

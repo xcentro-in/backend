@@ -4,6 +4,7 @@ import (
 	"github.com/labstack/echo/v4"
 	"xcentro.in/internal/adapters/database/postgres/business"
 	paymentRepo "xcentro.in/internal/adapters/database/postgres/payment"
+	payoutRepo "xcentro.in/internal/adapters/database/postgres/payout"
 	userRepo "xcentro.in/internal/adapters/database/postgres/user"
 	voucherRepo "xcentro.in/internal/adapters/database/postgres/voucher"
 	"xcentro.in/internal/core/business_rules"
@@ -13,15 +14,18 @@ import (
 	businessHandler "xcentro.in/internal/handlers/http/business"
 	"xcentro.in/internal/handlers/http/payee"
 	"xcentro.in/internal/handlers/http/payment"
+	payoutHandler "xcentro.in/internal/handlers/http/payout"
 	userHandler "xcentro.in/internal/handlers/http/user"
 	voucherHandler "xcentro.in/internal/handlers/http/voucher"
 	authservice "xcentro.in/internal/services/auth"
 	businessSvc "xcentro.in/internal/services/business"
 	payeeSvc "xcentro.in/internal/services/payee"
 	"xcentro.in/internal/services/payments"
+	payoutSvc "xcentro.in/internal/services/payout"
 	"xcentro.in/internal/services/user"
 	"xcentro.in/internal/services/verification"
 	voucherSvc "xcentro.in/internal/services/voucher"
+	"xcentro.in/internal/adapters/external/payout/factory"
 )
 
 func registerV1AuthRoutes(meta *serverMetaData, group *echo.Group) {
@@ -171,6 +175,61 @@ func registerV1VoucherRoutes(meta *serverMetaData, group *echo.Group) {
 	voucherHandler.RegisterVoucherRoutes(voucherGroup, voucherService)
 }
 
+func registerV1PayoutRoutes(meta *serverMetaData, group *echo.Group) {
+	// Create payout repository instances
+	transferRepository := payoutRepo.NewPostgresPayoutTransferRepository(meta.clients.db)
+	configRepository := payoutRepo.NewPostgresPayoutConfigurationRepository(meta.clients.db)
+	mappingRepository := payoutRepo.NewPostgresPayoutProviderMappingRepository(meta.clients.db)
+	voucherRepository := voucherRepo.NewPostgresVoucherRepository(meta.clients.db)
+
+	// Get webhook secret from configuration
+	webhookSecret := meta.config.Castler.WebhookSecret
+
+	// Create provider factory
+	providerFactory := factory.NewPayoutProviderFactory(&meta.config)
+
+	// Create payout service
+	payoutService := payoutSvc.NewPayoutService(
+		voucherRepository,
+		transferRepository,
+		mappingRepository,
+		configRepository,
+		providerFactory,
+	)
+
+	// Create webhook handler
+	webhookHandler := payoutHandler.NewPayoutWebhookHandler(
+		transferRepository,
+		voucherRepository,
+		webhookSecret,
+	)
+
+	// Create operations dashboard handler
+	dashboardHandler := payoutHandler.NewPayoutHandler(
+		payoutService,
+		transferRepository,
+		configRepository,
+	)
+
+	// Register payout routes
+	payoutGroup := group.Group("/payout")
+
+	// Webhook endpoint (no auth required - verified via HMAC signature)
+	payoutGroup.POST("/webhooks/castler", webhookHandler.HandleCastlerWebhook)
+
+	// Operations dashboard endpoints
+	payoutGroup.GET("/pending-approvals", dashboardHandler.GetPendingApprovals)
+	payoutGroup.POST("/:transfer_id/approve", dashboardHandler.ApproveTransfer)
+	payoutGroup.POST("/:transfer_id/cancel", dashboardHandler.CancelTransfer)
+	payoutGroup.GET("/:transfer_id", dashboardHandler.GetTransferDetails)
+	payoutGroup.GET("/:transfer_id/webhooks", dashboardHandler.GetWebhookHistory)
+	payoutGroup.GET("/timeouts", dashboardHandler.GetTimeoutTransfers)
+	payoutGroup.POST("/:transfer_id/mark-completed", dashboardHandler.MarkCompletedManually)
+	payoutGroup.GET("/config", dashboardHandler.GetConfig)
+	payoutGroup.PUT("/config", dashboardHandler.UpdateConfig)
+	payoutGroup.POST("/config", dashboardHandler.CreateConfig)
+}
+
 func registerV1Routes(s *xcentroServer) {
 	v1 := s.echo.Group("/v1")
 
@@ -198,6 +257,9 @@ func registerV1Routes(s *xcentroServer) {
 
 	// Voucher Routes
 	registerV1VoucherRoutes(&s.meta, v1)
+
+	// Payout Routes (Phase 9: Webhooks + Operations Dashboard)
+	registerV1PayoutRoutes(&s.meta, v1)
 }
 
 func registerRouters(s *xcentroServer) {

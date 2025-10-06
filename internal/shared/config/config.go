@@ -20,6 +20,7 @@ type Config struct {
 	JWT               JWTSecretConfig         `json:"jwt"`
 	S3                S3Config                `json:"s3"`
 	SES               SESConfig               `json:"ses"`
+	Castler           CastlerConfig           `json:"castler"`
 }
 
 // JWTSecretConfig holds JWT secret configuration.
@@ -52,6 +53,14 @@ type SESConfig struct {
 	SecretKey        string `json:"-" env:"SES_SECRET_KEY"`
 	SessionToken     string `json:"-" env:"SES_SESSION_TOKEN"`
 	Profile          string `json:"profile" env:"AWS_PROFILE"` // optional shared profile
+}
+
+// CastlerConfig holds Castler payout provider configuration.
+type CastlerConfig struct {
+	BaseURL       string `json:"base_url" env:"CASTLER_BASE_URL" env-default:"https://api.castler.in"`
+	APIKey        string `json:"-" env:"CASTLER_API_KEY"`        // API authentication key (sensitive)
+	SecretKey     string `json:"-" env:"CASTLER_SECRET_KEY"`     // API signing secret (sensitive)
+	WebhookSecret string `json:"-" env:"CASTLER_WEBHOOK_SECRET"` // Webhook signature verification (sensitive)
 }
 
 // RedisConfig holds Redis cache configuration.
@@ -176,5 +185,8 @@ func (mdc MigrationDatabaseConfig) ToDBConfig() client.DBConfig {
 func (c Config) Safe() Config {
 	c.Database.Password = "***REDACTED***"
 	c.MigrationDatabase.Password = "***REDACTED***"
+	c.Castler.APIKey = "***REDACTED***"
+	c.Castler.SecretKey = "***REDACTED***"
+	c.Castler.WebhookSecret = "***REDACTED***"
 	return c
 }
