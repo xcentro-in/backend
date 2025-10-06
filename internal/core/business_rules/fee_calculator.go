@@ -1,12 +1,14 @@
 package business_rules
 
 import (
+	"context"
 	"fmt"
 	"xcentro.in/internal/core/payment"
 )
 
 // FeeRule represents a fee calculation rule
 type FeeRule struct {
+	RuleID           string                `json:"rule_id,omitempty"`
 	PaymentMethod    payment.PaymentMethod `json:"payment_method"`
 	CardType         payment.CardType      `json:"card_type,omitempty"`
 	CardCategory     payment.CardCategory  `json:"card_category,omitempty"`
@@ -15,6 +17,8 @@ type FeeRule struct {
 	FixedFee         int64                 `json:"fixed_fee"`         // Fixed amount in smallest currency unit
 	MinFee           int64                 `json:"min_fee"`           // Minimum fee
 	MaxFee           int64                 `json:"max_fee"`           // Maximum fee
+	GSTPercentage    float64               `json:"gst_percentage"`    // GST percentage (e.g., 18.0 for 18%)
+	GSTApplicable    bool                  `json:"gst_applicable"`    // Whether GST applies
 	Currency         payment.Currency      `json:"currency"`
 	IsActive         bool                  `json:"is_active"`
 	Priority         int                   `json:"priority"`          // Higher priority rules override lower ones
@@ -25,6 +29,24 @@ type FeeCalculator interface {
 	CalculateFee(amount int64, method payment.PaymentMethod, cardType payment.CardType, cardCategory payment.CardCategory) (*FeeCalculation, error)
 	GetFeeRules(method payment.PaymentMethod) ([]*FeeRule, error)
 	GetAllFeeRules() ([]*FeeRule, error)
+}
+
+// FeeRulesRepository defines the interface for fee rules persistence
+type FeeRulesRepository interface {
+	// GetFeeRule fetches the most specific matching rule for a payment method
+	GetFeeRule(ctx context.Context, method payment.PaymentMethod, cardType *payment.CardType, cardCategory *payment.CardCategory) (*FeeRule, error)
+
+	// GetActiveFeeRules retrieves all active fee rules
+	GetActiveFeeRules(ctx context.Context) ([]*FeeRule, error)
+
+	// CreateFeeRule creates a new fee rule (for admin API in future)
+	CreateFeeRule(ctx context.Context, rule *FeeRule) error
+
+	// UpdateFeeRule updates an existing fee rule
+	UpdateFeeRule(ctx context.Context, ruleID string, rule *FeeRule) error
+
+	// DeactivateFeeRule soft deletes a fee rule
+	DeactivateFeeRule(ctx context.Context, ruleID string) error
 }
 
 // FeeCalculation represents the result of fee calculation
@@ -45,6 +67,22 @@ type FeeBreakdown struct {
 	MinFeeApplied bool    `json:"min_fee_applied"`
 	MaxFeeApplied bool    `json:"max_fee_applied"`
 	Description   string  `json:"description"`
+}
+
+// FeeCalculationWithTax represents fee calculation with GST breakdown (Phase 10)
+type FeeCalculationWithTax struct {
+	// Amounts in paise
+	BaseAmount          int64   `json:"base_amount"`
+	ConvenienceFee      int64   `json:"convenience_fee"`
+	ConvenienceFeeGST   int64   `json:"convenience_fee_gst"`
+	TotalFee            int64   `json:"total_fee"`
+	TotalAmount         int64   `json:"total_amount"`
+
+	// Percentages for display
+	ConvenienceFeePercent float64 `json:"convenience_fee_percent"` // e.g., 1.9
+	GSTPercent            float64 `json:"gst_percent"`             // e.g., 18.0
+
+	AppliedRule *FeeRule `json:"applied_rule"`
 }
 
 // MockFeeCalculator provides a mock implementation with hardcoded rules
