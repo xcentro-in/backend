@@ -2,7 +2,7 @@
 -- # Custom ENUM Types for Data Integrity
 -- #############################################################################
 -- Enum literals (snake_case) for consistency across DB + serialization layers.
-CREATE TYPE xcentro.verification_type AS ENUM ('email_verification', 'mobile_verification');
+CREATE TYPE xcentro.verification_type AS ENUM ('email_verification', 'mobile_verification','password_reset');
 CREATE TYPE xcentro.kyc_status_enum AS ENUM ('kyc_not_started', 'kyc_in_progress', 'kyc_completed', 'kyc_verified', 'kyc_needs_update', 'kyc_rejected');
 CREATE TYPE xcentro.user_role_enum AS ENUM ('owner', 'admin', 'finance', 'support');
 CREATE TYPE xcentro.business_type_enum AS ENUM (
@@ -124,9 +124,15 @@ CREATE TABLE xcentro.user_table (
     email_verified BOOLEAN DEFAULT FALSE,
     mobile_verified BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ
+    updated_at TIMESTAMPTZ,
+    name TEXT,
+    dob DATE,
+    kyc_needed BOOLEAN DEFAULT TRUE -- kyc_needed column default to TRUE (new users should do KYC by default)
 );
 COMMENT ON TABLE xcentro.user_table IS 'User accounts, authentication, and KYC data.';
+COMMENT ON COLUMN xcentro.user_table.name IS 'User full name collected during onboarding';
+COMMENT ON COLUMN xcentro.user_table.dob IS 'User date of birth collected during onboarding';
+COMMENT ON COLUMN xcentro.user_table.kyc_needed IS 'Whether KYC is required for this user (default TRUE for new users, can be set to FALSE for invited users based on business requirements)';
 
 -- Table for user verification codes
 CREATE TABLE xcentro.user_verification_codes (
