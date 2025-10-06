@@ -132,7 +132,7 @@ AUTHBRIDGE_PASSWORD=your_password
 ### Database Schema
 - **`business`**: Main business entities (GSTIN, KYB status, business type)
 - **`kyb_data`**: Income Tax ID, Company ID, business deed document URL
-- **`business_user_relation`**: Many-to-many user-business mapping with roles
+- **`business_user_relation`**: Many-to-many user-business mapping with roles (added_at, updated_at timestamps)
 - **`subscription_status`**: Subscription tiers (free, basic, premium, enterprise)
 
 ### Business Creation & KYB
@@ -143,6 +143,18 @@ AUTHBRIDGE_PASSWORD=your_password
    - `POST /v1/business/kyb/confirm-upload` - Verify and get download URL
 
 **Business Types**: sole_proprietorship, partnership, private_limited_company, trust, ngo, society, etc.
+
+### User Invitation & Management
+**Invite User** (`POST /v1/business/invite-user`): Admin/owner invites user with email, name, role, kycNeeded. Creates user, sends password via email, adds to business_user_relation.
+
+**User Management Routes** (admin/owner only):
+- `GET /v1/business/users?bid=xxx` - List business users
+- `POST /v1/business/users/update` - Update role (body: `{bid, userId, newRole}`)
+- `DELETE /v1/business/users` - Remove user (body: `{bid, userId}`)
+
+**Authorization Rules**:
+- Admin cannot change/remove owner
+- Admin cannot promote to owner
 
 ## Payment System
 
@@ -306,6 +318,11 @@ go test ./internal/core/business_rules/... -v -run TestBankVerification
 ### Amount Handling
 - All amounts in smallest unit (paise for INR)
 - Example: ₹500.00 = 50000 paise
+
+### PostgreSQL Timestamp Handling
+- Use `::text` to cast timestamps to string when scanning into Go string fields
+- Use `COALESCE(column::text, '')` for nullable timestamp columns
+- Example: `SELECT added_at::text, COALESCE(updated_at::text, '') FROM table`
 
 ### Security
 - **PCI DSS**: Cards never in plaintext, CVV transient only

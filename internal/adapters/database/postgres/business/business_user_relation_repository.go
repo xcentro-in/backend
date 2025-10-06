@@ -87,9 +87,9 @@ func (r *PgBusinessUserRelationRepository) FindByUser(ctx context.Context, userI
 // FindByBusiness finds all user relations for a business
 func (r *PgBusinessUserRelationRepository) FindByBusiness(ctx context.Context, bid string) ([]*business.BusinessUserRelation, error) {
 	query := `
-		SELECT 
-			user_id, bid, role, role_claim, added_at, kyb_initiated, updated_at
-		FROM xcentro.business_user_relation 
+		SELECT
+			user_id, bid, role, role_claim, added_at::text, kyb_initiated, COALESCE(updated_at::text, '')
+		FROM xcentro.business_user_relation
 		WHERE bid = $1
 	`
 
@@ -119,6 +119,56 @@ func (r *PgBusinessUserRelationRepository) FindByBusiness(ctx context.Context, b
 	}
 
 	return relations, nil
+}
+
+// GetBusinessUsersWithDetails retrieves all users for a business with their detailed information
+func (r *PgBusinessUserRelationRepository) GetBusinessUsersWithDetails(ctx context.Context, bid string) ([]*business.BusinessUserDTO, error) {
+	query := `
+		SELECT
+			bur.user_id,
+			u.email,
+			u.name,
+			bur.role,
+			bur.role_claim,
+			bur.added_at::text,
+			COALESCE(bur.updated_at::text, '')
+		FROM xcentro.business_user_relation bur
+		INNER JOIN xcentro.user_table u ON bur.user_id = u.id
+		WHERE bur.bid = $1
+		ORDER BY bur.added_at DESC
+	`
+
+	rows, err := r.querier.Query(ctx, query, bid)
+	if err != nil {
+		return nil, fmt.Errorf("error finding users for business: %w", err)
+	}
+	defer rows.Close()
+
+	var users []*business.BusinessUserDTO
+
+	for rows.Next() {
+		var user business.BusinessUserDTO
+		var role, roleClaim string
+
+		err := rows.Scan(
+			&user.UserID,
+			&user.Email,
+			&user.Name,
+			&role,
+			&roleClaim,
+			&user.AddedAt,
+			&user.UpdatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("error scanning business user: %w", err)
+		}
+
+		user.Role = shared.UserRole(role)
+		user.RoleClaim = shared.UserRole(roleClaim)
+		users = append(users, &user)
+	}
+
+	return users, nil
 }
 
 // AddUserToBusiness adds a user to a business with a specific role

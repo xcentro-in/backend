@@ -100,3 +100,14 @@ type OnboardingStatusResponse struct {
 	RequiresDeedUpload bool                `json:"requiresDeedUpload"`
 	HasDeedUploaded    bool                `json:"hasDeedUploaded"`
 }
+
+// BusinessUserDTO represents a user associated with a business with detailed information
+type BusinessUserDTO struct {
+	UserID    string          `json:"userId"`
+	Email     string          `json:"email"`
+	Name      string          `json:"name"`
+	Role      shared.UserRole `json:"role"`
+	RoleClaim shared.UserRole `json:"roleClaim"`
+	AddedAt   string          `json:"addedAt"`
+	UpdatedAt string          `json:"updatedAt"`
+}

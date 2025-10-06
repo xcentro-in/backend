@@ -27,6 +27,7 @@ type BusinessUserRelationRepository interface {
 	GetKYBInitiatedStatus(ctx context.Context, uid string) (*BusinessKYBData, *Business, error)
 	FindByUser(ctx context.Context, userID string) ([]*BusinessUserRelation, error)
 	FindByBusiness(ctx context.Context, bid string) ([]*BusinessUserRelation, error)
+	GetBusinessUsersWithDetails(ctx context.Context, bid string) ([]*BusinessUserDTO, error)
 	AddUserToBusiness(ctx context.Context, relation *BusinessUserRelation) error
 	UpdateUserRole(ctx context.Context, userID string, bid string, newRole shared.UserRole) error
 	UpdateRoleClaim(ctx context.Context, userID string, bid string, roleClaim shared.UserRole) error

@@ -51,6 +51,11 @@ func RegisterBusinessRoutes(e *echo.Group, businessService business.BusinessServ
 
 	// Invite user route
 	businessGroup.POST("/invite-user", handler.InviteUser)
+
+	// User management routes
+	businessGroup.GET("/users", handler.ListBusinessUsers)
+	businessGroup.POST("/users/update", handler.UpdateBusinessUser)
+	businessGroup.DELETE("/users", handler.RemoveBusinessUser)
 }
 
 func (h *BusinessHandler) UploadKYBDocuments(c echo.Context) error {
@@ -365,6 +370,263 @@ func (h *BusinessHandler) InviteUser(c echo.Context) error {
 			"email":  createdUser.Email,
 			"name":   createdUser.Name,
 		},
+	})
+}
+
+// ListBusinessUsers lists all users associated with a business (only admin/owner can access)
+func (h *BusinessHandler) ListBusinessUsers(c echo.Context) error {
+	// Parse query parameter
+	bid := c.QueryParam("bid")
+	if bid == "" {
+		return c.JSON(400, map[string]interface{}{
+			"error":   "INVALID_INPUT",
+			"message": "Business ID (bid) is required",
+		})
+	}
+
+	// Get user roles from context
+	ur := c.Get("userRoles")
+	if ur == nil {
+		return c.JSON(403, map[string]interface{}{
+			"error":   "FORBIDDEN",
+			"message": "No business association found",
+		})
+	}
+	roles := ur.([]*business.BusinessUserRelation)
+
+	// Find the role for this specific business
+	var userRole shared.UserRole
+	var hasAccess bool
+	for _, rel := range roles {
+		if rel.BID == bid {
+			userRole = rel.Role
+			hasAccess = true
+			break
+		}
+	}
+
+	if !hasAccess {
+		return c.JSON(403, map[string]interface{}{
+			"error":   "FORBIDDEN",
+			"message": "You don't have access to this business",
+		})
+	}
+
+	// Only admin or owner can list users
+	if userRole != shared.Owner && userRole != shared.Admin {
+		return c.JSON(403, map[string]interface{}{
+			"error":   "FORBIDDEN",
+			"message": "Only business owners and admins can list users",
+		})
+	}
+
+	// Get business users
+	users, err := h.businessService.GetBusinessUsers(c.Request().Context(), bid)
+	if err != nil {
+		h.logger.Errorf("Error getting business users: %v", err)
+		return c.JSON(500, map[string]interface{}{
+			"error":   "INTERNAL_ERROR",
+			"message": "Failed to get business users",
+		})
+	}
+
+	return c.JSON(200, map[string]interface{}{
+		"message": "Business users retrieved successfully",
+		"data":    users,
+	})
+}
+
+// UpdateBusinessUser updates a user's role in a business (only admin/owner can update)
+func (h *BusinessHandler) UpdateBusinessUser(c echo.Context) error {
+	// Parse request
+	type UpdateUserRequest struct {
+		BID     string          `json:"bid"`
+		UserID  string          `json:"userId"`
+		NewRole shared.UserRole `json:"newRole"`
+	}
+
+	var req UpdateUserRequest
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(400, map[string]interface{}{
+			"error":   "INVALID_INPUT",
+			"message": "Invalid request payload",
+		})
+	}
+
+	// Validate input
+	if req.BID == "" || req.UserID == "" || req.NewRole == "" {
+		return c.JSON(400, map[string]interface{}{
+			"error":   "INVALID_INPUT",
+			"message": "BID, userId, and newRole are required",
+		})
+	}
+
+	// Validate role is valid
+	validRoles := []shared.UserRole{shared.Owner, shared.Admin, shared.Finance, shared.Support}
+	isValidRole := false
+	for _, validRole := range validRoles {
+		if req.NewRole == validRole {
+			isValidRole = true
+			break
+		}
+	}
+	if !isValidRole {
+		return c.JSON(400, map[string]interface{}{
+			"error":   "INVALID_INPUT",
+			"message": "Invalid role. Must be one of: owner, admin, finance, support",
+		})
+	}
+
+	// Get user roles from context
+	ur := c.Get("userRoles")
+	if ur == nil {
+		return c.JSON(403, map[string]interface{}{
+			"error":   "FORBIDDEN",
+			"message": "No business association found",
+		})
+	}
+	roles := ur.([]*business.BusinessUserRelation)
+
+	// Find the role for this specific business
+	var userRole shared.UserRole
+	var hasAccess bool
+	for _, rel := range roles {
+		if rel.BID == req.BID {
+			userRole = rel.Role
+			hasAccess = true
+			break
+		}
+	}
+
+	if !hasAccess {
+		return c.JSON(403, map[string]interface{}{
+			"error":   "FORBIDDEN",
+			"message": "You don't have access to this business",
+		})
+	}
+
+	// Only admin or owner can update users
+	if userRole != shared.Owner && userRole != shared.Admin {
+		return c.JSON(403, map[string]interface{}{
+			"error":   "FORBIDDEN",
+			"message": "Only business owners and admins can update user roles",
+		})
+	}
+
+	// Update user role (service handles additional authorization checks)
+	err := h.businessService.UpdateUserRoleInBusiness(c.Request().Context(), req.BID, req.UserID, userRole, req.NewRole)
+	if err != nil {
+		h.logger.Errorf("Error updating user role: %v", err)
+		return c.JSON(500, map[string]interface{}{
+			"error":   "INTERNAL_ERROR",
+			"message": err.Error(),
+		})
+	}
+
+	return c.JSON(200, map[string]interface{}{
+		"message": "User role updated successfully",
+	})
+}
+
+// RemoveBusinessUser removes a user from a business (only admin/owner can remove)
+func (h *BusinessHandler) RemoveBusinessUser(c echo.Context) error {
+	// Parse request
+	type RemoveUserRequest struct {
+		BID    string `json:"bid"`
+		UserID string `json:"userId"`
+	}
+
+	var req RemoveUserRequest
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(400, map[string]interface{}{
+			"error":   "INVALID_INPUT",
+			"message": "Invalid request payload",
+		})
+	}
+
+	// Validate input
+	if req.BID == "" || req.UserID == "" {
+		return c.JSON(400, map[string]interface{}{
+			"error":   "INVALID_INPUT",
+			"message": "BID and userId are required",
+		})
+	}
+
+	// Get user roles from context
+	ur := c.Get("userRoles")
+	if ur == nil {
+		return c.JSON(403, map[string]interface{}{
+			"error":   "FORBIDDEN",
+			"message": "No business association found",
+		})
+	}
+	roles := ur.([]*business.BusinessUserRelation)
+
+	// Find the role for this specific business and get target user's role
+	var requesterRole shared.UserRole
+	var hasAccess bool
+	for _, rel := range roles {
+		if rel.BID == req.BID {
+			requesterRole = rel.Role
+			hasAccess = true
+			break
+		}
+	}
+
+	if !hasAccess {
+		return c.JSON(403, map[string]interface{}{
+			"error":   "FORBIDDEN",
+			"message": "You don't have access to this business",
+		})
+	}
+
+	// Only admin or owner can remove users
+	if requesterRole != shared.Owner && requesterRole != shared.Admin {
+		return c.JSON(403, map[string]interface{}{
+			"error":   "FORBIDDEN",
+			"message": "Only business owners and admins can remove users",
+		})
+	}
+
+	// Get target user's role
+	businessUsers, err := h.businessService.GetBusinessUsers(c.Request().Context(), req.BID)
+	if err != nil {
+		h.logger.Errorf("Error getting business users: %v", err)
+		return c.JSON(500, map[string]interface{}{
+			"error":   "INTERNAL_ERROR",
+			"message": "Failed to get business users",
+		})
+	}
+
+	var targetUserRole shared.UserRole
+	found := false
+	for _, u := range businessUsers {
+		if u.UserID == req.UserID {
+			targetUserRole = u.Role
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		return c.JSON(404, map[string]interface{}{
+			"error":   "NOT_FOUND",
+			"message": "User not found in business",
+		})
+	}
+
+	// Remove user from business (service handles additional authorization checks)
+	err = h.businessService.RemoveUserFromBusiness(c.Request().Context(), req.BID, req.UserID, targetUserRole, requesterRole)
+	if err != nil {
+		h.logger.Errorf("Error removing user from business: %v", err)
+		return c.JSON(500, map[string]interface{}{
+			"error":   "INTERNAL_ERROR",
+			"message": err.Error(),
+		})
+	}
+
+	return c.JSON(200, map[string]interface{}{
+		"message": "User removed from business successfully",
 	})
 }
 

@@ -388,3 +388,78 @@ func (s *BusinessServiceImpl) AddUserToBusiness(ctx context.Context, relation *b
 
 	return nil
 }
+
+// GetBusinessUsers retrieves all users associated with a business
+func (s *BusinessServiceImpl) GetBusinessUsers(ctx context.Context, bid string) ([]*business.BusinessUserDTO, error) {
+	s.logger.Infof("Getting users for business %s", bid)
+
+	users, err := s.businessUserRelRepo.GetBusinessUsersWithDetails(ctx, bid)
+	if err != nil {
+		return nil, fmt.Errorf("error getting business users: %w", err)
+	}
+
+	return users, nil
+}
+
+// UpdateUserRoleInBusiness updates a user's role in a business with authorization checks
+func (s *BusinessServiceImpl) UpdateUserRoleInBusiness(ctx context.Context, bid string, targetUserID string, requesterRole shared.UserRole, newRole shared.UserRole) error {
+	s.logger.Infof("Updating user %s role in business %s to %s (requester role: %s)", targetUserID, bid, newRole, requesterRole)
+
+	// Get target user's current role
+	relations, err := s.businessUserRelRepo.FindByBusiness(ctx, bid)
+	if err != nil {
+		return fmt.Errorf("error finding business relations: %w", err)
+	}
+
+	var targetUserCurrentRole shared.UserRole
+	found := false
+	for _, rel := range relations {
+		if rel.UserID == targetUserID {
+			targetUserCurrentRole = rel.Role
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		return fmt.Errorf("user not found in business")
+	}
+
+	// Authorization check: Admin cannot change owner's role
+	if requesterRole == shared.Admin && targetUserCurrentRole == shared.Owner {
+		return fmt.Errorf("admin cannot change owner's role")
+	}
+
+	// Authorization check: Admin cannot promote someone to owner
+	if requesterRole == shared.Admin && newRole == shared.Owner {
+		return fmt.Errorf("admin cannot promote users to owner role")
+	}
+
+	// Update the role
+	err = s.businessUserRelRepo.UpdateUserRole(ctx, targetUserID, bid, newRole)
+	if err != nil {
+		return fmt.Errorf("error updating user role: %w", err)
+	}
+
+	s.logger.Infof("Successfully updated user %s role to %s in business %s", targetUserID, newRole, bid)
+	return nil
+}
+
+// RemoveUserFromBusiness removes a user from a business with authorization checks
+func (s *BusinessServiceImpl) RemoveUserFromBusiness(ctx context.Context, bid string, targetUserID string, targetUserRole shared.UserRole, requesterRole shared.UserRole) error {
+	s.logger.Infof("Removing user %s from business %s (requester role: %s, target role: %s)", targetUserID, bid, requesterRole, targetUserRole)
+
+	// Authorization check: Admin cannot remove owner
+	if requesterRole == shared.Admin && targetUserRole == shared.Owner {
+		return fmt.Errorf("admin cannot remove owner from business")
+	}
+
+	// Remove user from business
+	err := s.businessUserRelRepo.RemoveUserFromBusiness(ctx, targetUserID, bid)
+	if err != nil {
+		return fmt.Errorf("error removing user from business: %w", err)
+	}
+
+	s.logger.Infof("Successfully removed user %s from business %s", targetUserID, bid)
+	return nil
+}
