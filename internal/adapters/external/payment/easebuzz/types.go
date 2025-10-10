@@ -108,3 +108,77 @@ const (
 	PaymentStatusDropped PaymentStatus = "dropped"
 	PaymentStatusUserCancelled PaymentStatus = "userCancelled"
 )
+
+// TokenizationRequest represents the pre-request script parameters for tokenization
+// This entire payload will be encrypted and sent as "enc_data"
+type TokenizationRequest struct {
+	CardNum            string `json:"card_num"`             // Card number
+	ExpiryMonth        string `json:"expirymonth"`          // Expiry month (MM)
+	ExpiryYear         string `json:"expiryyear"`           // Expiry year (YYYY)
+	CVV                string `json:"cvv"`                  // CVV code
+	NameOnCard         string `json:"name_on_card"`         // Name on card
+	CardType           string `json:"card_type"`            // "dc" (debit) or "cc" (credit)
+	CardBrand          string `json:"card_brand"`           // "Visa", "Mastercard", etc.
+	Name               string `json:"name"`                 // Customer name
+	Email              string `json:"email"`                // Customer email
+	Mobile             string `json:"mobile"`               // Customer mobile
+	CustomerUniqueID   string `json:"customer_unique_id"`   // Unique customer ID
+	MerchantTokenID    string `json:"merchant_token_id"`    // Token ID for merchant
+	TID                string `json:"tid,omitempty"`        // Transaction ID (optional)
+	MerchantID         string `json:"merchant_id,omitempty"` // Merchant ID (optional)
+	SubMerchantID      string `json:"submerchant_id,omitempty"` // Sub-merchant ID (optional)
+	MerchantKey        string `json:"merchant_key"`         // Merchant key
+	Salt               string `json:"salt"`                 // Salt
+	SKey               string `json:"s_key"`                // Encryption key
+	SIV                string `json:"s_iv"`                 // Encryption IV
+	Amount             string `json:"amount"`               // Transaction amount
+}
+
+// TokenizationAPIRequest represents the actual API request body
+// Only contains encrypted data
+type TokenizationAPIRequest struct {
+	EncData string `json:"enc_data"` // Encrypted payload (base64)
+}
+
+// TokenizationResponse represents the response from Easebuzz tokenization API
+type TokenizationResponse struct {
+	Status int    `json:"status"` // 1 for success, 0 for failure
+	Data   struct {
+		Token       string `json:"token"`        // Generated token
+		CardID      string `json:"card_id"`      // Card identifier
+		Message     string `json:"message"`      // Response message
+		LastFour    string `json:"last_four"`    // Last 4 digits
+		CardBrand   string `json:"card_brand"`   // Card brand
+		CardType    string `json:"card_type"`    // Card type
+		ExpiryMonth string `json:"expiry_month"` // Expiry month
+		ExpiryYear  string `json:"expiry_year"`  // Expiry year
+	} `json:"data"`
+	Message string `json:"message,omitempty"`
+	Error   string `json:"error,omitempty"`
+}
+
+// CryptogramRequest represents the pre-encrypted parameters for cryptogram generation
+// This entire payload will be encrypted and sent as "enc_data"
+type CryptogramRequest struct {
+	MerchantTokenID  string `json:"merchant_token_id"`  // Merchant's token ID
+	EasebuzzTokenID  string `json:"easebuzz_token_id"`  // Easebuzz token (from tokenization)
+}
+
+// CryptogramAPIRequest represents the actual API request body
+// Only contains encrypted data
+type CryptogramAPIRequest struct {
+	EncData string `json:"enc_data"` // Encrypted payload (base64)
+}
+
+// CryptogramResponse represents the response from Easebuzz cryptogram API
+type CryptogramResponse struct {
+	Status int    `json:"status"` // 1 for success, 0 for failure
+	Data   struct {
+		Cryptogram  string `json:"cryptogram"`   // Generated cryptogram
+		ExpiresAt   string `json:"expires_at"`   // Expiry timestamp
+		TokenID     string `json:"token_id"`     // Token identifier
+		Message     string `json:"message"`      // Response message
+	} `json:"data"`
+	Message string `json:"message,omitempty"`
+	Error   string `json:"error,omitempty"`
+}

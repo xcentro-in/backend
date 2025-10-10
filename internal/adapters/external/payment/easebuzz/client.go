@@ -3,6 +3,7 @@ package easebuzz
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,10 +16,12 @@ import (
 
 // EasebuzzClient implements the PaymentGateway interface for Easebuzz
 type EasebuzzClient struct {
-	baseURL     string
-	merchantKey string
-	salt        string
-	httpClient  *http.Client
+	baseURL            string
+	merchantKey        string
+	salt               string
+	apiKey             string // EBZ-KEY for tokenization API
+	tokenizationBaseURL string // TMS base URL for tokenization
+	httpClient         *http.Client
 }
 
 // NewEasebuzzClient creates a new Easebuzz payment gateway client
@@ -27,6 +30,7 @@ type EasebuzzClient struct {
 //   - baseURL: Easebuzz API base URL (e.g., "https://pay.easebuzz.in")
 //   - merchantKey: EASEBUZZ_MERCHANT_KEY from environment
 //   - salt: EASEBUZZ_SALT from environment
+//   - apiKey: EASEBUZZ_API_KEY for tokenization (EBZ-KEY header)
 //
 // Usage:
 //
@@ -34,12 +38,15 @@ type EasebuzzClient struct {
 //	    cfg.Easebuzz.BaseURL,
 //	    cfg.Easebuzz.MerchantKey,
 //	    cfg.Easebuzz.Salt,
+//	    cfg.Easebuzz.APIKey,
 //	)
-func NewEasebuzzClient(baseURL, merchantKey, salt string) payment.PaymentGateway {
+func NewEasebuzzClient(baseURL, merchantKey, salt, apiKey string) payment.PaymentGateway {
 	return &EasebuzzClient{
-		baseURL:     baseURL,
-		merchantKey: merchantKey,
-		salt:        salt,
+		baseURL:             baseURL,
+		merchantKey:         merchantKey,
+		salt:                salt,
+		apiKey:              apiKey,
+		tokenizationBaseURL: "https://tms.easebuzz.in", // Tokenization Management System
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
@@ -52,33 +59,150 @@ func (c *EasebuzzClient) GetGatewayType() payment.GatewayType {
 }
 
 // TokenizeCard implements Easebuzz-specific tokenization flow
-// Easebuzz Flow: Direct tokenize API with implicit ₹1 → credit + tokenize
+// Easebuzz Flow: Encrypt full payload → POST to TMS API
 //
-// TODO: Implement actual Easebuzz tokenization API
-// For now, returns mock response similar to the old mock gateway
+// API: POST https://tms.easebuzz.in/v1/create_token
+// Header: EBZ-KEY (API key)
+// Body: {"enc_data": "base64_encrypted_payload"}
 func (c *EasebuzzClient) TokenizeCard(ctx context.Context, request payment.GatewayTokenizeRequest) (*payment.GatewayTokenizeResponse, error) {
-	fmt.Println("=== EASEBUZZ GATEWAY: Direct Tokenization ===")
+	fmt.Println("=== EASEBUZZ GATEWAY: Tokenization (TMS API) ===")
 	fmt.Printf("📥 Business ID: %s\n", request.BusinessID)
 	fmt.Printf("📥 Transaction ID: %s\n", request.TransactionID)
 	fmt.Printf("💳 Card: %s %s ending in %s\n",
 		request.CardDetails.CardCategory, request.CardDetails.CardType, request.CardDetails.LastFourDigits)
 
-	// TODO: Implement actual Easebuzz tokenization API call
-	// For now, return mock response
-	fmt.Println("⚠️  WARNING: Using mock tokenization (implement real API)")
+	// Extract customer details from metadata
+	customerName := "Customer" // Default
+	if name, ok := request.Metadata["customer_name"].(string); ok {
+		customerName = name
+	}
+	email := "customer@example.com"
+	if e, ok := request.Metadata["customer_email"].(string); ok {
+		email = e
+	}
+	mobile := "9999999999"
+	if m, ok := request.Metadata["customer_phone"].(string); ok {
+		mobile = sanitizePhone(m)
+	}
 
+	// Generate unique IDs
+	customerUniqueID := request.BusinessID
+	merchantTokenID := fmt.Sprintf("mtoken_%s_%d", request.BusinessID[:8], time.Now().Unix())
+
+	// Determine card type (dc/cc) and brand
+	cardType := "cc" // Default credit
+	if request.CardDetails.CardCategory == payment.CardCategoryDebit {
+		cardType = "dc"
+	}
+	cardBrand := string(request.CardDetails.CardType) // "visa", "mastercard", etc.
+
+	// Derive s_key and s_iv (same as payment encryption)
+	sKey := deriveAES256Key(c.merchantKey)
+	sIV := deriveFixedIV(c.salt)
+
+	// Build tokenization request payload
+	tokenReq := TokenizationRequest{
+		CardNum:          request.CardDetails.Number,      // Field is "Number" not "CardNumber"
+		ExpiryMonth:      request.CardDetails.ExpiryMonth,
+		ExpiryYear:       request.CardDetails.ExpiryYear,
+		CVV:              request.CardDetails.CVV,
+		NameOnCard:       request.CardDetails.HolderName, // Field is "HolderName" not "CardHolderName"
+		CardType:         cardType,
+		CardBrand:        cardBrand,
+		Name:             customerName,
+		Email:            email,
+		Mobile:           mobile,
+		CustomerUniqueID: customerUniqueID,
+		MerchantTokenID:  merchantTokenID,
+		TID:              request.TransactionID,
+		MerchantKey:      c.merchantKey,
+		Salt:             c.salt,
+		SKey:             base64.StdEncoding.EncodeToString(sKey),
+		SIV:              base64.StdEncoding.EncodeToString(sIV),
+		Amount:           "1.00", // Tokenization amount
+	}
+
+	// Marshal to JSON
+	jsonPayload, err := json.Marshal(tokenReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal tokenization request: %w", err)
+	}
+
+	fmt.Printf("📝 Payload size: %d bytes\n", len(jsonPayload))
+
+	// Encrypt full payload
+	encData, err := EncryptFullPayload(string(jsonPayload), sKey, sIV)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encrypt payload: %w", err)
+	}
+
+	fmt.Printf("🔐 Encrypted payload: %s...\n", encData[:50])
+
+	// Build API request
+	apiReq := TokenizationAPIRequest{
+		EncData: encData,
+	}
+
+	reqBody, err := json.Marshal(apiReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal API request: %w", err)
+	}
+
+	// Make HTTP POST to tokenization API
+	req, err := http.NewRequestWithContext(ctx, "POST", c.tokenizationBaseURL+"/v1/create_token", bytes.NewReader(reqBody))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("EBZ-KEY", c.apiKey)
+
+	fmt.Println("🚀 Calling Easebuzz TMS API...")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("HTTP request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+	}
+
+	// Parse response
+	var tokenResp TokenizationResponse
+	if err := json.Unmarshal(body, &tokenResp); err != nil {
+		return nil, fmt.Errorf("failed to parse tokenization response: %w", err)
+	}
+
+	if tokenResp.Status != 1 {
+		return nil, fmt.Errorf("tokenization failed: %s", tokenResp.Error)
+	}
+
+	fmt.Printf("✅ Token created: %s\n", tokenResp.Data.Token[:10]+"...")
+
+	// Map to gateway response
 	response := &payment.GatewayTokenizeResponse{
-		Token:         fmt.Sprintf("eb_tok_%s_%d", request.CardDetails.CardType, time.Now().Unix()),
-		CardID:        fmt.Sprintf("card_%d", time.Now().Unix()),
+		Token:         tokenResp.Data.Token,
+		CardID:        tokenResp.Data.CardID,
 		TransactionID: request.TransactionID,
 		Status:        "success",
-		Message:       "Card tokenized successfully with Easebuzz (MOCK)",
+		Message:       tokenResp.Data.Message,
 		Metadata: map[string]any{
 			"gateway":           "easebuzz",
-			"tokenization_flow": "direct",
-			"mock_data":         true,
+			"tokenization_flow": "tms_api",
+			"card_brand":        tokenResp.Data.CardBrand,
+			"card_type":         tokenResp.Data.CardType,
+			"last_four":         tokenResp.Data.LastFour,
 		},
 	}
+
+	fmt.Println("=== EASEBUZZ GATEWAY: Tokenization Complete ===")
 
 	return response, nil
 }
@@ -133,26 +257,118 @@ func (c *EasebuzzClient) InitiatePayment(ctx context.Context, req payment.Gatewa
 
 // GenerateCryptogram generates Easebuzz-specific cryptogram
 //
-// TODO: Implement actual Easebuzz cryptogram generation
-// For now, returns mock response
+// API: POST https://tms.easebuzz.in/v1/get_cryptogram
+// Header: EBZ-KEY (API key)
+// Body: {"enc_data": "encrypted_payload"}
 func (c *EasebuzzClient) GenerateCryptogram(ctx context.Context, request payment.CryptogramRequest) (*payment.CryptogramResponse, error) {
-	fmt.Println("=== EASEBUZZ GATEWAY: GenerateCryptogram Called ===")
-	fmt.Printf("🔐 Token: %s\n", request.Token)
+	fmt.Println("=== EASEBUZZ GATEWAY: GenerateCryptogram (TMS API) ===")
+	fmt.Printf("🔐 Token: %s\n", request.Token[:10]+"...")
 	fmt.Printf("💰 Amount: %d %s\n", request.Amount, request.Currency)
 
-	// TODO: Implement actual Easebuzz cryptogram generation
-	fmt.Println("⚠️  WARNING: Using mock cryptogram (implement real API)")
+	// Generate merchant token ID (or extract from metadata if stored)
+	merchantTokenID := fmt.Sprintf("mtoken_%s_%d", request.BusinessID[:8], time.Now().Unix())
+	if mtid, ok := request.Metadata["merchant_token_id"].(string); ok && mtid != "" {
+		merchantTokenID = mtid
+	}
 
+	// Derive s_key and s_iv (same as tokenization encryption)
+	sKey := deriveAES256Key(c.merchantKey)
+	sIV := deriveFixedIV(c.salt)
+
+	// Build cryptogram request payload
+	cryptoReq := CryptogramRequest{
+		MerchantTokenID:  merchantTokenID,
+		EasebuzzTokenID:  request.Token, // This is the easebuzz token from stored card
+	}
+
+	// Marshal to JSON
+	jsonPayload, err := json.Marshal(cryptoReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal cryptogram request: %w", err)
+	}
+
+	fmt.Printf("📝 Payload size: %d bytes\n", len(jsonPayload))
+
+	// Encrypt full payload
+	encData, err := EncryptFullPayload(string(jsonPayload), sKey, sIV)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encrypt payload: %w", err)
+	}
+
+	fmt.Printf("🔐 Encrypted payload: %s...\n", encData[:50])
+
+	// Build API request
+	apiReq := CryptogramAPIRequest{
+		EncData: encData,
+	}
+
+	reqBody, err := json.Marshal(apiReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal API request: %w", err)
+	}
+
+	// Make HTTP POST to cryptogram API
+	req, err := http.NewRequestWithContext(ctx, "POST", c.tokenizationBaseURL+"/v1/get_cryptogram", bytes.NewReader(reqBody))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("EBZ-KEY", c.apiKey)
+
+	fmt.Println("🚀 Calling Easebuzz TMS API for cryptogram...")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("HTTP request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+	}
+
+	// Parse response
+	var cryptoResp CryptogramResponse
+	if err := json.Unmarshal(body, &cryptoResp); err != nil {
+		return nil, fmt.Errorf("failed to parse cryptogram response: %w", err)
+	}
+
+	if cryptoResp.Status != 1 {
+		return nil, fmt.Errorf("cryptogram generation failed: %s", cryptoResp.Error)
+	}
+
+	fmt.Printf("✅ Cryptogram generated: %s...\n", cryptoResp.Data.Cryptogram[:20])
+
+	// Parse expiry time (format may vary, handle gracefully)
+	expiresAt := time.Now().Add(15 * time.Minute) // Default 15 minutes
+	if cryptoResp.Data.ExpiresAt != "" {
+		// Try parsing timestamp (adjust format as needed based on Easebuzz response)
+		if t, err := time.Parse(time.RFC3339, cryptoResp.Data.ExpiresAt); err == nil {
+			expiresAt = t
+		}
+	}
+
+	// Map to gateway response
 	response := &payment.CryptogramResponse{
-		Cryptogram:   fmt.Sprintf("eb_crypto_%s_%d", request.Token[:8], time.Now().Unix()),
-		ExpiresAt:    time.Now().Add(15 * time.Minute),
+		Cryptogram:   cryptoResp.Data.Cryptogram,
+		ExpiresAt:    expiresAt,
 		ValidityMins: 15,
-		Algorithm:    "Easebuzz-HMAC-SHA256",
+		Algorithm:    "Easebuzz-AES256-CBC",
 		Metadata: map[string]any{
-			"gateway":   "easebuzz",
-			"mock_data": true,
+			"gateway":           "easebuzz",
+			"cryptogram_flow":   "tms_api",
+			"token_id":          cryptoResp.Data.TokenID,
+			"merchant_token_id": merchantTokenID,
 		},
 	}
+
+	fmt.Println("=== EASEBUZZ GATEWAY: GenerateCryptogram Complete ===")
 
 	return response, nil
 }

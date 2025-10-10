@@ -127,3 +127,91 @@ func pkcs7Unpad(data []byte) ([]byte, error) {
 
 	return data[:len(data)-padding], nil
 }
+
+// EncryptFullPayload encrypts the entire JSON payload for tokenization API.
+//
+// This is different from field-level encryption used in payment APIs.
+// For tokenization, the entire pre-request script parameters are encrypted.
+//
+// Parameters:
+//   - jsonPayload: JSON string of the TokenizationRequest
+//   - sKey: Encryption key (s_key) - derived from merchantKey
+//   - sIV: Initialization vector (s_iv) - derived from salt
+//
+// Returns:
+//   - Base64 encoded encrypted payload to be sent as "enc_data"
+//
+// Usage:
+//
+//	jsonData, _ := json.Marshal(tokenizationReq)
+//	encData, _ := EncryptFullPayload(string(jsonData), sKey, sIV)
+func EncryptFullPayload(jsonPayload string, sKey []byte, sIV []byte) (string, error) {
+	if jsonPayload == "" {
+		return "", fmt.Errorf("jsonPayload cannot be empty")
+	}
+	if len(sKey) != 32 {
+		return "", fmt.Errorf("s_key must be 32 bytes for AES-256, got %d bytes", len(sKey))
+	}
+	if len(sIV) != 16 {
+		return "", fmt.Errorf("s_iv must be 16 bytes, got %d bytes", len(sIV))
+	}
+
+	// Create AES cipher with 32-byte key
+	block, err := aes.NewCipher(sKey)
+	if err != nil {
+		return "", fmt.Errorf("failed to create AES cipher: %w", err)
+	}
+
+	// Pad the payload using PKCS7
+	paddedData := pkcs7Pad([]byte(jsonPayload), aes.BlockSize)
+
+	// Encrypt using CBC mode
+	mode := cipher.NewCBCEncrypter(block, sIV)
+	encrypted := make([]byte, len(paddedData))
+	mode.CryptBlocks(encrypted, paddedData)
+
+	// Base64 encode the encrypted data
+	encryptedB64 := base64.StdEncoding.EncodeToString(encrypted)
+
+	return encryptedB64, nil
+}
+
+// DecryptFullPayload decrypts the encrypted payload from tokenization API response.
+//
+// Used for decrypting API responses if needed.
+func DecryptFullPayload(encryptedB64 string, sKey []byte, sIV []byte) (string, error) {
+	if encryptedB64 == "" {
+		return "", fmt.Errorf("encryptedData cannot be empty")
+	}
+	if len(sKey) != 32 {
+		return "", fmt.Errorf("s_key must be 32 bytes for AES-256")
+	}
+	if len(sIV) != 16 {
+		return "", fmt.Errorf("s_iv must be 16 bytes")
+	}
+
+	// Decode from base64
+	encrypted, err := base64.StdEncoding.DecodeString(encryptedB64)
+	if err != nil {
+		return "", fmt.Errorf("failed to decode base64: %w", err)
+	}
+
+	// Create AES cipher
+	block, err := aes.NewCipher(sKey)
+	if err != nil {
+		return "", fmt.Errorf("failed to create AES cipher: %w", err)
+	}
+
+	// Decrypt using CBC mode
+	mode := cipher.NewCBCDecrypter(block, sIV)
+	decrypted := make([]byte, len(encrypted))
+	mode.CryptBlocks(decrypted, encrypted)
+
+	// Remove padding
+	unpaddedData, err := pkcs7Unpad(decrypted)
+	if err != nil {
+		return "", fmt.Errorf("failed to unpad data: %w", err)
+	}
+
+	return string(unpaddedData), nil
+}

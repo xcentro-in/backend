@@ -42,11 +42,12 @@ type MockPaymentOrchestrator struct {
 func NewMockPaymentOrchestrator(
 	paymentRepo PaymentRepository,
 	storedCardRepo StoredCardRepository,
+	jioPayClient PaymentGateway,   // Real JioPay client injected
 	easebuzzClient PaymentGateway, // Real Easebuzz client injected
 ) PaymentOrchestrator {
 	return &MockPaymentOrchestrator{
-		jioPayGateway:   NewMockJioPayGateway(), // TODO: Replace with real JioPay client
-		easebuzzGateway: easebuzzClient,          // ✅ Real Easebuzz client
+		jioPayGateway:   jioPayClient,       // ✅ Real JioPay client
+		easebuzzGateway: easebuzzClient,     // ✅ Real Easebuzz client
 		storedCards:     make(map[string][]*StoredCard),
 		paymentRepo:     paymentRepo,
 		storedCardRepo:  storedCardRepo,
@@ -256,6 +257,37 @@ func (o *MockPaymentOrchestrator) TokenizeCard(ctx context.Context, request Toke
 	}
 	fmt.Print("✅ Gateway tokenization successful\n")
 
+	// Store tokenized card in database
+	fmt.Println("💾 Storing tokenized card in database...")
+	storedCard := &StoredCard{
+		CardID:         gatewayResponse.CardID,
+		BusinessID:     request.BusinessID,
+		Token:          gatewayResponse.Token,
+		LastFourDigits: request.CardDetails.LastFourDigits,
+		CardType:       request.CardDetails.CardType,
+		CardCategory:   request.CardDetails.CardCategory,
+		ExpiryMonth:    request.CardDetails.ExpiryMonth,
+		ExpiryYear:     request.CardDetails.ExpiryYear,
+		IssuerBank:     "", // Issuer bank not available in request, will be populated by gateway metadata if available
+		CardHolderName: request.CardDetails.HolderName,
+		IsActive:       true,
+		GatewayUsed:    gateway,
+		AddedAt:        Now(),
+		LastUsedAt:     nil,
+		Metadata:       gatewayResponse.Metadata,
+	}
+
+	// Persist card to database via repository
+	err = o.storedCardRepo.CreateStoredCard(ctx, storedCard)
+	if err != nil {
+		fmt.Printf("❌ Failed to store card in database: %v\n", err)
+		// Don't fail the tokenization response, but log the error
+		// The gateway has already tokenized the card successfully
+		fmt.Printf("⚠️  WARNING: Card tokenized by gateway but failed to save in database\n")
+	} else {
+		fmt.Printf("✅ Card stored successfully in database: %s\n", storedCard.CardID)
+	}
+
 	// Create final response
 	response := &TokenizeResponse{
 		Token:          gatewayResponse.Token,
@@ -270,11 +302,6 @@ func (o *MockPaymentOrchestrator) TokenizeCard(ctx context.Context, request Toke
 		Message:        gatewayResponse.Message,
 		// CreatedAt:      gatewayResponse.ExpiresAt.Add(-15 * time.Minute), // Mock created time
 	}
-
-	// TODO-DB-4.1-CRITICAL: Store tokenized card via WalletService
-	// - Remove in-memory storage that was at lines 127-135 (if still exists)
-	// - Call walletService.AddPaymentSource(request.BusinessID, storedCard)
-	// - WalletService will persist via storedCardRepo.CreateStoredCard()
 
 	fmt.Printf("✅ Card tokenization successful with %s\n", gateway)
 	fmt.Println("=== ORCHESTRATOR: TokenizeCard Complete ===")

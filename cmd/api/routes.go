@@ -8,6 +8,7 @@ import (
 	userRepo "xcentro.in/internal/adapters/database/postgres/user"
 	voucherRepo "xcentro.in/internal/adapters/database/postgres/voucher"
 	"xcentro.in/internal/adapters/external/payment/easebuzz"
+	"xcentro.in/internal/adapters/external/payment/jiopay"
 	"xcentro.in/internal/adapters/external/payout/factory"
 	"xcentro.in/internal/core/business_rules"
 	corePayment "xcentro.in/internal/core/payment"
@@ -64,15 +65,25 @@ func registerV1PaymentRoutes(meta *serverMetaData, group *echo.Group) {
 	storedCardRepository := paymentRepo.NewPgStoredCardRepository(meta.clients.db)
 	bankAccountRepository := paymentRepo.NewPgBankAccountRepository(meta.clients.db)
 
-	// Create real Easebuzz payment gateway client
+	// Create real payment gateway clients
 	easebuzzClient := easebuzz.NewEasebuzzClient(
 		meta.config.Easebuzz.BaseURL,
 		meta.config.Easebuzz.MerchantKey,
 		meta.config.Easebuzz.Salt,
+		meta.config.Easebuzz.APIKey,
+	)
+
+	jioPayClient := jiopay.NewJioPayClient(
+		meta.config.JioPay.BaseURL,
+		meta.config.JioPay.TokenizationBaseURL,
+		meta.config.JioPay.MerchantID,
+		meta.config.JioPay.APIKey,
+		meta.config.JioPay.AppID,
+		meta.config.JioPay.EncryptionKey,
 	)
 
 	// Create business rules services
-	orchestrator := corePayment.NewMockPaymentOrchestrator(paymentRepository, storedCardRepository, easebuzzClient)
+	orchestrator := corePayment.NewMockPaymentOrchestrator(paymentRepository, storedCardRepository, jioPayClient, easebuzzClient)
 	feeCalculator := business_rules.NewMockFeeCalculator()
 	walletService := business_rules.NewMockWalletService(storedCardRepository, bankAccountRepository, meta.clients.txManager)
 

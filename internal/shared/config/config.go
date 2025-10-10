@@ -69,20 +69,23 @@ type CastlerConfig struct {
 
 // JioPayConfig holds JioPay payment gateway configuration.
 type JioPayConfig struct {
-	BaseURL       string `json:"base_url" env:"JIOPAY_BASE_URL" env-default:"https://api.jiopay.com"`
-	MerchantID    string `json:"merchant_id" env:"JIOPAY_MERCHANT_ID"`        // Merchant identifier
-	APIKey        string `json:"-" env:"JIOPAY_API_KEY"`                      // API authentication key (sensitive)
-	EncryptionKey string `json:"-" env:"JIOPAY_ENCRYPTION_KEY"`               // AES encryption key (optional, sensitive)
-	WebhookSecret string `json:"-" env:"JIOPAY_WEBHOOK_SECRET"`               // Webhook signature verification (sensitive)
+	BaseURL             string `json:"base_url" env:"JIOPAY_BASE_URL" env-default:"https://api.jiopay.com"`
+	TokenizationBaseURL string `json:"tokenization_base_url" env:"JIOPAY_TOKENIZATION_BASE_URL" env-default:"https://uat.jiopay.co.in/qatsp/api/vault"` // Vault API base URL
+	MerchantID          string `json:"merchant_id" env:"JIOPAY_MERCHANT_ID"`        // Merchant identifier
+	APIKey              string `json:"-" env:"JIOPAY_API_KEY"`                      // API authentication key for HMAC (sensitive)
+	AppID               string `json:"-" env:"JIOPAY_APP_ID"`                       // x-app-id header for vault APIs (sensitive)
+	EncryptionKey       string `json:"-" env:"JIOPAY_ENCRYPTION_KEY"`               // AES-128 encryption key for x-app-token (sensitive)
+	WebhookSecret       string `json:"-" env:"JIOPAY_WEBHOOK_SECRET"`               // Webhook signature verification (sensitive)
 }
 
 // EasebuzzConfig holds Easebuzz payment gateway configuration.
 type EasebuzzConfig struct {
-	BaseURL       string `json:"base_url" env:"EASEBUZZ_BASE_URL" env-default:"https://api.easebuzz.in"`
+	BaseURL       string `json:"base_url" env:"EASEBUZZ_BASE_URL" env-default:"https://pay.easebuzz.in"`
 	MerchantKey   string `json:"-" env:"EASEBUZZ_MERCHANT_KEY"`               // Merchant key (sensitive)
 	Salt          string `json:"-" env:"EASEBUZZ_SALT"`                       // Hash salt (sensitive)
-	EncryptionKey string `json:"-" env:"EASEBUZZ_ENCRYPTION_KEY"`             // AES encryption key (sensitive)
-	EncryptionIV  string `json:"-" env:"EASEBUZZ_ENCRYPTION_IV"`              // Fixed AES IV in base64 (sensitive)
+	APIKey        string `json:"-" env:"EASEBUZZ_API_KEY"`                    // API key for tokenization (EBZ-KEY header, sensitive)
+	EncryptionKey string `json:"-" env:"EASEBUZZ_ENCRYPTION_KEY"`             // AES encryption key (sensitive, optional)
+	EncryptionIV  string `json:"-" env:"EASEBUZZ_ENCRYPTION_IV"`              // Fixed AES IV in base64 (sensitive, optional)
 	WebhookSecret string `json:"-" env:"EASEBUZZ_WEBHOOK_SECRET"`             // Webhook signature verification (sensitive)
 }
 
@@ -214,10 +217,12 @@ func (c Config) Safe() Config {
 	c.Castler.EncryptionKey = "***REDACTED***"
 	c.Castler.EncryptionIV = "***REDACTED***"
 	c.JioPay.APIKey = "***REDACTED***"
+	c.JioPay.AppID = "***REDACTED***"
 	c.JioPay.EncryptionKey = "***REDACTED***"
 	c.JioPay.WebhookSecret = "***REDACTED***"
 	c.Easebuzz.MerchantKey = "***REDACTED***"
 	c.Easebuzz.Salt = "***REDACTED***"
+	c.Easebuzz.APIKey = "***REDACTED***"
 	c.Easebuzz.EncryptionKey = "***REDACTED***"
 	c.Easebuzz.EncryptionIV = "***REDACTED***"
 	c.Easebuzz.WebhookSecret = "***REDACTED***"
