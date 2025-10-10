@@ -100,7 +100,7 @@ func main() {
 	defer ticker.Stop()
 
 	fmt.Println("\n🔄 Worker scheduler started (runs every 1 minute)")
-	fmt.Println("⏸️  Press Ctrl+C to stop gracefully\n")
+	fmt.Println("⏸️  Press Ctrl+C to stop gracefully")
 
 	// Run worker immediately on startup
 	fmt.Println("🏃 Running initial worker cycle...")
