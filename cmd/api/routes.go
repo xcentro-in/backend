@@ -7,6 +7,8 @@ import (
 	payoutRepo "xcentro.in/internal/adapters/database/postgres/payout"
 	userRepo "xcentro.in/internal/adapters/database/postgres/user"
 	voucherRepo "xcentro.in/internal/adapters/database/postgres/voucher"
+	"xcentro.in/internal/adapters/external/payment/easebuzz"
+	"xcentro.in/internal/adapters/external/payout/factory"
 	"xcentro.in/internal/core/business_rules"
 	corePayment "xcentro.in/internal/core/payment"
 	coreVoucher "xcentro.in/internal/core/voucher"
@@ -25,7 +27,6 @@ import (
 	"xcentro.in/internal/services/user"
 	"xcentro.in/internal/services/verification"
 	voucherSvc "xcentro.in/internal/services/voucher"
-	"xcentro.in/internal/adapters/external/payout/factory"
 )
 
 func registerV1AuthRoutes(meta *serverMetaData, group *echo.Group) {
@@ -63,8 +64,15 @@ func registerV1PaymentRoutes(meta *serverMetaData, group *echo.Group) {
 	storedCardRepository := paymentRepo.NewPgStoredCardRepository(meta.clients.db)
 	bankAccountRepository := paymentRepo.NewPgBankAccountRepository(meta.clients.db)
 
+	// Create real Easebuzz payment gateway client
+	easebuzzClient := easebuzz.NewEasebuzzClient(
+		meta.config.Easebuzz.BaseURL,
+		meta.config.Easebuzz.MerchantKey,
+		meta.config.Easebuzz.Salt,
+	)
+
 	// Create business rules services
-	orchestrator := corePayment.NewMockPaymentOrchestrator(paymentRepository, storedCardRepository)
+	orchestrator := corePayment.NewMockPaymentOrchestrator(paymentRepository, storedCardRepository, easebuzzClient)
 	feeCalculator := business_rules.NewMockFeeCalculator()
 	walletService := business_rules.NewMockWalletService(storedCardRepository, bankAccountRepository, meta.clients.txManager)
 

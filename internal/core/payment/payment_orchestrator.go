@@ -38,10 +38,15 @@ type MockPaymentOrchestrator struct {
 }
 
 // NewMockPaymentOrchestrator creates a new mock payment orchestrator
-func NewMockPaymentOrchestrator(paymentRepo PaymentRepository, storedCardRepo StoredCardRepository) PaymentOrchestrator {
+// TODO: Rename to NewPaymentOrchestrator when moving to production
+func NewMockPaymentOrchestrator(
+	paymentRepo PaymentRepository,
+	storedCardRepo StoredCardRepository,
+	easebuzzClient PaymentGateway, // Real Easebuzz client injected
+) PaymentOrchestrator {
 	return &MockPaymentOrchestrator{
-		jioPayGateway:   NewMockJioPayGateway(),
-		easebuzzGateway: NewMockEasebuzzGateway(),
+		jioPayGateway:   NewMockJioPayGateway(), // TODO: Replace with real JioPay client
+		easebuzzGateway: easebuzzClient,          // ✅ Real Easebuzz client
 		storedCards:     make(map[string][]*StoredCard),
 		paymentRepo:     paymentRepo,
 		storedCardRepo:  storedCardRepo,

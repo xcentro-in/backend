@@ -21,6 +21,8 @@ type Config struct {
 	S3                S3Config                `json:"s3"`
 	SES               SESConfig               `json:"ses"`
 	Castler           CastlerConfig           `json:"castler"`
+	JioPay            JioPayConfig            `json:"jiopay"`
+	Easebuzz          EasebuzzConfig          `json:"easebuzz"`
 }
 
 // JWTSecretConfig holds JWT secret configuration.
@@ -61,6 +63,27 @@ type CastlerConfig struct {
 	APIKey        string `json:"-" env:"CASTLER_API_KEY"`        // API authentication key (sensitive)
 	SecretKey     string `json:"-" env:"CASTLER_SECRET_KEY"`     // API signing secret (sensitive)
 	WebhookSecret string `json:"-" env:"CASTLER_WEBHOOK_SECRET"` // Webhook signature verification (sensitive)
+	EncryptionKey string `json:"-" env:"CASTLER_ENCRYPTION_KEY"` // AES encryption key (optional, sensitive)
+	EncryptionIV  string `json:"-" env:"CASTLER_ENCRYPTION_IV"`  // Fixed AES IV in base64 (optional, sensitive)
+}
+
+// JioPayConfig holds JioPay payment gateway configuration.
+type JioPayConfig struct {
+	BaseURL       string `json:"base_url" env:"JIOPAY_BASE_URL" env-default:"https://api.jiopay.com"`
+	MerchantID    string `json:"merchant_id" env:"JIOPAY_MERCHANT_ID"`        // Merchant identifier
+	APIKey        string `json:"-" env:"JIOPAY_API_KEY"`                      // API authentication key (sensitive)
+	EncryptionKey string `json:"-" env:"JIOPAY_ENCRYPTION_KEY"`               // AES encryption key (optional, sensitive)
+	WebhookSecret string `json:"-" env:"JIOPAY_WEBHOOK_SECRET"`               // Webhook signature verification (sensitive)
+}
+
+// EasebuzzConfig holds Easebuzz payment gateway configuration.
+type EasebuzzConfig struct {
+	BaseURL       string `json:"base_url" env:"EASEBUZZ_BASE_URL" env-default:"https://api.easebuzz.in"`
+	MerchantKey   string `json:"-" env:"EASEBUZZ_MERCHANT_KEY"`               // Merchant key (sensitive)
+	Salt          string `json:"-" env:"EASEBUZZ_SALT"`                       // Hash salt (sensitive)
+	EncryptionKey string `json:"-" env:"EASEBUZZ_ENCRYPTION_KEY"`             // AES encryption key (sensitive)
+	EncryptionIV  string `json:"-" env:"EASEBUZZ_ENCRYPTION_IV"`              // Fixed AES IV in base64 (sensitive)
+	WebhookSecret string `json:"-" env:"EASEBUZZ_WEBHOOK_SECRET"`             // Webhook signature verification (sensitive)
 }
 
 // RedisConfig holds Redis cache configuration.
@@ -188,5 +211,15 @@ func (c Config) Safe() Config {
 	c.Castler.APIKey = "***REDACTED***"
 	c.Castler.SecretKey = "***REDACTED***"
 	c.Castler.WebhookSecret = "***REDACTED***"
+	c.Castler.EncryptionKey = "***REDACTED***"
+	c.Castler.EncryptionIV = "***REDACTED***"
+	c.JioPay.APIKey = "***REDACTED***"
+	c.JioPay.EncryptionKey = "***REDACTED***"
+	c.JioPay.WebhookSecret = "***REDACTED***"
+	c.Easebuzz.MerchantKey = "***REDACTED***"
+	c.Easebuzz.Salt = "***REDACTED***"
+	c.Easebuzz.EncryptionKey = "***REDACTED***"
+	c.Easebuzz.EncryptionIV = "***REDACTED***"
+	c.Easebuzz.WebhookSecret = "***REDACTED***"
 	return c
 }
