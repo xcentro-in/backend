@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ilyakaznacheev/cleanenv"
+	"xcentro.in/internal/shared/crypto"
 )
 
 var (
@@ -125,8 +126,8 @@ func (c *AuthBridgeClient) SearchDocument(req DocumentRequest) (map[string]inter
 	fmt.Printf("Document Type: %s (%d)\n", GetDocumentName(docType), docType)
 	fmt.Printf("Input JSON: %s\n", inputJSON)
 
-	// Encrypt the input
-	encryptedInput, err := encryptInput(inputJSON, c.config.Password)
+	// Encrypt the input (nil IV = random generation for AuthBridge)
+	encryptedInput, err := crypto.EncryptAES256CBC(inputJSON, c.config.Password, nil)
 	if err != nil {
 		return nil, fmt.Errorf("encryption failed: %v", err)
 	}
@@ -163,7 +164,7 @@ func (c *AuthBridgeClient) SearchDocument(req DocumentRequest) (map[string]inter
 	}
 
 	// Decrypt response
-	decryptedResponse, err := decryptResponse(apiResp.ResponseData, c.config.Password)
+	decryptedResponse, err := crypto.DecryptAES256CBC(apiResp.ResponseData, c.config.Password)
 	if err != nil {
 		return nil, fmt.Errorf("decryption failed: %v", err)
 	}
