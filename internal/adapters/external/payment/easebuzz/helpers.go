@@ -220,3 +220,95 @@ func extractTokenRequesterID(req payment.GatewayPaymentRequest) (string, error) 
 
 	return "", fmt.Errorf("token_requester_id not found in metadata")
 }
+
+// ============================================================================
+// CALLBACK/WEBHOOK HELPERS
+// ============================================================================
+
+// extractUDF extracts UDF (User-Defined Field) value from metadata
+// Returns empty string if UDF is not present
+//
+// Parameters:
+//   - metadata: Request metadata map
+//   - udfKey: UDF key name (e.g., "udf1", "udf2", ...)
+//
+// Returns:
+//   - UDF value as string, or empty string if not found
+//
+// Usage:
+//
+//	udf1 := extractUDF(req.Metadata, "udf1")
+//	udf2 := extractUDF(req.Metadata, "udf2")
+func extractUDF(metadata map[string]any, udfKey string) string {
+	if metadata == nil {
+		return ""
+	}
+
+	if val, ok := metadata[udfKey].(string); ok {
+		return val
+	}
+
+	return "" // Empty string for unused UDFs
+}
+
+// buildCallbackURL appends gateway type query parameter to callback URL
+// This allows our callback handler to route requests to the appropriate gateway handler
+//
+// Parameters:
+//   - baseURL: Base callback URL (e.g., "https://api.xcentro.com/api/v1/process_payment/callback")
+//   - gatewayType: Gateway identifier ("easebuzz", "jiopay", etc.)
+//
+// Returns:
+//   - Full callback URL with type parameter (e.g., ".../callback?type=easebuzz")
+//
+// Usage:
+//
+//	surl := buildCallbackURL(req.CallbackURL, "easebuzz")
+//	furl := buildCallbackURL(req.CallbackURL, "easebuzz")
+func buildCallbackURL(baseURL, gatewayType string) string {
+	// Check if URL already has query parameters
+	if strings.Contains(baseURL, "?") {
+		// Append with &
+		return fmt.Sprintf("%s&type=%s", baseURL, gatewayType)
+	}
+	// Append with ?
+	return fmt.Sprintf("%s?type=%s", baseURL, gatewayType)
+}
+
+// MapEasebuzzCallbackStatus maps Easebuzz callback status to internal PaymentStatus
+//
+// Status mapping:
+//   - "success" → "success"
+//   - "failure" → "failed"
+//   - "pending" → "pending"
+//   - "dropped" → "cancelled"
+//   - "userCancelled" → "cancelled"
+//   - Any other value → "failed"
+//
+// Parameters:
+//   - status: Easebuzz status from callback/webhook response
+//
+// Returns:
+//   - Internal payment status string
+//
+// Usage:
+//
+//	internalStatus := MapEasebuzzCallbackStatus(callback.Status)
+func MapEasebuzzCallbackStatus(status string) string {
+	// Normalize to lowercase for case-insensitive comparison
+	normalizedStatus := strings.ToLower(strings.TrimSpace(status))
+
+	switch normalizedStatus {
+	case "success":
+		return "success"
+	case "failure":
+		return "failed"
+	case "pending":
+		return "pending"
+	case "dropped", "usercancelled":
+		return "cancelled"
+	default:
+		// Any unknown status treated as failed for safety
+		return "failed"
+	}
+}

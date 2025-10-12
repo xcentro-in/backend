@@ -16,12 +16,13 @@ import (
 
 // EasebuzzClient implements the PaymentGateway interface for Easebuzz
 type EasebuzzClient struct {
-	baseURL            string
-	merchantKey        string
-	salt               string
-	apiKey             string // EBZ-KEY for tokenization API
+	baseURL             string
+	merchantKey         string
+	salt                string
+	apiKey              string // EBZ-KEY for tokenization API
 	tokenizationBaseURL string // TMS base URL for tokenization
-	httpClient         *http.Client
+	httpClient          *http.Client
+	hashGenerator       *SecureHashGenerator // Hash generator for request/response signatures
 }
 
 // NewEasebuzzClient creates a new Easebuzz payment gateway client
@@ -50,6 +51,7 @@ func NewEasebuzzClient(baseURL, merchantKey, salt, apiKey string) payment.Paymen
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
+		hashGenerator: NewSecureHashGenerator(merchantKey, salt),
 	}
 }
 
@@ -102,7 +104,7 @@ func (c *EasebuzzClient) TokenizeCard(ctx context.Context, request payment.Gatew
 
 	// Build tokenization request payload
 	tokenReq := TokenizationRequest{
-		CardNum:          request.CardDetails.Number,      // Field is "Number" not "CardNumber"
+		CardNum:          request.CardDetails.Number, // Field is "Number" not "CardNumber"
 		ExpiryMonth:      request.CardDetails.ExpiryMonth,
 		ExpiryYear:       request.CardDetails.ExpiryYear,
 		CVV:              request.CardDetails.CVV,
@@ -277,8 +279,8 @@ func (c *EasebuzzClient) GenerateCryptogram(ctx context.Context, request payment
 
 	// Build cryptogram request payload
 	cryptoReq := CryptogramRequest{
-		MerchantTokenID:  merchantTokenID,
-		EasebuzzTokenID:  request.Token, // This is the easebuzz token from stored card
+		MerchantTokenID: merchantTokenID,
+		EasebuzzTokenID: request.Token, // This is the easebuzz token from stored card
 	}
 
 	// Marshal to JSON
@@ -373,19 +375,32 @@ func (c *EasebuzzClient) GenerateCryptogram(ctx context.Context, request payment
 	return response, nil
 }
 
-// ValidateWebhook validates Easebuzz webhook signatures
+// ValidateWebhook validates Easebuzz callback/webhook signatures
 //
-// TODO: Implement actual Easebuzz webhook signature validation
+// Easebuzz uses SHA-512 reverse hash for signature verification.
+// The signature (hash) is calculated from response fields in reverse order.
+//
+// Verification steps:
+//  1. Parse the payload to extract all fields
+//  2. Build reverse hash sequence: salt|status|udf10|...|udf1|email|firstname|productinfo|amount|txnid|key
+//  3. Calculate SHA-512 hash
+//  4. Compare with provided signature using constant-time comparison
+//
+// This method is used for both:
+//   - Callback (SURL/FURL): Synchronous response after payment
+//   - Webhook: Asynchronous settlement notification
 func (c *EasebuzzClient) ValidateWebhook(payload []byte, signature string) error {
 	fmt.Println("=== EASEBUZZ GATEWAY: ValidateWebhook Called ===")
 	fmt.Printf("📝 Payload length: %d bytes\n", len(payload))
-	fmt.Printf("🔏 Signature: %s\n", signature)
 
-	// TODO: Implement actual Easebuzz webhook signature validation
-	// Use generateReverseHash() to verify webhook authenticity
-	fmt.Println("⚠️  WARNING: Webhook validation not implemented (implement reverse hash verification)")
+	// Parse payload to CallbackPayload struct
+	var callback CallbackPayload
+	if err := json.Unmarshal(payload, &callback); err != nil {
+		return fmt.Errorf("failed to parse payload: %w", err)
+	}
 
-	return nil
+	// Delegate to hash generator for validation
+	return c.hashGenerator.ValidateFromResponse(callback)
 }
 
 // initiatePaymentAPI calls Easebuzz Initiate Payment API to get access_key
@@ -399,19 +414,50 @@ func (c *EasebuzzClient) initiatePaymentAPI(ctx context.Context, req payment.Gat
 	email := extractEmail(req)
 	phone := extractPhone(req)
 
-	// Build hash sequence (with empty UDFs as per Easebuzz requirements)
-	// Format: key|txnid|amount|productinfo|firstname|email|||||||||||salt
+	// Format amount to rupees with 2 decimals
 	amountRupees := fmt.Sprintf("%.2f", float64(req.Amount)/100.0)
-	hashSequence := fmt.Sprintf("%s|%s|%s|%s|%s|%s|||||||||||%s",
-		c.merchantKey,
-		req.TransactionID,
-		amountRupees,
-		req.Description,
-		firstname,
-		email,
-		c.salt,
-	)
-	hash := generateHash(hashSequence)
+
+	// Extract UDF values from metadata (if present)
+	// UDF fields are optional and will be empty strings if not provided
+	udf1 := extractUDF(req.Metadata, "udf1")
+	udf2 := extractUDF(req.Metadata, "udf2")
+	udf3 := extractUDF(req.Metadata, "udf3")
+	udf4 := extractUDF(req.Metadata, "udf4")
+	udf5 := extractUDF(req.Metadata, "udf5")
+	udf6 := extractUDF(req.Metadata, "udf6")
+	udf7 := extractUDF(req.Metadata, "udf7")
+	udf8 := extractUDF(req.Metadata, "udf8")
+	udf9 := extractUDF(req.Metadata, "udf9")
+	udf10 := extractUDF(req.Metadata, "udf10")
+
+	// Build hash parameters
+	hashParams := RequestHashParams{
+		TxnID:       req.TransactionID,
+		Amount:      amountRupees,
+		ProductInfo: req.Description,
+		FirstName:   firstname,
+		Email:       email,
+		UDF1:        udf1,
+		UDF2:        udf2,
+		UDF3:        udf3,
+		UDF4:        udf4,
+		UDF5:        udf5,
+		UDF6:        udf6,
+		UDF7:        udf7,
+		UDF8:        udf8,
+		UDF9:        udf9,
+		UDF10:       udf10,
+	}
+
+	// Generate hash using hash generator
+	hash := c.hashGenerator.GenerateForRequest(hashParams)
+
+	// Build callback URLs with gateway type parameter
+	// Format: https://api.xcentro.com/api/v1/process_payment/callback?type=easebuzz
+	surl := buildCallbackURL(req.CallbackURL, "easebuzz")
+	furl := buildCallbackURL(req.CallbackURL, "easebuzz")
+
+	fmt.Printf("🔗 Callback URLs - SURL: %s, FURL: %s\n", surl, furl)
 
 	// Build form data
 	formData := url.Values{
@@ -422,10 +468,42 @@ func (c *EasebuzzClient) initiatePaymentAPI(ctx context.Context, req payment.Gat
 		"firstname":    {firstname},
 		"phone":        {phone},
 		"email":        {email},
-		"surl":         {req.CallbackURL + "/success"},
-		"furl":         {req.CallbackURL + "/failure"},
+		"surl":         {surl},
+		"furl":         {furl},
 		"hash":         {hash},
 		"request_flow": {"SEAMLESS"}, // Critical for seamless flow
+	}
+
+	// Add UDF fields to form data if they have values
+	if udf1 != "" {
+		formData.Add("udf1", udf1)
+	}
+	if udf2 != "" {
+		formData.Add("udf2", udf2)
+	}
+	if udf3 != "" {
+		formData.Add("udf3", udf3)
+	}
+	if udf4 != "" {
+		formData.Add("udf4", udf4)
+	}
+	if udf5 != "" {
+		formData.Add("udf5", udf5)
+	}
+	if udf6 != "" {
+		formData.Add("udf6", udf6)
+	}
+	if udf7 != "" {
+		formData.Add("udf7", udf7)
+	}
+	if udf8 != "" {
+		formData.Add("udf8", udf8)
+	}
+	if udf9 != "" {
+		formData.Add("udf9", udf9)
+	}
+	if udf10 != "" {
+		formData.Add("udf10", udf10)
 	}
 
 	// Make HTTP POST request
@@ -496,9 +574,9 @@ func (c *EasebuzzClient) processTokenPayment(
 	formData := url.Values{
 		"access_key":         {accessKey},
 		"payment_mode":       {string(paymentMode)},
-		"card_token":         {encryptedToken},      // ENCRYPTED
-		"cryptogram":         {encryptedCrypto},     // ENCRYPTED
-		"token_expiry_date":  {encryptedExpiry},     // ENCRYPTED
+		"card_token":         {encryptedToken},  // ENCRYPTED
+		"cryptogram":         {encryptedCrypto}, // ENCRYPTED
+		"token_expiry_date":  {encryptedExpiry}, // ENCRYPTED
 		"token_requester_id": {tokenRequesterID},
 		"card_last_4_digits": {req.CardDetails.LastFourDigits},
 	}
@@ -542,11 +620,11 @@ func (c *EasebuzzClient) processTokenPayment(
 		Currency:         req.Currency,
 		CreatedAt:        time.Now(),
 		Metadata: map[string]any{
-			"gateway":         "easebuzz",
-			"easepayid":       paymentResp.Data.EasepayID,
-			"bank_ref_num":    paymentResp.Data.BankRefNum,
-			"payment_source":  paymentResp.Data.PaymentSource,
-			"card_category":   paymentResp.Data.CardCategory,
+			"gateway":        "easebuzz",
+			"easepayid":      paymentResp.Data.EasepayID,
+			"bank_ref_num":   paymentResp.Data.BankRefNum,
+			"payment_source": paymentResp.Data.PaymentSource,
+			"card_category":  paymentResp.Data.CardCategory,
 		},
 	}, nil
 }

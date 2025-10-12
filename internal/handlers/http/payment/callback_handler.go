@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/labstack/echo/v4"
+	"xcentro.in/internal/adapters/external/payment/easebuzz"
 	"xcentro.in/internal/adapters/external/payment/jiopay"
 	"xcentro.in/internal/core/payment"
 )
@@ -147,24 +148,121 @@ func (h *CallbackHandler) handleJioPayCallback(c echo.Context) error {
 	// Step 7: Return HTML response to user
 	fmt.Println("=== JIOPAY CALLBACK: Complete ===")
 
-	if newStatus == payment.PaymentStatusSuccess {
+	switch newStatus {
+    case payment.PaymentStatusSuccess:
 		return c.HTML(http.StatusOK, generateSuccessHTML(pmt, callback.MerchantTxnNo, callback.RespDescription))
-	} else if newStatus == payment.PaymentStatusPending {
+	case payment.PaymentStatusPending:
 		return c.HTML(http.StatusOK, generatePendingHTML(pmt, callback.MerchantTxnNo, callback.RespDescription))
-	} else {
+	default:
 		return c.HTML(http.StatusOK, generateFailureHTML(pmt, callback.MerchantTxnNo, callback.RespDescription))
 	}
 }
 
 // handleEasebuzzCallback processes Easebuzz callback (SURL/FURL)
-// TODO: Implement Easebuzz callback handling (similar structure to JioPay)
 func (h *CallbackHandler) handleEasebuzzCallback(c echo.Context) error {
+	ctx := c.Request().Context()
+
 	fmt.Println("=== EASEBUZZ CALLBACK: Processing ===")
 
-	// TODO: Implement Easebuzz-specific callback handling
-	// Similar to JioPay but with Easebuzz payload structure and signature verification
+	// Step 1: Read request body
+	bodyBytes, err := io.ReadAll(c.Request().Body)
+	if err != nil {
+		fmt.Printf("❌ Failed to read body: %v\n", err)
+		return c.HTML(http.StatusBadRequest, generateErrorHTML("Invalid request"))
+	}
 
-	return c.HTML(http.StatusOK, generateErrorHTML("Easebuzz callback not yet implemented"))
+	fmt.Printf("📥 Callback payload size: %d bytes\n", len(bodyBytes))
+
+	// Step 2: Parse callback payload
+	var callback easebuzz.CallbackPayload
+	if err := json.Unmarshal(bodyBytes, &callback); err != nil {
+		fmt.Printf("❌ Failed to parse payload: %v\n", err)
+		return c.HTML(http.StatusBadRequest, generateErrorHTML("Invalid payload format"))
+	}
+
+	fmt.Printf("📋 TxnID: %s\n", callback.TxnID)
+	fmt.Printf("📋 Status: %s\n", callback.Status)
+	fmt.Printf("📋 Amount: %s\n", callback.Amount)
+	fmt.Printf("📋 Easepay ID: %s\n", callback.EasepayID)
+
+	// Step 3: Verify signature (security validation)
+	if err := h.easebuzzGateway.ValidateWebhook(bodyBytes, callback.Hash); err != nil {
+		fmt.Printf("❌ Signature verification failed: %v\n", err)
+		return c.HTML(http.StatusUnauthorized, generateErrorHTML("Security verification failed"))
+	}
+
+	fmt.Println("✅ Signature verified")
+
+	// Step 4: Query payment by txnid (our transaction ID)
+	pmt, err := h.paymentRepo.GetPaymentByGatewayPaymentID(ctx, callback.TxnID)
+	if err != nil || pmt == nil {
+		fmt.Printf("❌ Payment not found: %s, error: %v\n", callback.TxnID, err)
+		return c.HTML(http.StatusNotFound, generateErrorHTML("Payment not found"))
+	}
+
+	fmt.Printf("✅ Payment found: %s (current status: %s)\n", pmt.ID, pmt.Status)
+
+	// Step 5: Map callback status to internal status
+	newStatus := mapCallbackStatusToPaymentStatus(
+		easebuzz.MapEasebuzzCallbackStatus(callback.Status),
+	)
+
+	fmt.Printf("📊 Status mapping: %s → %s\n", callback.Status, newStatus)
+
+	// Step 6: Update payment (only if not already in terminal state)
+	if !isTerminalStatus(pmt.Status) {
+		fmt.Println("🔄 Updating payment status...")
+
+		metadata := map[string]any{
+			"callback_received_at": time.Now().Format(time.RFC3339),
+			"easepayid":            callback.EasepayID,
+			"bank_ref_num":         callback.BankRefNum,
+			"payment_source":       callback.PaymentSource,
+			"card_type":            callback.CardType,
+			"mode":                 callback.Mode,
+			"net_amount_debit":     callback.NetAmountDebit,
+			"deduction_percentage": callback.DeductionPercentage,
+			"cash_back_percentage": callback.CashBackPercentage,
+			"error":                callback.Error,
+			"error_message":        callback.ErrorMessage,
+			"added_on":             callback.AddedOn,
+			"response_code":        callback.ResponseCode,
+			"card_num":             callback.CardNum,
+			"bank_name":            callback.BankName,
+			"auth_code":            callback.AuthCode,
+			"gateway":              "easebuzz",
+		}
+
+		if err := h.paymentRepo.UpdatePaymentStatus(ctx, pmt.ID, newStatus, metadata); err != nil {
+			fmt.Printf("❌ Failed to update payment: %v\n", err)
+			// Don't fail callback - still show page to user
+		} else {
+			fmt.Printf("✅ Payment status updated to: %s\n", newStatus)
+		}
+
+		// Update gateway payment ID if not set or if it's still our txnid
+		if pmt.GatewayPaymentID == "" || pmt.GatewayPaymentID == callback.TxnID {
+			if err := h.paymentRepo.UpdateGatewayPaymentID(ctx, pmt.ID, callback.EasepayID, ""); err != nil {
+				fmt.Printf("⚠️  Failed to update gateway payment ID: %v\n", err)
+			} else {
+				fmt.Printf("✅ Gateway payment ID updated to: %s\n", callback.EasepayID)
+			}
+		}
+	} else {
+		fmt.Printf("⚠️  Payment already in terminal state: %s (skipping update)\n", pmt.Status)
+	}
+
+	// Step 7: Return HTML response to user
+	fmt.Println("=== EASEBUZZ CALLBACK: Complete ===")
+
+	switch newStatus {
+    case payment.PaymentStatusSuccess:
+		return c.HTML(http.StatusOK, generateSuccessHTML(pmt, callback.TxnID, callback.Error))
+	case payment.PaymentStatusPending:
+		return c.HTML(http.StatusOK, generatePendingHTML(pmt, callback.TxnID, callback.Error))
+	default:
+		return c.HTML(http.StatusOK, generateFailureHTML(pmt, callback.TxnID, callback.ErrorMessage))
+	}
 }
 
 // ============================================================================

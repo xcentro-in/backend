@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/labstack/echo/v4"
+	"xcentro.in/internal/adapters/external/payment/easebuzz"
 	"xcentro.in/internal/adapters/external/payment/jiopay"
 	"xcentro.in/internal/core/payment"
 )
@@ -153,15 +154,127 @@ func (h *WebhookHandler) HandleJioPayWebhook(c echo.Context) error {
 }
 
 // HandleEasebuzzWebhook handles webhooks from Easebuzz gateway
-// TODO: Implement Easebuzz webhook handling (similar structure to JioPay)
+// These are async settlement notifications sent by Easebuzz
 func (h *WebhookHandler) HandleEasebuzzWebhook(c echo.Context) error {
+	ctx := c.Request().Context()
+
 	fmt.Println("=== EASEBUZZ WEBHOOK: Async notification received ===")
 
-	// TODO: Implement Easebuzz-specific webhook handling
-	// Similar to JioPay but with Easebuzz payload structure and signature verification
+	// Step 1: Read request body
+	bodyBytes, err := io.ReadAll(c.Request().Body)
+	if err != nil {
+		fmt.Printf("❌ Failed to read webhook body: %v\n", err)
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "invalid_request",
+		})
+	}
+
+	fmt.Printf("📥 Webhook payload size: %d bytes\n", len(bodyBytes))
+
+	// Step 2: Parse webhook payload (same structure as callback)
+	var webhook easebuzz.CallbackPayload
+	if err := json.Unmarshal(bodyBytes, &webhook); err != nil {
+		fmt.Printf("❌ Failed to parse webhook payload: %v\n", err)
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "invalid_payload",
+		})
+	}
+
+	fmt.Printf("📋 TxnID: %s\n", webhook.TxnID)
+	fmt.Printf("📋 Status: %s\n", webhook.Status)
+	fmt.Printf("📋 EasepayID: %s\n", webhook.EasepayID)
+	fmt.Printf("📋 SettlementAmount: %s\n", webhook.SettlementAmount)
+
+	// Step 3: Verify signature
+	if err := h.easebuzzGateway.ValidateWebhook(bodyBytes, webhook.Hash); err != nil {
+		fmt.Printf("❌ Webhook signature verification failed: %v\n", err)
+		// Return 200 OK to avoid gateway retries, but log the failure
+		return c.JSON(http.StatusOK, map[string]string{
+			"status":  "error",
+			"message": "Signature verification failed",
+		})
+	}
+
+	fmt.Println("✅ Webhook signature verified")
+
+	// Step 4: Query payment by txnid (our transaction ID)
+	pmt, err := h.paymentRepo.GetPaymentByGatewayPaymentID(ctx, webhook.TxnID)
+	if err != nil || pmt == nil {
+		fmt.Printf("❌ Payment not found: %s, error: %v\n", webhook.TxnID, err)
+		// Return 200 OK to avoid gateway retries
+		return c.JSON(http.StatusOK, map[string]string{
+			"status":  "error",
+			"message": "Payment not found",
+		})
+	}
+
+	fmt.Printf("✅ Payment found: %s (current status: %s)\n", pmt.ID, pmt.Status)
+
+	// Step 5: Map status
+	newStatus := mapCallbackStatusToPaymentStatus(
+		easebuzz.MapEasebuzzCallbackStatus(webhook.Status),
+	)
+
+	fmt.Printf("📊 Status mapping: %s → %s\n", webhook.Status, newStatus)
+
+	// Step 6: Update payment (idempotency check)
+	if !isTerminalStatus(pmt.Status) {
+		fmt.Println("🔄 Updating payment status from webhook...")
+
+		metadata := map[string]any{
+			"webhook_received_at":  time.Now().Format(time.RFC3339),
+			"easepayid":            webhook.EasepayID,
+			"bank_ref_num":         webhook.BankRefNum,
+			"payment_source":       webhook.PaymentSource,
+			"card_type":            webhook.CardType,
+			"mode":                 webhook.Mode,
+			"settlement_amount":    webhook.SettlementAmount,
+			"net_amount_debit":     webhook.NetAmountDebit,
+			"service_tax":          webhook.ServiceTax,
+			"service_charge":       webhook.ServiceCharge,
+			"deduction_percentage": webhook.DeductionPercentage,
+			"cash_back_percentage": webhook.CashBackPercentage,
+			"discount_amount":      webhook.DiscountAmount,
+			"payment_category":     webhook.PaymentCategory,
+			"error":                webhook.Error,
+			"error_message":        webhook.ErrorMessage,
+			"error_code":           webhook.ErrorCode,
+			"added_on":             webhook.AddedOn,
+			"response_code":        webhook.ResponseCode,
+			"webhook_type":         "async_settlement",
+			"gateway":              "easebuzz",
+		}
+
+		if err := h.paymentRepo.UpdatePaymentStatus(ctx, pmt.ID, newStatus, metadata); err != nil {
+			fmt.Printf("❌ Failed to update payment: %v\n", err)
+			// Return 200 OK to avoid gateway retries
+			return c.JSON(http.StatusOK, map[string]string{
+				"status":  "error",
+				"message": "Failed to update payment",
+			})
+		}
+
+		fmt.Printf("✅ Payment status updated to: %s\n", newStatus)
+
+		// Update gateway payment ID if not set or if it's still our txnid
+		if pmt.GatewayPaymentID == "" || pmt.GatewayPaymentID == webhook.TxnID {
+			if err := h.paymentRepo.UpdateGatewayPaymentID(ctx, pmt.ID, webhook.EasepayID, ""); err != nil {
+				fmt.Printf("⚠️  Failed to update gateway payment ID: %v\n", err)
+			} else {
+				fmt.Printf("✅ Gateway payment ID updated to: %s\n", webhook.EasepayID)
+			}
+		}
+	} else {
+		fmt.Printf("⚠️  Payment already in terminal state: %s (idempotency - no update)\n", pmt.Status)
+	}
+
+	// TODO: Store webhook history for debugging
+	// Create webhook_logs table to log all webhook attempts
+
+	fmt.Println("=== EASEBUZZ WEBHOOK: Processing complete ===")
 
 	return c.JSON(http.StatusOK, map[string]string{
-		"status":  "pending",
-		"message": "Easebuzz webhook not yet implemented",
+		"status":  "success",
+		"message": "Webhook processed successfully",
 	})
 }
