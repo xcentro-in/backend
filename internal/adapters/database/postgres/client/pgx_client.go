@@ -61,6 +61,10 @@ func NewPgxDB(ctx context.Context, config DBConfig) (*PgxDB, error) {
 	poolConfig.MaxConnLifetime = config.MaxConnLifetime
 	poolConfig.MaxConnIdleTime = config.MaxConnIdleTime
 
+	// Configure connection to use describe-exec mode for better schema change handling
+	// This prevents cached plan errors when schema changes after migrations
+	poolConfig.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeDescribeExec
+
 	// Create connection pool
 	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {

@@ -18,6 +18,7 @@ type Config struct {
 	Server            ServerConfig            `json:"server"`
 	Rcache            RedisConfig             `json:"rcache"`
 	JWT               JWTSecretConfig         `json:"jwt"`
+	Cookie            CookieConfig            `json:"cookie"`
 	S3                S3Config                `json:"s3"`
 	SES               SESConfig               `json:"ses"`
 	Castler           CastlerConfig           `json:"castler"`
@@ -27,7 +28,16 @@ type Config struct {
 
 // JWTSecretConfig holds JWT secret configuration.
 type JWTSecretConfig struct {
-	SecretKey string `json:"secret_key" env:"JWT_SECRET_KEY" env-required:"true"`
+	SecretKey          string        `json:"secret_key" env:"JWT_SECRET_KEY" env-required:"true"`
+	AccessTokenExpiry  time.Duration `json:"access_token_expiry" env:"JWT_ACCESS_TOKEN_EXPIRY" env-default:"1h"`
+	RefreshTokenExpiry time.Duration `json:"refresh_token_expiry" env:"JWT_REFRESH_TOKEN_EXPIRY" env-default:"720h"` // 30 days
+}
+
+// CookieConfig holds cookie configuration for authentication.
+type CookieConfig struct {
+	Secure   bool   `json:"secure" env:"COOKIE_SECURE" env-default:"false"`    // Set to true in production (HTTPS only)
+	SameSite string `json:"same_site" env:"COOKIE_SAMESITE" env-default:"Lax"` // Strict, Lax, or None
+	Domain   string `json:"domain" env:"COOKIE_DOMAIN" env-default:""`         // Empty for current domain
 }
 
 // S3Config holds AWS S3 related configuration.
@@ -71,22 +81,22 @@ type CastlerConfig struct {
 type JioPayConfig struct {
 	BaseURL             string `json:"base_url" env:"JIOPAY_BASE_URL" env-default:"https://api.jiopay.com"`
 	TokenizationBaseURL string `json:"tokenization_base_url" env:"JIOPAY_TOKENIZATION_BASE_URL" env-default:"https://uat.jiopay.co.in/qatsp/api/vault"` // Vault API base URL
-	MerchantID          string `json:"merchant_id" env:"JIOPAY_MERCHANT_ID"`        // Merchant identifier
-	APIKey              string `json:"-" env:"JIOPAY_API_KEY"`                      // API authentication key for HMAC (sensitive)
-	AppID               string `json:"-" env:"JIOPAY_APP_ID"`                       // x-app-id header for vault APIs (sensitive)
-	EncryptionKey       string `json:"-" env:"JIOPAY_ENCRYPTION_KEY"`               // AES-128 encryption key for x-app-token (sensitive)
-	WebhookSecret       string `json:"-" env:"JIOPAY_WEBHOOK_SECRET"`               // Webhook signature verification (sensitive)
+	MerchantID          string `json:"merchant_id" env:"JIOPAY_MERCHANT_ID"`                                                                            // Merchant identifier
+	APIKey              string `json:"-" env:"JIOPAY_API_KEY"`                                                                                          // API authentication key for HMAC (sensitive)
+	AppID               string `json:"-" env:"JIOPAY_APP_ID"`                                                                                           // x-app-id header for vault APIs (sensitive)
+	EncryptionKey       string `json:"-" env:"JIOPAY_ENCRYPTION_KEY"`                                                                                   // AES-128 encryption key for x-app-token (sensitive)
+	WebhookSecret       string `json:"-" env:"JIOPAY_WEBHOOK_SECRET"`                                                                                   // Webhook signature verification (sensitive)
 }
 
 // EasebuzzConfig holds Easebuzz payment gateway configuration.
 type EasebuzzConfig struct {
 	BaseURL       string `json:"base_url" env:"EASEBUZZ_BASE_URL" env-default:"https://pay.easebuzz.in"`
-	MerchantKey   string `json:"-" env:"EASEBUZZ_MERCHANT_KEY"`               // Merchant key (sensitive)
-	Salt          string `json:"-" env:"EASEBUZZ_SALT"`                       // Hash salt (sensitive)
-	APIKey        string `json:"-" env:"EASEBUZZ_API_KEY"`                    // API key for tokenization (EBZ-KEY header, sensitive)
-	EncryptionKey string `json:"-" env:"EASEBUZZ_ENCRYPTION_KEY"`             // AES encryption key (sensitive, optional)
-	EncryptionIV  string `json:"-" env:"EASEBUZZ_ENCRYPTION_IV"`              // Fixed AES IV in base64 (sensitive, optional)
-	WebhookSecret string `json:"-" env:"EASEBUZZ_WEBHOOK_SECRET"`             // Webhook signature verification (sensitive)
+	MerchantKey   string `json:"-" env:"EASEBUZZ_MERCHANT_KEY"`   // Merchant key (sensitive)
+	Salt          string `json:"-" env:"EASEBUZZ_SALT"`           // Hash salt (sensitive)
+	APIKey        string `json:"-" env:"EASEBUZZ_API_KEY"`        // API key for tokenization (EBZ-KEY header, sensitive)
+	EncryptionKey string `json:"-" env:"EASEBUZZ_ENCRYPTION_KEY"` // AES encryption key (sensitive, optional)
+	EncryptionIV  string `json:"-" env:"EASEBUZZ_ENCRYPTION_IV"`  // Fixed AES IV in base64 (sensitive, optional)
+	WebhookSecret string `json:"-" env:"EASEBUZZ_WEBHOOK_SECRET"` // Webhook signature verification (sensitive)
 }
 
 // RedisConfig holds Redis cache configuration.
@@ -211,6 +221,14 @@ func (mdc MigrationDatabaseConfig) ToDBConfig() client.DBConfig {
 func (c Config) Safe() Config {
 	c.Database.Password = "***REDACTED***"
 	c.MigrationDatabase.Password = "***REDACTED***"
+	c.JWT.SecretKey = "***REDACTED***"
+	c.Rcache.Password = "***REDACTED***"
+	c.S3.AccessKey = "***REDACTED***"
+	c.S3.SecretKey = "***REDACTED***"
+	c.S3.SessionToken = "***REDACTED***"
+	c.SES.AccessKey = "***REDACTED***"
+	c.SES.SecretKey = "***REDACTED***"
+	c.SES.SessionToken = "***REDACTED***"
 	c.Castler.APIKey = "***REDACTED***"
 	c.Castler.SecretKey = "***REDACTED***"
 	c.Castler.WebhookSecret = "***REDACTED***"

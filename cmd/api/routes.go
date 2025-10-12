@@ -2,6 +2,7 @@ package main
 
 import (
 	"github.com/labstack/echo/v4"
+	authRepo "xcentro.in/internal/adapters/database/postgres/auth"
 	"xcentro.in/internal/adapters/database/postgres/business"
 	paymentRepo "xcentro.in/internal/adapters/database/postgres/payment"
 	payoutRepo "xcentro.in/internal/adapters/database/postgres/payout"
@@ -57,16 +58,20 @@ func registerV1AuthRoutes(meta *serverMetaData, group *echo.Group) {
 		meta.clients.rcache,
 	)
 
+	// Create session repository
+	sessionRepo := authRepo.NewPgSessionRepository(meta.clients.db)
+
 	// Create auth service with user and business services
 	authService := authservice.NewAuthService(
 		&meta.config.JWT,
 		meta.clients.rcache,
+		sessionRepo,
 		userService,
 		busSvc,
 	)
 
-	// Register auth routes (handler only needs authService now)
-	auth.RegisterAuthRoutes(group, authService)
+	// Register auth routes
+	auth.RegisterAuthRoutes(group, authService, &meta.config)
 }
 
 func registerV1PaymentRoutes(meta *serverMetaData, group *echo.Group) {
@@ -180,10 +185,14 @@ func registerV1BusinessRoutes(meta *serverMetaData, group *echo.Group) {
 		meta.clients.rcache,
 	)
 
+	// Create session repository
+	sessionRepo := authRepo.NewPgSessionRepository(meta.clients.db)
+
 	// Create auth service with updated signature
 	authService := authservice.NewAuthService(
 		&meta.config.JWT,
 		meta.clients.rcache,
+		sessionRepo,
 		userService,
 		busSvc,
 	)
@@ -218,10 +227,14 @@ func registerV1UserRoutes(meta *serverMetaData, group *echo.Group) {
 		meta.clients.rcache,
 	)
 
+	// Create session repository
+	sessionRepo := authRepo.NewPgSessionRepository(meta.clients.db)
+
 	// Create auth service with updated signature
 	authService := authservice.NewAuthService(
 		&meta.config.JWT,
 		meta.clients.rcache,
+		sessionRepo,
 		userService,
 		busSvc,
 	)

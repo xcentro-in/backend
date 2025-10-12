@@ -209,13 +209,6 @@ func (s *BusinessServiceImpl) InitiateOnboarding(ctx context.Context, uid string
 		return nil, fmt.Errorf("error creating business-user relation: %w", err)
 	}
 
-	// Step 8: Update Redis cache
-	key := keys.User.Verification(uid)
-	cmd := s.rclient.Client.HSet(ctx, key, "is_kyb_initiated", true)
-	if err := cmd.Err(); err != nil {
-		s.logger.Errorf("Error setting Redis cache: %v", err)
-	}
-
 	s.logger.Infof("Business onboarding initiated successfully for BID: %s", newBusiness.BID)
 
 	return &business.OnboardingInitResponse{
@@ -337,29 +330,7 @@ func (s *BusinessServiceImpl) CompleteKYB(ctx context.Context, uid string, req *
 
 	s.logger.Infof("KYB completed successfully for BID: %s", req.BID)
 
-	// Step 10: Invalidate onboarding cache for all users in this business
-	go func() {
-		bgCtx := context.Background()
-
-		// Get all users in this business
-		businessRelations, err := s.businessUserRelRepo.FindByBusiness(bgCtx, req.BID)
-		if err != nil {
-			s.logger.Warnf("Failed to get business users for cache invalidation: %v", err)
-			return
-		}
-
-		// Invalidate onboarding status cache for each user
-		for _, rel := range businessRelations {
-			onboardingKey := keys.User.OnboardingStatus(rel.UserID)
-			if err := s.rclient.Delete(bgCtx, onboardingKey); err != nil {
-				s.logger.Warnf("Failed to invalidate onboarding cache for user %s: %v", rel.UserID, err)
-			}
-		}
-
-		s.logger.Infof("Invalidated onboarding cache for %d users in business %s", len(businessRelations), req.BID)
-	}()
-
-	// Step 11: Determine if deed upload is required
+	// Determine if deed upload is required
 	requiresDeed := shared.RequiresDeed(req.BusinessType)
 
 	return &business.CompleteKYBResponse{
@@ -516,4 +487,52 @@ func (s *BusinessServiceImpl) RemoveUserFromBusiness(ctx context.Context, bid st
 
 	s.logger.Infof("Successfully removed user %s from business %s", targetUserID, bid)
 	return nil
+}
+
+// GetBusinessDetails retrieves business details for a given business ID
+// Only shows KYB status if it's not completed or verified
+func (s *BusinessServiceImpl) GetBusinessDetails(ctx context.Context, bid string, userID string) (*business.BusinessDetailsResponse, error) {
+	// Get user's role in this business
+	relations, err := s.businessUserRelRepo.FindByUser(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch user business relations: %w", err)
+	}
+
+	// Find the user's role for this specific business
+	var userRole shared.UserRole
+	var hasAccess bool
+	for _, rel := range relations {
+		if rel.BID == bid {
+			userRole = rel.Role
+			hasAccess = true
+			break
+		}
+	}
+
+	if !hasAccess {
+		return nil, fmt.Errorf("user does not have access to this business")
+	}
+
+	// Get business details from repository
+	bus, err := s.businessRepo.FindByID(ctx, bid)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch business details: %w", err)
+	}
+
+	// Prepare response
+	response := &business.BusinessDetailsResponse{
+		BID:          bus.BID,
+		Name:         bus.Name,
+		GSTIN:        bus.GSTIN,
+		PAN:          bus.ITID,
+		BusinessType: bus.BusinessType,
+		UserRole:     userRole,
+	}
+
+	// Only include KYB status if it's not completed or verified
+	if bus.KybStatus != shared.KYBCompleted && bus.KybStatus != shared.KYBVerified {
+		response.KYBStatus = bus.KybStatus
+	}
+
+	return response, nil
 }

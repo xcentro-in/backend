@@ -199,6 +199,25 @@ docker compose restart
 ./connect-redis.sh -t
 ```
 
+### "Cached plan must not change result type" Error
+This error occurs when database schema changes (migrations) but the application still has cached prepared statements.
+
+**Cause**: Running migrations while the application server is running causes PostgreSQL's prepared statement cache to become stale.
+
+**Solution**:
+```bash
+# 1. Stop your application server (API)
+# 2. Run migrations
+go run cmd/migrate/main.go -action=up
+
+# 3. Restart your application server
+# This clears the prepared statement cache
+
+# Note: The codebase has been configured to use QueryExecModeDescribeExec
+# which should prevent this issue in most cases, but restarting after
+# migrations is still recommended as a best practice.
+```
+
 ### Reset everything
 ```bash
 # Stop services and remove all data
@@ -234,7 +253,13 @@ docker compose down --rmi all
 
 3. **Migration workflow**:
    ```bash
-   # Connect as admin user for schema changes
+   # Run migrations (from project root)
+   go run cmd/migrate/main.go -action=up
+   
+   # IMPORTANT: After running migrations, restart your application server
+   # This clears cached prepared statements and prevents schema errors
+   
+   # Connect as admin user for schema changes (if needed)
    ./connect-postgres.sh admin
    ```
 

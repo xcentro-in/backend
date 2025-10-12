@@ -19,7 +19,10 @@ type MigrationService struct {
 
 // NewMigrationService creates a new migration service
 func NewMigrationService(migrationsPath string, dbConfig config.MigrationDatabaseConfig) *MigrationService {
-	databaseURL := fmt.Sprintf("pgx5://%s:%s@%s:%d/%s?sslmode=%s",
+	// Use x-migrations-table-quoted parameter for schema-qualified table name
+	// This ensures schema_migrations is created in xcentro schema, not public
+	// When quoted=true, we must use double quotes around schema.table
+	databaseURL := fmt.Sprintf(`pgx5://%s:%s@%s:%d/%s?sslmode=%s&x-migrations-table-quoted=true&x-migrations-table="xcentro"."schema_migrations"`,
 		dbConfig.Username,
 		dbConfig.Password,
 		dbConfig.Host,
@@ -117,24 +120,42 @@ func (m *MigrationService) Drop(ctx context.Context) error {
 	}
 	defer migrator.Close()
 
-	// Get current version to know how many down migrations to run
+	// Get current version to determine how many down migrations to run
 	version, dirty, err := migrator.Version()
 	if err != nil && err != migrate.ErrNilVersion {
 		return fmt.Errorf("failed to get current version: %w", err)
 	}
 
-	// If database is dirty, we cannot proceed safely
+	// If database is dirty, force clean it first
 	if dirty {
-		return fmt.Errorf("database is in dirty state (version %d), please fix with 'force' command first", version)
+		if err := migrator.Force(int(version)); err != nil {
+			return fmt.Errorf("failed to force clean dirty state: %w", err)
+		}
 	}
 
-	// Run all down migrations by stepping down from current version to 0
-	// This ensures all .down.sql files are executed in reverse order
-	if version > 0 {
-		// Steps with negative value runs down migrations
-		// We need to run 'version' number of down migrations to reach version 0
-		if err := migrator.Steps(-int(version)); err != nil && err != migrate.ErrNoChange {
-			return fmt.Errorf("failed to run all down migrations: %w", err)
+	// If we're already at version 0 or no migrations, nothing to do
+	if version == 0 || err == migrate.ErrNilVersion {
+		return nil
+	}
+
+	// Run down migrations one by one to properly clean up all database objects
+	// We can't use Steps(-int(version)) because of potential gaps in migration numbers
+	// So we repeatedly call Down() until we reach version 0
+	for {
+		currentVersion, _, err := migrator.Version()
+		if err == migrate.ErrNilVersion || currentVersion == 0 {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("failed to get version during drop: %w", err)
+		}
+
+		// Run one down migration
+		if err := migrator.Steps(-1); err != nil {
+			if err == migrate.ErrNoChange {
+				break
+			}
+			return fmt.Errorf("failed to run down migration from version %d: %w", currentVersion, err)
 		}
 	}
 

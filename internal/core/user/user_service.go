@@ -18,8 +18,11 @@ type UserService interface {
 	// GetUserByID retrieves a user by ID
 	GetUserByID(ctx context.Context, userID string) (*User, error)
 
-	// UpdateUserProfile updates user profile information
-	UpdateUserProfile(ctx context.Context, userID string, mobile, taxID string) error
+	// GetUserProfile retrieves user profile with masked national ID
+	GetUserProfile(ctx context.Context, userID string) (*UserProfileDTO, error)
+
+	// UpdateUserProfile updates user profile information (mobile only)
+	UpdateUserProfile(ctx context.Context, userID string, mobile string) error
 
 	// UpdateKYCStatus updates user's KYC status
 	UpdateKYCStatus(ctx context.Context, userID string, status shared.KYCStatus) error

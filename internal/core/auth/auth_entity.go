@@ -1,5 +1,7 @@
 package auth
 
+import "time"
+
 type AuthPayload struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
@@ -13,11 +15,12 @@ type SignupResponse struct {
 }
 
 // LoginResponse represents the response after successful login
-// Only contains essential information - token and onboarding flags
+// Contains access token, refresh token, and onboarding flags
 type LoginResponse struct {
-	Token     string `json:"token"`
-	KycNeeded bool   `json:"kycNeeded"` // Whether user needs to complete KYC
-	KybNeeded bool   `json:"kybNeeded"` // Whether user needs to complete KYB for their business
+	AccessToken  string `json:"accessToken"`
+	RefreshToken string `json:"refreshToken"`
+	KycNeeded    bool   `json:"kycNeeded"` // Whether user needs to complete KYC
+	KybNeeded    bool   `json:"kybNeeded"` // Whether user needs to complete KYB for their business
 }
 
 // OnboardingStatusCache represents cached onboarding status for login optimization
@@ -25,6 +28,32 @@ type LoginResponse struct {
 type OnboardingStatusCache struct {
 	KycNeeded bool `json:"kycNeeded"`
 	KybNeeded bool `json:"kybNeeded"`
+}
+
+// Session represents a user refresh token session
+type Session struct {
+	SessionID        string    `json:"sessionId"`
+	UserID           string    `json:"userId"`
+	RefreshTokenHash string    `json:"refreshTokenHash"`
+	ExpiresAt        time.Time `json:"expiresAt"`
+	CreatedAt        time.Time `json:"createdAt"`
+	LastUsedAt       time.Time `json:"lastUsedAt"`
+	UserAgent        string    `json:"userAgent,omitempty"`
+}
+
+// RefreshTokenRequest represents the request to refresh an access token
+type RefreshTokenRequest struct {
+	RefreshToken string `json:"refreshToken" validate:"required"`
+}
+
+// RefreshTokenResponse represents the response after refreshing access token
+type RefreshTokenResponse struct {
+	AccessToken string `json:"accessToken"`
+}
+
+// RevokeTokenRequest represents the request to revoke a refresh token
+type RevokeTokenRequest struct {
+	RefreshToken string `json:"refreshToken" validate:"required"`
 }
 
 // type AuthJWTClaim struct {

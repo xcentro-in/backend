@@ -4,6 +4,7 @@ import (
 	"github.com/labstack/echo/v4"
 	"xcentro.in/internal/core/auth"
 	"xcentro.in/internal/core/user"
+	"xcentro.in/internal/middleware"
 	"xcentro.in/internal/shared/logger"
 	"xcentro.in/internal/shared/types"
 )
@@ -34,12 +35,17 @@ func RegisterUserRoutes(e *echo.Group, userService user.UserService, authService
 	userGroup.POST("/reset-password", handler.ResetPassword)
 
 	// Protected routes requiring authentication
-	userGroup.Use(authService.GetEchoAuthMiddleware())
+	protectedUser := userGroup.Group("")
+	protectedUser.Use(middleware.JWTMiddleware(authService))
 
 	// User onboarding endpoints
-	userGroup.POST("/onboard/initiate", handler.InitiateOnboarding)
-	userGroup.POST("/onboard/complete", handler.CompleteOnboarding)
-	userGroup.GET("/onboard/status", handler.GetOnboardingStatus)
+	protectedUser.POST("/onboard/initiate", handler.InitiateOnboarding)
+	protectedUser.POST("/onboard/complete", handler.CompleteOnboarding)
+	protectedUser.GET("/onboard/status", handler.GetOnboardingStatus)
+
+	// User profile endpoints
+	protectedUser.GET("/profile", handler.GetProfile)
+	protectedUser.PUT("/profile", handler.UpdateProfile)
 }
 
 // VerifyEmail verifies user's email using verification token
@@ -130,13 +136,13 @@ func (h *UserHandler) InitiateOnboarding(c echo.Context) error {
 		if userErr, ok := err.(*types.UserError); ok {
 			switch userErr.Code {
 			case types.ErrCodeKYCAlreadyCompleted:
-				return c.JSON(400, map[string]interface{}{"message": userErr.Error(), "code": userErr.Code})
+				return c.JSON(400, map[string]interface{}{"error": userErr.Code, "message": userErr.Error()})
 			case types.ErrCodeInvalidKYCInput:
-				return c.JSON(400, map[string]interface{}{"message": userErr.Error(), "code": userErr.Code})
+				return c.JSON(400, map[string]interface{}{"error": userErr.Code, "message": userErr.Error()})
 			case types.ErrCodeVerificationFailed:
-				return c.JSON(400, map[string]interface{}{"message": userErr.Error(), "code": userErr.Code})
+				return c.JSON(400, map[string]interface{}{"error": userErr.Code, "message": userErr.Error()})
 			case types.ErrCodeUserNotFound:
-				return c.JSON(404, map[string]interface{}{"message": userErr.Error(), "code": userErr.Code})
+				return c.JSON(404, map[string]interface{}{"error": userErr.Code, "message": userErr.Error()})
 			}
 		}
 
@@ -152,6 +158,14 @@ func (h *UserHandler) InitiateOnboarding(c echo.Context) error {
 // CompleteOnboarding completes the user onboarding after Aadhaar verification
 // User claims role in specific business after identity verification
 func (h *UserHandler) CompleteOnboarding(c echo.Context) error {
+	// Read BusinessID from X-Business-ID header
+	businessID := c.Request().Header.Get("X-Business-ID")
+	if businessID == "" {
+		return c.JSON(400, map[string]string{
+			"message": "X-Business-ID header is required",
+		})
+	}
+
 	var dto user.CompleteOnboardingDTO
 	if err := c.Bind(&dto); err != nil {
 		return c.JSON(400, map[string]string{"message": "Invalid request payload"})
@@ -162,7 +176,7 @@ func (h *UserHandler) CompleteOnboarding(c echo.Context) error {
 		return c.JSON(401, map[string]string{"message": "Unauthorized request"})
 	}
 
-	err := h.userService.CompleteOnboarding(c.Request().Context(), userID, dto.BusinessID, dto.ClaimedRole)
+	err := h.userService.CompleteOnboarding(c.Request().Context(), userID, businessID, dto.ClaimedRole)
 	if err != nil {
 		h.logger.Errorf("Error completing onboarding for user %s: %v", userID, err)
 
@@ -170,13 +184,13 @@ func (h *UserHandler) CompleteOnboarding(c echo.Context) error {
 		if userErr, ok := err.(*types.UserError); ok {
 			switch userErr.Code {
 			case types.ErrCodeAadhaarNotInitiated:
-				return c.JSON(400, map[string]interface{}{"message": userErr.Error(), "code": userErr.Code})
+				return c.JSON(400, map[string]interface{}{"error": userErr.Code, "message": userErr.Error()})
 			case types.ErrCodeVerificationFailed:
-				return c.JSON(400, map[string]interface{}{"message": userErr.Error(), "code": userErr.Code})
+				return c.JSON(400, map[string]interface{}{"error": userErr.Code, "message": userErr.Error()})
 			case types.ErrCodeUserNotFound:
-				return c.JSON(404, map[string]interface{}{"message": userErr.Error(), "code": userErr.Code})
+				return c.JSON(404, map[string]interface{}{"error": userErr.Code, "message": userErr.Error()})
 			case types.ErrCodeInvalidKYCInput:
-				return c.JSON(400, map[string]interface{}{"message": userErr.Error(), "code": userErr.Code})
+				return c.JSON(400, map[string]interface{}{"error": userErr.Code, "message": userErr.Error()})
 			}
 		}
 
@@ -204,7 +218,7 @@ func (h *UserHandler) GetOnboardingStatus(c echo.Context) error {
 		if userErr, ok := err.(*types.UserError); ok {
 			switch userErr.Code {
 			case types.ErrCodeUserNotFound:
-				return c.JSON(404, map[string]interface{}{"message": userErr.Error(), "code": userErr.Code})
+				return c.JSON(404, map[string]interface{}{"error": userErr.Code, "message": userErr.Error()})
 			}
 		}
 
@@ -273,6 +287,53 @@ func (h *UserHandler) ResetPassword(c echo.Context) error {
 
 	return c.JSON(200, map[string]interface{}{
 		"message": "Password reset successfully. You can now log in with your new password.",
+		"data":    nil,
+	})
+}
+
+// GetProfile retrieves the user's profile information with masked national ID
+func (h *UserHandler) GetProfile(c echo.Context) error {
+	userID := c.Get("userId").(string)
+	if userID == "" {
+		return c.JSON(401, map[string]string{"message": "Unauthorized request"})
+	}
+
+	profile, err := h.userService.GetUserProfile(c.Request().Context(), userID)
+	if err != nil {
+		h.logger.Errorf("Error getting profile for user %s: %v", userID, err)
+		return c.JSON(500, map[string]string{"message": "Failed to get user profile"})
+	}
+
+	return c.JSON(200, map[string]interface{}{
+		"message": "Profile retrieved successfully",
+		"data":    profile,
+	})
+}
+
+// UpdateProfile updates the user's profile information (mobile only)
+func (h *UserHandler) UpdateProfile(c echo.Context) error {
+	var dto user.UpdateProfileDTO
+	if err := c.Bind(&dto); err != nil {
+		return c.JSON(400, map[string]string{"message": "Invalid request payload"})
+	}
+
+	if dto.Mobile == "" {
+		return c.JSON(400, map[string]string{"message": "Mobile number is required"})
+	}
+
+	userID := c.Get("userId").(string)
+	if userID == "" {
+		return c.JSON(401, map[string]string{"message": "Unauthorized request"})
+	}
+
+	err := h.userService.UpdateUserProfile(c.Request().Context(), userID, dto.Mobile)
+	if err != nil {
+		h.logger.Errorf("Error updating profile for user %s: %v", userID, err)
+		return c.JSON(500, map[string]string{"message": "Failed to update user profile"})
+	}
+
+	return c.JSON(200, map[string]interface{}{
+		"message": "Profile updated successfully",
 		"data":    nil,
 	})
 }

@@ -65,27 +65,27 @@ type CreateBusinessDTO struct {
 
 // New onboarding DTOs
 type OnboardingInitResponse struct {
-	BID         string                 `json:"bid"`
-	Name        string                 `json:"name"`
-	GSTIN       string                 `json:"gstin"`
-	GSTData     map[string]interface{} `json:"gstData,omitempty"`
-	KYBStatus   shared.KYBstatus       `json:"kybStatus"`
-	Message     string                 `json:"message"`
+	BID       string                 `json:"bid"`
+	Name      string                 `json:"name"`
+	GSTIN     string                 `json:"gstin"`
+	GSTData   map[string]interface{} `json:"gstData,omitempty"`
+	KYBStatus shared.KYBstatus       `json:"kybStatus"`
+	Message   string                 `json:"message"`
 }
 
 type CompleteKYBRequest struct {
 	BID          string              `json:"bid"`
 	BusinessType shared.BusinessType `json:"businessType"`
-	ITID         string              `json:"itid"` // Income Tax ID (PAN)
+	ITID         string              `json:"itid"`          // Income Tax ID (PAN)
 	CID          string              `json:"cid,omitempty"` // Company ID (CIN) - required for certain business types
 }
 
 type CompleteKYBResponse struct {
-	BID               string           `json:"bid"`
-	KYBStatus         shared.KYBstatus `json:"kybStatus"`
-	RequiresDeedUpload bool            `json:"requiresDeedUpload"`
-	UploadURL         string           `json:"uploadUrl,omitempty"`
-	Message           string           `json:"message"`
+	BID                string           `json:"bid"`
+	KYBStatus          shared.KYBstatus `json:"kybStatus"`
+	RequiresDeedUpload bool             `json:"requiresDeedUpload"`
+	UploadURL          string           `json:"uploadUrl,omitempty"`
+	Message            string           `json:"message"`
 }
 
 type OnboardingStatusResponse struct {
@@ -110,4 +110,15 @@ type BusinessUserDTO struct {
 	RoleClaim shared.UserRole `json:"roleClaim"`
 	AddedAt   string          `json:"addedAt"`
 	UpdatedAt string          `json:"updatedAt"`
+}
+
+// BusinessDetailsResponse represents the response for getting business details
+type BusinessDetailsResponse struct {
+	BID          string              `json:"bid"`
+	Name         string              `json:"name"`
+	GSTIN        string              `json:"gstin"`
+	PAN          string              `json:"pan"`
+	BusinessType shared.BusinessType `json:"businessType"`
+	KYBStatus    shared.KYBstatus    `json:"kybStatus,omitempty"` // Only visible if not completed/verified
+	UserRole     shared.UserRole     `json:"userRole"`
 }

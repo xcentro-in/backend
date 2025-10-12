@@ -31,21 +31,21 @@ func NewPaymentHandler(paymentService *payments.PaymentService, paymentSourceSer
 func (h *PaymentHandler) FetchWallet(c echo.Context) error {
 	fmt.Println("=== HANDLER: FetchWallet API Called ===")
 
-	// Parse request body
-	var req FetchWalletRequest
-	if err := c.Bind(&req); err != nil {
-		fmt.Printf("❌ Error binding request: %v\n", err)
+	// Read BusinessID from X-Business-ID header
+	businessID := c.Request().Header.Get("X-Business-ID")
+	if businessID == "" {
+		fmt.Println("❌ X-Business-ID header is missing")
 		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "invalid_request",
-			"message": "Invalid request body",
+			"error":   "missing_business_id",
+			"message": "X-Business-ID header is required",
 		})
 	}
 
-	fmt.Printf("📥 Request: Business ID: %s\n", req.BusinessID)
+	fmt.Printf("📥 Request: Business ID: %s\n", businessID)
 
 	// Call payment service to get business wallet information
 	fmt.Println("🔄 Calling Payment Service...")
-	businessWallet, err := h.paymentService.GetBusinessWallet(req.BusinessID)
+	businessWallet, err := h.paymentService.GetBusinessWallet(businessID)
 	if err != nil {
 		fmt.Printf("❌ Wallet service error: %v\n", err)
 		return c.JSON(http.StatusInternalServerError, map[string]any{
@@ -475,6 +475,16 @@ func (h *PaymentHandler) MakePayment(c echo.Context) error {
 func (h *PaymentHandler) AddPaymentSource(c echo.Context) error {
 	fmt.Println("=== HANDLER: AddPaymentSource API Called ===")
 
+	// Read BusinessID from X-Business-ID header
+	businessID := c.Request().Header.Get("X-Business-ID")
+	if businessID == "" {
+		fmt.Println("❌ X-Business-ID header is missing")
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "missing_business_id",
+			"message": "X-Business-ID header is required",
+		})
+	}
+
 	// Parse request body
 	var req AddPaymentSourceRequest
 	if err := c.Bind(&req); err != nil {
@@ -485,7 +495,7 @@ func (h *PaymentHandler) AddPaymentSource(c echo.Context) error {
 		})
 	}
 
-	fmt.Printf("📥 Request: Business ID: %s, Source Type: %s\n", req.BusinessID, req.SourceType)
+	fmt.Printf("📥 Request: Business ID: %s, Source Type: %s\n", businessID, req.SourceType)
 
 	// Validate request
 	if err := h.validateAddPaymentSourceRequest(&req); err != nil {
@@ -503,9 +513,9 @@ func (h *PaymentHandler) AddPaymentSource(c echo.Context) error {
 	// Route to appropriate handler based on source type
 	switch req.SourceType {
 	case "bank_account":
-		return h.handleBankAccountAddition(ctx, c, &req)
+		return h.handleBankAccountAddition(ctx, c, businessID, &req)
 	case "upi":
-		return h.handleUPIAccountAddition(ctx, c, &req)
+		return h.handleUPIAccountAddition(ctx, c, businessID, &req)
 	default:
 		fmt.Printf("❌ Unsupported source type: %s\n", req.SourceType)
 		return c.JSON(http.StatusBadRequest, map[string]any{
@@ -516,7 +526,7 @@ func (h *PaymentHandler) AddPaymentSource(c echo.Context) error {
 }
 
 // handleBankAccountAddition handles bank account verification and addition
-func (h *PaymentHandler) handleBankAccountAddition(ctx context.Context, c echo.Context, req *AddPaymentSourceRequest) error {
+func (h *PaymentHandler) handleBankAccountAddition(ctx context.Context, c echo.Context, businessID string, req *AddPaymentSourceRequest) error {
 	fmt.Println("🏦 Processing bank account addition...")
 
 	// Convert HTTP request to core domain request
@@ -532,7 +542,7 @@ func (h *PaymentHandler) handleBankAccountAddition(ctx context.Context, c echo.C
 	fmt.Println("🔄 Calling Payment Service for bank account verification and addition...")
 
 	// Call payment service to add and verify bank account
-	err := h.paymentService.AddPaymentSource(req.BusinessID, bankAccount)
+	err := h.paymentService.AddPaymentSource(businessID, bankAccount)
 
 	if err != nil {
 		fmt.Printf("❌ Bank account addition failed: %v\n", err)
@@ -573,7 +583,7 @@ func (h *PaymentHandler) handleBankAccountAddition(ctx context.Context, c echo.C
 }
 
 // handleUPIAccountAddition handles UPI account verification and addition
-func (h *PaymentHandler) handleUPIAccountAddition(ctx context.Context, c echo.Context, req *AddPaymentSourceRequest) error {
+func (h *PaymentHandler) handleUPIAccountAddition(ctx context.Context, c echo.Context, businessID string, req *AddPaymentSourceRequest) error {
 	fmt.Println("📱 Processing UPI account addition...")
 
 	// TODO: Implement UPI verification logic when UPI service is available
@@ -587,11 +597,6 @@ func (h *PaymentHandler) handleUPIAccountAddition(ctx context.Context, c echo.Co
 
 // validateAddPaymentSourceRequest validates the add payment source request
 func (h *PaymentHandler) validateAddPaymentSourceRequest(req *AddPaymentSourceRequest) error {
-	// Validate business ID
-	if req.BusinessID == "" {
-		return fmt.Errorf("business_id is required")
-	}
-
 	// Validate source type
 	if req.SourceType == "" {
 		return fmt.Errorf("source_type is required")
@@ -881,6 +886,16 @@ func (h *PaymentHandler) handleTokenizationError(err error) error {
 func (h *PaymentHandler) GetPaymentSourcesWithFees(c echo.Context) error {
 	fmt.Println("=== HANDLER: GetPaymentSourcesWithFees API Called (Phase 10) ===")
 
+	// Read BusinessID from X-Business-ID header
+	businessID := c.Request().Header.Get("X-Business-ID")
+	if businessID == "" {
+		fmt.Println("❌ X-Business-ID header is missing")
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "missing_business_id",
+			"message": "X-Business-ID header is required",
+		})
+	}
+
 	// Parse request body
 	var req GetPaymentSourcesWithFeesRequest
 	if err := c.Bind(&req); err != nil {
@@ -892,7 +907,7 @@ func (h *PaymentHandler) GetPaymentSourcesWithFees(c echo.Context) error {
 	}
 
 	fmt.Printf("📥 Request: Business ID: %s, Context: %s, Amount: %d\n",
-		req.BusinessID, req.PaymentContext, req.BaseAmount)
+		businessID, req.PaymentContext, req.BaseAmount)
 
 	// Validate payment context
 	paymentContext := payment.PaymentContext(req.PaymentContext)
@@ -920,7 +935,7 @@ func (h *PaymentHandler) GetPaymentSourcesWithFees(c echo.Context) error {
 
 	response, err := h.paymentSourceService.GetPaymentSourcesWithFees(
 		ctx,
-		req.BusinessID,
+		businessID,
 		paymentContext,
 		req.BaseAmount,
 	)

@@ -115,12 +115,14 @@ The migration service automatically uses your existing database configuration fr
 
 ## Best Practices
 
-1. **Always create both up and down migrations** - This allows you to rollback changes if needed
-2. **Test migrations in development** before applying to production
-3. **Make migrations idempotent** - Use `IF NOT EXISTS` and similar clauses
-4. **Keep migrations small and focused** - One logical change per migration
-5. **Never edit existing migrations** - Create new migrations to fix issues
-6. **Backup your database** before running migrations in production
+1. **Stop application before migrations** - Prevents cached plan errors (most important!)
+2. **Always create both up and down migrations** - This allows you to rollback changes if needed
+3. **Test migrations in development** before applying to production
+4. **Make migrations idempotent** - Use `IF NOT EXISTS` and similar clauses
+5. **Keep migrations small and focused** - One logical change per migration
+6. **Never edit existing migrations** - Create new migrations to fix issues
+7. **Backup your database** before running migrations in production
+8. **Test rollback (down)** - Always verify your down migration works
 
 ## Environment Variables
 
@@ -134,6 +136,55 @@ The migration service uses the same database configuration as your application:
 
 ## Troubleshooting
 
+### Cached Plan Error: "cached plan must not change result type"
+
+This is a common PostgreSQL error that occurs when running migrations while the application server is still running.
+
+**Why it happens:**
+- PostgreSQL's pgx driver caches prepared statements for performance
+- When you run migrations, the database schema changes (columns added/removed, types changed, etc.)
+- The running application still has cached prepared statements based on the old schema
+- When queries execute, PostgreSQL detects the mismatch and throws this error
+
+**Solution:**
+
+**Option 1: Restart Application Server (Recommended)**
+```bash
+# 1. Stop your application server
+# 2. Run migrations
+go run cmd/migrate/main.go -action=up
+
+# 3. Start your application server
+# This ensures fresh database connections with no stale cached plans
+```
+
+**Option 2: Use the Migration Workflow (Development)**
+```bash
+# Always run migrations when the app server is stopped
+./bin/migrate -action=up
+
+# Then start/restart your application server
+go run cmd/api/http_server.go
+```
+
+**Prevention:**
+- The codebase has been configured to use `QueryExecModeDescribeExec` in the pgx client
+- This mode re-describes queries when needed, preventing most cached plan issues
+- However, it's still best practice to restart the application after migrations
+
+**Emergency Fix (if restart isn't possible):**
+```sql
+-- Connect to PostgreSQL as superuser
+DISCARD ALL;  -- Clears all cached plans for your session
+
+-- Or terminate and restart connections
+SELECT pg_terminate_backend(pid) 
+FROM pg_stat_activity 
+WHERE datname = 'xcentro' 
+  AND pid <> pg_backend_pid()
+  AND usename = 'xcentro_rw';  -- Your application user
+```
+
 ### Dirty State
 If migrations are in a "dirty" state:
 1. Check what went wrong in the last migration
@@ -145,3 +196,26 @@ If migrations are in a "dirty" state:
 - Ensure version numbers are sequential and unique
 - Don't skip version numbers
 - Use leading zeros for consistent sorting (000001, 000002, etc.)
+
+## Production Deployment Workflow
+
+For production environments, follow this strict workflow:
+
+```bash
+# 1. Take a database backup
+pg_dump -h localhost -U postgres xcentro > backup_$(date +%Y%m%d_%H%M%S).sql
+
+# 2. Stop application servers (all instances)
+# This is critical - all app servers must be stopped
+
+# 3. Run migrations
+./bin/migrate -action=up
+
+# 4. Verify migration success
+./bin/migrate -action=version
+
+# 5. Start application servers
+# All instances will now connect with the new schema
+
+# 6. Monitor application logs for any errors
+```

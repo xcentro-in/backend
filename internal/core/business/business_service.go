@@ -19,6 +19,9 @@ type BusinessService interface {
 	GetOnboardingStatus(ctx context.Context, uid string) (*OnboardingStatusResponse, error)
 	ValidateOnboardingEligibility(ctx context.Context, uid string) error
 
+	// Business details
+	GetBusinessDetails(ctx context.Context, bid string, userID string) (*BusinessDetailsResponse, error)
+
 	// User management methods
 	AddUserToBusiness(ctx context.Context, relation *BusinessUserRelation) error
 	GetBusinessUsers(ctx context.Context, bid string) ([]*BusinessUserDTO, error)

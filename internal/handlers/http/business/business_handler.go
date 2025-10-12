@@ -10,6 +10,7 @@ import (
 	"xcentro.in/internal/core/business"
 	"xcentro.in/internal/core/shared"
 	"xcentro.in/internal/core/user"
+	"xcentro.in/internal/middleware"
 	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/logger"
 	"xcentro.in/internal/shared/types"
@@ -37,9 +38,12 @@ func RegisterBusinessRoutes(e *echo.Group, businessService business.BusinessServ
 	handler := NewBusinessHandler(businessService, authService, userService, s3Config)
 
 	businessGroup := e.Group("/business")
-	// Apply middleware to the business group, not the parent group
-	businessGroup.Use(authService.GetEchoAuthMiddleware())
+	// Apply middleware to the business group
+	businessGroup.Use(middleware.JWTMiddleware(authService))
 	businessGroup.Use(businessService.GetUserRolesMiddleware())
+
+	// Business details route
+	businessGroup.GET("/details", handler.GetBusinessDetails)
 
 	// Onboarding routes
 	onboardingGroup := businessGroup.Group("/onboard")
@@ -239,11 +243,65 @@ func (h *BusinessHandler) GetOnboardingStatus(c echo.Context) error {
 	})
 }
 
+// GetBusinessDetails retrieves business details for display in UI
+func (h *BusinessHandler) GetBusinessDetails(c echo.Context) error {
+	// Read BusinessID from X-Business-ID header
+	businessID := c.Request().Header.Get("X-Business-ID")
+	if businessID == "" {
+		return c.JSON(400, map[string]interface{}{
+			"error":   "MISSING_BUSINESS_ID",
+			"message": "X-Business-ID header is required",
+		})
+	}
+
+	// Get user ID from context
+	userIDRaw := c.Get("userId")
+	if userIDRaw == nil {
+		return c.JSON(401, map[string]interface{}{
+			"error":   "UNAUTHORIZED",
+			"message": "User not authenticated",
+		})
+	}
+	userID := userIDRaw.(string)
+
+	// Get business details from service
+	details, err := h.businessService.GetBusinessDetails(c.Request().Context(), businessID, userID)
+	if err != nil {
+		h.logger.Errorf("Error fetching business details: %v", err)
+
+		// Check if user doesn't have access
+		if err.Error() == "user does not have access to this business" {
+			return c.JSON(403, map[string]interface{}{
+				"error":   "FORBIDDEN",
+				"message": "You don't have access to this business",
+			})
+		}
+
+		return c.JSON(500, map[string]interface{}{
+			"error":   "INTERNAL_ERROR",
+			"message": "Failed to fetch business details",
+		})
+	}
+
+	return c.JSON(200, map[string]interface{}{
+		"message": "Business details retrieved successfully",
+		"data":    details,
+	})
+}
+
 // InviteUser invites a user to a business (only admin/owner can invite)
 func (h *BusinessHandler) InviteUser(c echo.Context) error {
+	// Read BusinessID from X-Business-ID header
+	businessID := c.Request().Header.Get("X-Business-ID")
+	if businessID == "" {
+		return c.JSON(400, map[string]interface{}{
+			"error":   "MISSING_BUSINESS_ID",
+			"message": "X-Business-ID header is required",
+		})
+	}
+
 	// Parse request
 	type InviteRequest struct {
-		BID       string          `json:"bid"`
 		Email     string          `json:"email"`
 		Name      string          `json:"name"`
 		Role      shared.UserRole `json:"role"`
@@ -259,10 +317,10 @@ func (h *BusinessHandler) InviteUser(c echo.Context) error {
 	}
 
 	// Validate input
-	if req.BID == "" || req.Email == "" || req.Name == "" || req.Role == "" {
+	if req.Email == "" || req.Name == "" || req.Role == "" {
 		return c.JSON(400, map[string]interface{}{
 			"error":   "INVALID_INPUT",
-			"message": "BID, email, name, and role are required",
+			"message": "Email, name, and role are required",
 		})
 	}
 
@@ -305,7 +363,7 @@ func (h *BusinessHandler) InviteUser(c echo.Context) error {
 	var userRole shared.UserRole
 	var hasAccess bool
 	for _, rel := range roles {
-		if rel.BID == req.BID {
+		if rel.BID == businessID {
 			userRole = rel.Role
 			hasAccess = true
 			break
@@ -348,7 +406,7 @@ func (h *BusinessHandler) InviteUser(c echo.Context) error {
 	// Add user to business with specified role
 	relation := &business.BusinessUserRelation{
 		UserID:       createdUser.Id,
-		BID:          req.BID,
+		BID:          businessID,
 		Role:         req.Role,
 		RoleClaim:    req.Role,
 		KybInitiated: false,
@@ -375,12 +433,12 @@ func (h *BusinessHandler) InviteUser(c echo.Context) error {
 
 // ListBusinessUsers lists all users associated with a business (only admin/owner can access)
 func (h *BusinessHandler) ListBusinessUsers(c echo.Context) error {
-	// Parse query parameter
-	bid := c.QueryParam("bid")
-	if bid == "" {
+	// Read BusinessID from X-Business-ID header
+	businessID := c.Request().Header.Get("X-Business-ID")
+	if businessID == "" {
 		return c.JSON(400, map[string]interface{}{
-			"error":   "INVALID_INPUT",
-			"message": "Business ID (bid) is required",
+			"error":   "MISSING_BUSINESS_ID",
+			"message": "X-Business-ID header is required",
 		})
 	}
 
@@ -398,7 +456,7 @@ func (h *BusinessHandler) ListBusinessUsers(c echo.Context) error {
 	var userRole shared.UserRole
 	var hasAccess bool
 	for _, rel := range roles {
-		if rel.BID == bid {
+		if rel.BID == businessID {
 			userRole = rel.Role
 			hasAccess = true
 			break
@@ -421,7 +479,7 @@ func (h *BusinessHandler) ListBusinessUsers(c echo.Context) error {
 	}
 
 	// Get business users
-	users, err := h.businessService.GetBusinessUsers(c.Request().Context(), bid)
+	users, err := h.businessService.GetBusinessUsers(c.Request().Context(), businessID)
 	if err != nil {
 		h.logger.Errorf("Error getting business users: %v", err)
 		return c.JSON(500, map[string]interface{}{
@@ -438,9 +496,17 @@ func (h *BusinessHandler) ListBusinessUsers(c echo.Context) error {
 
 // UpdateBusinessUser updates a user's role in a business (only admin/owner can update)
 func (h *BusinessHandler) UpdateBusinessUser(c echo.Context) error {
+	// Read BusinessID from X-Business-ID header
+	businessID := c.Request().Header.Get("X-Business-ID")
+	if businessID == "" {
+		return c.JSON(400, map[string]interface{}{
+			"error":   "MISSING_BUSINESS_ID",
+			"message": "X-Business-ID header is required",
+		})
+	}
+
 	// Parse request
 	type UpdateUserRequest struct {
-		BID     string          `json:"bid"`
 		UserID  string          `json:"userId"`
 		NewRole shared.UserRole `json:"newRole"`
 	}
@@ -454,10 +520,10 @@ func (h *BusinessHandler) UpdateBusinessUser(c echo.Context) error {
 	}
 
 	// Validate input
-	if req.BID == "" || req.UserID == "" || req.NewRole == "" {
+	if req.UserID == "" || req.NewRole == "" {
 		return c.JSON(400, map[string]interface{}{
 			"error":   "INVALID_INPUT",
-			"message": "BID, userId, and newRole are required",
+			"message": "userId and newRole are required",
 		})
 	}
 
@@ -491,7 +557,7 @@ func (h *BusinessHandler) UpdateBusinessUser(c echo.Context) error {
 	var userRole shared.UserRole
 	var hasAccess bool
 	for _, rel := range roles {
-		if rel.BID == req.BID {
+		if rel.BID == businessID {
 			userRole = rel.Role
 			hasAccess = true
 			break
@@ -514,7 +580,7 @@ func (h *BusinessHandler) UpdateBusinessUser(c echo.Context) error {
 	}
 
 	// Update user role (service handles additional authorization checks)
-	err := h.businessService.UpdateUserRoleInBusiness(c.Request().Context(), req.BID, req.UserID, userRole, req.NewRole)
+	err := h.businessService.UpdateUserRoleInBusiness(c.Request().Context(), businessID, req.UserID, userRole, req.NewRole)
 	if err != nil {
 		h.logger.Errorf("Error updating user role: %v", err)
 		return c.JSON(500, map[string]interface{}{
@@ -530,9 +596,17 @@ func (h *BusinessHandler) UpdateBusinessUser(c echo.Context) error {
 
 // RemoveBusinessUser removes a user from a business (only admin/owner can remove)
 func (h *BusinessHandler) RemoveBusinessUser(c echo.Context) error {
+	// Read BusinessID from X-Business-ID header
+	businessID := c.Request().Header.Get("X-Business-ID")
+	if businessID == "" {
+		return c.JSON(400, map[string]interface{}{
+			"error":   "MISSING_BUSINESS_ID",
+			"message": "X-Business-ID header is required",
+		})
+	}
+
 	// Parse request
 	type RemoveUserRequest struct {
-		BID    string `json:"bid"`
 		UserID string `json:"userId"`
 	}
 
@@ -545,10 +619,10 @@ func (h *BusinessHandler) RemoveBusinessUser(c echo.Context) error {
 	}
 
 	// Validate input
-	if req.BID == "" || req.UserID == "" {
+	if req.UserID == "" {
 		return c.JSON(400, map[string]interface{}{
 			"error":   "INVALID_INPUT",
-			"message": "BID and userId are required",
+			"message": "userId is required",
 		})
 	}
 
@@ -566,7 +640,7 @@ func (h *BusinessHandler) RemoveBusinessUser(c echo.Context) error {
 	var requesterRole shared.UserRole
 	var hasAccess bool
 	for _, rel := range roles {
-		if rel.BID == req.BID {
+		if rel.BID == businessID {
 			requesterRole = rel.Role
 			hasAccess = true
 			break
@@ -589,7 +663,7 @@ func (h *BusinessHandler) RemoveBusinessUser(c echo.Context) error {
 	}
 
 	// Get target user's role
-	businessUsers, err := h.businessService.GetBusinessUsers(c.Request().Context(), req.BID)
+	businessUsers, err := h.businessService.GetBusinessUsers(c.Request().Context(), businessID)
 	if err != nil {
 		h.logger.Errorf("Error getting business users: %v", err)
 		return c.JSON(500, map[string]interface{}{
@@ -616,7 +690,7 @@ func (h *BusinessHandler) RemoveBusinessUser(c echo.Context) error {
 	}
 
 	// Remove user from business (service handles additional authorization checks)
-	err = h.businessService.RemoveUserFromBusiness(c.Request().Context(), req.BID, req.UserID, targetUserRole, requesterRole)
+	err = h.businessService.RemoveUserFromBusiness(c.Request().Context(), businessID, req.UserID, targetUserRole, requesterRole)
 	if err != nil {
 		h.logger.Errorf("Error removing user from business: %v", err)
 		return c.JSON(500, map[string]interface{}{

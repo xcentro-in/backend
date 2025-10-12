@@ -2,14 +2,12 @@ package auth
 
 import (
 	"context"
-	"errors"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
-	echojwt "github.com/labstack/echo-jwt/v4"
-	"github.com/labstack/echo/v4"
-	goredis "github.com/redis/go-redis/v9"
 	"golang.org/x/crypto/bcrypt"
 	redis "xcentro.in/internal/adapters/cache/redis/client"
 	"xcentro.in/internal/adapters/cache/redis/keys"
@@ -19,12 +17,12 @@ import (
 	"xcentro.in/internal/core/user"
 	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/logger"
-	"xcentro.in/internal/shared/types"
 )
 
 type AuthService struct {
 	config          *config.JWTSecretConfig
 	rclient         *redis.RedisClient
+	sessionRepo     auth.SessionRepository
 	userService     user.UserService
 	businessService business.BusinessService
 }
@@ -32,100 +30,229 @@ type AuthService struct {
 func NewAuthService(
 	cfg *config.JWTSecretConfig,
 	rclient *redis.RedisClient,
+	sessionRepo auth.SessionRepository,
 	userService user.UserService,
 	businessService business.BusinessService,
 ) *AuthService {
 	return &AuthService{
 		config:          cfg,
 		rclient:         rclient,
+		sessionRepo:     sessionRepo,
 		userService:     userService,
 		businessService: businessService,
 	}
 }
 
-func (s *AuthService) CreateAuthJWT(userid string) (string, error) {
-	claim := jwt.RegisteredClaims{
-		Subject:   userid,
-		ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)),
+// generateToken creates a JWT token for the given user with specified expiry duration
+func (s *AuthService) generateToken(userID string, expiry time.Duration) (string, error) {
+	claims := jwt.RegisteredClaims{
+		Subject:   userID,
+		ExpiresAt: jwt.NewNumericDate(time.Now().Add(expiry)),
+		IssuedAt:  jwt.NewNumericDate(time.Now()),
 	}
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claim)
-	stoken, err := token.SignedString([]byte(s.config.SecretKey))
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	signedToken, err := token.SignedString([]byte(s.config.SecretKey))
+	if err != nil {
+		logger.Errorf("Failed to sign token: %v", err)
+		return "", fmt.Errorf("failed to create token")
+	}
+	return signedToken, nil
+}
+
+// generateAccessToken creates a new short-lived access token for the given user
+func (s *AuthService) generateAccessToken(userID string) (string, error) {
+	return s.generateToken(userID, s.config.AccessTokenExpiry)
+}
+
+// generateRefreshToken creates a new long-lived refresh token for the given user
+func (s *AuthService) generateRefreshToken(userID string) (string, error) {
+	return s.generateToken(userID, s.config.RefreshTokenExpiry)
+}
+
+// CreateTokenPair creates a new access and refresh token pair
+func (s *AuthService) CreateTokenPair(ctx context.Context, userID, userAgent string) (accessToken, refreshToken string, err error) {
+	// Generate access token (short-lived)
+	accessToken, err = s.generateAccessToken(userID)
+	if err != nil {
+		return "", "", err
+	}
+
+	// Generate refresh token (long-lived)
+	refreshToken, err = s.generateRefreshToken(userID)
+	if err != nil {
+		return "", "", err
+	}
+
+	// Hash the refresh token for storage
+	tokenHash := hashToken(refreshToken)
+
+	// Store refresh token session in database
+	_, err = s.sessionRepo.CreateSession(
+		ctx,
+		userID,
+		tokenHash,
+		time.Now().Add(s.config.RefreshTokenExpiry),
+		userAgent,
+	)
+	if err != nil {
+		logger.Errorf("Failed to store session: %v", err)
+		return "", "", fmt.Errorf("failed to store session")
+	}
+
+	return accessToken, refreshToken, nil
+}
+
+// RefreshAccessToken validates refresh token and issues a new access token
+func (s *AuthService) RefreshAccessToken(ctx context.Context, refreshToken string) (string, error) {
+	// Parse refresh token to extract userID (JWT expiry is validated here automatically)
+	claims, err := s.parseAndValidateToken(refreshToken)
+	if err != nil {
+		logger.Errorf("Invalid refresh token: %v", err)
+		return "", fmt.Errorf("invalid refresh token")
+	}
+
+	userID := claims.Subject
+	tokenHash := hashToken(refreshToken)
+
+	// Check if token is revoked in Redis cache first
+	revokedKey := keys.User.RevokedTokens(userID)
+	isRevoked, err := s.rclient.Client.HExists(ctx, revokedKey, tokenHash).Result()
 
 	if err != nil {
-		logger.Error("token signing failed: %v", err)
-		return "", err
+		// Redis is down - fallback to DB check
+		logger.Warnf("Redis error checking revocation, falling back to DB: %v", err)
+
+		// Try to get session from DB (if exists = not revoked, if not exists = revoked)
+		_, dbErr := s.sessionRepo.GetSessionByTokenHash(ctx, userID, tokenHash)
+		if dbErr != nil {
+			logger.Errorf("Session not found in DB (token revoked): %v", dbErr)
+			return "", fmt.Errorf("refresh token has been revoked")
+		}
+
+		// Session exists in DB, so not revoked - update last used timestamp
+		if err := s.sessionRepo.UpdateLastUsed(ctx, userID, tokenHash); err != nil {
+			logger.Warnf("Failed to update last used: %v", err)
+		}
+
+	} else if isRevoked {
+		// Token is in revoked set
+		logger.Errorf("Refresh token is revoked (cached)")
+		return "", fmt.Errorf("refresh token has been revoked")
+	} else {
+		// Redis is up and token not revoked - update last used timestamp
+		if err := s.sessionRepo.UpdateLastUsed(ctx, userID, tokenHash); err != nil {
+			logger.Warnf("Failed to update last used: %v", err)
+		}
 	}
-	return stoken, nil
+
+	// Generate new access token
+	return s.generateAccessToken(userID)
 }
 
-func (s *AuthService) ExtractAndValidateClaims(token *jwt.Token) (*jwt.RegisteredClaims, error) {
-	//just need to check if token is expired or not for now
-	if claims, ok := token.Claims.(*jwt.RegisteredClaims); ok && token.Valid {
-		return claims, nil
+// RevokeRefreshToken revokes a specific refresh token
+func (s *AuthService) RevokeRefreshToken(ctx context.Context, userID, refreshToken string) error {
+	// Parse token to validate it and verify it belongs to the user
+	claims, err := s.parseAndValidateToken(refreshToken)
+	if err != nil {
+		logger.Errorf("Invalid refresh token: %v", err)
+		return fmt.Errorf("invalid refresh token")
 	}
-	return nil, nil
+
+	// Verify token belongs to this user
+	if claims.Subject != userID {
+		logger.Errorf("Token does not belong to user %s", userID)
+		return fmt.Errorf("unauthorized token revocation")
+	}
+
+	// Hash the token
+	tokenHash := hashToken(refreshToken)
+
+	// Delete from database
+	if err := s.sessionRepo.DeleteSession(ctx, userID, tokenHash); err != nil {
+		logger.Errorf("Failed to delete session: %v", err)
+		return fmt.Errorf("failed to revoke token")
+	}
+
+	// Mark as revoked in Redis cache (MUST succeed)
+	revokedKey := keys.User.RevokedTokens(userID)
+	if err := s.rclient.Client.HSet(ctx, revokedKey, tokenHash, "1").Err(); err != nil {
+		logger.Errorf("Failed to mark token as revoked in Redis: %v", err)
+		return fmt.Errorf("failed to complete token revocation")
+	}
+
+	logger.Info("Successfully revoked refresh token for user %s", userID)
+	return nil
 }
 
-func (s *AuthService) parseToken(c echo.Context, auth string) (interface{}, error) {
-	// Parse the token first to get claims for debugging
-	token, err := jwt.ParseWithClaims(auth, &jwt.RegisteredClaims{}, func(token *jwt.Token) (interface{}, error) {
-		// Verify the token's signing algorithm.
+// RevokeAllUserTokens revokes all refresh tokens for a user
+func (s *AuthService) RevokeAllUserTokens(ctx context.Context, userID string) error {
+	// Delete all sessions from database and get their token hashes
+	tokenHashes, err := s.sessionRepo.DeleteAllUserSessions(ctx, userID)
+	if err != nil {
+		logger.Errorf("Failed to delete user sessions: %v", err)
+		return fmt.Errorf("failed to revoke tokens")
+	}
+
+	if len(tokenHashes) == 0 {
+		logger.Info("No tokens to revoke for user %s", userID)
+		return nil
+	}
+
+	// Mark all tokens as revoked in Redis cache using HSET (MUST succeed)
+	revokedKey := keys.User.RevokedTokens(userID)
+	tokenMap := make(map[string]interface{})
+	for _, tokenHash := range tokenHashes {
+		tokenMap[tokenHash] = "1"
+	}
+
+	if err := s.rclient.Client.HSet(ctx, revokedKey, tokenMap).Err(); err != nil {
+		logger.Errorf("Failed to mark tokens as revoked in Redis: %v", err)
+		return fmt.Errorf("failed to complete token revocation")
+	}
+
+	logger.Info("Successfully revoked %d tokens for user %s", len(tokenHashes), userID)
+	return nil
+}
+
+// ValidateAccessToken validates an access token and returns its claims
+func (s *AuthService) ValidateAccessToken(tokenString string) (*jwt.RegisteredClaims, error) {
+	return s.parseAndValidateToken(tokenString)
+}
+
+// parseAndValidateToken is a helper to parse and validate any JWT token
+func (s *AuthService) parseAndValidateToken(tokenString string) (*jwt.RegisteredClaims, error) {
+	token, err := jwt.ParseWithClaims(tokenString, &jwt.RegisteredClaims{}, func(token *jwt.Token) (interface{}, error) {
+		// Verify signing algorithm
 		if token.Method.Alg() != jwt.SigningMethodHS256.Name {
-			logger.Error("ERROR: unexpected jwt signing method=%v\n", token.Header["alg"])
-			return nil, fmt.Errorf("unexpected jwt signing method=%v", token.Header["alg"])
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 		}
-
-		// Get subject from claims for debugging
-		claims := token.Claims.(*jwt.RegisteredClaims)
-		fmt.Printf("Token subject: %s\n", claims.Subject)
-
-		// Check token revocation
-		isrevoked, err := s.CheckIfTokenRevoked(c.Request().Context(), claims.Subject, auth)
-		if err != nil {
-			logger.Error("ERROR: checking if token is revoked: %v\n", err)
-			return nil, err
-		}
-		if isrevoked {
-			logger.Error("ERROR: token is revoked\n")
-			return nil, fmt.Errorf("token is revoked")
-		}
-
-		logger.Info("Token validation successful, returning secret key\n")
 		return []byte(s.config.SecretKey), nil
 	})
 
-	// Handle parsing errors
 	if err != nil {
-		fmt.Printf("ERROR: parsing jwt token: %v\n", err)
-		return nil, types.ReplyError{Msg: err.Error()}
+		return nil, err
 	}
+
 	if !token.Valid {
-		fmt.Printf("ERROR: invalid jwt token\n")
-		return nil, types.ReplyError{Msg: "invalid token"}
+		return nil, fmt.Errorf("invalid token")
 	}
 
-	// Set userId in context
-	userId := token.Claims.(*jwt.RegisteredClaims).Subject
-	fmt.Printf("Setting userId in context: %s\n", userId)
-	c.Set("userId", userId)
+	claims, ok := token.Claims.(*jwt.RegisteredClaims)
+	if !ok {
+		return nil, fmt.Errorf("invalid token claims")
+	}
 
-	fmt.Printf("parseToken completed successfully\n")
-	return token, nil
+	return claims, nil
 }
 
-func (s *AuthService) GetEchoAuthMiddleware() echo.MiddlewareFunc {
-	return echojwt.WithConfig(echojwt.Config{
-		ContextKey:     "token",
-		ParseTokenFunc: s.parseToken,
-		ErrorHandler: func(c echo.Context, err error) error {
-			fmt.Printf("JWT Middleware Error: %v\n", err)
-			return c.JSON(401, map[string]any{"message": "unauthorized", "data": nil})
-		},
-	})
+// hashToken creates a SHA-256 hash of the token for storage
+func hashToken(token string) string {
+	hash := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(hash[:])
 }
 
+// HashPassword hashes a password using bcrypt
 func (s *AuthService) HashPassword(password string) (string, error) {
-	//TODO: need to add salt from .env
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		return "", err
@@ -133,32 +260,17 @@ func (s *AuthService) HashPassword(password string) (string, error) {
 	return string(hashedPassword), nil
 }
 
+// ComparePassword compares a hashed password with a plaintext password
 func (s *AuthService) ComparePassword(hashedPassword, password string) error {
-	//TODO: need to add salt from .env
 	return bcrypt.CompareHashAndPassword([]byte(hashedPassword), []byte(password))
 }
 
+// GetRedisClient returns the Redis client
 func (s *AuthService) GetRedisClient() *redis.RedisClient {
 	return s.rclient
 }
 
-func (s *AuthService) CheckIfTokenRevoked(ctx context.Context, userid, token string) (bool, error) {
-	key := keys.User.Token(userid)
-	result := s.rclient.Client.HGet(ctx, key, token)
-	if result.Err() != nil {
-		return false, result.Err()
-	}
-	return result.Val() == "true", nil
-}
-
-func (s *AuthService) SetNewToken(ctx context.Context, userid string, token string) error {
-	key := keys.User.Token(userid)
-	result := s.rclient.Client.HSet(ctx, key, token, false)
-	return result.Err()
-}
-
 // Signup handles complete user registration flow
-// Returns SignupResponse with minimal user info
 func (s *AuthService) Signup(ctx context.Context, email, password string) (*auth.SignupResponse, error) {
 	logger.Info("Processing signup for email: %s", email)
 
@@ -191,7 +303,6 @@ func (s *AuthService) Signup(ctx context.Context, email, password string) (*auth
 		bgCtx := context.Background()
 		if err := s.userService.SendEmailVerification(bgCtx, createdUser.Id); err != nil {
 			logger.Errorf("Failed to send email verification: %v", err)
-			// Don't fail signup if email sending fails
 		}
 	}()
 
@@ -201,9 +312,8 @@ func (s *AuthService) Signup(ctx context.Context, email, password string) (*auth
 	}, nil
 }
 
-// Login handles complete login flow with caching
-// Returns LoginResponse with minimal data: token, kycNeeded, kybNeeded
-func (s *AuthService) Login(ctx context.Context, email, password string) (*auth.LoginResponse, error) {
+// Login handles complete login flow with token pair generation
+func (s *AuthService) Login(ctx context.Context, email, password, userAgent string) (*auth.LoginResponse, error) {
 	logger.Info("Processing login for email: %s", email)
 
 	// Validate input
@@ -230,90 +340,48 @@ func (s *AuthService) Login(ctx context.Context, email, password string) (*auth.
 		return nil, fmt.Errorf("invalid email or password")
 	}
 
-	// Create JWT token
-	token, err := s.CreateAuthJWT(userObj.Id)
+	// Create token pair
+	accessToken, refreshToken, err := s.CreateTokenPair(ctx, userObj.Id, userAgent)
 	if err != nil {
-		logger.Errorf("Failed to create token: %v", err)
-		return nil, fmt.Errorf("failed to create authentication token")
-	}
-
-	// Store token in Redis
-	if err := s.SetNewToken(ctx, userObj.Id, token); err != nil {
-		logger.Errorf("Failed to store token: %v", err)
-		return nil, fmt.Errorf("failed to store authentication token")
+		logger.Errorf("Failed to create token pair: %v", err)
+		return nil, fmt.Errorf("failed to create authentication tokens")
 	}
 
 	// Get onboarding status (cached)
 	onboardingStatus := s.getOnboardingStatus(ctx, userObj)
 
 	return &auth.LoginResponse{
-		Token:     token,
-		KycNeeded: onboardingStatus.KycNeeded,
-		KybNeeded: onboardingStatus.KybNeeded,
+		AccessToken:  accessToken,
+		RefreshToken: refreshToken,
+		KycNeeded:    onboardingStatus.KycNeeded,
+		KybNeeded:    onboardingStatus.KybNeeded,
 	}, nil
 }
 
-// getOnboardingStatus determines KYC and KYB status with caching
-// Returns cached result if available, otherwise computes and caches
+// getOnboardingStatus determines KYC and KYB status
 func (s *AuthService) getOnboardingStatus(ctx context.Context, userObj *user.User) *auth.OnboardingStatusCache {
-	// Try cache first
-	cacheKey := keys.User.OnboardingStatus(userObj.Id)
-	var cached auth.OnboardingStatusCache
-	err := s.rclient.GetJSON(ctx, cacheKey, &cached)
-
-	if err == nil {
-		// Cache hit
-		logger.Info("Onboarding status cache hit for user: %s", userObj.Id)
-		return &cached
-	}
-
-	// Cache miss - compute status
-	if !errors.Is(err, goredis.Nil) {
-		logger.Warnf("Redis cache error for onboarding status (continuing): %v", err)
-	}
-
-	// KYC Logic: Check both kyc_needed flag AND kyc_status
-	// - If kyc_needed = false → user doesn't need KYC (invited user or exempted)
-	// - If kyc_needed = true → check kyc_status:
-	//   - If status is completed or verified → KYC done
-	//   - Otherwise → KYC still needed
+	// KYC Logic
 	kycNeeded := false
 	if userObj.KycNeeded {
-		// User requires KYC - check if it's complete
 		if userObj.KycStatus != shared.KYCCompleted && userObj.KycStatus != shared.KYCVerified {
 			kycNeeded = true
 		}
 	}
 
-	// KYB Logic: Check business onboarding status
-	// - Get business relations to determine if KYB is needed
+	// KYB Logic
 	kybNeeded := false
 	onboardingStatus, err := s.businessService.GetOnboardingStatus(ctx, userObj.Id)
 	if err != nil {
 		logger.Warnf("Failed to get business onboarding status: %v", err)
-		// If user has business relations but we can't get status, assume KYB needed
 		kybNeeded = true
 	} else if onboardingStatus != nil && onboardingStatus.KYBInitiated {
-		// User has started KYB - check if it's complete
 		kybNeeded = onboardingStatus.KYBStatus != shared.KYBCompleted && onboardingStatus.KYBStatus != shared.KYBVerified
 	} else if onboardingStatus != nil && onboardingStatus.KYBStatus == shared.KYBNotStarted {
-		// User has business relation but hasn't started KYB
 		kybNeeded = true
 	}
-	// If onboardingStatus is nil or has no business relations, kybNeeded remains false
 
-	result := &auth.OnboardingStatusCache{
+	return &auth.OnboardingStatusCache{
 		KycNeeded: kycNeeded,
 		KybNeeded: kybNeeded,
 	}
-
-	// Cache result asynchronously
-	go func() {
-		bgCtx := context.Background()
-		if err := s.rclient.SetJSON(bgCtx, cacheKey, result, keys.TTLOnboardingStatus); err != nil {
-			logger.Warnf("Failed to cache onboarding status: %v", err)
-		}
-	}()
-
-	return result
 }

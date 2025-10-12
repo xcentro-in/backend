@@ -47,8 +47,8 @@ type InitiateOnboardingDTO struct {
 
 // CompleteOnboardingDTO represents the request payload for completing onboarding
 // After identity verification, user claims role in a specific business
+// Note: BusinessID is now passed via X-Business-ID header
 type CompleteOnboardingDTO struct {
-	BusinessID  string          `json:"businessId" validate:"required"`
 	ClaimedRole shared.UserRole `json:"claimedRole" validate:"required"`
 }
 
@@ -93,4 +93,20 @@ type ForgotPasswordDTO struct {
 type ResetPasswordDTO struct {
 	Token       string `json:"token" validate:"required"`
 	NewPassword string `json:"newPassword" validate:"required,min=8"`
+}
+
+// UserProfileDTO represents the user profile response with masked national ID
+type UserProfileDTO struct {
+	UserID           string `json:"userId"`
+	Email            string `json:"email"`
+	Name             string `json:"name"`
+	DOB              string `json:"dob"`
+	Mobile           string `json:"mobile"`
+	TaxID            string `json:"taxId"`
+	MaskedNationalID string `json:"maskedNationalId"` // Only last 4 chars visible
+}
+
+// UpdateProfileDTO represents the request payload for updating user profile
+type UpdateProfileDTO struct {
+	Mobile string `json:"mobile" validate:"required"`
 }

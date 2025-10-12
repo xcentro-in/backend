@@ -197,23 +197,75 @@ func (s *UserServiceImpl) GetUserByID(ctx context.Context, userID string) (*user
 	return userFromDB, nil
 }
 
-// UpdateUserProfile updates user profile information in a transaction
-func (s *UserServiceImpl) UpdateUserProfile(ctx context.Context, userID string, mobile, taxID string) error {
+// GetUserProfile retrieves user profile with masked national ID
+func (s *UserServiceImpl) GetUserProfile(ctx context.Context, userID string) (*user.UserProfileDTO, error) {
+	s.logger.Info("Getting user profile for ID: %s", userID)
+
+	if userID == "" {
+		return nil, fmt.Errorf("user ID is required")
+	}
+
+	// Fetch user data and identity data
+	userData, identityData, err := s.userRepo.GetUserKYCStatus(ctx, userID)
+	if err != nil {
+		s.logger.Error("Failed to get user profile: %v", err)
+		return nil, fmt.Errorf("failed to get user profile: %w", err)
+	}
+
+	if userData == nil {
+		return nil, fmt.Errorf("user not found")
+	}
+
+	// Create profile DTO
+	profile := &user.UserProfileDTO{
+		UserID:           userData.Id,
+		Email:            userData.Email,
+		Name:             userData.Name,
+		DOB:              userData.DOB,
+		Mobile:           userData.Mobile,
+		TaxID:            "",
+		MaskedNationalID: "",
+	}
+
+	// Add identity data if available
+	if identityData != nil {
+		profile.TaxID = identityData.TaxID
+		// Mask national ID - show only last 4 characters
+		profile.MaskedNationalID = s.maskNationalID(identityData.NationalID)
+	}
+
+	return profile, nil
+}
+
+// maskNationalID masks the national ID showing only the last 4 characters
+func (s *UserServiceImpl) maskNationalID(nationalID string) string {
+	if nationalID == "" {
+		return ""
+	}
+	if len(nationalID) <= 4 {
+		return nationalID
+	}
+	lastFour := nationalID[len(nationalID)-4:]
+	maskedPart := ""
+	for i := 0; i < len(nationalID)-4; i++ {
+		maskedPart += "*"
+	}
+	return maskedPart + lastFour
+}
+
+// UpdateUserProfile updates user profile information in a transaction (mobile only)
+func (s *UserServiceImpl) UpdateUserProfile(ctx context.Context, userID string, mobile string) error {
 	s.logger.Info("Updating user profile for ID: %s", userID)
+
+	if mobile == "" {
+		return fmt.Errorf("mobile is required")
+	}
 
 	err := s.txManager.WithTx(context.Background(), func(ctx context.Context, tx client.Tx) error {
 		txUserRepo := s.userRepo.WithTx(tx)
 
-		if mobile != "" {
-			if err := txUserRepo.UpdateUserMobile(ctx, userID, mobile); err != nil {
-				return fmt.Errorf("failed to update mobile: %w", err)
-			}
-		}
-
-		if taxID != "" {
-			if err := txUserRepo.UpdateUserTaxID(ctx, userID, taxID); err != nil {
-				return fmt.Errorf("failed to update tax ID: %w", err)
-			}
+		if err := txUserRepo.UpdateUserMobile(ctx, userID, mobile); err != nil {
+			return fmt.Errorf("failed to update mobile: %w", err)
 		}
 
 		return nil
@@ -675,7 +727,7 @@ func (s *UserServiceImpl) CompleteOnboarding(ctx context.Context, userID, busine
 		}
 	}
 
-	return s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
+	err = s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
 		txUserRepo := s.userRepo.WithTx(tx)
 		txBusinessUserRelRepo := s.businessUserRelRepo.WithTx(tx)
 
@@ -731,15 +783,6 @@ func (s *UserServiceImpl) CompleteOnboarding(ctx context.Context, userID, busine
 		return err
 	}
 
-	// Invalidate onboarding cache after successful KYC completion
-	go func() {
-		bgCtx := context.Background()
-		onboardingKey := keys.User.OnboardingStatus(userID)
-		if err := s.rclient.Delete(bgCtx, onboardingKey); err != nil {
-			s.logger.Warnf("Failed to invalidate onboarding cache: %v", err)
-		}
-	}()
-
 	return nil
 }
 
@@ -758,6 +801,11 @@ func (s *UserServiceImpl) GetOnboardingStatus(ctx context.Context, userID string
 
 	if userData == nil {
 		return nil, types.ErrUserNotFound
+	}
+
+	// Restrict access after KYC is completed or verified
+	if userData.KycStatus == shared.KYCCompleted || userData.KycStatus == shared.KYCVerified {
+		return nil, fmt.Errorf("onboarding status is only available during onboarding process")
 	}
 
 	// Prepare response DTO

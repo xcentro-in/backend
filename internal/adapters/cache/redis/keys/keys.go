@@ -8,14 +8,14 @@ import (
 // TTL constants for different cache types
 const (
 	// User-related TTLs
-	TTLUserProfile       = 5 * time.Minute  // User profile data
-	TTLUserToken         = 24 * time.Hour   // JWT tokens
-	TTLVerification      = 24 * time.Hour   // Verification status
-	TTLOnboardingStatus  = 5 * time.Minute  // Onboarding status (KYC/KYB flags)
+	TTLUserProfile      = 5 * time.Minute     // User profile data
+	TTLVerification     = 24 * time.Hour      // Verification status
+	TTLOnboardingStatus = 5 * time.Minute     // Onboarding status (KYC/KYB flags)
+	TTLRevokedToken     = 30 * 24 * time.Hour // Revoked refresh tokens (30 days)
 
 	// Business-related TTLs
-	TTLBusinessDetails  = 10 * time.Minute // Business details
-	TTLUserRoles        = 5 * time.Minute  // User-business relations
+	TTLBusinessDetails = 10 * time.Minute // Business details
+	TTLUserRoles       = 5 * time.Minute  // User-business relations
 
 	// No TTL (manual invalidation or permanent)
 	TTLNone = 0
@@ -33,12 +33,6 @@ type userKeys struct{}
 // Pattern: xcentro:user:{userId}:profile
 func (userKeys) Profile(userID string) string {
 	return fmt.Sprintf("%s:user:%s:profile", keyPrefix, userID)
-}
-
-// Token returns cache key for user JWT token storage
-// Pattern: xcentro:user:{userId}:token
-func (userKeys) Token(userID string) string {
-	return fmt.Sprintf("%s:user:%s:token", keyPrefix, userID)
 }
 
 // EmailLookup returns cache key for email-to-userID lookup
@@ -86,6 +80,13 @@ func (businessKeys) UserRoles(userID string) string {
 // Pattern: xcentro:business:gstin:{gstin}
 func (businessKeys) GSTIN(gstin string) string {
 	return fmt.Sprintf("%s:business:gstin:%s", keyPrefix, gstin)
+}
+
+// RevokedTokens returns cache key for user's revoked refresh tokens (Redis hash)
+// Pattern: xcentro:user:{userId}:token
+// Usage: HSET key tokenHash 1, HEXISTS key tokenHash
+func (userKeys) RevokedTokens(userID string) string {
+	return fmt.Sprintf("%s:user:%s:token", keyPrefix, userID)
 }
 
 // InvalidateUser invalidates all user-related cache keys (helper for bulk invalidation)
