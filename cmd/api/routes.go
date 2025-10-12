@@ -131,6 +131,26 @@ func registerV1PaymentRoutes(meta *serverMetaData, group *echo.Group) {
 	// Register payment routes with payment service (Phase 10: Added paymentSourceService)
 	processPaymentGroup := group.Group("/process_payment")
 	payment.RegisterPaymentRoutes(processPaymentGroup, paymentService, paymentSourceService)
+
+	// Register callback handler for payment gateway responses (SURL/FURL)
+	// These are user-facing endpoints where gateways POST payment results
+	callbackHandler := payment.NewCallbackHandler(
+		paymentRepository,
+		jioPayClient,
+		easebuzzClient,
+	)
+	processPaymentGroup.POST("/callback", callbackHandler.HandleCallback)
+
+	// Register webhook handlers for async settlement notifications
+	// These are backend-to-backend notifications for settlement confirmation
+	webhookHandler := payment.NewWebhookHandler(
+		paymentRepository,
+		jioPayClient,
+		easebuzzClient,
+	)
+	webhookGroup := processPaymentGroup.Group("/webhooks")
+	webhookGroup.POST("/jiopay", webhookHandler.HandleJioPayWebhook)
+	webhookGroup.POST("/easebuzz", webhookHandler.HandleEasebuzzWebhook)
 }
 
 func registerV1BusinessRoutes(meta *serverMetaData, group *echo.Group) {

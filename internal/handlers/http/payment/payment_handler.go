@@ -36,7 +36,7 @@ func (h *PaymentHandler) FetchWallet(c echo.Context) error {
 	if err := c.Bind(&req); err != nil {
 		fmt.Printf("❌ Error binding request: %v\n", err)
 		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error": "invalid_request",
+			"error":   "invalid_request",
 			"message": "Invalid request body",
 		})
 	}
@@ -49,7 +49,7 @@ func (h *PaymentHandler) FetchWallet(c echo.Context) error {
 	if err != nil {
 		fmt.Printf("❌ Wallet service error: %v\n", err)
 		return c.JSON(http.StatusInternalServerError, map[string]any{
-			"error": "wallet_service_error",
+			"error":   "wallet_service_error",
 			"message": "Failed to retrieve business wallet information",
 		})
 	}
@@ -71,10 +71,10 @@ func (h *PaymentHandler) FetchWallet(c echo.Context) error {
 	fmt.Println("=== HANDLER: FetchWallet Complete ===")
 
 	return c.JSON(http.StatusOK, map[string]any{
-		"message": "Business wallet retrieved successfully",
+		"message":  "Business wallet retrieved successfully",
 		"endpoint": "POST /v1/process_payment/fetch_wallet",
-		"status": "success",
-		"data": response,
+		"status":   "success",
+		"data":     response,
 	})
 }
 
@@ -184,7 +184,7 @@ func (h *PaymentHandler) GetFeeRules(c echo.Context) error {
 	if err := c.Bind(&req); err != nil {
 		fmt.Printf("❌ Error binding request: %v\n", err)
 		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error": "invalid_request",
+			"error":   "invalid_request",
 			"message": "Invalid request body",
 		})
 	}
@@ -213,7 +213,7 @@ func (h *PaymentHandler) GetFeeRules(c echo.Context) error {
 	if err != nil {
 		fmt.Printf("❌ Fee calculator error: %v\n", err)
 		return c.JSON(http.StatusInternalServerError, map[string]any{
-			"error": "fee_calculator_error",
+			"error":   "fee_calculator_error",
 			"message": "Failed to retrieve fee rules",
 		})
 	}
@@ -248,9 +248,9 @@ func (h *PaymentHandler) GetFeeRules(c echo.Context) error {
 	}
 
 	response := map[string]any{
-		"message": "Fee rules retrieved successfully",
+		"message":  "Fee rules retrieved successfully",
 		"endpoint": "POST /v1/process_payment/get_fee_rules",
-		"status": "success",
+		"status":   "success",
 		"data": map[string]any{
 			"rules": responseRules,
 		},
@@ -285,7 +285,7 @@ func (h *PaymentHandler) Tokenize(c echo.Context) error {
 	if err := c.Bind(&req); err != nil {
 		fmt.Printf("❌ Error binding request: %v\n", err)
 		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error": "invalid_request",
+			"error":   "invalid_request",
 			"message": "Invalid request body",
 		})
 	}
@@ -296,7 +296,7 @@ func (h *PaymentHandler) Tokenize(c echo.Context) error {
 	if err := h.validateTokenizeRequest(&req); err != nil {
 		fmt.Printf("❌ Validation error: %v\n", err)
 		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error": "validation_failed",
+			"error":   "validation_failed",
 			"message": err.Error(),
 		})
 	}
@@ -357,7 +357,7 @@ func (h *PaymentHandler) Tokenize(c echo.Context) error {
 	if err := h.paymentService.AddPaymentSource(coreRequest.BusinessID, storedCard); err != nil {
 		fmt.Printf("❌ Failed to store card in wallet: %v\n", err)
 		return c.JSON(http.StatusInternalServerError, map[string]any{
-			"error": "storage_failed",
+			"error":   "storage_failed",
 			"message": "Card was tokenized but failed to save. Please contact support.",
 		})
 	}
@@ -367,8 +367,8 @@ func (h *PaymentHandler) Tokenize(c echo.Context) error {
 		"status":  "success",
 		"message": "Card tokenized and saved successfully",
 		"card_info": map[string]any{
-			"card_id":           tokenizeResponse.CardID,
-			"last_four_digits":  tokenizeResponse.LastFourDigits,
+			"card_id":          tokenizeResponse.CardID,
+			"last_four_digits": tokenizeResponse.LastFourDigits,
 			"card_type":        string(tokenizeResponse.CardType),
 			"card_category":    string(tokenizeResponse.CardCategory),
 			"expiry_month":     tokenizeResponse.ExpiryMonth,
@@ -395,7 +395,7 @@ func (h *PaymentHandler) MakePayment(c echo.Context) error {
 	if err := c.Bind(&req); err != nil {
 		fmt.Printf("❌ Error binding request: %v\n", err)
 		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error": "invalid_request",
+			"error":   "invalid_request",
 			"message": "Invalid request body",
 		})
 	}
@@ -406,15 +406,15 @@ func (h *PaymentHandler) MakePayment(c echo.Context) error {
 	if err := h.validatePaymentRequest(&req); err != nil {
 		fmt.Printf("❌ Validation error: %v\n", err)
 		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error": "validation_failed",
+			"error":   "validation_failed",
 			"message": err.Error(),
 		})
 	}
 
 	// Extract user_id and business_id from JWT token
 	// TODO: Implement proper JWT extraction from token claims
-	userID := "uid12345"      // TODO: Extract from JWT
-	businessID := "bid12345"  // TODO: Extract from JWT
+	userID := "uid12345"     // TODO: Extract from JWT
+	businessID := "bid12345" // TODO: Extract from JWT
 
 	// Convert HTTP request to core domain request
 	coreRequest := payment.PaymentRequest{
@@ -438,7 +438,7 @@ func (h *PaymentHandler) MakePayment(c echo.Context) error {
 	if err != nil {
 		fmt.Printf("❌ Payment service error: %v\n", err)
 		return c.JSON(http.StatusInternalServerError, map[string]any{
-			"error": "payment_processing_failed",
+			"error":   "payment_processing_failed",
 			"message": "Failed to process payment",
 		})
 	}
@@ -464,10 +464,10 @@ func (h *PaymentHandler) MakePayment(c echo.Context) error {
 	fmt.Println("=== HANDLER: MakePayment Complete ===")
 
 	return c.JSON(http.StatusCreated, map[string]any{
-		"message": "Payment initiated successfully",
+		"message":  "Payment initiated successfully",
 		"endpoint": "POST /v1/process_payment/make_payment",
-		"status": "success",
-		"data": response,
+		"status":   "success",
+		"data":     response,
 	})
 }
 
@@ -480,7 +480,7 @@ func (h *PaymentHandler) AddPaymentSource(c echo.Context) error {
 	if err := c.Bind(&req); err != nil {
 		fmt.Printf("❌ Error binding request: %v\n", err)
 		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error": "invalid_request",
+			"error":   "invalid_request",
 			"message": "Invalid request body",
 		})
 	}
@@ -491,7 +491,7 @@ func (h *PaymentHandler) AddPaymentSource(c echo.Context) error {
 	if err := h.validateAddPaymentSourceRequest(&req); err != nil {
 		fmt.Printf("❌ Validation error: %v\n", err)
 		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error": "validation_failed",
+			"error":   "validation_failed",
 			"message": err.Error(),
 		})
 	}
@@ -509,7 +509,7 @@ func (h *PaymentHandler) AddPaymentSource(c echo.Context) error {
 	default:
 		fmt.Printf("❌ Unsupported source type: %s\n", req.SourceType)
 		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error": "unsupported_source_type",
+			"error":   "unsupported_source_type",
 			"message": fmt.Sprintf("Source type '%s' is not supported", req.SourceType),
 		})
 	}
@@ -538,17 +538,17 @@ func (h *PaymentHandler) handleBankAccountAddition(ctx context.Context, c echo.C
 		fmt.Printf("❌ Bank account addition failed: %v\n", err)
 
 		return c.JSON(http.StatusInternalServerError, map[string]any{
-			"error": "internal_error",
+			"error":   "internal_error",
 			"message": fmt.Sprintf("Failed to add bank account: %v", err),
 		})
 	}
 
 	// Create success response
 	response := AddPaymentSourceResponse{
-		Success:           true,
-		Message:           "Bank account verified and added successfully",
-		SourceID:          bankAccount.GetSourceID(),
-		SourceType:        "bank_account",
+		Success:            true,
+		Message:            "Bank account verified and added successfully",
+		SourceID:           bankAccount.GetSourceID(),
+		SourceType:         "bank_account",
 		VerificationStatus: "verified",
 		AccountDetails: &VerifiedAccountDetails{
 			MaskedAccountNumber: h.maskAccountNumber(req.BankAccountDetails.AccountNumber),
@@ -565,10 +565,10 @@ func (h *PaymentHandler) handleBankAccountAddition(ctx context.Context, c echo.C
 	fmt.Println("=== HANDLER: AddPaymentSource Complete ===")
 
 	return c.JSON(http.StatusCreated, map[string]any{
-		"message": "Payment source added successfully",
+		"message":  "Payment source added successfully",
 		"endpoint": "POST /v1/process_payment/add_payment_source",
-		"status": "success",
-		"data": response,
+		"status":   "success",
+		"data":     response,
 	})
 }
 
@@ -578,7 +578,7 @@ func (h *PaymentHandler) handleUPIAccountAddition(ctx context.Context, c echo.Co
 
 	// TODO: Implement UPI verification logic when UPI service is available
 	return c.JSON(http.StatusNotImplemented, map[string]any{
-		"error": "not_implemented",
+		"error":   "not_implemented",
 		"message": "UPI account addition is not yet implemented",
 	})
 }
@@ -851,27 +851,27 @@ func (h *PaymentHandler) handleTokenizationError(err error) error {
 	switch {
 	case strings.Contains(errorMessage, "transaction_declined"):
 		return echo.NewHTTPError(http.StatusBadRequest, map[string]any{
-			"error": "card_declined",
+			"error":   "card_declined",
 			"message": "Card was declined. Please check your card details and try again.",
 		})
 	case strings.Contains(errorMessage, "invalid_card"):
 		return echo.NewHTTPError(http.StatusBadRequest, map[string]any{
-			"error": "invalid_card",
+			"error":   "invalid_card",
 			"message": "Invalid card details. Please check and try again.",
 		})
 	case strings.Contains(errorMessage, "timeout"):
 		return echo.NewHTTPError(http.StatusRequestTimeout, map[string]any{
-			"error": "timeout",
+			"error":   "timeout",
 			"message": "Tokenization timed out. Please try again.",
 		})
 	case strings.Contains(errorMessage, "gateway"):
 		return echo.NewHTTPError(http.StatusServiceUnavailable, map[string]any{
-			"error": "gateway_error",
+			"error":   "gateway_error",
 			"message": "Payment gateway temporarily unavailable. Please try again later.",
 		})
 	default:
 		return echo.NewHTTPError(http.StatusInternalServerError, map[string]any{
-			"error": "tokenization_failed",
+			"error":   "tokenization_failed",
 			"message": "Unable to save card. Please try again.",
 		})
 	}

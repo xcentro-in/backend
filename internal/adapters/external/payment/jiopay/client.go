@@ -15,13 +15,14 @@ import (
 
 // JioPayClient implements the PaymentGateway interface for JioPay
 type JioPayClient struct {
-	baseURL             string       // Base URL for payment APIs
-	tokenizationBaseURL string       // Vault API base URL
-	merchantID          string       // JioPay merchant identifier
-	apiKey              string       // API authentication key for HMAC
-	appID               string       // x-app-id header for vault APIs
-	encryptionKey       string       // AES-128 encryption key for x-app-token
+	baseURL             string // Base URL for payment APIs
+	tokenizationBaseURL string // Vault API base URL
+	merchantID          string // JioPay merchant identifier
+	apiKey              string // API authentication key for HMAC
+	appID               string // x-app-id header for vault APIs
+	encryptionKey       string // AES-128 encryption key for x-app-token
 	httpClient          *http.Client
+	hashGenerator       *SecureHashGenerator // Hash generator for request/response signatures
 }
 
 // NewJioPayClient creates a new JioPay payment gateway client
@@ -55,6 +56,7 @@ func NewJioPayClient(baseURL, tokenizationBaseURL, merchantID, apiKey, appID, en
 		httpClient: &http.Client{
 			Timeout: 60 * time.Second, // JioPay tokenization can take longer
 		},
+		hashGenerator: NewSecureHashGenerator(apiKey),
 	}
 }
 
@@ -379,6 +381,11 @@ func (c *JioPayClient) InitiatePayment(ctx context.Context, request payment.Gate
 		nameOnCard = request.CardDetails.HolderName
 	}
 
+	// Build callback URL with gateway type parameter
+	// Format: https://api.xcentro.com/api/v1/process_payment/callback?type=jiopay
+	callbackURL := buildCallbackURL(request.CallbackURL, "jiopay")
+	fmt.Printf("🔗 Callback URL: %s\n", callbackURL)
+
 	// Build initiateSale request (without secureHash first)
 	saleReq := InitiateSaleRequest{
 		// Mandatory fields
@@ -389,18 +396,18 @@ func (c *JioPayClient) InitiatePayment(ctx context.Context, request payment.Gate
 		PayType:         "1",   // Direct/Merchant checkout
 		CustomerEmailID: customerEmail,
 		TransactionType: "SALE",
-		ReturnURL:       request.CallbackURL,
+		ReturnURL:       callbackURL,
 		TxnDate:         txnDate,
 
 		// Payment method
 		PaymentMode: "CARD",
 
 		// Token card details
-		CardNo:          request.Token,          // Network token
-		CardExpiry:      cardExpiry,             // YYYYMM format
-		NameOnCard:      nameOnCard,             // Name on card
-		TokenCryptogram: request.Cryptogram,     // Cryptogram from getCryptogram
-		TokenRefID:      tokenRefID,             // Token reference ID
+		CardNo:          request.Token,      // Network token
+		CardExpiry:      cardExpiry,         // YYYYMM format
+		NameOnCard:      nameOnCard,         // Name on card
+		TokenCryptogram: request.Cryptogram, // Cryptogram from getCryptogram
+		TokenRefID:      tokenRefID,         // Token reference ID
 
 		// Optional customer details
 		CustomerName:     customerName,
@@ -413,17 +420,11 @@ func (c *JioPayClient) InitiatePayment(ctx context.Context, request payment.Gate
 		SecureHash: "", // Set after hash generation
 	}
 
-	// Generate secure hash using HMAC-SHA256
-	// Following JioPay's Python implementation:
-	// 1. Build field map from request
-	// 2. Sort keys alphabetically
-	// 3. Concatenate values (no separators)
-	// 4. HMAC-SHA256 with apiKey as secret
+	// Generate secure hash for outgoing request
+	// Use hash generator to calculate HMAC-SHA256 from all request fields
 	fieldMap := buildInitiateSaleFieldMap(&saleReq)
-	secureHash := generateSecureHash(c.apiKey, fieldMap)
+	secureHash := c.hashGenerator.GenerateForRequest(fieldMap)
 	saleReq.SecureHash = secureHash
-
-	fmt.Printf("🔐 Secure hash generated: %s...\n", secureHash[:20])
 
 	// Marshal to JSON
 	jsonPayload, err := json.Marshal(saleReq)
@@ -489,14 +490,14 @@ func (c *JioPayClient) InitiatePayment(ctx context.Context, request payment.Gate
 		Currency:         request.Currency,
 		CreatedAt:        time.Now(),
 		Metadata: map[string]any{
-			"gateway":              "jiopay",
-			"response_code":        saleResp.ResponseCode,
-			"show_otp_capture":     saleResp.ShowOTPCapturePage,
-			"tran_ctx":             saleResp.TranCtx,
-			"secure_hash":          saleResp.SecureHash,
-			"oth_charge":           saleResp.OthCharge,
-			"payment_method":       "card",
-			"tokenized":            true,
+			"gateway":          "jiopay",
+			"response_code":    saleResp.ResponseCode,
+			"show_otp_capture": saleResp.ShowOTPCapturePage,
+			"tran_ctx":         saleResp.TranCtx,
+			"secure_hash":      saleResp.SecureHash,
+			"oth_charge":       saleResp.OthCharge,
+			"payment_method":   "card",
+			"tokenized":        true,
 		},
 	}
 
@@ -516,15 +517,17 @@ func (c *JioPayClient) InitiatePayment(ctx context.Context, request payment.Gate
 	return response, nil
 }
 
-// ValidateWebhook validates JioPay webhook signatures
-// TODO: Implement actual webhook validation (Phase 2)
+// ValidateWebhook validates JioPay callback/webhook signatures
+//
+// JioPay uses HMAC-SHA256 for signature verification (same algorithm as payment initiation).
+// The signature (secureHash) is calculated from all fields in the response (excluding secureHash itself).
+//
+// This method is used for both:
+//   - Callback (SURL/FURL): Synchronous response after payment
+//   - Webhook: Asynchronous settlement notification
 func (c *JioPayClient) ValidateWebhook(payload []byte, signature string) error {
 	fmt.Println("=== JIOPAY GATEWAY: ValidateWebhook Called ===")
-	fmt.Printf("📝 Payload length: %d bytes\n", len(payload))
-	fmt.Printf("🔏 Signature: %s\n", signature)
 
-	// TODO: Implement actual JioPay webhook signature validation
-	fmt.Println("⚠️  WARNING: Webhook validation not implemented")
-
-	return nil
+	// Delegate to hash generator for validation
+	return c.hashGenerator.ValidateFromResponse(payload, signature)
 }

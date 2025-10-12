@@ -2,12 +2,8 @@ package jiopay
 
 import (
 	"crypto/aes"
-	"crypto/hmac"
-	"crypto/sha256"
 	"encoding/base64"
-	"encoding/hex"
 	"fmt"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -193,36 +189,14 @@ func formatAmountWithDecimals(paise int64) string {
 	return fmt.Sprintf("%.2f", rupees)
 }
 
-// generateSecureHash generates HMAC-SHA256 hash for JioPay API request
-// Following JioPay's official Python implementation:
-// 1. Sort all request fields alphabetically by key
-// 2. Concatenate all VALUES in sorted order (no separators)
-// 3. Calculate HMAC-SHA256 with apiKey as secret
-// 4. Return lowercase hex string
-func generateSecureHash(apiKey string, fieldMap map[string]string) string {
-	// Sort keys alphabetically
-	keys := make([]string, 0, len(fieldMap))
-	for k := range fieldMap {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-
-	// Concatenate values in sorted key order (no separators)
-	var concatenated strings.Builder
-	for _, key := range keys {
-		concatenated.WriteString(fieldMap[key])
-	}
-
-	message := concatenated.String()
-	fmt.Printf("🔐 HMAC string: %s\n", message)
-
-	// Calculate HMAC-SHA256
-	h := hmac.New(sha256.New, []byte(apiKey))
-	h.Write([]byte(message))
-
-	// Return lowercase hexadecimal
-	return hex.EncodeToString(h.Sum(nil))
-}
+// ============================================================================
+// HASH GENERATION
+// ============================================================================
+// NOTE: Hash generation and validation logic has been moved to hash.go
+// See SecureHashGenerator for:
+//   - GenerateForRequest(): Calculate hash for outgoing API requests
+//   - ValidateFromResponse(): Validate signature from incoming callbacks/webhooks
+// ============================================================================
 
 // ============================================================================
 // JIOPAY VAULT API HEADERS
@@ -396,4 +370,77 @@ func buildInitiateSaleFieldMap(req *InitiateSaleRequest) map[string]string {
 
 	// Do NOT include secureHash field itself
 	return fieldMap
+}
+
+// ============================================================================
+// JIOPAY CALLBACK URL BUILDING
+// ============================================================================
+
+// buildCallbackURL appends gateway type query parameter to callback URL
+// This allows our callback handler to route requests to the appropriate gateway handler
+//
+// Parameters:
+//   - baseURL: Base callback URL (e.g., "https://api.xcentro.com/api/v1/process_payment/callback")
+//   - gatewayType: Gateway identifier ("jiopay", "easebuzz", etc.)
+//
+// Returns:
+//   - Full callback URL with type parameter (e.g., ".../callback?type=jiopay")
+func buildCallbackURL(baseURL, gatewayType string) string {
+	// Check if URL already has query parameters
+	if strings.Contains(baseURL, "?") {
+		// Append with &
+		return fmt.Sprintf("%s&type=%s", baseURL, gatewayType)
+	}
+	// Append with ?
+	return fmt.Sprintf("%s?type=%s", baseURL, gatewayType)
+}
+
+// ============================================================================
+// JIOPAY CALLBACK STATUS MAPPING
+// ============================================================================
+
+// MapJioPayCallbackStatus maps JioPay callback response codes to internal PaymentStatus
+//
+// Status determination logic (based on user-provided documentation):
+//  1. Primary indicator: responseCode
+//     - "000" or "0000" → Success
+//     - "R1000" → Initiated/Pending (for UPI/NACH out-of-band payments)
+//     - Any other value → Failed
+//  2. Secondary indicator: txnStatus (for validation)
+//     - "SUC" → Success (assumption - validate with PG team)
+//     - "FAIL" → Failure (assumption)
+//     - "PEN" → Pending (assumption)
+//
+// Parameters:
+//   - responseCode: Primary status code from JioPay callback
+//   - txnStatus: Transaction status (SUC/FAIL/PEN)
+//
+// Returns:
+//   - "success": Payment completed successfully
+//   - "pending": Payment initiated but not completed (UPI/NACH)
+//   - "failed": Payment failed or cancelled
+func MapJioPayCallbackStatus(responseCode, txnStatus string) string {
+	// Primary: Check responseCode
+	switch responseCode {
+	case "000", "0000":
+		// Success response codes
+		return "success"
+	case "R1000":
+		// Request initiated successfully (UPI/NACH - out of band payment)
+		return "pending"
+	default:
+		// Any other responseCode indicates failure
+		// Secondary: Check txnStatus for more context
+		switch txnStatus {
+		case "SUC":
+			// Transaction successful (rare case where responseCode != 000 but txn succeeded)
+			return "success"
+		case "PEN":
+			// Transaction pending
+			return "pending"
+		default:
+			// Transaction failed (FAIL or unknown status)
+			return "failed"
+		}
+	}
 }

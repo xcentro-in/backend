@@ -23,17 +23,17 @@ type TokenizeRequest struct {
 
 // MakePaymentRequest represents the request for making a payment
 type MakePaymentRequest struct {
-	Amount        int64                  `json:"amount"`
-	Currency      string                 `json:"currency"`
-	PaymentMethod string                 `json:"payment_method"` // card, token-card, netbanking, upi, wallet
-	Description   string                 `json:"description"`
-	CardDetails   *CardDetails           `json:"card_details,omitempty"`
-	TokenDetails  *TokenCardDetails      `json:"token_details,omitempty"`
-	NetBanking    *NetBankingDetails     `json:"net_banking,omitempty"`
-	UPI           *UPIDetails            `json:"upi,omitempty"`
-	Wallet        *WalletDetails         `json:"wallet,omitempty"`
-	CallbackURL   string                 `json:"callback_url"`
-	Metadata      map[string]any 		 `json:"metadata,omitempty"`
+	Amount        int64              `json:"amount"`
+	Currency      string             `json:"currency"`
+	PaymentMethod string             `json:"payment_method"` // card, token-card, netbanking, upi, wallet
+	Description   string             `json:"description"`
+	CardDetails   *CardDetails       `json:"card_details,omitempty"`
+	TokenDetails  *TokenCardDetails  `json:"token_details,omitempty"`
+	NetBanking    *NetBankingDetails `json:"net_banking,omitempty"`
+	UPI           *UPIDetails        `json:"upi,omitempty"`
+	Wallet        *WalletDetails     `json:"wallet,omitempty"`
+	CallbackURL   string             `json:"callback_url"`
+	Metadata      map[string]any     `json:"metadata,omitempty"`
 }
 
 // CardDetails represents card payment details
@@ -72,10 +72,10 @@ type TokenCardDetails struct {
 
 // AddPaymentSourceRequest represents the request for adding a payment source to wallet
 type AddPaymentSourceRequest struct {
-	BusinessID           string                `json:"business_id"`
-	SourceType           string                `json:"source_type"` // bank_account, upi, etc.
-	BankAccountDetails   *BankAccountDetails   `json:"bank_account_details,omitempty"`
-	UPIAccountDetails    *UPIAccountDetails    `json:"upi_account_details,omitempty"`
+	BusinessID         string              `json:"business_id"`
+	SourceType         string              `json:"source_type"` // bank_account, upi, etc.
+	BankAccountDetails *BankAccountDetails `json:"bank_account_details,omitempty"`
+	UPIAccountDetails  *UPIAccountDetails  `json:"upi_account_details,omitempty"`
 }
 
 // BankAccountDetails represents bank account details for verification and addition
@@ -98,12 +98,12 @@ type UPIAccountDetails struct {
 
 // FetchWalletResponse represents the response for fetching business wallet information
 type FetchWalletResponse struct {
-	BusinessID   string                   `json:"business_id"`
-	StoredCards  []StoredCardResponse     `json:"stored_cards"`
-	BankAccounts []BankAccountResponse    `json:"bank_accounts"`
-	UPIDetails   []UPIDetailResponse      `json:"upi_details"`
-	CreditLines  []CreditLineResponse     `json:"credit_lines"`
-	LastUpdated  string                   `json:"last_updated"`
+	BusinessID   string                `json:"business_id"`
+	StoredCards  []StoredCardResponse  `json:"stored_cards"`
+	BankAccounts []BankAccountResponse `json:"bank_accounts"`
+	UPIDetails   []UPIDetailResponse   `json:"upi_details"`
+	CreditLines  []CreditLineResponse  `json:"credit_lines"`
+	LastUpdated  string                `json:"last_updated"`
 }
 
 // StoredCardResponse represents a stored card in the API response
@@ -121,14 +121,14 @@ type StoredCardResponse struct {
 
 // BankAccountResponse represents a bank account in the API response
 type BankAccountResponse struct {
-	AccountID       string `json:"account_id"`
-	LastFiveDigits  string `json:"last_five_digits"`
-	BankName        string `json:"bank_name"`
-	IFSCCode        string `json:"ifsc_code"`
-	AccountType     string `json:"account_type"`
-	IsActive        bool   `json:"is_active"`
-	IsVerified      bool   `json:"is_verified"`
-	Nickname        string `json:"nickname,omitempty"`
+	AccountID      string `json:"account_id"`
+	LastFiveDigits string `json:"last_five_digits"`
+	BankName       string `json:"bank_name"`
+	IFSCCode       string `json:"ifsc_code"`
+	AccountType    string `json:"account_type"`
+	IsActive       bool   `json:"is_active"`
+	IsVerified     bool   `json:"is_verified"`
+	Nickname       string `json:"nickname,omitempty"`
 }
 
 // UPIDetailResponse represents a UPI detail in the API response
@@ -178,28 +178,28 @@ type TokenizeResponse struct {
 
 // MakePaymentResponse represents the response for payment processing
 type MakePaymentResponse struct {
-	PaymentID       string                 `json:"payment_id"`
-	Status          string                 `json:"status"`
-	Amount          int64                  `json:"amount"`
-	Currency        string                 `json:"currency"`
-	PaymentMethod   string                 `json:"payment_method"`
-	GatewayUsed     string                 `json:"gateway_used"`
-	GatewayPaymentID string                `json:"gateway_payment_id,omitempty"`
-	RedirectURL     string                 `json:"redirect_url,omitempty"`
-	Message         string                 `json:"message"`
-	CreatedAt       string                 `json:"created_at"`
-	Metadata        map[string]any `json:"metadata,omitempty"`
+	PaymentID        string         `json:"payment_id"`
+	Status           string         `json:"status"`
+	Amount           int64          `json:"amount"`
+	Currency         string         `json:"currency"`
+	PaymentMethod    string         `json:"payment_method"`
+	GatewayUsed      string         `json:"gateway_used"`
+	GatewayPaymentID string         `json:"gateway_payment_id,omitempty"`
+	RedirectURL      string         `json:"redirect_url,omitempty"`
+	Message          string         `json:"message"`
+	CreatedAt        string         `json:"created_at"`
+	Metadata         map[string]any `json:"metadata,omitempty"`
 }
 
 // AddPaymentSourceResponse represents the response for adding a payment source
 type AddPaymentSourceResponse struct {
-	Success           bool                       `json:"success"`
-	Message           string                     `json:"message"`
-	SourceID          string                     `json:"source_id,omitempty"`
-	SourceType        string                     `json:"source_type"`
-	VerificationStatus string                    `json:"verification_status"`
-	AccountDetails     *VerifiedAccountDetails   `json:"account_details,omitempty"`
-	UPIDetails         *VerifiedUPIDetails       `json:"upi_details,omitempty"`
+	Success            bool                    `json:"success"`
+	Message            string                  `json:"message"`
+	SourceID           string                  `json:"source_id,omitempty"`
+	SourceType         string                  `json:"source_type"`
+	VerificationStatus string                  `json:"verification_status"`
+	AccountDetails     *VerifiedAccountDetails `json:"account_details,omitempty"`
+	UPIDetails         *VerifiedUPIDetails     `json:"upi_details,omitempty"`
 }
 
 // VerifiedAccountDetails represents verified bank account details in response
@@ -224,10 +224,10 @@ type VerifiedUPIDetails struct {
 
 // StandardResponse represents a standard API response
 type StandardResponse struct {
-	Message  string      `json:"message"`
-	Endpoint string      `json:"endpoint"`
-	Status   string      `json:"status"`
-	Data     any `json:"data,omitempty"`
+	Message  string `json:"message"`
+	Endpoint string `json:"endpoint"`
+	Status   string `json:"status"`
+	Data     any    `json:"data,omitempty"`
 }
 
 // ErrorResponse represents an error response
@@ -247,39 +247,39 @@ type GetPaymentSourcesWithFeesRequest struct {
 
 // GetPaymentSourcesWithFeesResponse represents the response for Phase 10
 type GetPaymentSourcesWithFeesResponse struct {
-	BusinessID     string                           `json:"business_id"`
-	PaymentContext string                           `json:"payment_context"`
-	BaseAmount     int64                            `json:"base_amount"`
-	Sources        []PaymentSourceWithFeesResponse  `json:"sources"`
+	BusinessID     string                          `json:"business_id"`
+	PaymentContext string                          `json:"payment_context"`
+	BaseAmount     int64                           `json:"base_amount"`
+	Sources        []PaymentSourceWithFeesResponse `json:"sources"`
 }
 
 // PaymentSourceWithFeesResponse represents a payment source with fee breakdown
 type PaymentSourceWithFeesResponse struct {
 	// Source identification
-	SourceID        string  `json:"source_id"`
-	SourceType      string  `json:"source_type"`
-	PaymentMethod   string  `json:"payment_method"`
-	DisplayName     string  `json:"display_name"`
+	SourceID      string `json:"source_id"`
+	SourceType    string `json:"source_type"`
+	PaymentMethod string `json:"payment_method"`
+	DisplayName   string `json:"display_name"`
 
 	// Card-specific fields
-	CardType        *string `json:"card_type,omitempty"`
-	CardCategory    *string `json:"card_category,omitempty"`
-	LastFourDigits  string  `json:"last_four_digits,omitempty"`
+	CardType       *string `json:"card_type,omitempty"`
+	CardCategory   *string `json:"card_category,omitempty"`
+	LastFourDigits string  `json:"last_four_digits,omitempty"`
 
 	// Bank account specific
-	LastFiveDigits  string  `json:"last_five_digits,omitempty"`
-	BankName        string  `json:"bank_name,omitempty"`
-	IFSCCode        string  `json:"ifsc_code,omitempty"`
+	LastFiveDigits string `json:"last_five_digits,omitempty"`
+	BankName       string `json:"bank_name,omitempty"`
+	IFSCCode       string `json:"ifsc_code,omitempty"`
 
 	// UPI specific
-	UPIAddress      string  `json:"upi_address,omitempty"`
+	UPIAddress string `json:"upi_address,omitempty"`
 
 	// Restriction information
-	IsAllowed          bool   `json:"is_allowed"`
-	RestrictionReason  string `json:"restriction_reason,omitempty"`
+	IsAllowed         bool   `json:"is_allowed"`
+	RestrictionReason string `json:"restriction_reason,omitempty"`
 
 	// Fee breakdown (only for allowed sources)
-	FeeBreakdown       *FeeBreakdownResponse `json:"fee_breakdown,omitempty"`
+	FeeBreakdown *FeeBreakdownResponse `json:"fee_breakdown,omitempty"`
 }
 
 // FeeBreakdownResponse represents fee calculation with GST

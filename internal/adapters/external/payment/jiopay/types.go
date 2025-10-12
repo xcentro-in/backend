@@ -27,8 +27,8 @@ type UserObject struct {
 // MobileObject represents mobile phone details
 // Both fields are mandatory if this object is included
 type MobileObject struct {
-	CountryCode int    `json:"countryCode"` // Mandatory: e.g., 91 for India
-	Number      int64  `json:"number"`      // Mandatory: 10-digit number
+	CountryCode int   `json:"countryCode"` // Mandatory: e.g., 91 for India
+	Number      int64 `json:"number"`      // Mandatory: 10-digit number
 }
 
 // EntityObject represents merchant/entity information
@@ -38,12 +38,12 @@ type EntityObject struct {
 
 // CardObject represents card details for tokenization
 type CardObject struct {
-	Number                     string `json:"number"`                               // Mandatory: Card number
-	ExpiryMm                   string `json:"expiryMm"`                             // Mandatory: MM format
-	ExpiryYy                   string `json:"expiryYy"`                             // Mandatory: YYYY format
-	Name                       string `json:"name"`                                 // Mandatory: Name on card
-	AuthenticationReferenceID  string `json:"Authentication Reference Id,omitempty"` // Conditional: Required for RuPay
-	Remark                     string `json:"remark,omitempty"`                     // Optional: Additional remarks
+	Number                    string `json:"number"`                                // Mandatory: Card number
+	ExpiryMm                  string `json:"expiryMm"`                              // Mandatory: MM format
+	ExpiryYy                  string `json:"expiryYy"`                              // Mandatory: YYYY format
+	Name                      string `json:"name"`                                  // Mandatory: Name on card
+	AuthenticationReferenceID string `json:"Authentication Reference Id,omitempty"` // Conditional: Required for RuPay
+	Remark                    string `json:"remark,omitempty"`                      // Optional: Additional remarks
 }
 
 // ConsentObject represents user consent information
@@ -62,22 +62,22 @@ type AuditObject struct {
 type TokenizationResponse struct {
 	Status StatusObject `json:"status"`
 	Card   struct {
-		Type         int    `json:"type"`         // Card type code
-		ExpiryMm     string `json:"expiryMm"`     // Expiry month
-		ExpiryYy     string `json:"expiryYy"`     // Expiry year
-		Name         string `json:"name"`         // Cardholder name
-		Scheme       int    `json:"scheme"`       // Card scheme code
-		Remark       string `json:"remark"`       // Response remark
-		VaultID      string `json:"vaultId"`      // Vault ID (use as CardID)
-		MaskedNumber string `json:"maskedNumber"` // Masked card number
-		PAR          string `json:"par"`          // Payment Account Reference
+		Type           int    `json:"type"`           // Card type code
+		ExpiryMm       string `json:"expiryMm"`       // Expiry month
+		ExpiryYy       string `json:"expiryYy"`       // Expiry year
+		Name           string `json:"name"`           // Cardholder name
+		Scheme         int    `json:"scheme"`         // Card scheme code
+		Remark         string `json:"remark"`         // Response remark
+		VaultID        string `json:"vaultId"`        // Vault ID (use as CardID)
+		MaskedNumber   string `json:"maskedNumber"`   // Masked card number
+		PAR            string `json:"par"`            // Payment Account Reference
 		TokenReference string `json:"tokenReference"` // Token reference
-		BankName     string `json:"bankName"`     // Issuing bank name
-		Status       string `json:"status"`       // Card status (e.g., "ACTIVE")
-		IsExpired    bool   `json:"isExpired"`    // Expiry status
-		IsDomestic   bool   `json:"isDomestic"`   // Domestic/international
-		CVVLess      int    `json:"cvvLess"`      // CVV-less transaction support
-		Consent      struct {
+		BankName       string `json:"bankName"`       // Issuing bank name
+		Status         string `json:"status"`         // Card status (e.g., "ACTIVE")
+		IsExpired      bool   `json:"isExpired"`      // Expiry status
+		IsDomestic     bool   `json:"isDomestic"`     // Domestic/international
+		CVVLess        int    `json:"cvvLess"`        // CVV-less transaction support
+		Consent        struct {
 			ID        string `json:"id"`        // Consent ID
 			Timestamp string `json:"timestamp"` // Consent timestamp
 		} `json:"consent"`
@@ -132,9 +132,9 @@ type CryptogramResponse struct {
 
 // SecureObject represents secure payment credentials
 type SecureObject struct {
-	Token        int64  `json:"token"`        // Network token (numeric)
-	TokenExpiry  string `json:"tokenExpiry"`  // Token expiry (MMYYYY format)
-	Cryptogram   string `json:"cryptogram"`   // Generated cryptogram
+	Token       int64  `json:"token"`       // Network token (numeric)
+	TokenExpiry string `json:"tokenExpiry"` // Token expiry (MMYYYY format)
+	Cryptogram  string `json:"cryptogram"`  // Generated cryptogram
 }
 
 // StatusObject represents API response status
@@ -150,15 +150,15 @@ type StatusObject struct {
 // InitiateSaleRequest represents the payment initiation request
 type InitiateSaleRequest struct {
 	// Mandatory fields
-	MerchantID       string `json:"merchantId"`       // Merchant account ID
-	MerchantTxnNo    string `json:"merchantTxnNo"`    // Transaction reference number
-	Amount           string `json:"amount"`           // Transaction amount (e.g., "100.00")
-	CurrencyCode     string `json:"currencyCode"`     // Default "356" for INR
-	PayType          string `json:"payType"`          // "0" = Hosted, "1" = Direct
-	CustomerEmailID  string `json:"customerEmailID"`  // Customer email
-	TransactionType  string `json:"transactionType"`  // "SALE" or "PREAUTH"
-	ReturnURL        string `json:"returnURL"`        // Callback URL
-	TxnDate          string `json:"txnDate"`          // YYYYMMDDHHMISS format
+	MerchantID      string `json:"merchantId"`      // Merchant account ID
+	MerchantTxnNo   string `json:"merchantTxnNo"`   // Transaction reference number
+	Amount          string `json:"amount"`          // Transaction amount (e.g., "100.00")
+	CurrencyCode    string `json:"currencyCode"`    // Default "356" for INR
+	PayType         string `json:"payType"`         // "0" = Hosted, "1" = Direct
+	CustomerEmailID string `json:"customerEmailID"` // Customer email
+	TransactionType string `json:"transactionType"` // "SALE" or "PREAUTH"
+	ReturnURL       string `json:"returnURL"`       // Callback URL
+	TxnDate         string `json:"txnDate"`         // YYYYMMDDHHMISS format
 
 	// Payment method specific
 	PaymentMode string `json:"paymentMode,omitempty"` // "CARD", "NB", "UPI", "WALLET"
@@ -202,4 +202,33 @@ type InitiateSaleResponse struct {
 	TranCtx             string  `json:"tranCtx"`             // Transaction context
 	SecureHash          string  `json:"secureHash"`          // Hash value
 	OthCharge           float64 `json:"oth_charge"`          // OTH charge
+}
+
+// ============================================================================
+// CALLBACK TYPES (SURL/FURL)
+// JioPay sends this payload to callback URL after payment completion
+// ============================================================================
+
+// CallbackPayload represents the payment callback response (SURL/FURL)
+// JioPay POSTs this structure to the ReturnURL after payment completion
+//
+// Status Determination:
+//   - responseCode: "000"/"0000" = Success, "R1000" = Initiated (UPI/NACH), other = Failed
+//   - txnStatus: "SUC" = Success, "FAIL" = Failure, "PEN" = Pending (assumption - validate with PG)
+//   - txnResponseCode: Secondary validation (should match responseCode)
+//
+// Security: secureHash must be verified using same HMAC-SHA256 algorithm as payment initiation
+type CallbackPayload struct {
+	ResponseCode     string `json:"responseCode"`               // "000"/"0000" = success, "R1000" = initiated, other = failed
+	RespDescription  string `json:"respDescription"`            // Response description/message
+	MerchantID       string `json:"merchantId"`                 // Merchant identifier
+	AggregatorID     string `json:"aggregatorID,omitempty"`     // Aggregator ID (optional)
+	MerchantTxnNo    string `json:"merchantTxnNo"`              // Our transaction ID (use for payment lookup)
+	SettlementStatus string `json:"settlementStatus,omitempty"` // Settlement status (e.g., "STD")
+	TxnStatus        string `json:"txnStatus"`                  // "SUC", "FAIL", "PEN" (assumption)
+	TxnResponseCode  string `json:"txnResponseCode"`            // Transaction response code
+	TxnID            string `json:"txnID"`                      // JioPay transaction ID
+	SettlementID     string `json:"settlementID,omitempty"`     // Settlement ID
+	SettlementDate   string `json:"settlementDate,omitempty"`   // Settlement date (YYYYMMDD format)
+	SecureHash       string `json:"secureHash"`                 // HMAC-SHA256 signature for verification
 }

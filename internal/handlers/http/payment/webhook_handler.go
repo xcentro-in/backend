@@ -1,158 +1,167 @@
 package payment
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"time"
 
 	"github.com/labstack/echo/v4"
+	"xcentro.in/internal/adapters/external/payment/jiopay"
 	"xcentro.in/internal/core/payment"
 )
 
-// WebhookHandler handles payment gateway webhooks
+// WebhookHandler handles payment gateway webhooks (async settlement notifications)
+// These are separate from SURL/FURL callbacks and are used for async settlement confirmations
 type WebhookHandler struct {
-	orchestrator payment.PaymentOrchestrator
+	paymentRepo     payment.PaymentRepository
+	jioPayGateway   payment.PaymentGateway
+	easebuzzGateway payment.PaymentGateway
 }
 
 // NewWebhookHandler creates a new webhook handler
-func NewWebhookHandler(orchestrator payment.PaymentOrchestrator) *WebhookHandler {
+func NewWebhookHandler(
+	paymentRepo payment.PaymentRepository,
+	jioPayGateway payment.PaymentGateway,
+	easebuzzGateway payment.PaymentGateway,
+) *WebhookHandler {
 	return &WebhookHandler{
-		orchestrator: orchestrator,
+		paymentRepo:     paymentRepo,
+		jioPayGateway:   jioPayGateway,
+		easebuzzGateway: easebuzzGateway,
 	}
 }
 
-// HandleJioPayWebhook handles webhooks from JioPay gateway
+// HandleJioPayWebhook handles async webhooks from JioPay gateway
+// These are settlement notifications sent by JioPay asynchronously
+// Note: Webhook payload structure might differ from SURL/FURL callback - validate with PG team
 func (h *WebhookHandler) HandleJioPayWebhook(c echo.Context) error {
-	fmt.Println("=== WEBHOOK: JioPay Webhook Called ===")
+	ctx := c.Request().Context()
 
-	// TODO-DB-4.1-CRITICAL: Query payment by gateway_payment_id
-	// - Parse gateway_payment_id from webhook payload
-	// - Call: paymentRepo.GetPaymentByGatewayPaymentID(ctx, gatewayPaymentID)
-	// - Verify payment exists and matches expected state
+	fmt.Println("=== JIOPAY WEBHOOK: Async notification received ===")
 
-	// TODO: Phase 3C Implementation
-	// 1. Parse JioPay webhook payload
-	// 2. Validate webhook signature using JioPay gateway
-	// 3. Extract payment status and transaction details
-	// 4. Update payment status in database
-	// 5. Trigger callback to frontend if needed
-	// 6. Send acknowledgment to JioPay
+	// Step 1: Read request body
+	bodyBytes, err := io.ReadAll(c.Request().Body)
+	if err != nil {
+		fmt.Printf("❌ Failed to read webhook body: %v\n", err)
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "invalid_request",
+		})
+	}
 
-	var payload map[string]any
-	if err := c.Bind(&payload); err != nil {
-		fmt.Printf("❌ Error parsing JioPay webhook: %v\n", err)
+	fmt.Printf("📥 Webhook payload size: %d bytes\n", len(bodyBytes))
+
+	// Step 2: Parse webhook payload
+	// Note: Assuming same structure as callback payload - validate with PG team
+	var webhook jiopay.CallbackPayload
+	if err := json.Unmarshal(bodyBytes, &webhook); err != nil {
+		fmt.Printf("❌ Failed to parse webhook payload: %v\n", err)
 		return c.JSON(http.StatusBadRequest, map[string]string{
 			"error": "invalid_payload",
 		})
 	}
 
-	fmt.Printf("📥 JioPay Webhook Payload: %+v\n", payload)
+	fmt.Printf("📋 MerchantTxnNo: %s\n", webhook.MerchantTxnNo)
+	fmt.Printf("📋 TxnStatus: %s\n", webhook.TxnStatus)
+	fmt.Printf("📋 ResponseCode: %s\n", webhook.ResponseCode)
+	fmt.Printf("📋 Settlement Status: %s\n", webhook.SettlementStatus)
 
-	// TODO-DB-4.1-CRITICAL: Update payment status from webhook
-	// - Map gateway status to PaymentStatus enum
-	// - Call: paymentRepo.UpdatePaymentStatus(ctx, payment.ID, newStatus, webhookData)
-	// - Store complete webhook payload in payment.metadata JSONB
-	// - Update payment.updated_at timestamp
+	// Step 3: Verify signature
+	if err := h.jioPayGateway.ValidateWebhook(bodyBytes, webhook.SecureHash); err != nil {
+		fmt.Printf("❌ Webhook signature verification failed: %v\n", err)
+		// Return 200 OK to avoid gateway retries, but log the failure
+		return c.JSON(http.StatusOK, map[string]string{
+			"status":  "error",
+			"message": "Signature verification failed",
+		})
+	}
 
-	// TODO-DB-4.1: Log webhook attempts for debugging
-	// - Create webhook_logs table (future phase)
-	// - Log all webhook attempts even if signature fails
-	// - Helps diagnose integration issues
+	fmt.Println("✅ Webhook signature verified")
 
-	// Mock webhook processing
-	fmt.Println("🔄 Processing JioPay webhook...")
-	fmt.Println("✅ JioPay webhook processed successfully (mock)")
-	fmt.Println("=== WEBHOOK: JioPay Webhook Complete ===")
+	// Step 4: Query payment by merchantTxnNo
+	pmt, err := h.paymentRepo.GetPaymentByGatewayPaymentID(ctx, webhook.MerchantTxnNo)
+	if err != nil || pmt == nil {
+		fmt.Printf("❌ Payment not found: %s, error: %v\n", webhook.MerchantTxnNo, err)
+		// Return 200 OK to avoid gateway retries
+		return c.JSON(http.StatusOK, map[string]string{
+			"status":  "error",
+			"message": "Payment not found",
+		})
+	}
+
+	fmt.Printf("✅ Payment found: %s (current status: %s)\n", pmt.ID, pmt.Status)
+
+	// Step 5: Map status
+	newStatus := mapCallbackStatusToPaymentStatus(
+		jiopay.MapJioPayCallbackStatus(webhook.ResponseCode, webhook.TxnStatus),
+	)
+
+	fmt.Printf("📊 Status mapping: %s + %s → %s\n",
+		webhook.ResponseCode, webhook.TxnStatus, newStatus)
+
+	// Step 6: Update payment (idempotency check)
+	if !isTerminalStatus(pmt.Status) {
+		fmt.Println("🔄 Updating payment status from webhook...")
+
+		metadata := map[string]any{
+			"webhook_received_at":  time.Now().Format(time.RFC3339),
+			"jiopay_txn_id":        webhook.TxnID,
+			"response_code":        webhook.ResponseCode,
+			"response_description": webhook.RespDescription,
+			"txn_status":           webhook.TxnStatus,
+			"txn_response_code":    webhook.TxnResponseCode,
+			"settlement_status":    webhook.SettlementStatus,
+			"settlement_id":        webhook.SettlementID,
+			"settlement_date":      webhook.SettlementDate,
+			"merchant_id":          webhook.MerchantID,
+			"webhook_type":         "async_settlement",
+		}
+
+		if err := h.paymentRepo.UpdatePaymentStatus(ctx, pmt.ID, newStatus, metadata); err != nil {
+			fmt.Printf("❌ Failed to update payment: %v\n", err)
+			// Return 200 OK to avoid gateway retries
+			return c.JSON(http.StatusOK, map[string]string{
+				"status":  "error",
+				"message": "Failed to update payment",
+			})
+		}
+
+		fmt.Printf("✅ Payment status updated to: %s\n", newStatus)
+
+		// Update gateway payment ID if not set
+		if pmt.GatewayPaymentID == "" || pmt.GatewayPaymentID == webhook.MerchantTxnNo {
+			if err := h.paymentRepo.UpdateGatewayPaymentID(ctx, pmt.ID, webhook.TxnID, ""); err != nil {
+				fmt.Printf("⚠️  Failed to update gateway payment ID: %v\n", err)
+			} else {
+				fmt.Printf("✅ Gateway payment ID updated to: %s\n", webhook.TxnID)
+			}
+		}
+	} else {
+		fmt.Printf("⚠️  Payment already in terminal state: %s (idempotency - no update)\n", pmt.Status)
+	}
+
+	// TODO: Store webhook history for debugging
+	// Create webhook_logs table to log all webhook attempts
+
+	fmt.Println("=== JIOPAY WEBHOOK: Processing complete ===")
 
 	return c.JSON(http.StatusOK, map[string]string{
-		"status": "success",
+		"status":  "success",
 		"message": "Webhook processed successfully",
 	})
 }
 
 // HandleEasebuzzWebhook handles webhooks from Easebuzz gateway
+// TODO: Implement Easebuzz webhook handling (similar structure to JioPay)
 func (h *WebhookHandler) HandleEasebuzzWebhook(c echo.Context) error {
-	fmt.Println("=== WEBHOOK: Easebuzz Webhook Called ===")
+	fmt.Println("=== EASEBUZZ WEBHOOK: Async notification received ===")
 
-	// TODO-DB-4.1-CRITICAL: Query payment by gateway_payment_id
-	// - Parse gateway_payment_id (txnid) from webhook payload
-	// - Call: paymentRepo.GetPaymentByGatewayPaymentID(ctx, gatewayPaymentID)
-	// - Verify payment exists and matches expected state
-
-	// TODO: Phase 3C Implementation
-	// 1. Parse Easebuzz webhook payload
-	// 2. Validate webhook signature using Easebuzz gateway
-	// 3. Extract payment status and transaction details
-	// 4. Update payment status in database
-	// 5. Trigger callback to frontend if needed
-	// 6. Send acknowledgment to Easebuzz
-
-	var payload map[string]any
-	if err := c.Bind(&payload); err != nil {
-		fmt.Printf("❌ Error parsing Easebuzz webhook: %v\n", err)
-		return c.JSON(http.StatusBadRequest, map[string]string{
-			"error": "invalid_payload",
-		})
-	}
-
-	fmt.Printf("📥 Easebuzz Webhook Payload: %+v\n", payload)
-
-	// TODO-DB-4.1-CRITICAL: Update payment status from webhook
-	// - Map gateway status to PaymentStatus enum
-	// - Call: paymentRepo.UpdatePaymentStatus(ctx, payment.ID, newStatus, webhookData)
-	// - Store complete webhook payload in payment.metadata JSONB
-	// - Update payment.updated_at timestamp
-
-	// TODO-DB-4.1: Log webhook attempts for debugging
-	// - Create webhook_logs table (future phase)
-	// - Log all webhook attempts even if signature fails
-	// - Helps diagnose integration issues
-
-	// Mock webhook processing
-	fmt.Println("🔄 Processing Easebuzz webhook...")
-	fmt.Println("✅ Easebuzz webhook processed successfully (mock)")
-	fmt.Println("=== WEBHOOK: Easebuzz Webhook Complete ===")
+	// TODO: Implement Easebuzz-specific webhook handling
+	// Similar to JioPay but with Easebuzz payload structure and signature verification
 
 	return c.JSON(http.StatusOK, map[string]string{
-		"status": "success",
-		"message": "Webhook processed successfully",
+		"status":  "pending",
+		"message": "Easebuzz webhook not yet implemented",
 	})
-}
-
-// RegisterWebhookRoutes registers webhook routes for payment gateways
-func RegisterWebhookRoutes(group *echo.Group, orchestrator payment.PaymentOrchestrator) {
-	handler := NewWebhookHandler(orchestrator)
-
-	// Webhook endpoints for different gateways
-	group.POST("/jiopay", handler.HandleJioPayWebhook)
-	group.POST("/easebuzz", handler.HandleEasebuzzWebhook)
-}
-
-// === WEBHOOK PAYLOAD STRUCTURES ===
-
-// JioPayWebhookPayload represents JioPay webhook payload structure
-// TODO: Update with actual JioPay webhook format
-type JioPayWebhookPayload struct {
-	PaymentID     string `json:"payment_id"`
-	Status        string `json:"status"`
-	Amount        string `json:"amount"`
-	Currency      string `json:"currency"`
-	TransactionID string `json:"transaction_id"`
-	BankRef       string `json:"bank_ref,omitempty"`
-	Signature     string `json:"signature"`
-	Timestamp     string `json:"timestamp"`
-}
-
-// EasebuzzWebhookPayload represents Easebuzz webhook payload structure
-// TODO: Update with actual Easebuzz webhook format
-type EasebuzzWebhookPayload struct {
-	Txnid         string `json:"txnid"`
-	Status        string `json:"status"`
-	Amount        string `json:"amount"`
-	ProductInfo   string `json:"productinfo"`
-	Email         string `json:"email"`
-	Phone         string `json:"phone"`
-	Hash          string `json:"hash"`
-	BankRefNum    string `json:"bank_ref_num,omitempty"`
-	Error         string `json:"error,omitempty"`
-	ErrorMessage  string `json:"error_Message,omitempty"`
 }
