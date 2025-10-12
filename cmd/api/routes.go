@@ -37,6 +37,7 @@ func registerV1AuthRoutes(meta *serverMetaData, group *echo.Group) {
 		panic("Failed to create verification service: " + err.Error())
 	}
 
+	// Create user service
 	userService := user.NewUserService(
 		userRepo.NewPgUserRepository(meta.clients.db),
 		business.NewPgBusinessUserRelationRepository(meta.clients.db),
@@ -44,10 +45,10 @@ func registerV1AuthRoutes(meta *serverMetaData, group *echo.Group) {
 		meta.clients.emailService,
 		verificationService,
 		&meta.config,
+		meta.clients.rcache,
 	)
-	authService := authservice.NewAuthService(&meta.config.JWT, meta.clients.rcache)
 
-	// Create business service for login user state
+	// Create business service
 	busSvc := businessSvc.NewBusinessService(
 		business.NewPgBusinessRepository(meta.clients.db),
 		business.NewPgBusinessUserRelationRepository(meta.clients.db),
@@ -56,7 +57,16 @@ func registerV1AuthRoutes(meta *serverMetaData, group *echo.Group) {
 		meta.clients.rcache,
 	)
 
-	auth.RegisterAuthRoutes(group, userService, authService, busSvc)
+	// Create auth service with user and business services
+	authService := authservice.NewAuthService(
+		&meta.config.JWT,
+		meta.clients.rcache,
+		userService,
+		busSvc,
+	)
+
+	// Register auth routes (handler only needs authService now)
+	auth.RegisterAuthRoutes(group, authService)
 }
 
 func registerV1PaymentRoutes(meta *serverMetaData, group *echo.Group) {
@@ -130,14 +140,7 @@ func registerV1BusinessRoutes(meta *serverMetaData, group *echo.Group) {
 		panic("Failed to create verification service: " + err.Error())
 	}
 
-	busSvc := businessSvc.NewBusinessService(business.NewPgBusinessRepository(meta.clients.db),
-		business.NewPgBusinessUserRelationRepository(meta.clients.db),
-		userRepo.NewPgUserRepository(meta.clients.db),
-		meta.clients.txManager,
-		meta.clients.rcache,
-	)
-	authService := authservice.NewAuthService(&meta.config.JWT, meta.clients.rcache)
-
+	// Create user service
 	userService := user.NewUserService(
 		userRepo.NewPgUserRepository(meta.clients.db),
 		business.NewPgBusinessUserRelationRepository(meta.clients.db),
@@ -145,6 +148,24 @@ func registerV1BusinessRoutes(meta *serverMetaData, group *echo.Group) {
 		meta.clients.emailService,
 		verificationService,
 		&meta.config,
+		meta.clients.rcache,
+	)
+
+	// Create business service
+	busSvc := businessSvc.NewBusinessService(
+		business.NewPgBusinessRepository(meta.clients.db),
+		business.NewPgBusinessUserRelationRepository(meta.clients.db),
+		userRepo.NewPgUserRepository(meta.clients.db),
+		meta.clients.txManager,
+		meta.clients.rcache,
+	)
+
+	// Create auth service with updated signature
+	authService := authservice.NewAuthService(
+		&meta.config.JWT,
+		meta.clients.rcache,
+		userService,
+		busSvc,
 	)
 
 	businessHandler.RegisterBusinessRoutes(group, busSvc, authService, userService, &meta.config.S3)
@@ -157,6 +178,7 @@ func registerV1UserRoutes(meta *serverMetaData, group *echo.Group) {
 		panic("Failed to create verification service: " + err.Error())
 	}
 
+	// Create user service
 	userService := user.NewUserService(
 		userRepo.NewPgUserRepository(meta.clients.db),
 		business.NewPgBusinessUserRelationRepository(meta.clients.db),
@@ -164,8 +186,26 @@ func registerV1UserRoutes(meta *serverMetaData, group *echo.Group) {
 		meta.clients.emailService,
 		verificationService,
 		&meta.config,
+		meta.clients.rcache,
 	)
-	authService := authservice.NewAuthService(&meta.config.JWT, meta.clients.rcache)
+
+	// Create business service
+	busSvc := businessSvc.NewBusinessService(
+		business.NewPgBusinessRepository(meta.clients.db),
+		business.NewPgBusinessUserRelationRepository(meta.clients.db),
+		userRepo.NewPgUserRepository(meta.clients.db),
+		meta.clients.txManager,
+		meta.clients.rcache,
+	)
+
+	// Create auth service with updated signature
+	authService := authservice.NewAuthService(
+		&meta.config.JWT,
+		meta.clients.rcache,
+		userService,
+		busSvc,
+	)
+
 	userHandler.RegisterUserRoutes(group, userService, authService)
 }
 

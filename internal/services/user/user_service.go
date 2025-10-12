@@ -6,10 +6,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
+	"github.com/redis/go-redis/v9"
 	"golang.org/x/crypto/bcrypt"
+	redisClient "xcentro.in/internal/adapters/cache/redis/client"
+	"xcentro.in/internal/adapters/cache/redis/keys"
 	"xcentro.in/internal/adapters/database/postgres/client"
 	userRepo "xcentro.in/internal/adapters/database/postgres/user"
 	"xcentro.in/internal/adapters/providers/authbridge"
@@ -32,6 +36,7 @@ type UserServiceImpl struct {
 	emailService        mailers.EmailService
 	verificationService *verification.DocumentVerificationService
 	config              *config.Config
+	rclient             *redisClient.RedisClient
 	logger              *logger.Logger
 }
 
@@ -43,6 +48,7 @@ func NewUserService(
 	emailService mailers.EmailService,
 	verificationService *verification.DocumentVerificationService,
 	config *config.Config,
+	rclient *redisClient.RedisClient,
 ) user.UserService {
 	return &UserServiceImpl{
 		userRepo:            userRepo,
@@ -51,6 +57,7 @@ func NewUserService(
 		emailService:        emailService,
 		verificationService: verificationService,
 		config:              config,
+		rclient:             rclient,
 		logger:              logger.GetDefault(),
 	}
 }
@@ -101,7 +108,7 @@ func (s *UserServiceImpl) CreateUser(ctx context.Context, authPayload auth.AuthP
 	return createdUser, nil
 }
 
-// GetUserByEmail retrieves a user by email
+// GetUserByEmail retrieves a user by email with caching
 func (s *UserServiceImpl) GetUserByEmail(ctx context.Context, email string) (*user.User, error) {
 	s.logger.Info("Getting user by email: %s", email)
 
@@ -109,16 +116,47 @@ func (s *UserServiceImpl) GetUserByEmail(ctx context.Context, email string) (*us
 		return nil, fmt.Errorf("email is required")
 	}
 
-	user, err := s.userRepo.GetUserByEmail(ctx, email)
+	// Try email lookup cache first
+	emailKey := keys.User.EmailLookup(email)
+	var userID string
+	err := s.rclient.GetJSON(ctx, emailKey, &userID)
+
+	if err == nil && userID != "" {
+		// Cache hit - now get full user profile
+		return s.GetUserByID(ctx, userID)
+	}
+
+	// Cache miss - fetch from database
+	if err != nil && !errors.Is(err, redis.Nil) {
+		s.logger.Warnf("Redis cache error for email lookup (continuing with DB): %v", err)
+	}
+
+	userObj, err := s.userRepo.GetUserByEmail(ctx, email)
 	if err != nil {
 		s.logger.Error("Failed to get user by email: %v", err)
 		return nil, fmt.Errorf("failed to get user: %w", err)
 	}
 
-	return user, nil
+	// Cache email-to-userID mapping and profile asynchronously
+	go func() {
+		bgCtx := context.Background()
+
+		// Cache email lookup
+		if err := s.rclient.SetJSON(bgCtx, emailKey, userObj.Id, keys.TTLUserProfile); err != nil {
+			s.logger.Warnf("Failed to cache email lookup: %v", err)
+		}
+
+		// Cache full profile
+		profileKey := keys.User.Profile(userObj.Id)
+		if err := s.rclient.SetJSON(bgCtx, profileKey, userObj, keys.TTLUserProfile); err != nil {
+			s.logger.Warnf("Failed to cache user profile: %v", err)
+		}
+	}()
+
+	return userObj, nil
 }
 
-// GetUserByID retrieves a user by ID
+// GetUserByID retrieves a user by ID with caching
 func (s *UserServiceImpl) GetUserByID(ctx context.Context, userID string) (*user.User, error) {
 	s.logger.Info("Getting user by ID: %s", userID)
 
@@ -126,20 +164,44 @@ func (s *UserServiceImpl) GetUserByID(ctx context.Context, userID string) (*user
 		return nil, fmt.Errorf("user ID is required")
 	}
 
-	user, err := s.userRepo.GetUserByID(ctx, userID)
+	// Try cache first
+	cacheKey := keys.User.Profile(userID)
+	var userObj user.User
+	err := s.rclient.GetJSON(ctx, cacheKey, &userObj)
+
+	if err == nil {
+		// Cache hit
+		s.logger.Info("User profile cache hit for ID: %s", userID)
+		return &userObj, nil
+	}
+
+	// Cache miss - fetch from database
+	if !errors.Is(err, redis.Nil) {
+		s.logger.Warnf("Redis cache error for user profile (continuing with DB): %v", err)
+	}
+
+	userFromDB, err := s.userRepo.GetUserByID(ctx, userID)
 	if err != nil {
 		s.logger.Error("Failed to get user by ID: %v", err)
 		return nil, fmt.Errorf("failed to get user: %w", err)
 	}
 
-	return user, nil
+	// Update cache asynchronously (fire-and-forget)
+	go func() {
+		bgCtx := context.Background()
+		if err := s.rclient.SetJSON(bgCtx, cacheKey, userFromDB, keys.TTLUserProfile); err != nil {
+			s.logger.Warnf("Failed to cache user profile: %v", err)
+		}
+	}()
+
+	return userFromDB, nil
 }
 
 // UpdateUserProfile updates user profile information in a transaction
 func (s *UserServiceImpl) UpdateUserProfile(ctx context.Context, userID string, mobile, taxID string) error {
 	s.logger.Info("Updating user profile for ID: %s", userID)
 
-	return s.txManager.WithTx(context.Background(), func(ctx context.Context, tx client.Tx) error {
+	err := s.txManager.WithTx(context.Background(), func(ctx context.Context, tx client.Tx) error {
 		txUserRepo := s.userRepo.WithTx(tx)
 
 		if mobile != "" {
@@ -156,13 +218,28 @@ func (s *UserServiceImpl) UpdateUserProfile(ctx context.Context, userID string, 
 
 		return nil
 	})
+
+	if err != nil {
+		return err
+	}
+
+	// Invalidate user cache after successful update
+	go func() {
+		bgCtx := context.Background()
+		invalidationKeys := keys.InvalidateUser(userID)
+		if err := s.rclient.Delete(bgCtx, invalidationKeys...); err != nil {
+			s.logger.Warnf("Failed to invalidate user cache: %v", err)
+		}
+	}()
+
+	return nil
 }
 
 // UpdateKYCStatus updates user's KYC status
 func (s *UserServiceImpl) UpdateKYCStatus(ctx context.Context, userID string, status shared.KYCStatus) error {
 	s.logger.Info("Updating KYC status for user ID: %s to status: %v", userID, status)
 
-	return s.txManager.WithTx(context.Background(), func(ctx context.Context, tx client.Tx) error {
+	err := s.txManager.WithTx(context.Background(), func(ctx context.Context, tx client.Tx) error {
 		txUserRepo := s.userRepo.WithTx(tx)
 
 		if err := txUserRepo.UpdateUserKYCStatus(ctx, userID, status); err != nil {
@@ -171,6 +248,21 @@ func (s *UserServiceImpl) UpdateKYCStatus(ctx context.Context, userID string, st
 
 		return nil
 	})
+
+	if err != nil {
+		return err
+	}
+
+	// Invalidate user cache after successful update
+	go func() {
+		bgCtx := context.Background()
+		invalidationKeys := keys.InvalidateUser(userID)
+		if err := s.rclient.Delete(bgCtx, invalidationKeys...); err != nil {
+			s.logger.Warnf("Failed to invalidate user cache: %v", err)
+		}
+	}()
+
+	return nil
 }
 
 // SendEmailVerification sends email verification token to user's email
@@ -235,7 +327,7 @@ func (s *UserServiceImpl) SendEmailVerification(ctx context.Context, userID stri
 			<p>%s</p>
 			<p>This link will expire in 24 hours.</p>
 			<p>If you didn't create an account with us, please ignore this email.</p>
-			<p>Best regards,<br>The Xcentro Team</p>
+			<p>Best regards,<br>Xcentro Team</p>
 		</body>
 		</html>
 	`, verificationURL, verificationURL)
@@ -254,7 +346,7 @@ func (s *UserServiceImpl) SendEmailVerification(ctx context.Context, userID stri
 		If you didn't create an account with us, please ignore this email.
 		
 		Best regards,
-		The Xcentro Team
+		Xcentro Team
 	`, verificationURL)
 
 	// Create email message
@@ -634,6 +726,21 @@ func (s *UserServiceImpl) CompleteOnboarding(ctx context.Context, userID, busine
 
 		return nil
 	})
+
+	if err != nil {
+		return err
+	}
+
+	// Invalidate onboarding cache after successful KYC completion
+	go func() {
+		bgCtx := context.Background()
+		onboardingKey := keys.User.OnboardingStatus(userID)
+		if err := s.rclient.Delete(bgCtx, onboardingKey); err != nil {
+			s.logger.Warnf("Failed to invalidate onboarding cache: %v", err)
+		}
+	}()
+
+	return nil
 }
 
 // GetOnboardingStatus returns the current onboarding status for a user
@@ -738,7 +845,7 @@ func (s *UserServiceImpl) SendPasswordResetEmail(ctx context.Context, email stri
 			<p>This code will expire in 1 hour.</p>
 			<p>If you didn't request a password reset, please ignore this email and your password will remain unchanged.</p>
 			<p><strong>Security Note:</strong> Never share this code with anyone. Xcentro staff will never ask for your verification code.</p>
-			<p>Best regards,<br>The Xcentro Team</p>
+			<p>Best regards,<br>Xcentro Team</p>
 		</body>
 		</html>
 	`, resetToken)
@@ -759,7 +866,7 @@ func (s *UserServiceImpl) SendPasswordResetEmail(ctx context.Context, email stri
 		Security Note: Never share this code with anyone. Xcentro staff will never ask for your verification code.
 
 		Best regards,
-		The Xcentro Team
+		Xcentro Team
 	`, resetToken)
 
 	// Create email message
@@ -845,12 +952,12 @@ func (s *UserServiceImpl) ResetPasswordWithToken(ctx context.Context, token stri
 // generateRandomPassword generates a cryptographically secure random password
 func (s *UserServiceImpl) generateRandomPassword() (string, error) {
 	const (
-		length     = 16
-		lowerChars = "abcdefghijklmnopqrstuvwxyz"
-		upperChars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-		digitChars = "0123456789"
+		length      = 16
+		lowerChars  = "abcdefghijklmnopqrstuvwxyz"
+		upperChars  = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+		digitChars  = "0123456789"
 		symbolChars = "!@#$%^&*"
-		allChars   = lowerChars + upperChars + digitChars + symbolChars
+		allChars    = lowerChars + upperChars + digitChars + symbolChars
 	)
 
 	password := make([]byte, length)
@@ -925,7 +1032,7 @@ func (s *UserServiceImpl) CreateInvitedUser(ctx context.Context, email, name str
 			<p><strong>Temporary Password:</strong> <code style="background-color: #f0f0f0; padding: 5px 10px; border-radius: 3px;">%s</code></p>
 			<p><strong>⚠️ IMPORTANT:</strong> Please reset your password immediately after logging in for security purposes.</p>
 			<p>If you didn't expect this invitation, please contact the business administrator.</p>
-			<p>Best regards,<br>The Xcentro Team</p>
+			<p>Best regards,<br>Xcentro Team</p>
 		</body>
 		</html>
 	`, name, email, randomPassword)
@@ -946,7 +1053,7 @@ func (s *UserServiceImpl) CreateInvitedUser(ctx context.Context, email, name str
 		If you didn't expect this invitation, please contact the business administrator.
 
 		Best regards,
-		The Xcentro Team
+		Xcentro Team
 	`, name, email, randomPassword)
 
 	emailMsg := &mailers.EmailMessage{

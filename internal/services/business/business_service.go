@@ -2,11 +2,14 @@ package business
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
-	redis "xcentro.in/internal/adapters/cache/redis/client"
+	"github.com/redis/go-redis/v9"
+	redisClient "xcentro.in/internal/adapters/cache/redis/client"
+	"xcentro.in/internal/adapters/cache/redis/keys"
 	"xcentro.in/internal/adapters/database/postgres/client"
 	"xcentro.in/internal/core/business"
 	"xcentro.in/internal/core/shared"
@@ -22,7 +25,7 @@ type BusinessServiceImpl struct {
 	businessUserRelRepo business.BusinessUserRelationRepository
 	userRepo            user.UserRepository
 	txManager           client.TxManager
-	rclient             *redis.RedisClient
+	rclient             *redisClient.RedisClient
 	verificationService *verification.DocumentVerificationService
 	logger              *logger.Logger
 }
@@ -33,7 +36,7 @@ func NewBusinessService(
 	businessUserRelRepo business.BusinessUserRelationRepository,
 	userRepo user.UserRepository,
 	txManager client.TxManager,
-	rclient *redis.RedisClient,
+	rclient *redisClient.RedisClient,
 ) business.BusinessService {
 	// Initialize verification service (handle error in production)
 	verificationSvc, err := verification.NewDocumentVerificationService()
@@ -56,13 +59,41 @@ func (s *BusinessServiceImpl) GetUserRolesMiddleware() echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
 			userID := c.Get("userId").(string)
-			rel, err := s.businessUserRelRepo.FindByUser(c.Request().Context(), userID)
+			ctx := c.Request().Context()
+
+			// Try cache first
+			cacheKey := keys.Business.UserRoles(userID)
+			var rel []*business.BusinessUserRelation
+			err := s.rclient.GetJSON(ctx, cacheKey, &rel)
+
+			if err == nil && len(rel) > 0 {
+				// Cache hit
+				c.Set("userRoles", rel)
+				return next(c)
+			}
+
+			// Cache miss or error - fetch from database
+			if !errors.Is(err, redis.Nil) && err != nil {
+				s.logger.Warnf("Redis cache error (continuing with DB): %v", err)
+			}
+
+			rel, err = s.businessUserRelRepo.FindByUser(ctx, userID)
 			if err != nil {
 				s.logger.Errorf("%v", err)
 			}
+
 			if len(rel) > 0 {
 				c.Set("userRoles", rel)
+
+				// Update cache asynchronously (fire-and-forget)
+				go func() {
+					bgCtx := context.Background()
+					if err := s.rclient.SetJSON(bgCtx, cacheKey, rel, keys.TTLUserRoles); err != nil {
+						s.logger.Warnf("Failed to cache user roles: %v", err)
+					}
+				}()
 			}
+
 			return next(c)
 		}
 	}
@@ -179,7 +210,8 @@ func (s *BusinessServiceImpl) InitiateOnboarding(ctx context.Context, uid string
 	}
 
 	// Step 8: Update Redis cache
-	cmd := s.rclient.Client.HSet(ctx, "xcentro:user:verification:"+uid, "is_kyb_initiated", true)
+	key := keys.User.Verification(uid)
+	cmd := s.rclient.Client.HSet(ctx, key, "is_kyb_initiated", true)
 	if err := cmd.Err(); err != nil {
 		s.logger.Errorf("Error setting Redis cache: %v", err)
 	}
@@ -305,7 +337,29 @@ func (s *BusinessServiceImpl) CompleteKYB(ctx context.Context, uid string, req *
 
 	s.logger.Infof("KYB completed successfully for BID: %s", req.BID)
 
-	// Step 10: Determine if deed upload is required
+	// Step 10: Invalidate onboarding cache for all users in this business
+	go func() {
+		bgCtx := context.Background()
+
+		// Get all users in this business
+		businessRelations, err := s.businessUserRelRepo.FindByBusiness(bgCtx, req.BID)
+		if err != nil {
+			s.logger.Warnf("Failed to get business users for cache invalidation: %v", err)
+			return
+		}
+
+		// Invalidate onboarding status cache for each user
+		for _, rel := range businessRelations {
+			onboardingKey := keys.User.OnboardingStatus(rel.UserID)
+			if err := s.rclient.Delete(bgCtx, onboardingKey); err != nil {
+				s.logger.Warnf("Failed to invalidate onboarding cache for user %s: %v", rel.UserID, err)
+			}
+		}
+
+		s.logger.Infof("Invalidated onboarding cache for %d users in business %s", len(businessRelations), req.BID)
+	}()
+
+	// Step 11: Determine if deed upload is required
 	requiresDeed := shared.RequiresDeed(req.BusinessType)
 
 	return &business.CompleteKYBResponse{
