@@ -203,7 +203,8 @@ func registerV1BusinessRoutes(meta *serverMetaData, group *echo.Group) {
 		busSvc,
 	)
 
-	businessHandler.RegisterBusinessRoutes(group, busSvc, authService, userService, &meta.config.S3)
+	businessUserRelRepo := business.NewPgBusinessUserRelationRepository(meta.clients.db)
+	businessHandler.RegisterBusinessRoutes(group, busSvc, authService, userService, &meta.config.S3, businessUserRelRepo, meta.clients.rcache)
 }
 
 func registerV1UserRoutes(meta *serverMetaData, group *echo.Group) {
@@ -245,7 +246,8 @@ func registerV1UserRoutes(meta *serverMetaData, group *echo.Group) {
 		busSvc,
 	)
 
-	userHandler.RegisterUserRoutes(group, userService, authService)
+	businessUserRelRepo := business.NewPgBusinessUserRelationRepository(meta.clients.db)
+	userHandler.RegisterUserRoutes(group, userService, authService, businessUserRelRepo, meta.clients.rcache)
 }
 
 func registerV1PayeeRoutes(meta *serverMetaData, group *echo.Group) {

@@ -2,7 +2,9 @@ package user
 
 import (
 	"github.com/labstack/echo/v4"
+	redisClient "xcentro.in/internal/adapters/cache/redis/client"
 	"xcentro.in/internal/core/auth"
+	coreBusiness "xcentro.in/internal/core/business"
 	"xcentro.in/internal/core/user"
 	"xcentro.in/internal/middleware"
 	"xcentro.in/internal/shared/logger"
@@ -23,7 +25,7 @@ func NewUserHandler(userService user.UserService, authService auth.AuthService) 
 	}
 }
 
-func RegisterUserRoutes(e *echo.Group, userService user.UserService, authService auth.AuthService) {
+func RegisterUserRoutes(e *echo.Group, userService user.UserService, authService auth.AuthService, businessUserRelRepo coreBusiness.BusinessUserRelationRepository, rclient *redisClient.RedisClient) {
 	handler := NewUserHandler(userService, authService)
 
 	userGroup := e.Group("/user")
@@ -46,6 +48,9 @@ func RegisterUserRoutes(e *echo.Group, userService user.UserService, authService
 	// User profile endpoints
 	protectedUser.GET("/profile", handler.GetProfile)
 	protectedUser.PUT("/profile", handler.UpdateProfile)
+
+	// User roles endpoint (requires both JWT and BusinessRoles middleware)
+	protectedUser.GET("/roles", handler.GetUserRoles, middleware.BusinessRolesMiddleware(businessUserRelRepo, rclient))
 }
 
 // VerifyEmail verifies user's email using verification token
@@ -335,5 +340,46 @@ func (h *UserHandler) UpdateProfile(c echo.Context) error {
 	return c.JSON(200, map[string]interface{}{
 		"message": "Profile updated successfully",
 		"data":    nil,
+	})
+}
+
+// GetUserRoles retrieves the user's business roles
+func (h *UserHandler) GetUserRoles(c echo.Context) error {
+	userID := c.Get("userId").(string)
+	if userID == "" {
+		return c.JSON(401, map[string]string{"message": "Unauthorized request"})
+	}
+
+	// Get user roles from context (injected by BusinessRolesMiddleware)
+	userRolesRaw := c.Get("userRoles")
+	if userRolesRaw == nil {
+		// No business roles found
+		return c.JSON(200, map[string]interface{}{
+			"message": "User roles retrieved successfully",
+			"data":    []map[string]string{},
+		})
+	}
+
+	userRoles := userRolesRaw.([]*coreBusiness.BusinessUserRelation)
+
+	// Format response: only return userId, businessId, and role
+	type RoleResponse struct {
+		UserID     string `json:"userId"`
+		BusinessID string `json:"businessId"`
+		Role       string `json:"role"`
+	}
+
+	roles := make([]RoleResponse, 0, len(userRoles))
+	for _, rel := range userRoles {
+		roles = append(roles, RoleResponse{
+			UserID:     rel.UserID,
+			BusinessID: rel.BID,
+			Role:       string(rel.Role),
+		})
+	}
+
+	return c.JSON(200, map[string]interface{}{
+		"message": "User roles retrieved successfully",
+		"data":    roles,
 	})
 }

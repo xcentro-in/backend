@@ -180,6 +180,12 @@ func (s *AuthService) RevokeRefreshToken(ctx context.Context, userID, refreshTok
 		return fmt.Errorf("failed to complete token revocation")
 	}
 
+	// Set TTL on the revoked tokens hash (15 minutes)
+	if err := s.rclient.Client.Expire(ctx, revokedKey, keys.TTLRevokedToken).Err(); err != nil {
+		logger.Errorf("Failed to set TTL on revoked tokens: %v", err)
+		return fmt.Errorf("failed to complete token revocation")
+	}
+
 	logger.Info("Successfully revoked refresh token for user %s", userID)
 	return nil
 }
@@ -207,6 +213,12 @@ func (s *AuthService) RevokeAllUserTokens(ctx context.Context, userID string) er
 
 	if err := s.rclient.Client.HSet(ctx, revokedKey, tokenMap).Err(); err != nil {
 		logger.Errorf("Failed to mark tokens as revoked in Redis: %v", err)
+		return fmt.Errorf("failed to complete token revocation")
+	}
+
+	// Set TTL on the revoked tokens hash (15 minutes)
+	if err := s.rclient.Client.Expire(ctx, revokedKey, keys.TTLRevokedToken).Err(); err != nil {
+		logger.Errorf("Failed to set TTL on revoked tokens: %v", err)
 		return fmt.Errorf("failed to complete token revocation")
 	}
 
@@ -370,7 +382,7 @@ func (s *AuthService) getOnboardingStatus(ctx context.Context, userObj *user.Use
 
 	// KYB Logic
 	kybNeeded := false
-	onboardingStatus, err := s.businessService.GetOnboardingStatus(ctx, userObj.Id)
+	onboardingStatus, err := s.businessService.GetOnboardingStatus(ctx, userObj.Id, nil)
 	if err != nil {
 		logger.Warnf("Failed to get business onboarding status: %v", err)
 		kybNeeded = true

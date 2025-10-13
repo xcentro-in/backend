@@ -2,12 +2,9 @@ package business
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
-	"github.com/labstack/echo/v4"
-	"github.com/redis/go-redis/v9"
 	redisClient "xcentro.in/internal/adapters/cache/redis/client"
 	"xcentro.in/internal/adapters/cache/redis/keys"
 	"xcentro.in/internal/adapters/database/postgres/client"
@@ -55,50 +52,6 @@ func NewBusinessService(
 	}
 }
 
-func (s *BusinessServiceImpl) GetUserRolesMiddleware() echo.MiddlewareFunc {
-	return func(next echo.HandlerFunc) echo.HandlerFunc {
-		return func(c echo.Context) error {
-			userID := c.Get("userId").(string)
-			ctx := c.Request().Context()
-
-			// Try cache first
-			cacheKey := keys.Business.UserRoles(userID)
-			var rel []*business.BusinessUserRelation
-			err := s.rclient.GetJSON(ctx, cacheKey, &rel)
-
-			if err == nil && len(rel) > 0 {
-				// Cache hit
-				c.Set("userRoles", rel)
-				return next(c)
-			}
-
-			// Cache miss or error - fetch from database
-			if !errors.Is(err, redis.Nil) && err != nil {
-				s.logger.Warnf("Redis cache error (continuing with DB): %v", err)
-			}
-
-			rel, err = s.businessUserRelRepo.FindByUser(ctx, userID)
-			if err != nil {
-				s.logger.Errorf("%v", err)
-			}
-
-			if len(rel) > 0 {
-				c.Set("userRoles", rel)
-
-				// Update cache asynchronously (fire-and-forget)
-				go func() {
-					bgCtx := context.Background()
-					if err := s.rclient.SetJSON(bgCtx, cacheKey, rel, keys.TTLUserRoles); err != nil {
-						s.logger.Warnf("Failed to cache user roles: %v", err)
-					}
-				}()
-			}
-
-			return next(c)
-		}
-	}
-}
-
 func (s *BusinessServiceImpl) UpdateBusinessRoleClaim(ctx context.Context, uid, bid string, roleClaim shared.UserRole) error {
 	if uid == "" || bid == "" {
 		return fmt.Errorf("user ID and business ID are required")
@@ -108,6 +61,15 @@ func (s *BusinessServiceImpl) UpdateBusinessRoleClaim(ctx context.Context, uid, 
 	if err != nil {
 		return fmt.Errorf("error updating role claim: %w", err)
 	}
+
+	// Invalidate user roles cache after successful update
+	go func() {
+		bgCtx := context.Background()
+		invalidationKeys := keys.InvalidateUserRoles(uid)
+		if err := s.rclient.Delete(bgCtx, invalidationKeys...); err != nil {
+			s.logger.Warnf("Failed to invalidate user roles cache for user %s: %v", uid, err)
+		}
+	}()
 
 	return nil
 }
@@ -122,6 +84,7 @@ func (s *BusinessServiceImpl) UpdateBusinessDeedDocumentKey(ctx context.Context,
 		return fmt.Errorf("error updating business deed document path: %w", err)
 	}
 
+	// Business details cache will expire via TTL (10 minutes)
 	return nil
 }
 
@@ -129,30 +92,9 @@ func (s *BusinessServiceImpl) UpdateBusinessDeedDocumentKey(ctx context.Context,
 // New Onboarding Flow Methods
 // ============================================================================
 
-// ValidateOnboardingEligibility checks if a user can create a new business
-func (s *BusinessServiceImpl) ValidateOnboardingEligibility(ctx context.Context, uid string) error {
-	// Use optimized count query instead of fetching all relations
-	count, err := s.userRepo.CountBusinessRelations(ctx, uid)
-	if err != nil {
-		return fmt.Errorf("error checking user business relations: %w", err)
-	}
-
-	if count > 0 {
-		s.logger.Warnf("User %s already associated with %d business(es) - KYB forbidden for invited users", uid, count)
-		return types.ErrUserAlreadyAssociated
-	}
-
-	return nil
-}
-
 // InitiateOnboarding creates a new business and verifies GSTIN via AuthBridge
 func (s *BusinessServiceImpl) InitiateOnboarding(ctx context.Context, uid string, name string, gstin string) (*business.OnboardingInitResponse, error) {
 	s.logger.Infof("Initiating onboarding for user %s with GSTIN %s", uid, gstin)
-
-	// Step 1: Validate user eligibility
-	if err := s.ValidateOnboardingEligibility(ctx, uid); err != nil {
-		return nil, err
-	}
 
 	// Step 2: Validate inputs
 	if name == "" || gstin == "" {
@@ -221,7 +163,7 @@ func (s *BusinessServiceImpl) InitiateOnboarding(ctx context.Context, uid string
 }
 
 // CompleteKYB completes the KYB process with business type, PAN, and optionally CIN
-func (s *BusinessServiceImpl) CompleteKYB(ctx context.Context, uid string, req *business.CompleteKYBRequest) (*business.CompleteKYBResponse, error) {
+func (s *BusinessServiceImpl) CompleteKYB(ctx context.Context, uid string, userRoles []*business.BusinessUserRelation, req *business.CompleteKYBRequest) (*business.CompleteKYBResponse, error) {
 	s.logger.Infof("Completing KYB for user %s, BID %s", uid, req.BID)
 
 	// Step 1: Validate inputs
@@ -239,15 +181,10 @@ func (s *BusinessServiceImpl) CompleteKYB(ctx context.Context, uid string, req *
 		return nil, types.NewInvalidInputError("cid", fmt.Sprintf("CIN is required for business type: %s", req.BusinessType))
 	}
 
-	// Step 4: Verify user is authorized for this business
-	relations, err := s.businessUserRelRepo.FindByUser(ctx, uid)
-	if err != nil {
-		return nil, fmt.Errorf("error checking user authorization: %w", err)
-	}
-
+	// Step 4: Verify user is authorized for this business (using middleware-injected roles)
 	authorized := false
 	kybInitiated := false
-	for _, rel := range relations {
+	for _, rel := range userRoles {
 		if rel.BID == req.BID {
 			authorized = true
 			kybInitiated = rel.KybInitiated
@@ -330,6 +267,8 @@ func (s *BusinessServiceImpl) CompleteKYB(ctx context.Context, uid string, req *
 
 	s.logger.Infof("KYB completed successfully for BID: %s", req.BID)
 
+	// Business details cache will expire via TTL (10 minutes)
+
 	// Determine if deed upload is required
 	requiresDeed := shared.RequiresDeed(req.BusinessType)
 
@@ -342,13 +281,19 @@ func (s *BusinessServiceImpl) CompleteKYB(ctx context.Context, uid string, req *
 }
 
 // GetOnboardingStatus retrieves the current KYB onboarding status for a user
-func (s *BusinessServiceImpl) GetOnboardingStatus(ctx context.Context, uid string) (*business.OnboardingStatusResponse, error) {
+func (s *BusinessServiceImpl) GetOnboardingStatus(ctx context.Context, uid string, userRoles []*business.BusinessUserRelation) (*business.OnboardingStatusResponse, error) {
 	s.logger.Infof("Fetching onboarding status for user %s", uid)
 
-	// Get user's business relations
-	relations, err := s.businessUserRelRepo.FindByUser(ctx, uid)
-	if err != nil {
-		return nil, fmt.Errorf("error fetching user relations: %w", err)
+	// If roles not provided by middleware, fetch from DB (e.g., during login flow)
+	var relations []*business.BusinessUserRelation
+	if userRoles == nil {
+		var err error
+		relations, err = s.businessUserRelRepo.FindByUser(ctx, uid)
+		if err != nil {
+			return nil, fmt.Errorf("error fetching user relations: %w", err)
+		}
+	} else {
+		relations = userRoles
 	}
 
 	// If no relations, user hasn't started onboarding
@@ -411,6 +356,15 @@ func (s *BusinessServiceImpl) AddUserToBusiness(ctx context.Context, relation *b
 		return fmt.Errorf("error adding user to business: %w", err)
 	}
 
+	// Invalidate user roles cache after successful addition
+	go func() {
+		bgCtx := context.Background()
+		invalidationKeys := keys.InvalidateUserRoles(relation.UserID)
+		if err := s.rclient.Delete(bgCtx, invalidationKeys...); err != nil {
+			s.logger.Warnf("Failed to invalidate user roles cache for user %s: %v", relation.UserID, err)
+		}
+	}()
+
 	return nil
 }
 
@@ -466,6 +420,15 @@ func (s *BusinessServiceImpl) UpdateUserRoleInBusiness(ctx context.Context, bid 
 		return fmt.Errorf("error updating user role: %w", err)
 	}
 
+	// Invalidate user roles cache after successful update
+	go func() {
+		bgCtx := context.Background()
+		invalidationKeys := keys.InvalidateUserRoles(targetUserID)
+		if err := s.rclient.Delete(bgCtx, invalidationKeys...); err != nil {
+			s.logger.Warnf("Failed to invalidate user roles cache for user %s: %v", targetUserID, err)
+		}
+	}()
+
 	s.logger.Infof("Successfully updated user %s role to %s in business %s", targetUserID, newRole, bid)
 	return nil
 }
@@ -485,35 +448,35 @@ func (s *BusinessServiceImpl) RemoveUserFromBusiness(ctx context.Context, bid st
 		return fmt.Errorf("error removing user from business: %w", err)
 	}
 
+	// Invalidate user roles cache after successful removal
+	go func() {
+		bgCtx := context.Background()
+		invalidationKeys := keys.InvalidateUserRoles(targetUserID)
+		if err := s.rclient.Delete(bgCtx, invalidationKeys...); err != nil {
+			s.logger.Warnf("Failed to invalidate user roles cache for user %s: %v", targetUserID, err)
+		}
+	}()
+
 	s.logger.Infof("Successfully removed user %s from business %s", targetUserID, bid)
 	return nil
 }
 
-// GetBusinessDetails retrieves business details for a given business ID
-// Only shows KYB status if it's not completed or verified
-func (s *BusinessServiceImpl) GetBusinessDetails(ctx context.Context, bid string, userID string) (*business.BusinessDetailsResponse, error) {
-	// Get user's role in this business
-	relations, err := s.businessUserRelRepo.FindByUser(ctx, userID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to fetch user business relations: %w", err)
+// GetBusinessDetails retrieves business details for a given business ID (cached)
+// Uses middleware-injected user role to avoid DB query
+func (s *BusinessServiceImpl) GetBusinessDetails(ctx context.Context, bid string, userRole shared.UserRole) (*business.BusinessDetailsResponse, error) {
+	// Try cache first
+	cacheKey := keys.Business.Details(bid)
+	var cachedResponse business.BusinessDetailsResponse
+	err := s.rclient.GetJSON(ctx, cacheKey, &cachedResponse)
+
+	if err == nil {
+		// Cache hit - inject user's role (role is user-specific, not cached)
+		cachedResponse.UserRole = userRole
+		s.logger.Infof("Business details cache hit for BID: %s", bid)
+		return &cachedResponse, nil
 	}
 
-	// Find the user's role for this specific business
-	var userRole shared.UserRole
-	var hasAccess bool
-	for _, rel := range relations {
-		if rel.BID == bid {
-			userRole = rel.Role
-			hasAccess = true
-			break
-		}
-	}
-
-	if !hasAccess {
-		return nil, fmt.Errorf("user does not have access to this business")
-	}
-
-	// Get business details from repository
+	// Cache miss - fetch from database
 	bus, err := s.businessRepo.FindByID(ctx, bid)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch business details: %w", err)
@@ -529,10 +492,21 @@ func (s *BusinessServiceImpl) GetBusinessDetails(ctx context.Context, bid string
 		UserRole:     userRole,
 	}
 
-	// Only include KYB status if it's not completed or verified
-	if bus.KybStatus != shared.KYBCompleted && bus.KybStatus != shared.KYBVerified {
-		response.KYBStatus = bus.KybStatus
-	}
+	// Cache response asynchronously (without user role - that's injected per-user)
+	go func() {
+		bgCtx := context.Background()
+		cacheData := &business.BusinessDetailsResponse{
+			BID:          response.BID,
+			Name:         response.Name,
+			GSTIN:        response.GSTIN,
+			PAN:          response.PAN,
+			BusinessType: response.BusinessType,
+			// UserRole is NOT cached - it's per-user
+		}
+		if err := s.rclient.SetJSON(bgCtx, cacheKey, cacheData, keys.TTLBusinessDetails); err != nil {
+			s.logger.Warnf("Failed to cache business details: %v", err)
+		}
+	}()
 
 	return response, nil
 }

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/labstack/echo/v4"
+	redisClient "xcentro.in/internal/adapters/cache/redis/client"
 	"xcentro.in/internal/adapters/providers/fileupload"
 	"xcentro.in/internal/core/auth"
 	"xcentro.in/internal/core/business"
@@ -34,16 +35,16 @@ func NewBusinessHandler(businessService business.BusinessService, authService au
 	}
 }
 
-func RegisterBusinessRoutes(e *echo.Group, businessService business.BusinessService, authService auth.AuthService, userService user.UserService, s3Config *config.S3Config) {
+func RegisterBusinessRoutes(e *echo.Group, businessService business.BusinessService, authService auth.AuthService, userService user.UserService, s3Config *config.S3Config, businessUserRelRepo business.BusinessUserRelationRepository, rclient *redisClient.RedisClient) {
 	handler := NewBusinessHandler(businessService, authService, userService, s3Config)
 
 	businessGroup := e.Group("/business")
 	// Apply middleware to the business group
 	businessGroup.Use(middleware.JWTMiddleware(authService))
-	businessGroup.Use(businessService.GetUserRolesMiddleware())
+	businessGroup.Use(middleware.BusinessRolesMiddleware(businessUserRelRepo, rclient))
 
 	// Business details route
-	businessGroup.GET("/details", handler.GetBusinessDetails)
+	businessGroup.GET("", handler.GetBusinessDetails)
 
 	// Onboarding routes
 	onboardingGroup := businessGroup.Group("/onboard")
@@ -202,8 +203,18 @@ func (h *BusinessHandler) CompleteOnboarding(c echo.Context) error {
 	}
 	userID := userIDRaw.(string)
 
-	// Complete KYB
-	response, err := h.businessService.CompleteKYB(c.Request().Context(), userID, &req)
+	// Get user roles from middleware context
+	ur := c.Get("userRoles")
+	if ur == nil {
+		return c.JSON(403, map[string]interface{}{
+			"error":   "FORBIDDEN",
+			"message": "No business association found",
+		})
+	}
+	userRoles := ur.([]*business.BusinessUserRelation)
+
+	// Complete KYB (passing middleware-injected roles)
+	response, err := h.businessService.CompleteKYB(c.Request().Context(), userID, userRoles, &req)
 	if err != nil {
 		h.logger.Errorf("Error completing KYB: %v", err)
 		return h.handleBusinessError(c, err)
@@ -227,8 +238,15 @@ func (h *BusinessHandler) GetOnboardingStatus(c echo.Context) error {
 	}
 	userID := userIDRaw.(string)
 
-	// Get onboarding status
-	status, err := h.businessService.GetOnboardingStatus(c.Request().Context(), userID)
+	// Get user roles from middleware context
+	ur := c.Get("userRoles")
+	var userRoles []*business.BusinessUserRelation
+	if ur != nil {
+		userRoles = ur.([]*business.BusinessUserRelation)
+	}
+
+	// Get onboarding status (passing middleware-injected roles)
+	status, err := h.businessService.GetOnboardingStatus(c.Request().Context(), userID, userRoles)
 	if err != nil {
 		h.logger.Errorf("Error fetching onboarding status: %v", err)
 		return c.JSON(500, map[string]interface{}{
@@ -254,29 +272,38 @@ func (h *BusinessHandler) GetBusinessDetails(c echo.Context) error {
 		})
 	}
 
-	// Get user ID from context
-	userIDRaw := c.Get("userId")
-	if userIDRaw == nil {
-		return c.JSON(401, map[string]interface{}{
-			"error":   "UNAUTHORIZED",
-			"message": "User not authenticated",
+	// Get user roles from middleware context
+	ur := c.Get("userRoles")
+	if ur == nil {
+		return c.JSON(403, map[string]interface{}{
+			"error":   "FORBIDDEN",
+			"message": "No business association found",
 		})
 	}
-	userID := userIDRaw.(string)
+	roles := ur.([]*business.BusinessUserRelation)
 
-	// Get business details from service
-	details, err := h.businessService.GetBusinessDetails(c.Request().Context(), businessID, userID)
+	// Find the role for this specific business
+	var userRole shared.UserRole
+	var hasAccess bool
+	for _, rel := range roles {
+		if rel.BID == businessID {
+			userRole = rel.Role
+			hasAccess = true
+			break
+		}
+	}
+
+	if !hasAccess {
+		return c.JSON(403, map[string]interface{}{
+			"error":   "FORBIDDEN",
+			"message": "You don't have access to this business",
+		})
+	}
+
+	// Get business details from service (using middleware-injected role)
+	details, err := h.businessService.GetBusinessDetails(c.Request().Context(), businessID, userRole)
 	if err != nil {
 		h.logger.Errorf("Error fetching business details: %v", err)
-
-		// Check if user doesn't have access
-		if err.Error() == "user does not have access to this business" {
-			return c.JSON(403, map[string]interface{}{
-				"error":   "FORBIDDEN",
-				"message": "You don't have access to this business",
-			})
-		}
-
 		return c.JSON(500, map[string]interface{}{
 			"error":   "INTERNAL_ERROR",
 			"message": "Failed to fetch business details",

@@ -6,11 +6,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"time"
 
-	"github.com/redis/go-redis/v9"
 	"golang.org/x/crypto/bcrypt"
 	redisClient "xcentro.in/internal/adapters/cache/redis/client"
 	"xcentro.in/internal/adapters/cache/redis/keys"
@@ -108,27 +106,12 @@ func (s *UserServiceImpl) CreateUser(ctx context.Context, authPayload auth.AuthP
 	return createdUser, nil
 }
 
-// GetUserByEmail retrieves a user by email with caching
+// GetUserByEmail retrieves a user by email (simple DB fetch - email column has index)
 func (s *UserServiceImpl) GetUserByEmail(ctx context.Context, email string) (*user.User, error) {
 	s.logger.Info("Getting user by email: %s", email)
 
 	if email == "" {
 		return nil, fmt.Errorf("email is required")
-	}
-
-	// Try email lookup cache first
-	emailKey := keys.User.EmailLookup(email)
-	var userID string
-	err := s.rclient.GetJSON(ctx, emailKey, &userID)
-
-	if err == nil && userID != "" {
-		// Cache hit - now get full user profile
-		return s.GetUserByID(ctx, userID)
-	}
-
-	// Cache miss - fetch from database
-	if err != nil && !errors.Is(err, redis.Nil) {
-		s.logger.Warnf("Redis cache error for email lookup (continuing with DB): %v", err)
 	}
 
 	userObj, err := s.userRepo.GetUserByEmail(ctx, email)
@@ -137,47 +120,15 @@ func (s *UserServiceImpl) GetUserByEmail(ctx context.Context, email string) (*us
 		return nil, fmt.Errorf("failed to get user: %w", err)
 	}
 
-	// Cache email-to-userID mapping and profile asynchronously
-	go func() {
-		bgCtx := context.Background()
-
-		// Cache email lookup
-		if err := s.rclient.SetJSON(bgCtx, emailKey, userObj.Id, keys.TTLUserProfile); err != nil {
-			s.logger.Warnf("Failed to cache email lookup: %v", err)
-		}
-
-		// Cache full profile
-		profileKey := keys.User.Profile(userObj.Id)
-		if err := s.rclient.SetJSON(bgCtx, profileKey, userObj, keys.TTLUserProfile); err != nil {
-			s.logger.Warnf("Failed to cache user profile: %v", err)
-		}
-	}()
-
 	return userObj, nil
 }
 
-// GetUserByID retrieves a user by ID with caching
+// GetUserByID retrieves a user by ID (simple DB fetch)
 func (s *UserServiceImpl) GetUserByID(ctx context.Context, userID string) (*user.User, error) {
 	s.logger.Info("Getting user by ID: %s", userID)
 
 	if userID == "" {
 		return nil, fmt.Errorf("user ID is required")
-	}
-
-	// Try cache first
-	cacheKey := keys.User.Profile(userID)
-	var userObj user.User
-	err := s.rclient.GetJSON(ctx, cacheKey, &userObj)
-
-	if err == nil {
-		// Cache hit
-		s.logger.Info("User profile cache hit for ID: %s", userID)
-		return &userObj, nil
-	}
-
-	// Cache miss - fetch from database
-	if !errors.Is(err, redis.Nil) {
-		s.logger.Warnf("Redis cache error for user profile (continuing with DB): %v", err)
 	}
 
 	userFromDB, err := s.userRepo.GetUserByID(ctx, userID)
@@ -186,18 +137,10 @@ func (s *UserServiceImpl) GetUserByID(ctx context.Context, userID string) (*user
 		return nil, fmt.Errorf("failed to get user: %w", err)
 	}
 
-	// Update cache asynchronously (fire-and-forget)
-	go func() {
-		bgCtx := context.Background()
-		if err := s.rclient.SetJSON(bgCtx, cacheKey, userFromDB, keys.TTLUserProfile); err != nil {
-			s.logger.Warnf("Failed to cache user profile: %v", err)
-		}
-	}()
-
 	return userFromDB, nil
 }
 
-// GetUserProfile retrieves user profile with masked national ID
+// GetUserProfile retrieves user profile with masked national ID (cached)
 func (s *UserServiceImpl) GetUserProfile(ctx context.Context, userID string) (*user.UserProfileDTO, error) {
 	s.logger.Info("Getting user profile for ID: %s", userID)
 
@@ -205,7 +148,18 @@ func (s *UserServiceImpl) GetUserProfile(ctx context.Context, userID string) (*u
 		return nil, fmt.Errorf("user ID is required")
 	}
 
-	// Fetch user data and identity data
+	// Try cache first
+	cacheKey := keys.User.Profile(userID)
+	var cachedProfile user.UserProfileDTO
+	err := s.rclient.GetJSON(ctx, cacheKey, &cachedProfile)
+
+	if err == nil {
+		// Cache hit
+		s.logger.Info("User profile cache hit for ID: %s", userID)
+		return &cachedProfile, nil
+	}
+
+	// Cache miss - fetch from database
 	userData, identityData, err := s.userRepo.GetUserKYCStatus(ctx, userID)
 	if err != nil {
 		s.logger.Error("Failed to get user profile: %v", err)
@@ -233,6 +187,14 @@ func (s *UserServiceImpl) GetUserProfile(ctx context.Context, userID string) (*u
 		// Mask national ID - show only last 4 characters
 		profile.MaskedNationalID = s.maskNationalID(identityData.NationalID)
 	}
+
+	// Cache profile asynchronously (fire-and-forget)
+	go func() {
+		bgCtx := context.Background()
+		if err := s.rclient.SetJSON(bgCtx, cacheKey, profile, keys.TTLUserProfile); err != nil {
+			s.logger.Warnf("Failed to cache user profile: %v", err)
+		}
+	}()
 
 	return profile, nil
 }

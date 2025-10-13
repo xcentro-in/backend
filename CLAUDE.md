@@ -32,6 +32,7 @@ go fmt ./... && go vet ./... && go mod tidy
 - **`internal/core/`**: Domain entities, business logic, repository interfaces
 - **`internal/adapters/`**: Database, cache, external APIs, payment gateways
 - **`internal/handlers/`**: HTTP handlers and middleware
+- **`internal/middleware/`**: Reusable middleware (JWT, business roles with Redis caching)
 - **`internal/services/`**: Application orchestration layer
 - **`internal/shared/`**: Common utilities and configuration
 - **`cmd/`**: Entry points (api, migrate)
@@ -305,6 +306,7 @@ DELETE /v1/payees/:payee_id/accounts/:account_id      # Soft delete
 - `GET /v1/user/verify-email?token=xxx` - Email verification
 - `GET /v1/user/forgot-password?email=xxx` - Request password reset
 - `POST /v1/user/reset-password` - Reset password with token
+- `GET /v1/user/roles` - Get user's business roles (returns userId, businessId, role)
 
 ### User Onboarding (KYC) APIs (`/v1/user/onboard`)
 - `POST /v1/user/onboard/initiate` - Start KYC process (PAN + Aadhaar verification)

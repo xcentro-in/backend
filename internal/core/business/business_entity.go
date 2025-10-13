@@ -119,6 +119,5 @@ type BusinessDetailsResponse struct {
 	GSTIN        string              `json:"gstin"`
 	PAN          string              `json:"pan"`
 	BusinessType shared.BusinessType `json:"businessType"`
-	KYBStatus    shared.KYBstatus    `json:"kybStatus,omitempty"` // Only visible if not completed/verified
 	UserRole     shared.UserRole     `json:"userRole"`
 }
