@@ -281,3 +281,102 @@ type CallbackPayload struct {
 	MerchantLogo    string `json:"merchant_logo"`    // Merchant logo URL (e.g., "NA")
 	UnmappedStatus  string `json:"unmappedstatus"`   // Unmapped status (e.g., "NA")
 }
+
+// ============================================================================
+// SETTLEMENT WEBHOOK TYPES
+// Sent by Easebuzz when settlement is completed (T+1 to T+3 days after payment)
+// Note: Webhook data arrives as form-urlencoded, must be parsed to JSON
+// ============================================================================
+
+// SettlementWebhookResponse represents the top-level settlement webhook response
+// Form-urlencoded data is parsed into this structure
+//
+// Key Characteristics:
+//   - Data Format: Form-urlencoded (field "data" contains JSON string)
+//   - Batch Processing: Contains multiple transactions in settled_transactions[] array
+//   - Amounts: Numbers only (int or float64), never strings
+//   - Hash Validation: SHA-512 (TODO - algorithm TBD for settlement webhooks)
+type SettlementWebhookResponse struct {
+	Status int                   `json:"status"` // 1 for success, 0 for failure
+	Data   SettlementWebhookData `json:"data"`   // Main settlement data
+}
+
+// SettlementWebhookData represents the batch settlement notification data
+// Contains arrays of settled transactions and batch-level financial summary
+type SettlementWebhookData struct {
+	// ============================================================================
+	// SECURITY & IDENTIFICATION
+	// ============================================================================
+	Hash    string `json:"hash"`     // SHA-512 hash for verification (TODO: validation algorithm TBD)
+	PaidOut int    `json:"paid_out"` // 1 = funds paid out, 0 = not paid
+
+	// ============================================================================
+	// SETTLEMENT IDENTIFICATION
+	// ============================================================================
+	PayoutID   string `json:"payout_id"`   // Settlement batch ID (e.g., "PT1LCHKBAB")
+	PayoutDate string `json:"payout_date"` // Settlement timestamp "YYYY-MM-DD HH:MM:SS.SSSSSS"
+
+	// ============================================================================
+	// BANK DETAILS (where funds were settled)
+	// ============================================================================
+	BankTransactionID string `json:"bank_transaction_id"` // Bank reference (e.g., "YESBN5202501300640000000")
+	BankName          string `json:"bank_name"`           // Bank name (e.g., "Kotak Mahindra Bank")
+	AccountNumber     string `json:"account_number"`      // Account number (e.g., "000000000000")
+	IFSCCode          string `json:"ifsc_code"`           // IFSC code (e.g., "K00000ABC")
+	NameOnBank        string `json:"name_on_bank"`        // Account holder name (e.g., "RAJESH K")
+
+	// ============================================================================
+	// FINANCIAL TOTALS (batch level)
+	// All amounts are numbers (int or float64), never strings
+	// ============================================================================
+	TotalAmount         float64 `json:"total_amount"`          // Total of all transactions in batch
+	PayoutAmount        float64 `json:"payout_amount"`         // Net amount paid out (after fees)
+	RefundAmount        float64 `json:"refund_amount"`         // Total refunds in batch
+	ServiceChargeAmount float64 `json:"service_charge_amount"` // Total MDR fees (batch level)
+	ServiceTaxAmount    float64 `json:"service_tax_amount"`    // Total GST on MDR (batch level)
+
+	// ============================================================================
+	// TRANSACTION ARRAYS
+	// ============================================================================
+	SettledTransactions []SettledTransaction `json:"settled_transactions"` // KEY: Process these transactions
+	RefundTransactions  []RefundTransaction  `json:"refund_transactions"`  // Refunds (skip for now)
+	SplitPayouts        []any                `json:"split_payouts"`        // Split payouts (not used)
+	SubmerchantPayouts  []any                `json:"submerchant_payouts"`  // Submerchant payouts (not used)
+}
+
+// SettledTransaction represents an individual payment settlement within the batch
+// Each transaction in this array corresponds to a payment that has been settled
+//
+// Financial Flow:
+//   - transaction_amount: Original payment amount customer paid
+//   - service_charge: MDR base fee charged by gateway
+//   - service_tax: GST on MDR (18% of service_charge)
+//   - settlement_amount: Net amount received = transaction_amount - service_charge - service_tax
+//
+// All amounts are numbers (int or float64), never strings
+type SettledTransaction struct {
+	TxnID             string   `json:"txnid"`              // KEY: Our payment_id (for lookup)
+	EasepayID         string   `json:"easepayid"`          // Easebuzz transaction ID (gateway reference)
+	TransactionAmount float64  `json:"transaction_amount"` // Original payment amount (e.g., 5.0)
+	ServiceCharge     float64  `json:"service_charge"`     // MDR base fee (e.g., 0.0)
+	ServiceTax        float64  `json:"service_tax"`        // GST on MDR (e.g., 0.0)
+	SettlementAmount  float64  `json:"settlement_amount"`  // Net amount = txn - charge - tax (e.g., 5.0)
+	TransactionType   string   `json:"transaction_type"`   // Payment method: "UPI", "CARD", "NB", etc.
+	SubmerchantID     *string  `json:"submerchant_id"`     // Submerchant ID (usually null)
+	SplitTransactions any      `json:"split_transactions"` // Split data (usually null)
+}
+
+// RefundTransaction represents a refund within the settlement batch
+// Not processing refunds currently (future implementation)
+type RefundTransaction struct {
+	TxnID             string   `json:"txnid"`               // Original transaction ID
+	EasepayID         string   `json:"easepayid"`           // Easebuzz transaction ID
+	RefundID          string   `json:"refund_id"`           // Refund identifier
+	RefundAmount      float64  `json:"refund_amount"`       // Amount refunded
+	TransactionAmount float64  `json:"transaction_amount"`  // Original transaction amount
+	TransactionType   string   `json:"transaction_type"`    // Payment method
+	MerchantRefundID  string   `json:"merchant_refund_id"`  // Merchant's refund reference
+	UDF1              *string  `json:"udf1"`                // User-defined field 1
+	UDF2              *string  `json:"udf2"`                // User-defined field 2
+	UDF3              *string  `json:"udf3"`                // User-defined field 3
+}

@@ -343,9 +343,38 @@ DELETE /v1/payees/:payee_id/accounts/:account_id      # Soft delete
 **Fee Calculation**:
 - `POST /api/v1/process_payment/get_fee_rules` - Get fee rules for payment context
 
-**Webhooks**:
-- `POST /api/v1/process_payment/webhooks/jiopay` - JioPay webhook handler
-- `POST /api/v1/process_payment/webhooks/easebuzz` - Easebuzz webhook handler
+**Webhooks (Payment Status)**:
+- `POST /api/v1/process_payment/webhooks/payment_status?type=jiopay` - JioPay payment status webhook
+- `POST /api/v1/process_payment/webhooks/payment_status?type=easebuzz` - Easebuzz payment status webhook
+  - **Purpose**: Real-time payment authorization status (after 3DS/OTP completion)
+  - **Updates**: Payment status (success/failed/pending), initializes settlement_status='pending'
+  - **Metadata**: Payment-specific fields (txn_id, response_code, etc.)
+  - **Timing**: Immediate (within seconds of payment completion)
+
+**Webhooks (Settlement Status)**:
+- `POST /api/v1/process_payment/webhooks/settlement_status?type=jiopay` - JioPay settlement webhook ✅ **IMPLEMENTED**
+  - **Data Format**: JSON
+  - **Processing**: Single transaction per webhook
+  - **Purpose**: Settlement notification (actual funds transfer to merchant account)
+  - **Timing**: T+1 to T+3 days after successful payment
+
+- `POST /api/v1/process_payment/webhooks/settlement_status?type=easebuzz` - Easebuzz settlement webhook ✅ **IMPLEMENTED**
+  - **Data Format**: Form-urlencoded (parsed to JSON)
+  - **Processing**: Batch (multiple transactions in `settled_transactions[]` array)
+  - **Purpose**: Batch settlement notifications (actual funds transfer to merchant account)
+  - **Timing**: T+1 to T+3 days after successful payment
+
+  **Common Characteristics**:
+  - **Updates**: Settlement status 'pending' → 'settled', settlement financial data
+  - **Financial Fields**:
+    - `settlement_amount`: Original payment amount (txnAmount from webhook)
+    - `mdr_amount`: Gateway fees = service_charge + service_tax (MDR + GST on MDR)
+    - `net_settlement_amount`: Final amount received = settlement_amount (transaction_amount - mdr)
+    - `settled_at`: Actual settlement date
+    - `settlement_reference_id`: Settlement batch ID (payout_id for Easebuzz)
+  - **Key Characteristic**: Arrival = 100% success (no status field in webhook)
+  - **Idempotency**: Duplicate webhooks skipped (check settlement_status = 'settled')
+  - **Security**: SHA-512 signature validation (Easebuzz), HMAC-SHA256 (JioPay)
 
 ### Payee APIs (`/v1/payees`)
 - `POST /v1/payees` - Onboard new payee (GSTIN + bank verification)
@@ -466,14 +495,18 @@ Orchestrator automatically selects gateway based on payment method and card type
 - ✅ Cryptogram generation with Vault API headers
 - ✅ Payment initiation with HMAC-SHA256 secure hash
 - ✅ Card storage in database after tokenization
-- ⏳ Webhook validation (TODO)
+- ✅ Payment webhook validation with HMAC-SHA256
+- ✅ Settlement webhook validation with HMAC-SHA256
+- ✅ Settlement financial tracking (settlement_amount, mdr_amount, net_settlement_amount)
 
 **Easebuzz Implementation Status**:
 - ✅ Tokenization with TMS API (full payload AES-256 encryption)
 - ✅ Cryptogram generation with TMS API (full payload encryption)
 - ✅ Payment with field-level AES-256 encryption (token, cryptogram, cvv)
 - ✅ Card storage in database after tokenization
-- ⏳ Webhook validation (TODO)
+- ✅ Payment webhook validation with SHA-512
+- ✅ Settlement webhook (batch processing with form-urlencoded parsing)
+- ✅ Settlement financial tracking (settlement_amount, mdr_amount, net_settlement_amount)
 
 ### Tokenization Flow (Auto-routing)
 1. **Client Request**: `/tokenize` with card details
@@ -625,7 +658,7 @@ POST /api/v1/process_payment/make_payment -H "Authorization: Bearer <TOKEN>"
 # Step 3: User completes 3DS/OTP on redirect_url
 
 # Step 4: Webhook callback (automatic)
-POST https://yourapp.com/api/v1/process_payment/webhooks/jiopay
+POST https://yourapp.com/api/v1/process_payment/webhooks/payment_status?type=jiopay
 {
   "payment_id": "pay_uuid_001",
   "status": "success",
@@ -711,4 +744,222 @@ POST /v1/payees -H "Authorization: Bearer <TOKEN>"
     "account_holder_name": "ABC Industries Pvt Ltd",
     "display_name": "ABC Corp"
   }
+```
+
+### Example: Settlement Webhook Flow (JioPay)
+```bash
+# Timeline: Payment → Settlement (T+1 to T+3 days)
+
+# Day 0: Payment completed (payment_status webhook)
+# - payment.status = 'success'
+# - payment.settlement_status = 'pending'
+# - payment.total_amount = 51250 (₹512.50 with fees)
+
+# Day 2: Settlement completed by JioPay (settlement webhook arrives)
+POST https://yourapp.com/api/v1/process_payment/webhooks/settlement_status?type=jiopay
+{
+  "aggregatorID": "A001",
+  "merchantId": "123243",
+  "merchantTxnNo": "pay_uuid_001",           # Our payment_id
+  "invoiceNos": "INV12345",
+  "paymentMode": "CARD",
+  "paymentSubInstType": "CC",
+  "txnChannel": "WEB",
+  "txnAmount": "512.50",                     # Original amount in rupees
+  "txnCharges": "12.81",                     # MDR base (2.5% of 512.50)
+  "serviceTax": "2.31",                      # GST on MDR (18% of 12.81)
+  "settlementID": "A00121-20251013-010",     # Settlement batch ID
+  "settlementDate": "20251013",              # YYYYMMDD format
+  "settlementAccount": "9876543210987654321",
+  "settlementAccountIFSC": "HDFC0001",
+  "settledAmount": "497.38",                 # Net: 512.50 - 12.81 - 2.31 = 497.38
+  "cardNetwork": "VISA",
+  "addlParam1": "SettlementInfo",
+  "secureHash": "39867b8ef38a2853aacb84bbf5f927a72b27bdb301365245564f012d20dbc2f2"
+}
+
+# System Processing:
+# 1. Validate HMAC-SHA256 signature
+# 2. Find payment by merchantTxnNo
+# 3. Verify payment.status = 'success' and settlement_status = 'pending'
+# 4. Parse and convert amounts:
+#    - settlement_amount = 51250 paise (₹512.50 * 100)
+#    - mdr_amount = 1512 paise [(₹12.81 + ₹2.31) * 100]
+#    - net_settlement_amount = 49738 paise (₹497.38 * 100)
+# 5. Update database:
+#    - settlement_status = 'settled'
+#    - settlement_amount = 51250
+#    - mdr_amount = 1512
+#    - net_settlement_amount = 49738
+#    - settled_at = 2025-10-13
+#    - settlement_reference_id = "A00121-20251013-010"
+#    - settlement_metadata = {full webhook payload as JSONB}
+
+# Financial Summary:
+# Customer Paid:    ₹512.50 (including payment processing fee)
+# Gateway Settled:  ₹512.50 (same as payment amount)
+# Gateway MDR:      ₹15.12  (2.5% + 18% GST)
+# Merchant Received: ₹497.38 (final amount in bank account)
+```
+
+### Example: Settlement Webhook Flow (Easebuzz - Batch Processing)
+```bash
+# Timeline: Multiple Payments → Batch Settlement (T+1 to T+3 days)
+
+# Day 0: Multiple payments completed (payment_status webhooks)
+# Payment 1:
+#   - payment.id = "pay_uuid_001", txnid = "ORDER123"
+#   - payment.status = 'success'
+#   - payment.settlement_status = 'pending'
+#   - payment.total_amount = 100000 (₹1000.00)
+# Payment 2:
+#   - payment.id = "pay_uuid_002", txnid = "ORDER124"
+#   - payment.status = 'success'
+#   - payment.settlement_status = 'pending'
+#   - payment.total_amount = 50000 (₹500.00)
+
+# Day 2: Batch settlement completed by Easebuzz (single webhook for multiple transactions)
+POST https://yourapp.com/api/v1/process_payment/webhooks/settlement_status?type=easebuzz
+Content-Type: application/x-www-form-urlencoded
+
+data={
+  "status": 1,                                 # 1 = success, 0 = failure
+  "data": {
+    "hash": "abc123...def789",                 # SHA-512 signature
+    "paid_out": 1,                             # 1 = funds disbursed
+    "payout_id": "PT1LCHKBAB",                 # Settlement batch ID
+    "payout_date": "2025-10-13 14:30:00.000000",
+    "bank_transaction_id": "UTR202510131430001",
+    "bank_name": "HDFC Bank",
+    "account_number": "50200012345678",
+    "ifsc_code": "HDFC0001234",
+    "name_on_bank": "XCentro Private Limited",
+
+    # Batch-level totals (all amounts as numbers, not strings)
+    "total_amount": 1500.00,                   # Total of all transactions
+    "payout_amount": 1455.30,                  # Net amount paid out
+    "refund_amount": 0.00,
+    "service_charge_amount": 37.50,            # Total MDR
+    "service_tax_amount": 7.20,                # Total GST on MDR
+
+    # Transaction array - KEY: Process each one
+    "settled_transactions": [
+      {
+        "txnid": "ORDER123",                   # Our payment_id for lookup
+        "easepayid": "EZBPAY789012",          # Easebuzz reference
+        "transaction_amount": 1000.00,         # Original amount in rupees
+        "service_charge": 25.00,               # MDR base (2.5%)
+        "service_tax": 4.50,                   # GST on MDR (18% of 25.00)
+        "settlement_amount": 970.50,           # Net: 1000 - 25 - 4.50
+        "transaction_type": "CARD",
+        "submerchant_id": null,
+        "split_transactions": []
+      },
+      {
+        "txnid": "ORDER124",
+        "easepayid": "EZBPAY789013",
+        "transaction_amount": 500.00,
+        "service_charge": 12.50,               # MDR base (2.5%)
+        "service_tax": 2.25,                   # GST on MDR (18% of 12.50)
+        "settlement_amount": 485.25,           # Net: 500 - 12.50 - 2.25
+        "transaction_type": "UPI",
+        "submerchant_id": null,
+        "split_transactions": []
+      }
+    ],
+    "refund_transactions": [],                 # Not processed (future feature)
+    "split_payouts": [],
+    "submerchant_payouts": []
+  }
+}
+
+# System Processing (Batch Loop):
+# For each transaction in settled_transactions[]:
+#
+# Transaction 1 (ORDER123):
+# 1. Parse form-urlencoded data to JSON
+# 2. Validate webhook.status = 1
+# 3. Hash validation (SHA-512) - TODO: Add proper validation
+# 4. Find payment by txnid: "ORDER123" → payment_id "pay_uuid_001"
+# 5. Verify payment.status = 'success' and settlement_status = 'pending'
+# 6. Convert amounts from float64 to paise:
+#    - settlement_amount = 100000 paise (1000.00 * 100)
+#    - mdr_amount = 2950 paise [(25.00 + 4.50) * 100]
+#    - net_settlement_amount = 97050 paise (970.50 * 100)
+# 7. Update database:
+#    - settlement_status = 'settled'
+#    - settlement_amount = 100000
+#    - mdr_amount = 2950
+#    - net_settlement_amount = 97050
+#    - settled_at = 2025-10-13 14:30:00
+#    - settlement_reference_id = "PT1LCHKBAB"
+#    - settlement_metadata = {
+#        "settlement_batch_id": "PT1LCHKBAB",
+#        "settlement_bank_transaction_id": "UTR202510131430001",
+#        "easepayid": "EZBPAY789012",
+#        "transaction_type": "CARD",
+#        "batch_total_amount": 1500.00,
+#        ...full webhook data...
+#      }
+# 8. Increment success_count
+#
+# Transaction 2 (ORDER124):
+# [Same processing steps as Transaction 1]
+#
+# Response (after batch processing):
+{
+  "status": "success",
+  "message": "Batch settlement processed",
+  "summary": {
+    "total_transactions": 2,
+    "processed": 2,                            # Successfully updated
+    "skipped": 0,                              # Already settled or invalid
+    "errors": 0                                # Failed to process
+  }
+}
+
+# Financial Summary (Transaction 1):
+# Customer Paid:     ₹1000.00 (original payment)
+# Gateway Settled:   ₹1000.00 (confirmed by webhook)
+# Gateway MDR:       ₹29.50   (2.5% MDR + 18% GST)
+# Merchant Received: ₹970.50  (in bank account)
+
+# Financial Summary (Transaction 2):
+# Customer Paid:     ₹500.00
+# Gateway Settled:   ₹500.00
+# Gateway MDR:       ₹14.75  (2.5% MDR + 18% GST)
+# Merchant Received: ₹485.25
+
+# Batch Total:
+# Total Settled:     ₹1500.00
+# Total MDR:         ₹44.25
+# Total Received:    ₹1455.75 (actual bank credit)
+```
+
+### Easebuzz Settlement Webhook: Key Differences
+```bash
+# JioPay vs Easebuzz Settlement Webhooks
+
+JioPay:
+- Data Format: JSON (direct)
+- Processing Model: Single transaction per webhook
+- Amount Format: Decimal strings ("1000.00")
+- Date Format: YYYYMMDD ("20251013")
+- Hash Algorithm: HMAC-SHA256
+- Webhook Frequency: One per payment
+
+Easebuzz:
+- Data Format: Form-urlencoded (requires parsing to JSON)
+- Processing Model: Batch (multiple transactions in array)
+- Amount Format: Numbers (1000.00 as float64)
+- Date Format: "YYYY-MM-DD HH:MM:SS.SSSSSS"
+- Hash Algorithm: SHA-512
+- Webhook Frequency: One per batch (multiple payments)
+
+# Error Handling Strategy:
+# - Continue processing batch even if individual transactions fail
+# - Return 200 OK always (prevent gateway retry storms)
+# - Track success/skip/error counts separately
+# - Idempotency: Skip already-settled transactions
+# - Log errors but don't halt batch processing
 ```

@@ -1,6 +1,7 @@
 package payment
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -381,6 +382,106 @@ func parseSettlementDate(dateStr string) (time.Time, error) {
 }
 
 // ============================================================================
+// EASEBUZZ SETTLEMENT WEBHOOK HELPERS
+// ============================================================================
+
+// parseFormEncodedWebhook extracts JSON from form-urlencoded webhook data
+//
+// Easebuzz sends webhook data as form-urlencoded format per their documentation:
+// "The data received on the webhook URL will be in form-url-encoded format.
+// It needs to be parsed into the JSON first and then use it accordingly."
+//
+// This function handles:
+//  1. Reading raw request body
+//  2. Detecting if data is already JSON (fallback)
+//  3. Parsing form-urlencoded data
+//  4. Extracting JSON from form field (typically "data" field)
+//
+// Returns:
+//   - JSON bytes ready for unmarshaling
+//   - Error if parsing fails
+func parseFormEncodedWebhook(c echo.Context) ([]byte, error) {
+	// Step 1: Read raw body
+	bodyBytes, err := io.ReadAll(c.Request().Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read body: %w", err)
+	}
+
+	// Step 2: Check if it's already JSON (some gateways may send JSON despite docs)
+	if json.Valid(bodyBytes) {
+		fmt.Println("📥 Body is already valid JSON")
+		return bodyBytes, nil
+	}
+
+	// Step 3: Parse as form data
+	// Reset body reader for form parsing
+	c.Request().Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+	if err := c.Request().ParseForm(); err != nil {
+		return nil, fmt.Errorf("failed to parse form: %w", err)
+	}
+
+	fmt.Printf("📥 Form fields received: %d\n", len(c.Request().Form))
+
+	// Step 4: Try common form field names
+	// Easebuzz typically uses "data" field for JSON payload
+	if dataField := c.Request().FormValue("data"); dataField != "" {
+		fmt.Println("✅ Found JSON in 'data' form field")
+		return []byte(dataField), nil
+	}
+
+	// Step 5: If no "data" field found, log all fields for debugging
+	fmt.Println("⚠️  No 'data' field found, available fields:")
+	for key := range c.Request().Form {
+		fmt.Printf("   - %s\n", key)
+	}
+
+	// Fallback: assume entire body is JSON
+	return bodyBytes, nil
+}
+
+// parseNumberToPaise converts float64 amount to paise int64
+//
+// Easebuzz sends amounts as numbers (int or float64), never strings.
+// This function converts rupee amounts to paise (smallest unit) for database storage.
+//
+// Examples:
+//   - 5.0 → 500 paise
+//   - 982.30 → 98230 paise
+//   - 0.0 → 0 paise
+//
+// Handles floating point precision by rounding to nearest integer.
+func parseNumberToPaise(amount float64) int64 {
+	return int64(math.Round(amount * 100))
+}
+
+// parseEasebuzzSettlementDate parses Easebuzz settlement date format to time.Time
+//
+// Easebuzz date format: "YYYY-MM-DD HH:MM:SS.SSSSSS"
+//
+// Examples:
+//   - "2025-01-30 11:50:21.712996" → 2025-01-30 11:50:21 UTC
+//   - "2025-01-30 11:50:21" → 2025-01-30 11:50:21 UTC (without microseconds)
+//
+// Tries with microseconds first, falls back to without if parsing fails.
+func parseEasebuzzSettlementDate(dateStr string) (time.Time, error) {
+	if dateStr == "" {
+		return time.Time{}, fmt.Errorf("date string is empty")
+	}
+
+	// Try with microseconds first: "2006-01-02 15:04:05.999999"
+	settlementDate, err := time.Parse("2006-01-02 15:04:05.999999", dateStr)
+	if err != nil {
+		// Fallback without microseconds: "2006-01-02 15:04:05"
+		settlementDate, err = time.Parse("2006-01-02 15:04:05", dateStr)
+		if err != nil {
+			return time.Time{}, fmt.Errorf("failed to parse date '%s': %w", dateStr, err)
+		}
+	}
+
+	return settlementDate, nil
+}
+
+// ============================================================================
 // SETTLEMENT STATUS WEBHOOKS (FUTURE IMPLEMENTATION)
 // ============================================================================
 
@@ -683,13 +784,183 @@ func (h *WebhookHandler) handleJioPaySettlementWebhook(c echo.Context) error {
 }
 
 // handleEasebuzzSettlementWebhook processes settlement notifications from Easebuzz
-// TODO: Implement when Easebuzz settlement webhook format is provided
+// Sent when Easebuzz completes settlement to merchant account (T+1 to T+3 days)
+//
+// Key Differences from JioPay:
+//   - Data format: Form-urlencoded (must parse to JSON)
+//   - Batch processing: Multiple transactions in settled_transactions[] array
+//   - Amount format: Numbers (int/float64), not strings
+//   - Date format: "YYYY-MM-DD HH:MM:SS.SSSSSS"
 func (h *WebhookHandler) handleEasebuzzSettlementWebhook(c echo.Context) error {
-	fmt.Println("⚠️  Easebuzz settlement webhook not yet implemented")
+	ctx := c.Request().Context()
 
-	return c.JSON(http.StatusNotImplemented, map[string]string{
-		"status":  "error",
-		"message": "Easebuzz settlement webhooks not yet implemented. Format specification pending.",
-		"gateway": "easebuzz",
+	fmt.Println("=== EASEBUZZ SETTLEMENT WEBHOOK: Processing batch settlement notification ===")
+
+	// Step 1: Parse form-urlencoded data to JSON
+	jsonData, err := parseFormEncodedWebhook(c)
+	if err != nil {
+		fmt.Printf("❌ Failed to parse form data: %v\n", err)
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "invalid_form_data",
+		})
+	}
+
+	fmt.Printf("📥 Parsed JSON data: %d bytes\n", len(jsonData))
+
+	// Step 2: Unmarshal to settlement webhook response
+	var webhook easebuzz.SettlementWebhookResponse
+	if err := json.Unmarshal(jsonData, &webhook); err != nil {
+		fmt.Printf("❌ Failed to unmarshal settlement webhook: %v\n", err)
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "invalid_json_structure",
+		})
+	}
+
+	// Step 3: Validate response status
+	if webhook.Status != 1 {
+		fmt.Printf("❌ Invalid webhook status: %d (expected 1)\n", webhook.Status)
+		return c.JSON(http.StatusOK, map[string]string{
+			"status":  "error",
+			"message": "Invalid webhook status",
+		})
+	}
+
+	fmt.Printf("📋 PayoutID: %s\n", webhook.Data.PayoutID)
+	fmt.Printf("📋 PayoutDate: %s\n", webhook.Data.PayoutDate)
+	fmt.Printf("📋 Transactions to process: %d\n", len(webhook.Data.SettledTransactions))
+	fmt.Printf("📋 Batch totals - Total: %.2f, Payout: %.2f, MDR: %.2f\n",
+		webhook.Data.TotalAmount, webhook.Data.PayoutAmount, webhook.Data.ServiceChargeAmount)
+
+	// Step 4: Hash validation (TODO - algorithm TBD for settlement webhooks)
+	// For now, log the hash for reference and skip validation with warning
+	fmt.Printf("⚠️  Hash validation skipped for settlement webhooks (algorithm TBD)\n")
+	fmt.Printf("   Received hash: %s\n", webhook.Data.Hash)
+	fmt.Printf("   TODO: Implement hash validation once settlement webhook hash algorithm confirmed\n")
+
+	// Step 5: Parse payout date
+	payoutDate, err := parseEasebuzzSettlementDate(webhook.Data.PayoutDate)
+	if err != nil {
+		fmt.Printf("❌ Failed to parse payout date: %v\n", err)
+		return c.JSON(http.StatusOK, map[string]string{
+			"status":  "error",
+			"message": "Invalid payout date format",
+		})
+	}
+
+	fmt.Printf("📅 Payout date: %s\n", payoutDate.Format("2006-01-02 15:04:05"))
+
+	// Step 6: Initialize batch processing counters
+	totalCount := len(webhook.Data.SettledTransactions)
+	successCount := 0
+	skipCount := 0
+	errorCount := 0
+
+	fmt.Printf("\n🔄 Processing %d settlements in batch...\n\n", totalCount)
+
+	// Step 7: Loop through settled_transactions array
+	for idx, settlement := range webhook.Data.SettledTransactions {
+		fmt.Printf("--- Processing settlement %d/%d: TxnID %s ---\n", idx+1, totalCount, settlement.TxnID)
+
+		// Find payment by txnid (our payment_id)
+		pmt, err := h.paymentRepo.GetPaymentByGatewayPaymentID(ctx, settlement.TxnID)
+		if err != nil || pmt == nil {
+			fmt.Printf("❌ Payment not found: %s, error: %v\n", settlement.TxnID, err)
+			errorCount++
+			continue
+		}
+
+		fmt.Printf("✅ Payment found: %s (status: %s, settlement_status: %s)\n",
+			pmt.ID, pmt.Status, pmt.SettlementStatus)
+
+		// Validate payment state
+		if pmt.Status != payment.PaymentStatusSuccess {
+			fmt.Printf("⚠️  Payment status is not 'success': %s (skipping)\n", pmt.Status)
+			skipCount++
+			continue
+		}
+
+		// Idempotency check - if already settled, skip
+		if pmt.SettlementStatus == payment.SettlementStatusSettled {
+			fmt.Printf("⚠️  Payment already settled (idempotent - skipping)\n")
+			skipCount++
+			continue
+		}
+
+		// Validate settlement_status is 'pending'
+		if pmt.SettlementStatus != payment.SettlementStatusPending {
+			fmt.Printf("⚠️  Settlement status is not 'pending': %s (skipping)\n", pmt.SettlementStatus)
+			skipCount++
+			continue
+		}
+
+		// Parse amounts (numbers to paise)
+		settlementAmount := parseNumberToPaise(settlement.TransactionAmount)
+		serviceCharge := parseNumberToPaise(settlement.ServiceCharge)
+		serviceTax := parseNumberToPaise(settlement.ServiceTax)
+		netAmount := parseNumberToPaise(settlement.SettlementAmount)
+
+		// Calculate MDR (charges + GST)
+		mdrAmount := serviceCharge + serviceTax
+
+		// Validate calculation
+		expectedNet := settlementAmount - mdrAmount
+		if netAmount != expectedNet {
+			fmt.Printf("⚠️  Settlement calculation mismatch! Expected: %d, Got: %d\n",
+				expectedNet, netAmount)
+		}
+
+		fmt.Printf("💰 Settlement amounts (in paise):\n")
+		fmt.Printf("   - Transaction Amount: %d (₹%.2f)\n", settlementAmount, float64(settlementAmount)/100)
+		fmt.Printf("   - MDR Amount: %d (₹%.2f) [Charge: %d + Tax: %d]\n",
+			mdrAmount, float64(mdrAmount)/100, serviceCharge, serviceTax)
+		fmt.Printf("   - Net Settlement: %d (₹%.2f)\n", netAmount, float64(netAmount)/100)
+
+		// Prepare settlement metadata
+		settlementMetadata := map[string]any{
+			"settlement_webhook_received_at": time.Now().Format(time.RFC3339),
+			"settlement_gateway":             "easebuzz",
+			"settlement_batch_id":            webhook.Data.PayoutID,
+			"settlement_bank_transaction_id": webhook.Data.BankTransactionID,
+			"settlement_bank_name":           webhook.Data.BankName,
+			"settlement_account":             webhook.Data.AccountNumber,
+			"settlement_ifsc":                webhook.Data.IFSCCode,
+			"batch_total_amount":             webhook.Data.TotalAmount,
+			"batch_payout_amount":            webhook.Data.PayoutAmount,
+			"transaction_type":               settlement.TransactionType,
+			"easepayid":                      settlement.EasepayID,
+		}
+
+		// Update settlement status to 'settled'
+		if err := h.paymentRepo.UpdateSettlementStatus(ctx, pmt.ID, payment.SettlementStatusSettled, settlementMetadata); err != nil {
+			fmt.Printf("❌ Failed to update settlement status: %v\n", err)
+			errorCount++
+			continue
+		}
+
+		// Update settlement amounts
+		if err := h.paymentRepo.UpdateSettlementAmounts(ctx, pmt.ID, settlementAmount, mdrAmount, netAmount); err != nil {
+			fmt.Printf("❌ Failed to update settlement amounts: %v\n", err)
+			errorCount++
+			continue
+		}
+
+		fmt.Printf("✅ Settlement processed successfully for %s\n\n", settlement.TxnID)
+		successCount++
+	}
+
+	// Step 8: Return batch summary
+	fmt.Println("=== EASEBUZZ SETTLEMENT WEBHOOK: Batch processing complete ===")
+	fmt.Printf("📊 Summary: Total: %d, Processed: %d, Skipped: %d, Errors: %d\n",
+		totalCount, successCount, skipCount, errorCount)
+
+	return c.JSON(http.StatusOK, map[string]any{
+		"status":  "success",
+		"message": "Batch settlement processed",
+		"summary": map[string]int{
+			"total_transactions": totalCount,
+			"processed":          successCount,
+			"skipped":            skipCount,
+			"errors":             errorCount,
+		},
 	})
 }
