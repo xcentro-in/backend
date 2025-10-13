@@ -374,3 +374,148 @@ func (r *PgPaymentRepository) GetPaymentsByBusinessID(ctx context.Context, busin
 
 	return payments, nil
 }
+
+// ============================================================================
+// Settlement Tracking Methods (Phase 7)
+// ============================================================================
+
+// UpdateSettlementStatus updates settlement status and related metadata
+func (r *PgPaymentRepository) UpdateSettlementStatus(ctx context.Context, paymentID string, status payment.SettlementStatus, metadata map[string]any) error {
+	fmt.Printf("[PgPaymentRepository] UpdateSettlementStatus called - PaymentID: %s, SettlementStatus: %s\n", paymentID, status)
+
+	query := `
+		UPDATE xcentro.payments
+		SET settlement_status = $1,
+		    settlement_metadata = COALESCE(settlement_metadata, '{}'::jsonb) || $2::jsonb,
+		    settled_at = CASE WHEN $1 = 'settled' THEN NOW() ELSE settled_at END,
+		    updated_at = NOW()
+		WHERE payment_id = $3
+	`
+
+	// Serialize metadata to JSONB
+	var metadataJSON []byte
+	if metadata != nil {
+		var err error
+		metadataJSON, err = json.Marshal(metadata)
+		if err != nil {
+			return fmt.Errorf("failed to marshal settlement metadata: %w", err)
+		}
+	} else {
+		metadataJSON = []byte("{}")
+	}
+
+	_, err := r.querier.Exec(ctx, query, status, metadataJSON, paymentID)
+	if err != nil {
+		return fmt.Errorf("failed to update settlement status: %w", err)
+	}
+
+	return nil
+}
+
+// UpdateSettlementAmounts updates settlement financial fields
+func (r *PgPaymentRepository) UpdateSettlementAmounts(ctx context.Context, paymentID string, settlementAmount, mdrAmount, netSettlementAmount int64) error {
+	fmt.Printf("[PgPaymentRepository] UpdateSettlementAmounts called - PaymentID: %s, SettlementAmount: %d, MDR: %d, Net: %d\n",
+		paymentID, settlementAmount, mdrAmount, netSettlementAmount)
+
+	query := `
+		UPDATE xcentro.payments
+		SET settlement_amount = $1,
+		    mdr_amount = $2,
+		    net_settlement_amount = $3,
+		    updated_at = NOW()
+		WHERE payment_id = $4
+	`
+
+	_, err := r.querier.Exec(ctx, query, settlementAmount, mdrAmount, netSettlementAmount, paymentID)
+	if err != nil {
+		return fmt.Errorf("failed to update settlement amounts: %w", err)
+	}
+
+	return nil
+}
+
+// GetPendingSettlements retrieves payments pending settlement for a business
+func (r *PgPaymentRepository) GetPendingSettlements(ctx context.Context, businessID string) ([]*payment.Payment, error) {
+	fmt.Printf("[PgPaymentRepository] GetPendingSettlements called - BusinessID: %s\n", businessID)
+
+	query := `
+		SELECT payment_id, user_id, business_id, amount, currency, payment_method, status,
+		       description, gateway_used, gateway_payment_id, callback_url, redirect_url,
+		       payment_source_id, payment_source_type, fee_amount, total_amount,
+		       metadata, created_at, updated_at
+		FROM xcentro.payments
+		WHERE business_id = $1
+		  AND status = 'success'
+		  AND settlement_status = 'pending'
+		ORDER BY created_at ASC
+	`
+
+	rows, err := r.querier.Query(ctx, query, businessID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query pending settlements: %w", err)
+	}
+	defer rows.Close()
+
+	var payments []*payment.Payment
+	for rows.Next() {
+		var p payment.Payment
+		var gatewayUsed, gatewayPaymentID, redirectURL, paymentSourceID, paymentSourceType *string
+		var metadataJSON []byte
+		var updatedAt *time.Time
+
+		err := rows.Scan(
+			&p.ID,
+			&p.UserID,
+			&p.BusinessID,
+			&p.Amount,
+			&p.Currency,
+			&p.PaymentMethod,
+			&p.Status,
+			&p.Description,
+			&gatewayUsed,
+			&gatewayPaymentID,
+			&p.CallbackURL,
+			&redirectURL,
+			&paymentSourceID,
+			&paymentSourceType,
+			&p.FeeAmount,
+			&p.TotalAmount,
+			&metadataJSON,
+			&p.CreatedAt,
+			&updatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan payment: %w", err)
+		}
+
+		// Handle NULL fields
+		if gatewayUsed != nil {
+			p.GatewayUsed = payment.GatewayType(*gatewayUsed)
+		}
+		if gatewayPaymentID != nil {
+			p.GatewayPaymentID = *gatewayPaymentID
+		}
+		if redirectURL != nil {
+			p.RedirectURL = *redirectURL
+		}
+		p.PaymentSourceID = paymentSourceID
+		if paymentSourceType != nil {
+			pst := payment.PaymentSourceType(*paymentSourceType)
+			p.PaymentSourceType = &pst
+		}
+		if updatedAt != nil {
+			p.UpdatedAt = *updatedAt
+		}
+
+		// Deserialize JSONB metadata
+		if len(metadataJSON) > 0 {
+			if err := json.Unmarshal(metadataJSON, &p.Metadata); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal metadata: %w", err)
+			}
+		}
+
+		payments = append(payments, &p)
+	}
+
+	return payments, nil
+}

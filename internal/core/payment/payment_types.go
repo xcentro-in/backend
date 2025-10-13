@@ -64,10 +64,10 @@ const (
 type PaymentSourceType string
 
 const (
-	PaymentSourceCard       PaymentSourceType = "card"
+	PaymentSourceCard        PaymentSourceType = "card"
 	PaymentSourceBankAccount PaymentSourceType = "bank_account"
-	PaymentSourceUPI        PaymentSourceType = "upi"
-	PaymentSourceCreditLine PaymentSourceType = "credit_line"
+	PaymentSourceUPI         PaymentSourceType = "upi"
+	PaymentSourceCreditLine  PaymentSourceType = "credit_line"
 )
 
 // BankAccountType represents different types of bank accounts
@@ -96,10 +96,10 @@ const (
 type CreditLineStatus string
 
 const (
-	CreditLineStatusActive   CreditLineStatus = "active"
-	CreditLineStatusInactive CreditLineStatus = "inactive"
+	CreditLineStatusActive    CreditLineStatus = "active"
+	CreditLineStatusInactive  CreditLineStatus = "inactive"
 	CreditLineStatusSuspended CreditLineStatus = "suspended"
-	CreditLineStatusExpired  CreditLineStatus = "expired"
+	CreditLineStatusExpired   CreditLineStatus = "expired"
 )
 
 // Currency represents supported currencies
@@ -114,7 +114,7 @@ const (
 type FeeType string
 
 const (
-	FeeTypePercentage    FeeType = "percentage"
-	FeeTypeFixed         FeeType = "fixed"
+	FeeTypePercentage     FeeType = "percentage"
+	FeeTypeFixed          FeeType = "fixed"
 	FeeTypePercentagePlus FeeType = "percentage_plus_fixed"
 )

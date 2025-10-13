@@ -19,6 +19,11 @@ type PaymentRepository interface {
 	// Querying for business operations
 	GetPaymentsByBusinessID(ctx context.Context, businessID string, limit, offset int) ([]*Payment, error)
 
+	// Settlement tracking (Phase 7)
+	UpdateSettlementStatus(ctx context.Context, paymentID string, status SettlementStatus, metadata map[string]any) error
+	UpdateSettlementAmounts(ctx context.Context, paymentID string, settlementAmount, mdrAmount, netSettlementAmount int64) error
+	GetPendingSettlements(ctx context.Context, businessID string) ([]*Payment, error)
+
 	// Transaction support (follows user_repository.go pattern)
 	WithTx(tx interface{}) PaymentRepository
 }

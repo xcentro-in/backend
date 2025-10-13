@@ -68,14 +68,14 @@ func (g *MockJioPayGateway) TokenizeCard(ctx context.Context, request GatewayTok
 		TransactionID: request.TransactionID,
 		Status:        "success",
 		Message:       "Card tokenized successfully with JioPay 2-step process",
-		RedirectURL:   "", // No redirect needed for tokenization
+		RedirectURL:   "",  // No redirect needed for tokenization
 		ExpiresAt:     nil, // Tokens don't expire
 		Metadata: map[string]any{
-			"gateway":             "jiopay",
-			"tokenization_flow":   "two_step",
-			"validation_txn_id":   transactionID,
-			"auth_response_code":  authResponseCode,
-			"validation_amount":   100, // ₹1 in paise
+			"gateway":            "jiopay",
+			"tokenization_flow":  "two_step",
+			"validation_txn_id":  transactionID,
+			"auth_response_code": authResponseCode,
+			"validation_amount":  100, // ₹1 in paise
 			"mock_data":          true,
 		},
 	}
@@ -148,10 +148,10 @@ func (g *MockJioPayGateway) InitiatePayment(ctx context.Context, request Gateway
 		CreatedAt:        time.Now(),
 		ExpiresAt:        &[]time.Time{time.Now().Add(30 * time.Minute)}[0],
 		Metadata: map[string]any{
-			"gateway":         "jiopay",
-			"payment_method":  request.PaymentMethod,
-			"mock_data":       true,
-			"api_endpoint":    "initiate_sale/",
+			"gateway":        "jiopay",
+			"payment_method": request.PaymentMethod,
+			"mock_data":      true,
+			"api_endpoint":   "initiate_sale/",
 		},
 	}
 

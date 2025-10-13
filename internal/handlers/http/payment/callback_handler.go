@@ -115,6 +115,8 @@ func (h *CallbackHandler) handleJioPayCallback(c echo.Context) error {
 
 		metadata := map[string]any{
 			"callback_received_at": time.Now().Format(time.RFC3339),
+			"callback_type":        "payment_status",
+			"gateway":              "jiopay",
 			"jiopay_txn_id":        callback.TxnID,
 			"response_code":        callback.ResponseCode,
 			"response_description": callback.RespDescription,
@@ -149,7 +151,7 @@ func (h *CallbackHandler) handleJioPayCallback(c echo.Context) error {
 	fmt.Println("=== JIOPAY CALLBACK: Complete ===")
 
 	switch newStatus {
-    case payment.PaymentStatusSuccess:
+	case payment.PaymentStatusSuccess:
 		return c.HTML(http.StatusOK, generateSuccessHTML(pmt, callback.MerchantTxnNo, callback.RespDescription))
 	case payment.PaymentStatusPending:
 		return c.HTML(http.StatusOK, generatePendingHTML(pmt, callback.MerchantTxnNo, callback.RespDescription))
@@ -215,6 +217,8 @@ func (h *CallbackHandler) handleEasebuzzCallback(c echo.Context) error {
 
 		metadata := map[string]any{
 			"callback_received_at": time.Now().Format(time.RFC3339),
+			"callback_type":        "payment_status",
+			"gateway":              "easebuzz",
 			"easepayid":            callback.EasepayID,
 			"bank_ref_num":         callback.BankRefNum,
 			"payment_source":       callback.PaymentSource,
@@ -230,7 +234,6 @@ func (h *CallbackHandler) handleEasebuzzCallback(c echo.Context) error {
 			"card_num":             callback.CardNum,
 			"bank_name":            callback.BankName,
 			"auth_code":            callback.AuthCode,
-			"gateway":              "easebuzz",
 		}
 
 		if err := h.paymentRepo.UpdatePaymentStatus(ctx, pmt.ID, newStatus, metadata); err != nil {
@@ -256,7 +259,7 @@ func (h *CallbackHandler) handleEasebuzzCallback(c echo.Context) error {
 	fmt.Println("=== EASEBUZZ CALLBACK: Complete ===")
 
 	switch newStatus {
-    case payment.PaymentStatusSuccess:
+	case payment.PaymentStatusSuccess:
 		return c.HTML(http.StatusOK, generateSuccessHTML(pmt, callback.TxnID, callback.Error))
 	case payment.PaymentStatusPending:
 		return c.HTML(http.StatusOK, generatePendingHTML(pmt, callback.TxnID, callback.Error))
@@ -406,6 +409,22 @@ func generateSuccessHTML(pmt *payment.Payment, txnRef, message string) string {
         @keyframes spin {
             to { transform: rotate(360deg); }
         }
+        .button {
+            display: inline-block;
+            background: #667eea;
+            color: white;
+            padding: 12px 32px;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 16px;
+            border: none;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+        .button:hover {
+            background: #5568d3;
+        }
     </style>
 </head>
 <body>
@@ -431,14 +450,35 @@ func generateSuccessHTML(pmt *payment.Payment, txnRef, message string) string {
                 <span class="detail-value">Completed</span>
             </div>
         </div>
-        <p class="redirect-message">
-            Redirecting to dashboard<span class="spinner"></span>
+        <p class="redirect-message" id="closeMessage">
+            This window will close automatically in <span id="countdown">3</span> seconds...
         </p>
+        <button id="closeButton" class="button" style="display:none; margin-top: 16px;" onclick="window.close()">
+            Close Window
+        </button>
     </div>
     <script>
-        setTimeout(function() {
-            window.location.href = '/dashboard';
-        }, 3000);
+        var countdown = 3;
+        var countdownElement = document.getElementById('countdown');
+        var closeMessage = document.getElementById('closeMessage');
+        var closeButton = document.getElementById('closeButton');
+
+        var timer = setInterval(function() {
+            countdown--;
+            countdownElement.textContent = countdown;
+
+            if (countdown <= 0) {
+                clearInterval(timer);
+                // Try to close the window
+                window.close();
+
+                // If window.close() fails (window not opened by script), show manual close button
+                setTimeout(function() {
+                    closeMessage.textContent = 'Please close this window manually';
+                    closeButton.style.display = 'inline-block';
+                }, 500);
+            }
+        }, 1000);
     </script>
 </body>
 </html>`,
@@ -550,10 +590,17 @@ func generateFailureHTML(pmt *payment.Payment, txnRef, message string) string {
             text-decoration: none;
             font-weight: 600;
             font-size: 16px;
+            border: none;
+            cursor: pointer;
             transition: background 0.3s;
         }
         .button:hover {
             background: #5568d3;
+        }
+        .redirect-message {
+            color: #999;
+            font-size: 14px;
+            margin-top: 24px;
         }
     </style>
 </head>
@@ -581,8 +628,36 @@ func generateFailureHTML(pmt *payment.Payment, txnRef, message string) string {
                 <span class="detail-value">Failed</span>
             </div>
         </div>
-        <a href="/payments/retry" class="button">Try Again</a>
+        <p class="redirect-message" id="closeMessage">
+            This window will close automatically in <span id="countdown">3</span> seconds...
+        </p>
+        <button id="closeButton" class="button" style="display:none; margin-top: 16px;" onclick="window.close()">
+            Close Window
+        </button>
     </div>
+    <script>
+        var countdown = 3;
+        var countdownElement = document.getElementById('countdown');
+        var closeMessage = document.getElementById('closeMessage');
+        var closeButton = document.getElementById('closeButton');
+
+        var timer = setInterval(function() {
+            countdown--;
+            countdownElement.textContent = countdown;
+
+            if (countdown <= 0) {
+                clearInterval(timer);
+                // Try to close the window
+                window.close();
+
+                // If window.close() fails (window not opened by script), show manual close button
+                setTimeout(function() {
+                    closeMessage.textContent = 'Please close this window manually';
+                    closeButton.style.display = 'inline-block';
+                }, 500);
+            }
+        }, 1000);
+    </script>
 </body>
 </html>`,
 		escapeHTML(message),
@@ -689,6 +764,22 @@ func generatePendingHTML(pmt *payment.Payment, txnRef, message string) string {
             font-size: 14px;
             margin-top: 24px;
         }
+        .button {
+            display: inline-block;
+            background: #667eea;
+            color: white;
+            padding: 12px 32px;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: 600;
+            font-size: 16px;
+            border: none;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+        .button:hover {
+            background: #5568d3;
+        }
     </style>
 </head>
 <body>
@@ -718,6 +809,9 @@ func generatePendingHTML(pmt *payment.Payment, txnRef, message string) string {
         <p class="redirect-message">
             You can check the status in your transaction history.
         </p>
+        <button class="button" style="margin-top: 16px;" onclick="window.close()">
+            Close Window
+        </button>
     </div>
 </body>
 </html>`,

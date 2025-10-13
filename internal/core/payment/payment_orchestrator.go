@@ -31,10 +31,10 @@ type MockPaymentOrchestrator struct {
 	// - Orchestrator should be stateless
 	storedCards map[string][]*StoredCard // businessID -> cards
 	// Repository dependencies (Phase 4.2)
-	paymentRepo     PaymentRepository
-	storedCardRepo  StoredCardRepository
+	paymentRepo    PaymentRepository
+	storedCardRepo StoredCardRepository
 	// Voucher service for finalization (Phase 6)
-	voucherService  interface{} // Will be voucher.VoucherService, using interface{} to avoid circular import
+	voucherService interface{} // Will be voucher.VoucherService, using interface{} to avoid circular import
 }
 
 // NewMockPaymentOrchestrator creates a new mock payment orchestrator
@@ -42,12 +42,12 @@ type MockPaymentOrchestrator struct {
 func NewMockPaymentOrchestrator(
 	paymentRepo PaymentRepository,
 	storedCardRepo StoredCardRepository,
-	jioPayClient PaymentGateway,   // Real JioPay client injected
+	jioPayClient PaymentGateway, // Real JioPay client injected
 	easebuzzClient PaymentGateway, // Real Easebuzz client injected
 ) PaymentOrchestrator {
 	return &MockPaymentOrchestrator{
-		jioPayGateway:   jioPayClient,       // ✅ Real JioPay client
-		easebuzzGateway: easebuzzClient,     // ✅ Real Easebuzz client
+		jioPayGateway:   jioPayClient,   // ✅ Real JioPay client
+		easebuzzGateway: easebuzzClient, // ✅ Real Easebuzz client
 		storedCards:     make(map[string][]*StoredCard),
 		paymentRepo:     paymentRepo,
 		storedCardRepo:  storedCardRepo,
@@ -115,18 +115,18 @@ func (o *MockPaymentOrchestrator) ProcessPayment(ctx context.Context, request Pa
 
 	// Prepare gateway payment request
 	gatewayRequest := GatewayPaymentRequest{
-		BusinessID:      request.BusinessID,
-		TransactionID:   transactionID,
-		Amount:          request.Amount + feeAmount, // Include fee in total
-		Currency:        request.Currency,
-		PaymentMethod:   request.PaymentMethod,
-		Description:     request.Description,
-		CallbackURL:     request.CallbackURL,
-		CardDetails:     request.CardDetails,
+		BusinessID:        request.BusinessID,
+		TransactionID:     transactionID,
+		Amount:            request.Amount + feeAmount, // Include fee in total
+		Currency:          request.Currency,
+		PaymentMethod:     request.PaymentMethod,
+		Description:       request.Description,
+		CallbackURL:       request.CallbackURL,
+		CardDetails:       request.CardDetails,
 		NetBankingDetails: request.NetBankingDetails,
-		UPIDetails:      request.UPIDetails,
-		WalletDetails:   request.WalletDetails,
-		Metadata:        request.Metadata,
+		UPIDetails:        request.UPIDetails,
+		WalletDetails:     request.WalletDetails,
+		Metadata:          request.Metadata,
 	}
 
 	// Call actual gateway
@@ -239,7 +239,7 @@ func (o *MockPaymentOrchestrator) TokenizeCard(ctx context.Context, request Toke
 		CallbackURL:   "https://mock-callback.com/tokenize", // TODO: Make configurable
 		Metadata: map[string]any{
 			"tokenization_request": true,
-			"business_id":         request.BusinessID,
+			"business_id":          request.BusinessID,
 		},
 	}
 
@@ -405,8 +405,8 @@ func (o *MockPaymentOrchestrator) ProcessTokenizedPayment(ctx context.Context, r
 		Token:         storedCard.Token,
 		Cryptogram:    cryptogramResponse.Cryptogram,
 		Metadata: map[string]any{
-			"payment_type": "tokenized",
-			"card_id":      storedCard.CardID,
+			"payment_type":      "tokenized",
+			"card_id":           storedCard.CardID,
 			"original_metadata": request.Metadata,
 		},
 	}
@@ -440,10 +440,10 @@ func (o *MockPaymentOrchestrator) ProcessTokenizedPayment(ctx context.Context, r
 		Message:          fmt.Sprintf("Tokenized payment initiated with %s", storedCard.GatewayUsed),
 		CreatedAt:        gatewayResponse.CreatedAt,
 		Metadata: map[string]any{
-			"payment_type":    "tokenized",
-			"card_id":         storedCard.CardID,
-			"card_last_four":  storedCard.LastFourDigits,
-			"gateway_used":    string(storedCard.GatewayUsed),
+			"payment_type":      "tokenized",
+			"card_id":           storedCard.CardID,
+			"card_last_four":    storedCard.LastFourDigits,
+			"gateway_used":      string(storedCard.GatewayUsed),
 			"original_metadata": request.Metadata,
 		},
 	}
@@ -509,7 +509,7 @@ func (o *MockPaymentOrchestrator) generateMockStoredCards(businessID string) []*
 			GatewayUsed:    GatewayJioPay,
 			AddedAt:        Now().AddDate(0, -2, 0),
 			Metadata: map[string]any{
-				"nickname": "Primary Card",
+				"nickname":  "Primary Card",
 				"mock_data": true,
 			},
 		},
@@ -528,7 +528,7 @@ func (o *MockPaymentOrchestrator) generateMockStoredCards(businessID string) []*
 			GatewayUsed:    GatewayEasebuzz,
 			AddedAt:        Now().AddDate(0, -1, -15),
 			Metadata: map[string]any{
-				"nickname": "Backup Card",
+				"nickname":  "Backup Card",
 				"mock_data": true,
 			},
 		},

@@ -232,3 +232,45 @@ type CallbackPayload struct {
 	SettlementDate   string `json:"settlementDate,omitempty"`   // Settlement date (YYYYMMDD format)
 	SecureHash       string `json:"secureHash"`                 // HMAC-SHA256 signature for verification
 }
+
+// ============================================================================
+// SETTLEMENT WEBHOOK TYPES
+// Sent by JioPay when settlement is completed (T+1 to T+3 days after payment)
+// ============================================================================
+
+// SettlementWebhook represents settlement notification from JioPay
+// Sent when gateway completes final settlement to merchant account
+//
+// Key Characteristics:
+//   - Arrival of this webhook = 100% settlement success (no status field)
+//   - Contains final settlement amounts after gateway fees (MDR)
+//   - merchantTxnNo matches our payment_id for lookup
+//   - secureHash must be verified using HMAC-SHA256
+//
+// Financial Flow:
+//   - txnAmount: Original payment amount (e.g., "1000.00")
+//   - txnCharges: Base MDR fee (e.g., "15.00")
+//   - serviceTax: GST on MDR (e.g., "2.70")
+//   - settledAmount: Net amount received = txnAmount - txnCharges - serviceTax
+//
+// Security: secureHash validation is mandatory using SecureHashGenerator
+type SettlementWebhook struct {
+	AggregatorID          string `json:"aggregatorID"`          // Aggregator identifier
+	MerchantID            string `json:"merchantId"`            // Merchant identifier
+	MerchantTxnNo         string `json:"merchantTxnNo"`         // KEY: Our payment_id for lookup
+	InvoiceNos            string `json:"invoiceNos"`            // Comma-separated invoice numbers
+	PaymentMode           string `json:"paymentMode"`           // "CARD", "NB", "UPI", "WALLET"
+	PaymentSubInstType    string `json:"paymentSubInstType"`    // "CC" = Credit Card, "DC" = Debit Card
+	TxnChannel            string `json:"txnChannel"`            // "WEB", "POS" (only for CARD payments)
+	TxnAmount             string `json:"txnAmount"`             // Original payment amount in rupees (e.g., "1000.00")
+	TxnCharges            string `json:"txnCharges"`            // Base MDR charges in rupees (e.g., "15.00")
+	ServiceTax            string `json:"serviceTax"`            // GST on MDR in rupees (e.g., "2.70")
+	SettlementID          string `json:"settlementID"`          // Settlement batch ID (e.g., "A00121-20171101-010")
+	SettlementDate        string `json:"settlementDate"`        // Settlement date YYYYMMDD format (e.g., "20171101")
+	SettlementAccount     string `json:"settlementAccount"`     // Bank account number where funds settled
+	SettlementAccountIFSC string `json:"settlementAccountIFSC"` // IFSC code of settlement account
+	SettledAmount         string `json:"settledAmount"`         // Net amount received in rupees (e.g., "982.30")
+	CardNetwork           string `json:"cardNetwork"`           // "VISA", "MASTERCARD", etc. (only for card payments)
+	AddlParam1            string `json:"addlParam1"`            // Additional settlement information
+	SecureHash            string `json:"secureHash"`            // HMAC-SHA256 signature for verification
+}

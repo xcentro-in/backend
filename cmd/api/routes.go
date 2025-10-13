@@ -146,16 +146,22 @@ func registerV1PaymentRoutes(meta *serverMetaData, group *echo.Group) {
 	)
 	processPaymentGroup.POST("/callback", callbackHandler.HandleCallback)
 
-	// Register webhook handlers for async settlement notifications
-	// These are backend-to-backend notifications for settlement confirmation
+	// Register webhook handlers for async payment status notifications
+	// These are backend-to-backend notifications for payment status updates
 	webhookHandler := payment.NewWebhookHandler(
 		paymentRepository,
 		jioPayClient,
 		easebuzzClient,
 	)
 	webhookGroup := processPaymentGroup.Group("/webhooks")
-	webhookGroup.POST("/jiopay", webhookHandler.HandleJioPayWebhook)
-	webhookGroup.POST("/easebuzz", webhookHandler.HandleEasebuzzWebhook)
+
+	// Payment status webhooks (real-time payment updates)
+	// Endpoint: /api/v1/process_payment/webhooks/payment_status?type=<gateway>
+	webhookGroup.POST("/payment_status", webhookHandler.HandlePaymentStatusWebhook)
+
+	// Settlement webhooks (batch settlement notifications T+1 to T+3)
+	// Endpoint: /api/v1/process_payment/webhooks/settlement_status?type=<gateway>
+	webhookGroup.POST("/settlement_status", webhookHandler.HandleSettlementStatusWebhook)
 }
 
 func registerV1BusinessRoutes(meta *serverMetaData, group *echo.Group) {

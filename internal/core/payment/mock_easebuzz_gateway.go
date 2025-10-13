@@ -51,14 +51,14 @@ func (g *MockEasebuzzGateway) TokenizeCard(ctx context.Context, request GatewayT
 		TransactionID: request.TransactionID,
 		Status:        "success",
 		Message:       "Card tokenized successfully with Easebuzz direct flow",
-		RedirectURL:   "", // No redirect needed for tokenization
+		RedirectURL:   "",  // No redirect needed for tokenization
 		ExpiresAt:     nil, // Tokens don't expire
 		Metadata: map[string]any{
 			"gateway":           "easebuzz",
 			"tokenization_flow": "direct",
 			"validation_amount": 100, // ₹1 in paise (implicit)
 			"credit_processed":  true,
-			"mock_data":        true,
+			"mock_data":         true,
 		},
 	}
 
@@ -131,10 +131,10 @@ func (g *MockEasebuzzGateway) InitiatePayment(ctx context.Context, request Gatew
 		CreatedAt:        time.Now(),
 		ExpiresAt:        &[]time.Time{time.Now().Add(25 * time.Minute)}[0],
 		Metadata: map[string]any{
-			"gateway":         "easebuzz",
-			"payment_method":  request.PaymentMethod,
-			"mock_data":       true,
-			"api_endpoint":    "initiate_seamless_payment/",
+			"gateway":        "easebuzz",
+			"payment_method": request.PaymentMethod,
+			"mock_data":      true,
+			"api_endpoint":   "initiate_seamless_payment/",
 		},
 	}
 
