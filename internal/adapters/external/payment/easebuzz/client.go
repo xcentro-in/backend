@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"xcentro.in/internal/core/payment"
+	"xcentro.in/internal/shared/logger"
 )
 
 // EasebuzzClient implements the PaymentGateway interface for Easebuzz
@@ -129,6 +130,8 @@ func (c *EasebuzzClient) TokenizeCard(ctx context.Context, request payment.Gatew
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal tokenization request: %w", err)
 	}
+
+	logger.Debug(string(jsonPayload))
 
 	fmt.Printf("📝 Payload size: %d bytes\n", len(jsonPayload))
 

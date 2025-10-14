@@ -17,7 +17,7 @@ type GetFeeRulesRequest struct {
 
 // TokenizeRequest represents the request for card tokenization
 type TokenizeRequest struct {
-	UserID      string       `json:"user_id"`
+	BusinessID  string       `json:"business_id"`
 	CardDetails *CardDetails `json:"card_details"`
 }
 

@@ -9,7 +9,7 @@ import (
 	"xcentro.in/internal/shared/logger"
 )
 
-func placeHolderFn(c echo.Context) error { return c.String(200, "This is a placeholder function") }
+func placeHolderFn(c echo.Context) error { return c.String(200, "Not Implemented") }
 
 // AuthHandler handles HTTP requests for authentication
 // Delegates all business logic to AuthService

@@ -41,7 +41,7 @@ func RegisterUserRoutes(e *echo.Group, userService user.UserService, authService
 	protectedUser.Use(middleware.JWTMiddleware(authService))
 
 	// User onboarding endpoints
-	protectedUser.POST("/onboard/initiate", handler.InitiateOnboarding)
+	protectedUser.POST("/onboard/init", handler.InitiateOnboarding)
 	protectedUser.POST("/onboard/complete", handler.CompleteOnboarding)
 	protectedUser.GET("/onboard/status", handler.GetOnboardingStatus)
 

@@ -290,7 +290,7 @@ func (h *PaymentHandler) Tokenize(c echo.Context) error {
 		})
 	}
 
-	fmt.Printf("📥 Request: Business ID: %s, Card: %s %s\n", req.UserID, req.CardDetails.CardCategory, req.CardDetails.CardType)
+	fmt.Printf("📥 Request: Business ID: %s, Card: %s %s\n", req.BusinessID, req.CardDetails.CardCategory, req.CardDetails.CardType)
 
 	// Validate card details
 	if err := h.validateTokenizeRequest(&req); err != nil {
@@ -307,7 +307,7 @@ func (h *PaymentHandler) Tokenize(c echo.Context) error {
 
 	// Convert HTTP request to core domain request
 	coreRequest := payment.TokenizeRequest{
-		BusinessID: req.UserID, // TODO-DB-4.1: Extract from JWT token in production
+		BusinessID: req.BusinessID, // TODO-DB-4.1: Extract from JWT token in production
 		CardDetails: payment.Card{
 			Number:         req.CardDetails.CardNumber,
 			ExpiryMonth:    req.CardDetails.ExpiryMonth,
@@ -825,7 +825,7 @@ func (h *PaymentHandler) populatePaymentMethodDetails(coreReq *payment.PaymentRe
 
 // validateTokenizeRequest validates the tokenization request
 func (h *PaymentHandler) validateTokenizeRequest(req *TokenizeRequest) error {
-	if req.UserID == "" {
+	if req.BusinessID == "" {
 		return fmt.Errorf("user_id is required")
 	}
 
