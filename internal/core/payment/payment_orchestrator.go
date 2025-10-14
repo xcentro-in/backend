@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-
-	"github.com/google/uuid"
 )
 
 // PaymentOrchestrator defines the interface for payment orchestration
@@ -87,11 +85,7 @@ func (o *MockPaymentOrchestrator) ProcessPayment(ctx context.Context, request Pa
 	if paymentID == "" {
 		return nil, fmt.Errorf("payment_id is required (should be set by service layer)")
 	}
-	fmt.Printf("🆔 Using Payment ID from service: %s\n", paymentID)
-
-	// Generate transaction ID for gateway
-	transactionID := fmt.Sprintf("txn_%s_%s", time.Now().Format("20060102"), uuid.New().String()[:8])
-	fmt.Printf("🆔 Generated Transaction ID: %s\n", transactionID)
+	fmt.Printf("🆔 Using Payment ID from service (also used as gateway transaction ID): %s\n", paymentID)
 
 	// TODO-DB-4.1-CRITICAL: Update payment record with selected gateway
 	// - Call paymentRepo.UpdatePaymentGateway(ctx, paymentID, gateway)
@@ -116,7 +110,7 @@ func (o *MockPaymentOrchestrator) ProcessPayment(ctx context.Context, request Pa
 	// Prepare gateway payment request
 	gatewayRequest := GatewayPaymentRequest{
 		BusinessID:        request.BusinessID,
-		TransactionID:     transactionID,
+		TransactionID:     paymentID, // Use payment UUID as gateway transaction ID
 		Amount:            request.Amount + feeAmount, // Include fee in total
 		Currency:          request.Currency,
 		PaymentMethod:     request.PaymentMethod,
@@ -221,9 +215,11 @@ func (o *MockPaymentOrchestrator) TokenizeCard(ctx context.Context, request Toke
 	}
 	fmt.Printf("🎯 Selected Gateway for Tokenization: %s\n", gateway)
 
-	// Generate transaction ID for tokenization
-	transactionID := fmt.Sprintf("tok_%s_%s", time.Now().Format("20060102"), uuid.New().String()[:8])
-	fmt.Printf("🆔 Generated Tokenization Transaction ID: %s\n", transactionID)
+	// Use transaction ID from service layer (payment UUID for ₹1 tokenization payment)
+	if request.TransactionID == "" {
+		return nil, fmt.Errorf("transaction_id is required (should be set by service layer as payment UUID)")
+	}
+	fmt.Printf("🆔 Using Transaction ID from service (Payment ID): %s\n", request.TransactionID)
 
 	// Get selected gateway instance
 	selectedGateway := o.getGatewayInstance(gateway)
@@ -234,7 +230,7 @@ func (o *MockPaymentOrchestrator) TokenizeCard(ctx context.Context, request Toke
 	// Prepare gateway tokenization request
 	gatewayRequest := GatewayTokenizeRequest{
 		BusinessID:    request.BusinessID,
-		TransactionID: transactionID,
+		TransactionID: request.TransactionID, // Payment UUID from service layer
 		CardDetails:   request.CardDetails,
 		CallbackURL:   "https://mock-callback.com/tokenize", // TODO: Make configurable
 		Metadata: map[string]any{
@@ -326,9 +322,12 @@ func (o *MockPaymentOrchestrator) ProcessTokenizedPayment(ctx context.Context, r
 
 	fmt.Printf("📥 Card ID: %s\n", request.TokenCardDetails.CardID)
 
-	// TODO-CRITICAL: Generate payment ID (should come from handler in Phase 4.4)
-	paymentID := uuid.New().String()
-	fmt.Printf("🆔 Generated Payment ID: %s\n", paymentID)
+	// Use payment ID from service layer (already created in DB)
+	paymentID := request.PaymentID
+	if paymentID == "" {
+		return nil, fmt.Errorf("payment_id is required (should be set by service layer)")
+	}
+	fmt.Printf("🆔 Using Payment ID from service: %s\n", paymentID)
 
 	// Step 1: Retrieve stored card by card_id using wallet service
 	fmt.Println("🔍 Looking up stored card by ID...")
@@ -372,7 +371,7 @@ func (o *MockPaymentOrchestrator) ProcessTokenizedPayment(ctx context.Context, r
 		Token:         storedCard.Token,
 		Amount:        request.Amount,
 		Currency:      request.Currency,
-		TransactionID: fmt.Sprintf("txn_%s_%s", time.Now().Format("20060102"), uuid.New().String()[:8]),
+		TransactionID: paymentID, // Use payment UUID as transaction ID
 		BusinessID:    request.BusinessID,
 		Metadata: map[string]any{
 			"payment_type": "tokenized",

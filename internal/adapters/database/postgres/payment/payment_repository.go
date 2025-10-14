@@ -33,14 +33,14 @@ func (r *PgPaymentRepository) WithTx(tx interface{}) payment.PaymentRepository {
 
 // CreatePayment creates a new payment record
 func (r *PgPaymentRepository) CreatePayment(ctx context.Context, p *payment.Payment) error {
-	fmt.Printf("[PgPaymentRepository] CreatePayment called - BusinessID: %s, UserID: %s, Amount: %d, Currency: %s, Method: %s\n",
-		p.BusinessID, p.UserID, p.Amount, p.Currency, p.PaymentMethod)
+	fmt.Printf("[PgPaymentRepository] CreatePayment called - BusinessID: %s, UserID: %s, Amount: %d, Currency: %s, Method: %s, Type: %s\n",
+		p.BusinessID, p.UserID, p.Amount, p.Currency, p.PaymentMethod, p.PaymentType)
 
 	query := `
 		INSERT INTO xcentro.payments (
-			user_id, business_id, amount, currency, payment_method, status,
-			description, callback_url, metadata
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+			user_id, business_id, amount, currency, payment_method, payment_type, status,
+			description, callback_url, fee_amount, total_amount, metadata
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		RETURNING payment_id, created_at
 	`
 
@@ -60,9 +60,12 @@ func (r *PgPaymentRepository) CreatePayment(ctx context.Context, p *payment.Paym
 		p.Amount,
 		p.Currency,
 		p.PaymentMethod,
+		p.PaymentType,
 		p.Status,
 		p.Description,
 		p.CallbackURL,
+		p.FeeAmount,
+		p.TotalAmount,
 		metadataJSON,
 	).Scan(&p.ID, &p.CreatedAt)
 
@@ -149,7 +152,11 @@ func (r *PgPaymentRepository) GetPaymentByID(ctx context.Context, paymentID stri
 	return &p, nil
 }
 
-// GetPaymentByGatewayPaymentID retrieves payment by gateway's transaction ID
+// GetPaymentByGatewayPaymentID retrieves payment by gateway's transaction ID or payment UUID
+// Searches both gateway_payment_id and payment_id columns for maximum flexibility
+// This enables webhook matching for:
+//   - Regular payments: where gateway_payment_id = gateway's txn ID
+//   - Tokenization payments: where txnid = our payment UUID
 func (r *PgPaymentRepository) GetPaymentByGatewayPaymentID(ctx context.Context, gatewayPaymentID string) (*payment.Payment, error) {
 	fmt.Printf("[PgPaymentRepository] GetPaymentByGatewayPaymentID called - GatewayPaymentID: %s\n", gatewayPaymentID)
 
@@ -158,7 +165,8 @@ func (r *PgPaymentRepository) GetPaymentByGatewayPaymentID(ctx context.Context, 
 		       description, gateway_used, gateway_payment_id, callback_url, redirect_url,
 		       payment_source_id, payment_source_type, fee_amount, total_amount,
 		       metadata, created_at, updated_at
-		FROM xcentro.payments WHERE gateway_payment_id = $1
+		FROM xcentro.payments
+		WHERE gateway_payment_id = $1 OR payment_id = $1
 	`
 
 	var p payment.Payment

@@ -10,6 +10,7 @@ type Payment struct {
 	Amount           int64         `json:"amount"` // Amount in smallest currency unit (paise for INR)
 	Currency         Currency      `json:"currency"`
 	PaymentMethod    PaymentMethod `json:"payment_method"`
+	PaymentType      PaymentType   `json:"payment_type"`      // Type: payment, tokenization, refund
 	Status           PaymentStatus `json:"status"`
 	Description      string        `json:"description"`
 	GatewayUsed      GatewayType   `json:"gateway_used"`
@@ -134,8 +135,9 @@ type PaymentResponse struct {
 
 // TokenizeRequest represents a request to tokenize a card
 type TokenizeRequest struct {
-	BusinessID  string `json:"business_id"`
-	CardDetails Card   `json:"card_details"`
+	BusinessID    string `json:"business_id"`
+	TransactionID string `json:"transaction_id,omitempty"` // Payment ID for the ₹1 tokenization payment
+	CardDetails   Card   `json:"card_details"`
 }
 
 // TokenizeResponse represents a response from card tokenization

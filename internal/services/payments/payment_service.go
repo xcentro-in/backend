@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/google/uuid"
 	"xcentro.in/internal/adapters/database/postgres/client"
 	"xcentro.in/internal/core/business_rules"
 	"xcentro.in/internal/core/payment"
@@ -76,14 +77,20 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 		feeCalculation.BaseAmount, feeCalculation.FeeAmount,
 		feeCalculation.TotalAmount, feeCalculation.Currency)
 
-	// Step 2: Create initial payment record with 'pending' status
+	// Step 2: Generate UUID for payment at application level
+	paymentID := uuid.New().String()
+	fmt.Printf("🆔 Generated Payment ID: %s\n", paymentID)
+
+	// Step 3: Create initial payment record with 'pending' status
 	fmt.Println("💾 Creating initial payment record...")
 	p := &payment.Payment{
+		ID:            paymentID,
 		UserID:        req.UserID,
 		BusinessID:    req.BusinessID,
 		Amount:        req.Amount,
 		Currency:      req.Currency,
 		PaymentMethod: req.PaymentMethod,
+		PaymentType:   payment.PaymentTypePayment, // Regular payment
 		Status:        payment.PaymentStatusPending,
 		Description:   req.Description,
 		CallbackURL:   req.CallbackURL,
@@ -97,12 +104,12 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 		return nil, fmt.Errorf("failed to create payment record: %w", err)
 	}
 
-	fmt.Printf("✅ Payment record created with ID: %s\n", p.ID)
+	fmt.Printf("✅ Payment record created with ID: %s\n", paymentID)
 
-	// Step 3: Add payment_id to request for orchestrator
-	req.PaymentID = p.ID
+	// Step 4: Add payment_id to request for orchestrator
+	req.PaymentID = paymentID
 
-	// Step 4: Call orchestrator to process payment
+	// Step 5: Call orchestrator to process payment
 	fmt.Println("🔄 Calling Payment Orchestrator...")
 	response, err := s.orchestrator.ProcessPayment(ctx, req)
 
@@ -134,17 +141,68 @@ func (s *PaymentService) AddPaymentSource(businessID string, source payment.Paym
 }
 
 // TokenizeCard tokenizes a card and stores it in the wallet
+// Creates a ₹1 payment record for the tokenization transaction
 func (s *PaymentService) TokenizeCard(ctx context.Context, req payment.TokenizeRequest) (*payment.TokenizeResponse, error) {
 	fmt.Printf("=== PAYMENT SERVICE: TokenizeCard Called - BusinessID: %s ===\n", req.BusinessID)
 
-	// Call orchestrator for tokenization
+	// Step 1: Generate UUID for tokenization payment at application level
+	paymentID := uuid.New().String()
+	fmt.Printf("🆔 Generated Payment ID for tokenization: %s\n", paymentID)
+
+	// Step 2: Create payment record for ₹1 tokenization transaction
+	fmt.Println("💾 Creating tokenization payment record...")
+	p := &payment.Payment{
+		ID:            paymentID,
+		UserID:        "",                                  // Tokenization is business-level, no specific user
+		BusinessID:    req.BusinessID,
+		Amount:        100,                                 // ₹1.00 in paise (tokenization charge)
+		Currency:      payment.CurrencyINR,
+		PaymentMethod: payment.PaymentMethodCard,
+		PaymentType:   payment.PaymentTypeTokenization,    // Mark as tokenization payment
+		Status:        payment.PaymentStatusPending,
+		Description:   "Card tokenization (₹1 verification charge)",
+		CallbackURL:   "", // No callback URL needed for tokenization
+		FeeAmount:     0,  // No fee for tokenization
+		TotalAmount:   100, // ₹1.00 total
+		Metadata: map[string]any{
+			"card_type":     string(req.CardDetails.CardType),
+			"card_category": string(req.CardDetails.CardCategory),
+			"last_four":     req.CardDetails.LastFourDigits,
+		},
+	}
+
+	if err := s.paymentRepo.CreatePayment(ctx, p); err != nil {
+		fmt.Printf("❌ Failed to create tokenization payment record: %v\n", err)
+		return nil, fmt.Errorf("failed to create tokenization payment record: %w", err)
+	}
+
+	fmt.Printf("✅ Tokenization payment record created with ID: %s\n", p.ID)
+
+	// Step 3: Pass payment ID to orchestrator as transaction ID
+	req.TransactionID = paymentID
+
+	// Step 4: Call orchestrator for tokenization
+	fmt.Println("🔄 Calling Payment Orchestrator for tokenization...")
 	response, err := s.orchestrator.TokenizeCard(ctx, req)
 	if err != nil {
+		// Update payment status to failed
+		failureMetadata := map[string]any{"error": err.Error()}
+		_ = s.paymentRepo.UpdatePaymentStatus(ctx, paymentID, payment.PaymentStatusFailed, failureMetadata)
+
 		fmt.Printf("❌ Tokenization failed: %v\n", err)
 		return nil, fmt.Errorf("tokenization failed: %w", err)
 	}
 
+	// Step 5: Update payment status to success
+	successMetadata := map[string]any{
+		"card_id":      response.CardID,
+		"token":        response.Token,
+		"gateway_used": string(response.GatewayUsed),
+	}
+	_ = s.paymentRepo.UpdatePaymentStatus(ctx, paymentID, payment.PaymentStatusSuccess, successMetadata)
+
 	fmt.Printf("✅ Card tokenized successfully: %s\n", response.CardID)
+	fmt.Printf("💳 Payment ID: %s (for webhook matching)\n", paymentID)
 	return response, nil
 }
 

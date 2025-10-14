@@ -41,6 +41,15 @@ const (
 	PaymentStatusCancelled PaymentStatus = "cancelled"
 )
 
+// PaymentType represents the type of payment transaction
+type PaymentType string
+
+const (
+	PaymentTypePayment      PaymentType = "payment"      // Regular payment transaction
+	PaymentTypeTokenization PaymentType = "tokenization" // ₹1 card tokenization payment
+	PaymentTypeRefund       PaymentType = "refund"       // Refund transaction
+)
+
 // SettlementStatus represents settlement status (Phase 7)
 // Tracks when gateway funds settle into XCentro escrow account
 type SettlementStatus string
