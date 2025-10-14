@@ -163,14 +163,6 @@ func (h *UserHandler) InitiateOnboarding(c echo.Context) error {
 // CompleteOnboarding completes the user onboarding after Aadhaar verification
 // User claims role in specific business after identity verification
 func (h *UserHandler) CompleteOnboarding(c echo.Context) error {
-	// Read BusinessID from X-Business-ID header
-	businessID := c.Request().Header.Get("X-Business-ID")
-	if businessID == "" {
-		return c.JSON(400, map[string]string{
-			"message": "X-Business-ID header is required",
-		})
-	}
-
 	var dto user.CompleteOnboardingDTO
 	if err := c.Bind(&dto); err != nil {
 		return c.JSON(400, map[string]string{"message": "Invalid request payload"})
@@ -181,9 +173,23 @@ func (h *UserHandler) CompleteOnboarding(c echo.Context) error {
 		return c.JSON(401, map[string]string{"message": "Unauthorized request"})
 	}
 
-	err := h.userService.CompleteOnboarding(c.Request().Context(), userID, businessID, dto.ClaimedRole)
+	businessID := c.Request().Header.Get("X-Business-ID")
+
+	var err error
+	if businessID != "" {
+		// Existing flow: Complete onboarding for a business
+		err = h.userService.CompleteOnboarding(c.Request().Context(), userID, businessID, dto.ClaimedRole)
+	} else if dto.GSTIN != "" {
+		// New flow: Join a business by GSTIN
+		err = h.userService.JoinBusinessByGSTIN(c.Request().Context(), userID, dto.GSTIN, dto.ClaimedRole)
+	} else {
+		return c.JSON(400, map[string]string{
+			"message": "Either X-Business-ID header or gstin in the body is required",
+		})
+	}
+
 	if err != nil {
-		h.logger.Errorf("Error completing onboarding for user %s: %v", userID, err)
+		h.logger.Errorf("Error in CompleteOnboarding for user %s: %v", userID, err)
 
 		// Handle typed errors
 		if userErr, ok := err.(*types.UserError); ok {
@@ -196,6 +202,14 @@ func (h *UserHandler) CompleteOnboarding(c echo.Context) error {
 				return c.JSON(404, map[string]interface{}{"error": userErr.Code, "message": userErr.Error()})
 			case types.ErrCodeInvalidKYCInput:
 				return c.JSON(400, map[string]interface{}{"error": userErr.Code, "message": userErr.Error()})
+			}
+		}
+		if bizErr, ok := err.(*types.BusinessError); ok {
+			switch bizErr.Code {
+			case types.ErrCodeBusinessNotFound:
+				return c.JSON(404, map[string]interface{}{"error": bizErr.Code, "message": bizErr.Error()})
+			case types.ErrCodeUserAlreadyAssociated:
+				return c.JSON(409, map[string]interface{}{"error": bizErr.Code, "message": bizErr.Error()})
 			}
 		}
 

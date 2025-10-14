@@ -49,7 +49,10 @@ func (s *xcentroServer) registerGlobalMiddleware() {
 	s.echo.Use(middleware.RequestID())
 	s.echo.Use(middleware.Logger())
 	s.echo.Use(middleware.Recover())
-	s.echo.Use(middleware.CORS())
+	s.echo.Use(middleware.CORSWithConfig(middleware.CORSConfig{
+		AllowOrigins:     []string{"http://localhost:8080"},
+		AllowCredentials: true,
+	}))
 	s.echo.Use(middleware.Secure())
 }
 

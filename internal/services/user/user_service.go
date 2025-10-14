@@ -29,6 +29,7 @@ import (
 // UserServiceImpl provides business logic for user operations
 type UserServiceImpl struct {
 	userRepo            user.UserRepository
+	businessRepo        businessRepo.BusinessRepository
 	businessUserRelRepo businessRepo.BusinessUserRelationRepository
 	txManager           client.TxManager
 	emailService        mailers.EmailService
@@ -41,6 +42,7 @@ type UserServiceImpl struct {
 // NewUserService creates a new user service with dependency injection
 func NewUserService(
 	userRepo *userRepo.PgUserRepository,
+	businessRepo businessRepo.BusinessRepository,
 	businessUserRelRepo businessRepo.BusinessUserRelationRepository,
 	txManager client.TxManager,
 	emailService mailers.EmailService,
@@ -50,6 +52,7 @@ func NewUserService(
 ) user.UserService {
 	return &UserServiceImpl{
 		userRepo:            userRepo,
+		businessRepo:        businessRepo,
 		businessUserRelRepo: businessUserRelRepo,
 		txManager:           txManager,
 		emailService:        emailService,
@@ -58,6 +61,48 @@ func NewUserService(
 		rclient:             rclient,
 		logger:              logger.GetDefault(),
 	}
+}
+
+func (s *UserServiceImpl) JoinBusinessByGSTIN(ctx context.Context, userID string, gstin string, claimedRole shared.UserRole) error {
+	s.logger.Info("User %s attempting to join business with GSTIN %s", userID, gstin)
+
+	// 1. Find business by GSTIN
+	bus, err := s.businessRepo.FindByGSTIN(ctx, gstin)
+	if err != nil {
+		return fmt.Errorf("error finding business by GSTIN: %w", err)
+	}
+	if bus == nil {
+		return types.ErrBusinessNotFound
+	}
+
+	// 2. Check if user is already associated
+	relations, err := s.businessUserRelRepo.FindByUser(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("error checking for existing user-business relation: %w", err)
+	}
+	for _, rel := range relations {
+		if rel.BID == bus.BID {
+			return types.ErrUserAlreadyAssociated
+		}
+	}
+
+	// 3. Create new association
+	relation := &businessRepo.BusinessUserRelation{
+		UserID:       userID,
+		BID:          bus.BID,
+		Role:         "support", // Using claimedRole for both
+		RoleClaim:    claimedRole,
+		KybInitiated: false,      // User is joining, not initiating
+	}
+
+	err = s.businessUserRelRepo.AddUserToBusiness(ctx, relation)
+	if err != nil {
+		return fmt.Errorf("error adding user to business: %w", err)
+	}
+
+	s.logger.Infof("User %s successfully joined business %s (BID: %s) with role claim %s", userID, bus.Name, bus.BID, claimedRole)
+
+	return nil
 }
 
 // CreateUser creates a new user with proper validation and transaction handling

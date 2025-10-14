@@ -203,6 +203,16 @@ func (h *BusinessHandler) CompleteOnboarding(c echo.Context) error {
 	}
 	userID := userIDRaw.(string)
 
+	// Get businessID from header
+	businessID := c.Request().Header.Get("X-Business-ID")
+	if businessID == "" {
+		return c.JSON(400, map[string]interface{}{
+			"error":   "MISSING_BUSINESS_ID",
+			"message": "X-Business-ID header is required",
+		})
+	}
+	req.BID = businessID
+
 	// Get user roles from middleware context
 	ur := c.Get("userRoles")
 	if ur == nil {

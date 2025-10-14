@@ -339,6 +339,10 @@ func (s *AuthService) Login(ctx context.Context, email, password, userAgent stri
 		logger.Errorf("Failed to get user by email: %v", err)
 		return nil, fmt.Errorf("invalid email or password")
 	}
+	if userObj == nil {
+		logger.Error("User not found for email: %s", email)
+		return nil, fmt.Errorf("invalid email or password")
+	}
 
 	// Check email verification
 	if !userObj.EmailVerified {

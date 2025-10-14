@@ -50,6 +50,7 @@ type InitiateOnboardingDTO struct {
 // Note: BusinessID is now passed via X-Business-ID header
 type CompleteOnboardingDTO struct {
 	ClaimedRole shared.UserRole `json:"claimedRole" validate:"required"`
+	GSTIN       string          `json:"gstin,omitempty"`
 }
 
 // OnboardingStatusDTO represents the response for onboarding status

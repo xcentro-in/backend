@@ -41,6 +41,7 @@ func registerV1AuthRoutes(meta *serverMetaData, group *echo.Group) {
 	// Create user service
 	userService := user.NewUserService(
 		userRepo.NewPgUserRepository(meta.clients.db),
+		business.NewPgBusinessRepository(meta.clients.db),
 		business.NewPgBusinessUserRelationRepository(meta.clients.db),
 		meta.clients.txManager,
 		meta.clients.emailService,
@@ -174,6 +175,7 @@ func registerV1BusinessRoutes(meta *serverMetaData, group *echo.Group) {
 	// Create user service
 	userService := user.NewUserService(
 		userRepo.NewPgUserRepository(meta.clients.db),
+		business.NewPgBusinessRepository(meta.clients.db),
 		business.NewPgBusinessUserRelationRepository(meta.clients.db),
 		meta.clients.txManager,
 		meta.clients.emailService,
@@ -217,6 +219,7 @@ func registerV1UserRoutes(meta *serverMetaData, group *echo.Group) {
 	// Create user service
 	userService := user.NewUserService(
 		userRepo.NewPgUserRepository(meta.clients.db),
+		business.NewPgBusinessRepository(meta.clients.db),
 		business.NewPgBusinessUserRelationRepository(meta.clients.db),
 		meta.clients.txManager,
 		meta.clients.emailService,
