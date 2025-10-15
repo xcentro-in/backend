@@ -92,7 +92,7 @@ func (s *UserServiceImpl) JoinBusinessByGSTIN(ctx context.Context, userID string
 		BID:          bus.BID,
 		Role:         "support", // Using claimedRole for both
 		RoleClaim:    claimedRole,
-		KybInitiated: false,      // User is joining, not initiating
+		KybInitiated: false, // User is joining, not initiating
 	}
 
 	err = s.businessUserRelRepo.AddUserToBusiness(ctx, relation)
@@ -125,7 +125,7 @@ func (s *UserServiceImpl) CreateUser(ctx context.Context, authPayload auth.AuthP
 		existingUser, err := txUserRepo.GetUserByEmail(ctx, authPayload.Email)
 		if err == nil && existingUser != nil {
 			s.logger.Errorf("user with email %s already exists", authPayload.Email)
-			return nil
+			return types.ErrUserAlreadyExists
 		}
 
 		if err != nil {
@@ -636,7 +636,7 @@ func (s *UserServiceImpl) InitiateOnboarding(
 
 		// Generate unique transaction ID for Aadhaar
 		aadhaarTxnID := fmt.Sprintf("aadhaar_%s_%d", userID, time.Now().Unix())
-		linkRequest := authbridge.NewAadhaarLinkRequest(aadhaarTxnID, "", "")
+		linkRequest := authbridge.NewAadhaarLinkRequest(aadhaarTxnID, "", "http://localhost:8888/v1/callback")
 
 		// Call authbridge API
 		aadhaarResponse, err := authClient.SearchDocument(linkRequest)
@@ -691,9 +691,11 @@ func (s *UserServiceImpl) InitiateOnboarding(
 }
 
 // CompleteOnboarding completes the user onboarding after Aadhaar verification
-// User claims role in a specific business after identity verification
-func (s *UserServiceImpl) CompleteOnboarding(ctx context.Context, userID, businessID string, claimedRole shared.UserRole) error {
-	s.logger.Info("Completing onboarding for user %s in business %s with role %s", userID, businessID, claimedRole)
+// Supports two flows:
+// 1. Create new business: businessID (from header) + claimedRole
+// 2. Join existing business: gstin + claimedRole
+func (s *UserServiceImpl) CompleteOnboarding(ctx context.Context, userID, businessID, gstin string, claimedRole shared.UserRole) error {
+	s.logger.Info("Completing onboarding for user %s with businessID=%s, gstin=%s, role=%s", userID, businessID, gstin, claimedRole)
 
 	// Input validation
 	if userID == "" {
@@ -722,16 +724,53 @@ func (s *UserServiceImpl) CompleteOnboarding(ctx context.Context, userID, busine
 	}
 
 	isInvitedUser := relationCount > 0
+	var targetBusinessID string
 
-	// For invited users, businessID and claimedRole are ignored
+	// Determine which flow: create new business OR join existing business
 	if !isInvitedUser {
-		// Non-invited users must provide businessID and role
-		if businessID == "" {
-			return types.NewInvalidKYCInputError("businessID", "required")
-		}
+		// User is completing KYC and needs to associate with a business
 		if claimedRole == "" {
 			return types.NewInvalidKYCInputError("claimedRole", "required")
 		}
+
+		if businessID != "" {
+			// Flow 1: Create new business (businessID from header)
+			targetBusinessID = businessID
+			s.logger.Info("User %s completing KYC to create/own business %s", userID, businessID)
+		} else if gstin != "" {
+			// Flow 2: Join existing business (gstin from body)
+			s.logger.Info("User %s completing KYC to join business with GSTIN %s", userID, gstin)
+
+			// Find business by GSTIN
+			business, err := s.businessRepo.FindByGSTIN(ctx, gstin)
+			if err != nil {
+				return fmt.Errorf("error finding business by GSTIN: %w", err)
+			}
+			if business == nil {
+				return types.ErrBusinessNotFound
+			}
+			targetBusinessID = business.BID
+
+			// Create business relation for joining user
+			relation := &businessRepo.BusinessUserRelation{
+				UserID:       userID,
+				BID:          targetBusinessID,
+				Role:         "support",
+				RoleClaim:    claimedRole,
+				KybInitiated: false, // User is joining, not creating
+			}
+
+			err = s.businessUserRelRepo.AddUserToBusiness(ctx, relation)
+			if err != nil {
+				return fmt.Errorf("error adding user to business: %w", err)
+			}
+			s.logger.Info("User %s successfully joined business %s (GSTIN: %s)", userID, targetBusinessID, gstin)
+		} else {
+			return types.NewInvalidKYCInputError("businessID or gstin", "one of businessID or gstin is required")
+		}
+	} else {
+		// Invited user - already has business relation, no need for businessID or gstin
+		s.logger.Info("User %s is invited, skipping business association", userID)
 	}
 
 	err = s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
@@ -773,12 +812,15 @@ func (s *UserServiceImpl) CompleteOnboarding(ctx context.Context, userID, busine
 			return fmt.Errorf("failed to update KYC status: %w", err)
 		}
 
-		// Step 6: Update role_claim ONLY for non-invited users
-		if !isInvitedUser {
-			if err := txBusinessUserRelRepo.UpdateRoleClaim(ctx, userID, businessID, claimedRole); err != nil {
-				return fmt.Errorf("failed to update role claim for business %s: %w", businessID, err)
+		// Step 6: Update role_claim ONLY for non-invited users who created a business
+		if !isInvitedUser && businessID != "" && targetBusinessID != "" {
+			// Only update role_claim if user is creating a business (not joining via GSTIN)
+			if err := txBusinessUserRelRepo.UpdateRoleClaim(ctx, userID, targetBusinessID, claimedRole); err != nil {
+				return fmt.Errorf("failed to update role claim for business %s: %w", targetBusinessID, err)
 			}
-			s.logger.Info("Onboarding completed successfully - role claim %s set for user %s in business %s", claimedRole, userID, businessID)
+			s.logger.Info("Onboarding completed successfully - role claim %s set for user %s in business %s", claimedRole, userID, targetBusinessID)
+		} else if !isInvitedUser && gstin != "" {
+			s.logger.Info("Onboarding completed successfully for user %s joining business via GSTIN %s", userID, gstin)
 		} else {
 			s.logger.Info("Onboarding completed successfully for invited user %s - skipping role claim", userID)
 		}
@@ -789,6 +831,15 @@ func (s *UserServiceImpl) CompleteOnboarding(ctx context.Context, userID, busine
 	if err != nil {
 		return err
 	}
+
+	// Invalidate user cache after successful KYC completion
+	go func() {
+		bgCtx := context.Background()
+		invalidationKeys := keys.InvalidateUser(userID)
+		if err := s.rclient.Delete(bgCtx, invalidationKeys...); err != nil {
+			s.logger.Warnf("Failed to invalidate user cache after KYC completion: %v", err)
+		}
+	}()
 
 	return nil
 }

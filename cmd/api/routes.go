@@ -350,6 +350,20 @@ func registerV1Routes(s *xcentroServer) {
 		})
 	})
 
+	// implement callback endpoint and print headers, and body
+	v1.POST("/callback", func(c echo.Context) error {
+		headers := c.Request().Header
+		body := make([]byte, c.Request().ContentLength)
+		c.Request().Body.Read(body)
+
+		s.log.Infof("Headers: %v", headers)
+		s.log.Infof("Body: %s", string(body))
+
+		return c.JSON(200, map[string]string{
+			"status": "received",
+		})
+	})
+
 	// Authentication Routes
 	registerV1AuthRoutes(&s.meta, v1)
 

@@ -307,13 +307,15 @@ func (s *AuthService) Signup(ctx context.Context, email, password string) (*auth
 	createdUser, err := s.userService.CreateUser(ctx, authPayload)
 	if err != nil {
 		logger.Errorf("Failed to create user: %v", err)
-		return nil, fmt.Errorf("failed to create user")
+		// Return the actual error message (e.g., "user already exists")
+		return nil, err
 	}
 
-	// Send email verification (non-blocking)
+	// Send email verification (non-blocking) - only if user was created successfully
+	userID := createdUser.Id // Capture the ID to avoid race conditions
 	go func() {
 		bgCtx := context.Background()
-		if err := s.userService.SendEmailVerification(bgCtx, createdUser.Id); err != nil {
+		if err := s.userService.SendEmailVerification(bgCtx, userID); err != nil {
 			logger.Errorf("Failed to send email verification: %v", err)
 		}
 	}()
@@ -391,8 +393,13 @@ func (s *AuthService) getOnboardingStatus(ctx context.Context, userObj *user.Use
 		logger.Warnf("Failed to get business onboarding status: %v", err)
 		kybNeeded = true
 	} else if onboardingStatus != nil && onboardingStatus.KYBInitiated {
+		// User initiated KYB (owns/created business) - check if KYB is completed
 		kybNeeded = onboardingStatus.KYBStatus != shared.KYBCompleted && onboardingStatus.KYBStatus != shared.KYBVerified
+	} else if onboardingStatus != nil && !onboardingStatus.KYBInitiated && onboardingStatus.KYBStatus == shared.KYBNotStarted {
+		// User joined existing business (not initiator) - KYB not needed
+		kybNeeded = false
 	} else if onboardingStatus != nil && onboardingStatus.KYBStatus == shared.KYBNotStarted {
+		// No business relation at all - KYB needed
 		kybNeeded = true
 	}
 

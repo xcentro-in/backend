@@ -112,6 +112,7 @@ const (
 	ErrCodeVerificationFailed  = "VERIFICATION_FAILED"
 	ErrCodeUserNotFound        = "USER_NOT_FOUND"
 	ErrCodeAadhaarNotInitiated = "AADHAAR_NOT_INITIATED"
+	ErrCodeUserAlreadyExists   = "USER_ALREADY_EXISTS"
 )
 
 // Predefined user errors
@@ -139,6 +140,11 @@ var (
 	ErrAadhaarNotInitiated = &UserError{
 		Code:    ErrCodeAadhaarNotInitiated,
 		Message: "Aadhaar verification has not been initiated",
+	}
+
+	ErrUserAlreadyExists = &UserError{
+		Code:    ErrCodeUserAlreadyExists,
+		Message: "User with this email is already registered. Please login instead.",
 	}
 )
 

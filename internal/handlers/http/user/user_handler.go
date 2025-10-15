@@ -161,7 +161,9 @@ func (h *UserHandler) InitiateOnboarding(c echo.Context) error {
 }
 
 // CompleteOnboarding completes the user onboarding after Aadhaar verification
-// User claims role in specific business after identity verification
+// Supports two flows:
+// 1. Create new business: businessID in X-Business-ID header + claimedRole in body
+// 2. Join existing business: gstin + claimedRole in body
 func (h *UserHandler) CompleteOnboarding(c echo.Context) error {
 	var dto user.CompleteOnboardingDTO
 	if err := c.Bind(&dto); err != nil {
@@ -173,20 +175,12 @@ func (h *UserHandler) CompleteOnboarding(c echo.Context) error {
 		return c.JSON(401, map[string]string{"message": "Unauthorized request"})
 	}
 
+	// Get businessID from header (for create new business flow)
 	businessID := c.Request().Header.Get("X-Business-ID")
 
-	var err error
-	if businessID != "" {
-		// Existing flow: Complete onboarding for a business
-		err = h.userService.CompleteOnboarding(c.Request().Context(), userID, businessID, dto.ClaimedRole)
-	} else if dto.GSTIN != "" {
-		// New flow: Join a business by GSTIN
-		err = h.userService.JoinBusinessByGSTIN(c.Request().Context(), userID, dto.GSTIN, dto.ClaimedRole)
-	} else {
-		return c.JSON(400, map[string]string{
-			"message": "Either X-Business-ID header or gstin in the body is required",
-		})
-	}
+	// Call CompleteOnboarding with both businessID and gstin
+	// Service will determine which flow based on which parameter is provided
+	err := h.userService.CompleteOnboarding(c.Request().Context(), userID, businessID, dto.GSTIN, dto.ClaimedRole)
 
 	if err != nil {
 		h.logger.Errorf("Error in CompleteOnboarding for user %s: %v", userID, err)
