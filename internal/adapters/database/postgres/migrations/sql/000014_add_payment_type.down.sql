@@ -4,8 +4,8 @@
 DROP INDEX IF EXISTS idx_payments_payment_type;
 
 -- Drop column
-ALTER TABLE payments
+ALTER TABLE xcentro.payments
 DROP COLUMN IF EXISTS payment_type;
 
 -- Drop enum type
-DROP TYPE IF EXISTS payment_type;
+DROP TYPE IF EXISTS xcentro.payment_type;

@@ -95,7 +95,7 @@ func (s *DocumentVerificationService) VerifyPANCOM(ctx context.Context, pan stri
 	s.logger.Infof("Verifying PAN (Company): %s with transID: %s", pan, transID)
 
 	// First API call: PAN_COM
-	panComReq := authbridge.NewPANCOMRequest(pan, transID)
+	panComReq := authbridge.NewPANRequest(pan, transID)
 	panComResult, err := s.authBridgeClient.SearchDocument(panComReq)
 	if err != nil {
 		s.logger.Errorf("PAN_COM verification failed: %v", err)
