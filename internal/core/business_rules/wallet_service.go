@@ -79,15 +79,8 @@ func (ws *MockWalletService) GetBusinessWallet(businessID string) (*payment.Busi
 		realStoredCards = append(realStoredCards, dbStoredCards...)
 	}
 
-	// Generate mock payment sources
-	// TODO-DB-4.1-CRITICAL: Remove mock stored cards generation
-	// - Delete call to ws.generateMockStoredCards(businessID)
-	// - All cards should come from database only
-	// - Keep this temporarily for Phase 4.1, remove in Phase 4.4
-	mockStoredCards := ws.generateMockStoredCards(businessID)
-
-	// Combine real and mock cards
-	storedCards := append(realStoredCards, mockStoredCards...)
+	// Use only real stored cards from database
+	storedCards := realStoredCards
 
 	// Get real bank accounts (from verification) and combine with mock data
 	// TODO-DB-4.1-CRITICAL: Fetch bank accounts from database
@@ -104,19 +97,15 @@ func (ws *MockWalletService) GetBusinessWallet(businessID string) (*payment.Busi
 		realBankAccounts = append(realBankAccounts, dbBankAccounts...)
 	}
 
-	// Generate mock bank accounts and combine with real ones
-	// TODO-DB-4.1-CRITICAL: Remove mock bank accounts generation
-	// - Delete call to ws.generateMockBankAccounts(businessID)
-	// - All accounts should come from database only
-	// - Keep this temporarily for Phase 4.1, remove in Phase 4.4
-	mockBankAccounts := ws.generateMockBankAccounts(businessID)
-	bankAccounts := append(realBankAccounts, mockBankAccounts...)
+	// Use only real bank accounts from database
+	bankAccounts := realBankAccounts
 
 	// TODO-DB-4.1-FUTURE: Add repository queries when features implemented
 	// - upiDetailRepo.GetUPIDetailsByBusinessID(ctx, businessID)
 	// - creditLineRepo.GetCreditLinesByBusinessID(ctx, businessID)
-	upiDetails := ws.generateMockUPIDetails(businessID)
-	creditLines := ws.generateMockCreditLines(businessID)
+	// For now, return empty slices until repositories are implemented
+	upiDetails := make([]*payment.UPIDetail, 0)
+	creditLines := make([]*payment.CreditLine, 0)
 
 	wallet := &payment.BusinessWallet{
 		BusinessID:   businessID,
@@ -127,9 +116,8 @@ func (ws *MockWalletService) GetBusinessWallet(businessID string) (*payment.Busi
 		LastUpdated:  payment.Now(),
 	}
 
-	fmt.Printf("💳 Found %d stored cards (%d real + %d mock)\n",
-		len(storedCards), len(realStoredCards), len(mockStoredCards))
-	fmt.Printf("🏦 Found %d bank accounts\n", len(bankAccounts))
+	fmt.Printf("💳 Found %d stored cards (from database)\n", len(storedCards))
+	fmt.Printf("🏦 Found %d bank accounts (from database)\n", len(bankAccounts))
 	fmt.Printf("📱 Found %d UPI details\n", len(upiDetails))
 	fmt.Printf("💰 Found %d credit lines\n", len(creditLines))
 

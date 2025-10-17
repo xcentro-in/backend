@@ -1,0 +1,270 @@
+{
+  "info": {
+    "name": "XCentro Wallet API - Test Collection",
+    "description": "Test collection for GetPaymentSourcesWithFees API using seeded test data",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Get Payment Sources With Fees",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{jwt_token}}",
+            "type": "text",
+            "description": "Replace {{jwt_token}} with your actual JWT token"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"business_id\": \"01936d7a-7c8e-7890-b123-456789abcdef\",\n  \"payment_context\": \"vendor_payment\",\n  \"base_amount\": 100000\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{base_url}}/v1/process_payment/get_payment_sources_with_fees",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "v1",
+            "process_payment",
+            "get_payment_sources_with_fees"
+          ]
+        },
+        "description": "Retrieves all payment sources (cards and bank accounts) with calculated fees based on payment context and amount.\n\n**Test Business ID:** 01936d7a-7c8e-7890-b123-456789abcdef\n\n**Expected Result:**\n- 4 active stored cards (Visa, Mastercard, RuPay, Amex)\n- 3 verified bank accounts (HDFC, ICICI, SBI)\n- Fee calculations based on payment context"
+      },
+      "response": []
+    },
+    {
+      "name": "Get Payment Sources - Payroll Context",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{jwt_token}}",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"business_id\": \"01936d7a-7c8e-7890-b123-456789abcdef\",\n  \"payment_context\": \"payroll\",\n  \"base_amount\": 50000\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{base_url}}/v1/process_payment/get_payment_sources_with_fees",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "v1",
+            "process_payment",
+            "get_payment_sources_with_fees"
+          ]
+        },
+        "description": "Test with payroll payment context (₹500 = 50000 paise)"
+      },
+      "response": []
+    },
+    {
+      "name": "Get Payment Sources - GST Payment",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{jwt_token}}",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"business_id\": \"01936d7a-7c8e-7890-b123-456789abcdef\",\n  \"payment_context\": \"gst_payment\",\n  \"base_amount\": 200000\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{base_url}}/v1/process_payment/get_payment_sources_with_fees",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "v1",
+            "process_payment",
+            "get_payment_sources_with_fees"
+          ]
+        },
+        "description": "Test with GST payment context (₹2000 = 200000 paise)"
+      },
+      "response": []
+    },
+    {
+      "name": "Get Payment Sources - Invalid Business ID",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{jwt_token}}",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"business_id\": \"00000000-0000-0000-0000-000000000000\",\n  \"payment_context\": \"vendor_payment\",\n  \"base_amount\": 100000\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{base_url}}/v1/process_payment/get_payment_sources_with_fees",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "v1",
+            "process_payment",
+            "get_payment_sources_with_fees"
+          ]
+        },
+        "description": "Test with non-existent business ID - should return empty sources"
+      },
+      "response": []
+    },
+    {
+      "name": "Get Payment Sources - Missing Business ID",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{jwt_token}}",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"payment_context\": \"vendor_payment\",\n  \"base_amount\": 100000\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{base_url}}/v1/process_payment/get_payment_sources_with_fees",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "v1",
+            "process_payment",
+            "get_payment_sources_with_fees"
+          ]
+        },
+        "description": "Test validation - missing business_id should return 400 error"
+      },
+      "response": []
+    },
+    {
+      "name": "Get Payment Sources - Invalid Context",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          },
+          {
+            "key": "Authorization",
+            "value": "Bearer {{jwt_token}}",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"business_id\": \"01936d7a-7c8e-7890-b123-456789abcdef\",\n  \"payment_context\": \"invalid_context\",\n  \"base_amount\": 100000\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{base_url}}/v1/process_payment/get_payment_sources_with_fees",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "v1",
+            "process_payment",
+            "get_payment_sources_with_fees"
+          ]
+        },
+        "description": "Test validation - invalid payment_context should return 400 error"
+      },
+      "response": []
+    }
+  ],
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8888",
+      "type": "string",
+      "description": "Base URL for the API"
+    },
+    {
+      "key": "jwt_token",
+      "value": "your-jwt-token-here",
+      "type": "string",
+      "description": "JWT authentication token - update after login"
+    }
+  ]
+}

@@ -700,9 +700,10 @@ POST /api/v1/process_payment/make_payment -H "Authorization: Bearer <TOKEN>"
 ### Example: Get Payment Sources with Fee Calculation
 ```bash
 # Get all payment sources with calculated fees for specific context
+# Note: Returns only real database data (no mock data)
 POST /api/v1/process_payment/get_payment_sources_with_fees -H "Authorization: Bearer <TOKEN>"
 {
-  "business_id": "uuid-of-business",
+  "business_id": "uuid-of-business",         # Required in request body
   "payment_context": "vendor_payment",       # or "payroll", "gst_payment"
   "base_amount": 100000                      # ₹1000.00 in paise
 }

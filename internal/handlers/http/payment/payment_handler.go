@@ -886,16 +886,6 @@ func (h *PaymentHandler) handleTokenizationError(err error) error {
 func (h *PaymentHandler) GetPaymentSourcesWithFees(c echo.Context) error {
 	fmt.Println("=== HANDLER: GetPaymentSourcesWithFees API Called (Phase 10) ===")
 
-	// Read BusinessID from X-Business-ID header
-	businessID := c.Request().Header.Get("X-Business-ID")
-	if businessID == "" {
-		fmt.Println("❌ X-Business-ID header is missing")
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "missing_business_id",
-			"message": "X-Business-ID header is required",
-		})
-	}
-
 	// Parse request body
 	var req GetPaymentSourcesWithFeesRequest
 	if err := c.Bind(&req); err != nil {
@@ -906,8 +896,17 @@ func (h *PaymentHandler) GetPaymentSourcesWithFees(c echo.Context) error {
 		})
 	}
 
+	// Validate business_id
+	if req.BusinessID == "" {
+		fmt.Println("❌ business_id is missing")
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "missing_business_id",
+			"message": "business_id is required in request body",
+		})
+	}
+
 	fmt.Printf("📥 Request: Business ID: %s, Context: %s, Amount: %d\n",
-		businessID, req.PaymentContext, req.BaseAmount)
+		req.BusinessID, req.PaymentContext, req.BaseAmount)
 
 	// Validate payment context
 	paymentContext := payment.PaymentContext(req.PaymentContext)
@@ -935,7 +934,7 @@ func (h *PaymentHandler) GetPaymentSourcesWithFees(c echo.Context) error {
 
 	response, err := h.paymentSourceService.GetPaymentSourcesWithFees(
 		ctx,
-		businessID,
+		req.BusinessID,
 		paymentContext,
 		req.BaseAmount,
 	)

@@ -240,8 +240,8 @@ type ErrorResponse struct {
 // === PHASE 10: PAYMENT SOURCE SELECTION MODELS ===
 
 // GetPaymentSourcesWithFeesRequest represents the request for Phase 10
-// Note: BusinessID is now passed via X-Business-ID header
 type GetPaymentSourcesWithFeesRequest struct {
+	BusinessID     string `json:"business_id"`     // Business identifier
 	PaymentContext string `json:"payment_context"` // vendor_payment, gst_payment, bill_payment, payroll
 	BaseAmount     int64  `json:"base_amount"`     // Amount in paise
 }
