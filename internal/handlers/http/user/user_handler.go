@@ -368,22 +368,27 @@ func (h *UserHandler) GetUserRoles(c echo.Context) error {
 		})
 	}
 
-	userRoles := userRolesRaw.([]*coreBusiness.BusinessUserRelation)
-
-	// Format response: only return userId, businessId, and role
+	// Format response: return userId, businessId, role, and kycNeeded for non-empty roles
 	type RoleResponse struct {
 		UserID     string `json:"userId"`
 		BusinessID string `json:"businessId"`
 		Role       string `json:"role"`
+		KycNeeded  bool   `json:"kycNeeded"`
 	}
 
-	roles := make([]RoleResponse, 0, len(userRoles))
-	for _, rel := range userRoles {
-		roles = append(roles, RoleResponse{
-			UserID:     rel.UserID,
-			BusinessID: rel.BID,
-			Role:       string(rel.Role),
-		})
+	allUserRoles := userRolesRaw.([]*coreBusiness.BusinessUserRelation)
+	roles := make([]RoleResponse, 0, len(allUserRoles))
+
+	for _, rel := range allUserRoles {
+		// Only include entries where role is not NULL or empty (skip onboarding in progress)
+		if rel.Role != "" {
+			roles = append(roles, RoleResponse{
+				UserID:     rel.UserID,
+				BusinessID: rel.BID,
+				Role:       string(rel.Role),
+				KycNeeded:  rel.KycNeeded,
+			})
+		}
 	}
 
 	return c.JSON(200, map[string]interface{}{

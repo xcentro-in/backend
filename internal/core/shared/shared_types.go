@@ -16,8 +16,9 @@ type UserRole string
 const (
 	Owner   UserRole = "owner"
 	Admin   UserRole = "admin"
-	Finance UserRole = "finance"
-	Support UserRole = "support"
+	Manager UserRole = "manager"
+	Auditor UserRole = "auditor"
+	None    UserRole = "none"
 )
 
 type BusinessType string

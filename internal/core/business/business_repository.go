@@ -32,5 +32,6 @@ type BusinessUserRelationRepository interface {
 	UpdateUserRole(ctx context.Context, userID string, bid string, newRole shared.UserRole) error
 	UpdateRoleClaim(ctx context.Context, userID string, bid string, roleClaim shared.UserRole) error
 	UpdateKYBInitiated(ctx context.Context, uid string, bid string, initiated bool) error
+	UpdateKycNeeded(ctx context.Context, userID string, bid string, kycNeeded bool) error
 	RemoveUserFromBusiness(ctx context.Context, userID string, bid string) error
 }

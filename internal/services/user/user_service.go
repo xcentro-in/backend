@@ -63,48 +63,6 @@ func NewUserService(
 	}
 }
 
-func (s *UserServiceImpl) JoinBusinessByGSTIN(ctx context.Context, userID string, gstin string, claimedRole shared.UserRole) error {
-	s.logger.Info("User %s attempting to join business with GSTIN %s", userID, gstin)
-
-	// 1. Find business by GSTIN
-	bus, err := s.businessRepo.FindByGSTIN(ctx, gstin)
-	if err != nil {
-		return fmt.Errorf("error finding business by GSTIN: %w", err)
-	}
-	if bus == nil {
-		return types.ErrBusinessNotFound
-	}
-
-	// 2. Check if user is already associated
-	relations, err := s.businessUserRelRepo.FindByUser(ctx, userID)
-	if err != nil {
-		return fmt.Errorf("error checking for existing user-business relation: %w", err)
-	}
-	for _, rel := range relations {
-		if rel.BID == bus.BID {
-			return types.ErrUserAlreadyAssociated
-		}
-	}
-
-	// 3. Create new association
-	relation := &businessRepo.BusinessUserRelation{
-		UserID:       userID,
-		BID:          bus.BID,
-		Role:         "support", // Using claimedRole for both
-		RoleClaim:    claimedRole,
-		KybInitiated: false, // User is joining, not initiating
-	}
-
-	err = s.businessUserRelRepo.AddUserToBusiness(ctx, relation)
-	if err != nil {
-		return fmt.Errorf("error adding user to business: %w", err)
-	}
-
-	s.logger.Infof("User %s successfully joined business %s (BID: %s) with role claim %s", userID, bus.Name, bus.BID, claimedRole)
-
-	return nil
-}
-
 // CreateUser creates a new user with proper validation and transaction handling
 func (s *UserServiceImpl) CreateUser(ctx context.Context, authPayload auth.AuthPayload) (*user.User, error) {
 	s.logger.Info("Creating user with email: %s", authPayload.Email)
@@ -282,15 +240,14 @@ func (s *UserServiceImpl) UpdateUserProfile(ctx context.Context, userID string, 
 		return err
 	}
 
-	// Invalidate user cache after successful update
+	// Invalidate only the user profile cache, as roles are not affected.
 	go func() {
 		bgCtx := context.Background()
-		invalidationKeys := keys.InvalidateUser(userID)
-		if err := s.rclient.Delete(bgCtx, invalidationKeys...); err != nil {
-			s.logger.Warnf("Failed to invalidate user cache: %v", err)
+		invalidationKey := keys.User.Profile(userID)
+		if err := s.rclient.Delete(bgCtx, invalidationKey); err != nil {
+			s.logger.Warnf("Failed to invalidate user profile cache: %v", err)
 		}
 	}()
-
 	return nil
 }
 
@@ -312,12 +269,12 @@ func (s *UserServiceImpl) UpdateKYCStatus(ctx context.Context, userID string, st
 		return err
 	}
 
-	// Invalidate user cache after successful update
+	// Invalidate only the user profile cache, as roles are not affected by a KYC status change.
 	go func() {
 		bgCtx := context.Background()
-		invalidationKeys := keys.InvalidateUser(userID)
-		if err := s.rclient.Delete(bgCtx, invalidationKeys...); err != nil {
-			s.logger.Warnf("Failed to invalidate user cache: %v", err)
+		invalidationKey := keys.User.Profile(userID)
+		if err := s.rclient.Delete(bgCtx, invalidationKey); err != nil {
+			s.logger.Warnf("Failed to invalidate user profile cache: %v", err)
 		}
 	}()
 
@@ -691,9 +648,10 @@ func (s *UserServiceImpl) InitiateOnboarding(
 }
 
 // CompleteOnboarding completes the user onboarding after Aadhaar verification
-// Supports two flows:
-// 1. Create new business: businessID (from header) + claimedRole
-// 2. Join existing business: gstin + claimedRole
+// Supports three flows:
+// 1. Invited user (no businessID/gstin): Complete KYC for all business relations
+// 2. Creator flow (businessID/gstin + role claim): Complete KYC and set role claim
+// 3. Invited user for specific business: Complete KYC for specific business relation
 func (s *UserServiceImpl) CompleteOnboarding(ctx context.Context, userID, businessID, gstin string, claimedRole shared.UserRole) error {
 	s.logger.Info("Completing onboarding for user %s with businessID=%s, gstin=%s, role=%s", userID, businessID, gstin, claimedRole)
 
@@ -717,112 +675,106 @@ func (s *UserServiceImpl) CompleteOnboarding(ctx context.Context, userID, busine
 		return fmt.Errorf("user must have tax ID configured")
 	}
 
-	// Check if user is invited (has existing business relations)
-	relationCount, err := s.userRepo.CountBusinessRelations(ctx, userID)
+	// Fetch all business relations for the user
+	userRelations, err := s.businessUserRelRepo.FindByUser(ctx, userID)
 	if err != nil {
-		return fmt.Errorf("failed to check business relations: %w", err)
+		return fmt.Errorf("failed to fetch user business relations: %w", err)
 	}
 
-	isInvitedUser := relationCount > 0
-	var targetBusinessID string
-
-	// Determine which flow: create new business OR join existing business
-	if !isInvitedUser {
-		// User is completing KYC and needs to associate with a business
-		if claimedRole == "" {
-			return types.NewInvalidKYCInputError("claimedRole", "required")
-		}
-
-		if businessID != "" {
-			// Flow 1: Create new business (businessID from header)
-			targetBusinessID = businessID
-			s.logger.Info("User %s completing KYC to create/own business %s", userID, businessID)
-		} else if gstin != "" {
-			// Flow 2: Join existing business (gstin from body)
-			s.logger.Info("User %s completing KYC to join business with GSTIN %s", userID, gstin)
-
-			// Find business by GSTIN
-			business, err := s.businessRepo.FindByGSTIN(ctx, gstin)
-			if err != nil {
-				return fmt.Errorf("error finding business by GSTIN: %w", err)
-			}
-			if business == nil {
-				return types.ErrBusinessNotFound
-			}
-			targetBusinessID = business.BID
-
-			// Create business relation for joining user
-			relation := &businessRepo.BusinessUserRelation{
-				UserID:       userID,
-				BID:          targetBusinessID,
-				Role:         "support",
-				RoleClaim:    claimedRole,
-				KybInitiated: false, // User is joining, not creating
-			}
-
-			err = s.businessUserRelRepo.AddUserToBusiness(ctx, relation)
-			if err != nil {
-				return fmt.Errorf("error adding user to business: %w", err)
-			}
-			s.logger.Info("User %s successfully joined business %s (GSTIN: %s)", userID, targetBusinessID, gstin)
-		} else {
-			return types.NewInvalidKYCInputError("businessID or gstin", "one of businessID or gstin is required")
-		}
-	} else {
-		// Invited user - already has business relation, no need for businessID or gstin
-		s.logger.Info("User %s is invited, skipping business association", userID)
-	}
-
+	// Execute onboarding based on flow type
 	err = s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
-		txUserRepo := s.userRepo.WithTx(tx)
 		txBusinessUserRelRepo := s.businessUserRelRepo.WithTx(tx)
 
-		// Step 1: Get stored Aadhaar transaction ID
-		tsTransID, err := txUserRepo.GetAadhaarTransactionID(ctx, userID)
-		if err != nil {
-			return types.ErrAadhaarNotInitiated
+		// Step 1: Complete Aadhaar verification (common for all flows)
+		if err := s.completeAadhaarVerification(ctx, tx, userID, userData.TaxID); err != nil {
+			return err
 		}
 
-		// Step 2: Create authbridge client
-		authClient, err := authbridge.NewClient()
-		if err != nil {
-			return fmt.Errorf("failed to create authentication client: %w", err)
-		}
-
-		// Step 3: Call Aadhaar status API
-		s.logger.Info("Fetching Aadhaar verification status for user %s", userID)
-		statusRequest := authbridge.NewAadhaarStatusRequest(tsTransID)
-		aadhaarStatusResponse, err := authClient.SearchDocument(statusRequest)
-		if err != nil {
-			return types.NewVerificationFailedError("Aadhaar status", err.Error())
-		}
-
-		// Step 4: Convert response to JSON and store in national_id_data
-		responseJSON, err := json.Marshal(aadhaarStatusResponse)
-		if err != nil {
-			return fmt.Errorf("failed to marshal Aadhaar response: %w", err)
-		}
-
-		if err := txUserRepo.UpdateNationalIDData(ctx, userData.TaxID, string(responseJSON)); err != nil {
-			return fmt.Errorf("failed to update national ID data: %w", err)
-		}
-
-		// Step 5: Set KYC status to completed
-		if err := txUserRepo.UpdateUserKYCStatus(ctx, userID, shared.KYCCompleted); err != nil {
-			return fmt.Errorf("failed to update KYC status: %w", err)
-		}
-
-		// Step 6: Update role_claim ONLY for non-invited users who created a business
-		if !isInvitedUser && businessID != "" && targetBusinessID != "" {
-			// Only update role_claim if user is creating a business (not joining via GSTIN)
-			if err := txBusinessUserRelRepo.UpdateRoleClaim(ctx, userID, targetBusinessID, claimedRole); err != nil {
-				return fmt.Errorf("failed to update role claim for business %s: %w", targetBusinessID, err)
+		// Step 2: Handle business relation updates based on flow type
+		if businessID == "" && gstin == "" {
+			// Flow 1: Invited user (no specific business) - update all relations
+			invited := false
+			for _, rel := range userRelations {
+				if rel.Role != "" {
+					invited = true
+					break
+				}
 			}
-			s.logger.Info("Onboarding completed successfully - role claim %s set for user %s in business %s", claimedRole, userID, targetBusinessID)
-		} else if !isInvitedUser && gstin != "" {
-			s.logger.Info("Onboarding completed successfully for user %s joining business via GSTIN %s", userID, gstin)
+			if !invited {
+				return types.NewInvalidKYCInputError("businessID or gstin", "invited user must have a business relation with a role")
+			}
+
+			s.logger.Info("User %s is invited, completing KYC for all business relations", userID)
+			for _, rel := range userRelations {
+				if err := txBusinessUserRelRepo.UpdateKycNeeded(ctx, userID, rel.BID, false); err != nil {
+					s.logger.Errorf("Failed to update kycNeeded for user %s in business %s: %v", userID, rel.BID, err)
+					return fmt.Errorf("failed to update kycNeeded for business %s: %w", rel.BID, err)
+				}
+			}
+			s.logger.Info("Onboarding completed for invited user %s - role already assigned, kycNeeded=false", userID)
+
 		} else {
-			s.logger.Info("Onboarding completed successfully for invited user %s - skipping role claim", userID)
+			// Flow 2 & 3: Business-specific flows
+			if claimedRole == "" {
+				return types.NewInvalidKYCInputError("claimedRole", "required")
+			}
+
+			// Resolve target business ID
+			var targetBusinessID string
+			if businessID != "" {
+				targetBusinessID = businessID
+			} else if gstin != "" {
+				business, err := s.businessRepo.FindByGSTIN(ctx, gstin)
+				if err != nil {
+					return fmt.Errorf("error finding business by GSTIN: %w", err)
+				}
+				if business == nil {
+					return types.ErrBusinessNotFound
+				}
+				targetBusinessID = business.BID
+			}
+
+			// Find the business relation
+			var rel *businessRepo.BusinessUserRelation
+			for _, r := range userRelations {
+				if r.BID == targetBusinessID {
+					rel = r
+					break
+				}
+			}
+
+			if rel == nil {
+				return fmt.Errorf("user-business relation not found for business %s", targetBusinessID)
+			}
+
+			if rel.KybInitiated && rel.Role == "" && rel.RoleClaim == "" {
+				// Flow 2: Creator flow (user created the business)
+				s.logger.Info("User %s is business creator for %s", userID, targetBusinessID)
+
+				if err := txBusinessUserRelRepo.UpdateUserRole(ctx, userID, targetBusinessID, shared.None); err != nil {
+					return fmt.Errorf("failed to update role to 'none' for business %s: %w", targetBusinessID, err)
+				}
+				if err := txBusinessUserRelRepo.UpdateRoleClaim(ctx, userID, targetBusinessID, claimedRole); err != nil {
+					return fmt.Errorf("failed to update role claim for business %s: %w", targetBusinessID, err)
+				}
+				if err := txBusinessUserRelRepo.UpdateKycNeeded(ctx, userID, targetBusinessID, false); err != nil {
+					return fmt.Errorf("failed to update kycNeeded for business %s: %w", targetBusinessID, err)
+				}
+				s.logger.Info("Onboarding completed - role='none', roleClaim='%s', kycNeeded=false for user %s in business %s (pending ops approval)", claimedRole, userID, targetBusinessID)
+
+			} else if rel.Role != "" {
+				// Flow 3: Invited user for specific business
+				s.logger.Info("User %s is invited to business %s", userID, targetBusinessID)
+
+				if err := txBusinessUserRelRepo.UpdateKycNeeded(ctx, userID, targetBusinessID, false); err != nil {
+					s.logger.Errorf("Failed to update kycNeeded for user %s in business %s: %v", userID, targetBusinessID, err)
+					return fmt.Errorf("failed to update kycNeeded for business %s: %w", targetBusinessID, err)
+				}
+				s.logger.Info("Onboarding completed for invited user %s in business %s - kycNeeded=false", userID, targetBusinessID)
+
+			} else {
+				return fmt.Errorf("ambiguous user-business relation for user %s and business %s", userID, targetBusinessID)
+			}
 		}
 
 		return nil
@@ -844,6 +796,48 @@ func (s *UserServiceImpl) CompleteOnboarding(ctx context.Context, userID, busine
 	return nil
 }
 
+// completeAadhaarVerification handles the common Aadhaar verification steps
+func (s *UserServiceImpl) completeAadhaarVerification(ctx context.Context, tx client.Tx, userID, taxID string) error {
+	txUserRepo := s.userRepo.WithTx(tx)
+
+	// Step 1: Get stored Aadhaar transaction ID
+	tsTransID, err := txUserRepo.GetAadhaarTransactionID(ctx, userID)
+	if err != nil {
+		return types.ErrAadhaarNotInitiated
+	}
+
+	// Step 2: Create authbridge client
+	authClient, err := authbridge.NewClient()
+	if err != nil {
+		return fmt.Errorf("failed to create authentication client: %w", err)
+	}
+
+	// Step 3: Call Aadhaar status API
+	s.logger.Info("Fetching Aadhaar verification status for user %s", userID)
+	statusRequest := authbridge.NewAadhaarStatusRequest(tsTransID)
+	aadhaarStatusResponse, err := authClient.SearchDocument(statusRequest)
+	if err != nil {
+		return types.NewVerificationFailedError("Aadhaar status", err.Error())
+	}
+
+	// Step 4: Convert response to JSON and store in national_id_data
+	responseJSON, err := json.Marshal(aadhaarStatusResponse)
+	if err != nil {
+		return fmt.Errorf("failed to marshal Aadhaar response: %w", err)
+	}
+
+	if err := txUserRepo.UpdateNationalIDData(ctx, taxID, string(responseJSON)); err != nil {
+		return fmt.Errorf("failed to update national ID data: %w", err)
+	}
+
+	// Step 5: Set KYC status to completed
+	if err := txUserRepo.UpdateUserKYCStatus(ctx, userID, shared.KYCCompleted); err != nil {
+		return fmt.Errorf("failed to update KYC status: %w", err)
+	}
+
+	return nil
+}
+
 // GetOnboardingStatus returns the current onboarding status for a user
 func (s *UserServiceImpl) GetOnboardingStatus(ctx context.Context, userID string) (*user.OnboardingStatusDTO, error) {
 	s.logger.Info("Getting onboarding status for user %s", userID)
@@ -861,12 +855,14 @@ func (s *UserServiceImpl) GetOnboardingStatus(ctx context.Context, userID string
 		return nil, types.ErrUserNotFound
 	}
 
-	// Restrict access after KYC is completed or verified
+	// SECURITY: If KYC is completed or verified, only return status (no sensitive data)
 	if userData.KycStatus == shared.KYCCompleted || userData.KycStatus == shared.KYCVerified {
-		return nil, fmt.Errorf("onboarding status is only available during onboarding process")
+		return &user.OnboardingStatusDTO{
+			KycStatus: userData.KycStatus,
+		}, nil
 	}
 
-	// Prepare response DTO
+	// KYC in progress - return full details for resume capability
 	response := &user.OnboardingStatusDTO{
 		UserID:         userData.Id,
 		Email:          userData.Email,

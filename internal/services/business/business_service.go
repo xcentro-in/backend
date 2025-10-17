@@ -101,6 +101,15 @@ func (s *BusinessServiceImpl) InitiateOnboarding(ctx context.Context, uid string
 		return nil, types.NewInvalidInputError("name or gstin", "both name and GSTIN are required")
 	}
 
+	// Step 2.1: Validate GSTIN format (must be exactly 15 characters)
+	if len(gstin) != 15 {
+		return nil, types.NewInvalidInputError("gstin", "GSTIN must be exactly 15 characters")
+	}
+
+	// Step 2.2: Extract PAN from GSTIN (characters 3-12, positions 2-11 in 0-indexed)
+	pan := gstin[2:12]
+	s.logger.Infof("Extracted PAN %s from GSTIN %s", pan, gstin)
+
 	// Step 3: Check if business already exists
 	existingBusiness, err := s.businessRepo.FindByGSTIN(ctx, gstin)
 	if err != nil {
@@ -126,6 +135,22 @@ func (s *BusinessServiceImpl) InitiateOnboarding(ctx context.Context, uid string
 		}
 	}
 
+	// Step 4.1: Verify PAN via AuthBridge PAN_COM
+	var itidDataJSON string
+	if s.verificationService != nil {
+		transID := uuid.New().String()
+		panData, err := s.verificationService.VerifyPANCOM(ctx, pan, transID)
+		if err != nil {
+			s.logger.Errorf("PAN verification failed: %v", err)
+			return nil, fmt.Errorf("PAN verification failed: %w", err)
+		}
+
+		itidDataJSON, err = verification.ToJSON(panData)
+		if err != nil {
+			s.logger.Errorf("Failed to serialize PAN data: %v", err)
+		}
+	}
+
 	// Step 5: Create business with KYB in progress
 	newBusiness, err := s.businessRepo.CreateBusinessByNameAndGSTIN(ctx, name, gstin)
 	if err != nil {
@@ -139,36 +164,62 @@ func (s *BusinessServiceImpl) InitiateOnboarding(ctx context.Context, uid string
 		}
 	}
 
-	// Step 7: Create business-user relation with kyb_initiated = true
+	// Step 6.1: Create/Update KYB data with PAN (income_tax_id)
+	if pan != "" {
+		_, err = s.businessRepo.UpdateKYBData(ctx, newBusiness.BID, &business.BusinessKYBData{
+			ITID:     pan,
+			ITIDData: itidDataJSON, // Repository handles empty string → NULL conversion
+			CID:      "",
+			CIDData:  "",
+			DocUrl:   "",
+		})
+		if err != nil {
+			s.logger.Errorf("Failed to update KYB data with PAN: %v", err)
+			return nil, fmt.Errorf("error updating KYB data: %w", err)
+		}
+
+		// Link the PAN to business
+		err = s.businessRepo.AddKYBSuccessData(ctx, &business.Business{
+			BID:  newBusiness.BID,
+			ITID: pan,
+		})
+		if err != nil {
+			s.logger.Errorf("Failed to link PAN to business: %v", err)
+		}
+	}
+
+	// Step 7: Create business-user relation with role and roleClaim as NULL
 	err = s.businessUserRelRepo.AddUserToBusiness(ctx, &business.BusinessUserRelation{
 		UserID:       uid,
 		BID:          newBusiness.BID,
 		KybInitiated: true,
-		Role:         shared.Support,
-		RoleClaim:    shared.Support,
+		KycNeeded:    true, // User creating business needs KYC
+		Role:         "",   // NULL - will be set after ops verification
+		RoleClaim:    "",   // NULL - will be set when user completes KYC
 	})
 	if err != nil {
 		return nil, fmt.Errorf("error creating business-user relation: %w", err)
 	}
 
-	s.logger.Infof("Business onboarding initiated successfully for BID: %s", newBusiness.BID)
+	s.logger.Infof("Business onboarding initiated successfully for BID: %s with PAN: %s", newBusiness.BID, pan)
 
 	return &business.OnboardingInitResponse{
 		BID:       newBusiness.BID,
 		Name:      newBusiness.Name,
 		GSTIN:     newBusiness.GSTIN,
 		KYBStatus: shared.KYBInProgress,
-		Message:   "Business created successfully. Please complete KYB details.",
+		Message:   "Business created successfully. PAN extracted and verified. Please complete KYB details.",
 	}, nil
 }
 
-// CompleteKYB completes the KYB process with business type, PAN, and optionally CIN
+// CompleteKYB completes the KYB process with business type and optionally CIN
+// PAN (ITID) is already set during InitiateOnboarding
 func (s *BusinessServiceImpl) CompleteKYB(ctx context.Context, uid string, userRoles []*business.BusinessUserRelation, req *business.CompleteKYBRequest) (*business.CompleteKYBResponse, error) {
 	s.logger.Infof("Completing KYB for user %s, BID %s", uid, req.BID)
 
-	// Step 1: Validate inputs
-	if req.BID == "" || req.ITID == "" || req.BusinessType == "" {
-		return nil, types.NewInvalidInputError("bid, itid, or businessType", "all required fields must be provided")
+	// Step 1: Validate inputs (ITID is optional now, already set in init)
+	if req.BID == "" || req.BusinessType == "" {
+		return nil, types.NewInvalidInputError("bid or businessType", "bid and businessType are required")
 	}
 
 	// Step 2: Validate business type
@@ -201,7 +252,7 @@ func (s *BusinessServiceImpl) CompleteKYB(ctx context.Context, uid string, userR
 	}
 
 	// Step 5: Check if KYB already completed
-	existingBusiness, _, err := s.businessRepo.GetBusinessWithKYBData(ctx, req.BID)
+	existingBusiness, existingKYBData, err := s.businessRepo.GetBusinessWithKYBData(ctx, req.BID)
 	if err != nil {
 		return nil, fmt.Errorf("error fetching business: %w", err)
 	}
@@ -210,23 +261,13 @@ func (s *BusinessServiceImpl) CompleteKYB(ctx context.Context, uid string, userR
 		return nil, types.ErrKYBAlreadyCompleted
 	}
 
-	// Step 6: Verify PAN via AuthBridge
-	var itidDataJSON string
-	if s.verificationService != nil {
-		transID := uuid.New().String()
-		panData, err := s.verificationService.VerifyPANCOM(ctx, req.ITID, transID)
-		if err != nil {
-			s.logger.Errorf("PAN verification failed: %v", err)
-			return nil, fmt.Errorf("PAN verification failed: %w", err)
-		}
-
-		itidDataJSON, err = verification.ToJSON(panData)
-		if err != nil {
-			s.logger.Errorf("Failed to serialize PAN data: %v", err)
-		}
+	// Step 5.1: Get existing PAN from business (set during init)
+	existingPAN := existingBusiness.ITID
+	if existingPAN == "" {
+		return nil, types.NewInvalidInputError("itid", "PAN not found. Please reinitiate business onboarding.")
 	}
 
-	// Step 7: Verify CIN if required
+	// Step 6: Verify CIN if required
 	var cidDataJSON string
 	if shared.RequiresCIN(req.BusinessType) && s.verificationService != nil {
 		transID := uuid.New().String()
@@ -242,30 +283,36 @@ func (s *BusinessServiceImpl) CompleteKYB(ctx context.Context, uid string, userR
 		}
 	}
 
-	// Step 8: Update KYB data
-	_, err = s.businessRepo.UpdateKYBData(ctx, req.BID, &business.BusinessKYBData{
-		ITID:     req.ITID,
-		ITIDData: itidDataJSON,
-		CID:      req.CID,
-		CIDData:  cidDataJSON,
-		DocUrl:   "", // Will be updated when deed is uploaded
-	})
+	// Step 7: Update KYB data (keep existing PAN data, add CIN)
+	kybUpdate := &business.BusinessKYBData{
+		ITID:    existingPAN, // Keep existing PAN
+		CID:     req.CID,     // Update CIN
+		CIDData: cidDataJSON, // Update CIN data
+	}
+
+	// Preserve existing data if available
+	if existingKYBData != nil {
+		kybUpdate.ITIDData = existingKYBData.ITIDData
+		kybUpdate.DocUrl = existingKYBData.DocUrl
+	}
+
+	_, err = s.businessRepo.UpdateKYBData(ctx, req.BID, kybUpdate)
 	if err != nil {
 		return nil, fmt.Errorf("error updating KYB data: %w", err)
 	}
 
-	// Step 9: Update business with type and status
+	// Step 8: Update business with type and status
 	err = s.businessRepo.AddKYBSuccessData(ctx, &business.Business{
 		BID:          req.BID,
 		KybStatus:    shared.KYBCompleted,
 		BusinessType: req.BusinessType,
-		ITID:         req.ITID,
+		ITID:         existingPAN, // Keep existing PAN
 	})
 	if err != nil {
 		return nil, fmt.Errorf("error updating business KYB status: %w", err)
 	}
 
-	s.logger.Infof("KYB completed successfully for BID: %s", req.BID)
+	s.logger.Infof("KYB completed successfully for BID: %s with business type: %s", req.BID, req.BusinessType)
 
 	// Business details cache will expire via TTL (10 minutes)
 
@@ -323,6 +370,14 @@ func (s *BusinessServiceImpl) GetOnboardingStatus(ctx context.Context, uid strin
 		return nil, fmt.Errorf("error fetching business data: %w", err)
 	}
 
+	// SECURITY: If KYB is completed or verified, only return status (no sensitive data)
+	if bus.KybStatus == shared.KYBCompleted || bus.KybStatus == shared.KYBVerified {
+		return &business.OnboardingStatusResponse{
+			KYBStatus: bus.KybStatus,
+		}, nil
+	}
+
+	// KYB in progress - return full details for resume capability
 	response := &business.OnboardingStatusResponse{
 		BID:          bus.BID,
 		Name:         bus.Name,

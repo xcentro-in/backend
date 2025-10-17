@@ -362,7 +362,7 @@ func (h *BusinessHandler) InviteUser(c echo.Context) error {
 	}
 
 	// Validate role is valid
-	validRoles := []shared.UserRole{shared.Owner, shared.Admin, shared.Finance, shared.Support}
+	validRoles := []shared.UserRole{shared.Owner, shared.Admin, shared.Manager, shared.Auditor}
 	isValidRole := false
 	for _, validRole := range validRoles {
 		if req.Role == validRole {
@@ -373,7 +373,7 @@ func (h *BusinessHandler) InviteUser(c echo.Context) error {
 	if !isValidRole {
 		return c.JSON(400, map[string]interface{}{
 			"error":   "INVALID_INPUT",
-			"message": "Invalid role. Must be one of: owner, admin, finance, support",
+			"message": "Invalid role. Must be one of: owner, admin, manager, auditor",
 		})
 	}
 
@@ -447,6 +447,7 @@ func (h *BusinessHandler) InviteUser(c echo.Context) error {
 		Role:         req.Role,
 		RoleClaim:    req.Role,
 		KybInitiated: false,
+		KycNeeded:    req.KycNeeded,
 	}
 
 	err = h.businessService.AddUserToBusiness(c.Request().Context(), relation)
@@ -565,7 +566,7 @@ func (h *BusinessHandler) UpdateBusinessUser(c echo.Context) error {
 	}
 
 	// Validate role is valid
-	validRoles := []shared.UserRole{shared.Owner, shared.Admin, shared.Finance, shared.Support}
+	validRoles := []shared.UserRole{shared.Owner, shared.Admin, shared.Manager, shared.Auditor}
 	isValidRole := false
 	for _, validRole := range validRoles {
 		if req.NewRole == validRole {
@@ -576,7 +577,7 @@ func (h *BusinessHandler) UpdateBusinessUser(c echo.Context) error {
 	if !isValidRole {
 		return c.JSON(400, map[string]interface{}{
 			"error":   "INVALID_INPUT",
-			"message": "Invalid role. Must be one of: owner, admin, finance, support",
+			"message": "Invalid role. Must be one of: owner, admin, manager, auditor",
 		})
 	}
 

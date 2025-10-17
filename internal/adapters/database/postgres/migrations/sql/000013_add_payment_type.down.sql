@@ -1,7 +1,7 @@
 -- Rollback: Remove payment_type column from payments table
 
 -- Drop index
-DROP INDEX IF EXISTS idx_payments_payment_type;
+DROP INDEX IF EXISTS xcentro.idx_payments_payment_type;
 
 -- Drop column
 ALTER TABLE xcentro.payments

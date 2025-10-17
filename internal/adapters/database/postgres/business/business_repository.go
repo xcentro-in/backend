@@ -33,21 +33,23 @@ func (r *PgBusinessRepository) WithTx(tx client.Tx) business.BusinessRepository 
 // FindByID finds a business by its ID
 func (r *PgBusinessRepository) FindByID(ctx context.Context, bid string) (*business.Business, error) {
 	query := `
-		SELECT 
-			bid, name, gstin, gst_data, income_tax_id, kyb_status, 
-			business_type, country_code, currency_code
-		FROM xcentro.business 
+		SELECT
+			bid, name, gstin, gst_data, income_tax_id, kyb_status,
+			business_type, business_model, business_turnover, country_code, currency_code
+		FROM xcentro.business
 		WHERE bid = $1
 	`
 
 	var b business.Business
 	var gstData sql.NullString
 	var incomeTexID sql.NullString
-	var kybStatus, businessType sql.NullString
+	var kybStatusStr string // NOT NULL with DEFAULT
+	var businessType, businessModel, businessTurnover sql.NullString
+	var countryCode, currencyCode sql.NullString
 
 	err := r.querier.QueryRow(ctx, query, bid).Scan(
-		&b.BID, &b.Name, &b.GSTIN, &gstData, &incomeTexID, &kybStatus,
-		&businessType,
+		&b.BID, &b.Name, &b.GSTIN, &gstData, &incomeTexID, &kybStatusStr,
+		&businessType, &businessModel, &businessTurnover, &countryCode, &currencyCode,
 	)
 
 	if err != nil {
@@ -59,8 +61,12 @@ func (r *PgBusinessRepository) FindByID(ctx context.Context, bid string) (*busin
 
 	b.GSTINData = gstData.String
 	b.ITID = incomeTexID.String
-	b.KybStatus = shared.KYBstatus(kybStatus.String)
+	b.KybStatus = shared.KYBstatus(kybStatusStr)
 	b.BusinessType = shared.BusinessType(businessType.String)
+	b.BusinessModel = businessModel.String
+	b.BusinessTurnover = businessTurnover.String
+	b.CountryCode = countryCode.String
+	b.CurrencyCode = currencyCode.String
 
 	return &b, nil
 }
@@ -68,21 +74,21 @@ func (r *PgBusinessRepository) FindByID(ctx context.Context, bid string) (*busin
 // FindByGSTIN finds a business by its GSTIN
 func (r *PgBusinessRepository) FindByGSTIN(ctx context.Context, gstin string) (*business.Business, error) {
 	query := `
-		SELECT 
-			bid, name, gstin, gst_data, income_tax_id, kyb_status, 
+		SELECT
+			bid, name, gstin, gst_data, income_tax_id, kyb_status,
 			business_type
-		FROM xcentro.business 
+		FROM xcentro.business
 		WHERE gstin = $1
 	`
 
 	var b business.Business
 	var gstData sql.NullString
 	var incomeTexID sql.NullString
-	var kybStatus sql.NullString
+	var kybStatusStr string // NOT NULL with DEFAULT
 	var businessType sql.NullString
 
 	err := r.querier.QueryRow(ctx, query, gstin).Scan(
-		&b.BID, &b.Name, &b.GSTIN, &gstData, &incomeTexID, &kybStatus,
+		&b.BID, &b.Name, &b.GSTIN, &gstData, &incomeTexID, &kybStatusStr,
 		&businessType,
 	)
 
@@ -95,7 +101,7 @@ func (r *PgBusinessRepository) FindByGSTIN(ctx context.Context, gstin string) (*
 
 	b.GSTINData = gstData.String
 	b.ITID = incomeTexID.String
-	b.KybStatus = shared.KYBstatus(kybStatus.String)
+	b.KybStatus = shared.KYBstatus(kybStatusStr)
 	b.BusinessType = shared.BusinessType(businessType.String)
 
 	return &b, nil
@@ -124,7 +130,7 @@ func (r *PgBusinessRepository) CreateBusinessByNameAndGSTIN(ctx context.Context,
 
 func (r *PgBusinessRepository) AddKYBSuccessData(ctx context.Context, bus *business.Business) error {
 	query := `
-		UPDATE xcentro.business 
+		UPDATE xcentro.business
 		SET kyb_status = $2, business_type = $3, income_tax_id = $4
 		WHERE bid = $1
 	`
@@ -149,18 +155,32 @@ func (r *PgBusinessRepository) UpdateKYBData(ctx context.Context, bid string, ky
 	// First, update or create KYB data
 	kybQuery := `
 		INSERT INTO xcentro.kyb_data (income_tax_id, income_tax_id_data, company_id, company_id_data, business_deed)
-		VALUES ($1, $2, $3, $4, $5)
-		ON CONFLICT (income_tax_id) 
-		DO UPDATE SET 
-			income_tax_id_data = $2, 
-			company_id = $3, 
-			company_id_data = $4, 
+		VALUES ($1, $2::jsonb, $3, $4::jsonb, $5)
+		ON CONFLICT (income_tax_id)
+		DO UPDATE SET
+			income_tax_id_data = $2::jsonb,
+			company_id = $3,
+			company_id_data = $4::jsonb,
 			business_deed = $5
 		RETURNING income_tax_id
 	`
 
+	// Convert empty strings to NULL for JSONB columns
+	var itidDataParam, cidDataParam interface{}
+	if kybData.ITIDData == "" {
+		itidDataParam = nil
+	} else {
+		itidDataParam = kybData.ITIDData
+	}
+
+	if kybData.CIDData == "" {
+		cidDataParam = nil
+	} else {
+		cidDataParam = kybData.CIDData
+	}
+
 	err := r.querier.QueryRow(ctx, kybQuery,
-		kybData.ITID, kybData.ITIDData, kybData.CID, kybData.CIDData, kybData.DocUrl,
+		kybData.ITID, itidDataParam, kybData.CID, cidDataParam, kybData.DocUrl,
 	).Scan(&kybData.ITID)
 
 	if err != nil {
@@ -234,7 +254,8 @@ func (r *PgBusinessRepository) GetBusinessWithKYBData(ctx context.Context, bid s
 	query := `
 		SELECT
 			b.bid, b.name, b.gstin, b.gst_data, b.income_tax_id,
-			b.kyb_status, b.business_type, b.country_code, b.currency_code,
+			b.kyb_status, b.business_type, b.business_model, b.business_turnover,
+			b.country_code, b.currency_code,
 			k.income_tax_id, k.income_tax_id_data, k.company_id, k.company_id_data, k.business_deed
 		FROM xcentro.business b
 		LEFT JOIN xcentro.kyb_data k ON b.income_tax_id = k.income_tax_id
@@ -243,13 +264,16 @@ func (r *PgBusinessRepository) GetBusinessWithKYBData(ctx context.Context, bid s
 
 	var b business.Business
 	var kybData business.BusinessKYBData
-	var gstData, incomeTexID, kybStatus, businessType sql.NullString
+	var gstData, incomeTexID sql.NullString
+	var kybStatusStr string // NOT NULL with DEFAULT
+	var businessType, businessModel, businessTurnover sql.NullString
 	var countryCode, currencyCode sql.NullString
 	var kybITID, kybITIDData, kybCID, kybCIDData, kybDocUrl sql.NullString
 
 	err := r.querier.QueryRow(ctx, query, bid).Scan(
 		&b.BID, &b.Name, &b.GSTIN, &gstData, &incomeTexID,
-		&kybStatus, &businessType, &countryCode, &currencyCode,
+		&kybStatusStr, &businessType, &businessModel, &businessTurnover,
+		&countryCode, &currencyCode,
 		&kybITID, &kybITIDData, &kybCID, &kybCIDData, &kybDocUrl,
 	)
 
@@ -262,8 +286,10 @@ func (r *PgBusinessRepository) GetBusinessWithKYBData(ctx context.Context, bid s
 
 	b.GSTINData = gstData.String
 	b.ITID = incomeTexID.String
-	b.KybStatus = shared.KYBstatus(kybStatus.String)
+	b.KybStatus = shared.KYBstatus(kybStatusStr)
 	b.BusinessType = shared.BusinessType(businessType.String)
+	b.BusinessModel = businessModel.String
+	b.BusinessTurnover = businessTurnover.String
 	b.CountryCode = countryCode.String
 	b.CurrencyCode = currencyCode.String
 

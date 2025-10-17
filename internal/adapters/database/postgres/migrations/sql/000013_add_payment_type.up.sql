@@ -2,11 +2,11 @@
 -- This distinguishes between regular payments, tokenization payments, and refunds
 
 -- Create payment_type enum type
-CREATE TYPE payment_type AS ENUM ('payment', 'tokenization', 'refund');
+CREATE TYPE xcentro.payment_type AS ENUM ('payment', 'tokenization', 'refund');
 
 -- Add payment_type column to payments table
 ALTER TABLE xcentro.payments
-ADD COLUMN payment_type payment_type NOT NULL DEFAULT 'payment';
+ADD COLUMN payment_type xcentro.payment_type NOT NULL DEFAULT 'payment';
 
 -- Add index for querying by payment type
 CREATE INDEX idx_payments_payment_type ON xcentro.payments(payment_type);

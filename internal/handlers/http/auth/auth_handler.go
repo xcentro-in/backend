@@ -116,8 +116,6 @@ func (ah AuthHandler) HandleLogin(c echo.Context) error {
 		"data": map[string]any{
 			"accessToken":  response.AccessToken,
 			"refreshToken": response.RefreshToken,
-			"kycNeeded":    response.KycNeeded,
-			"kybNeeded":    response.KybNeeded,
 		},
 	})
 }

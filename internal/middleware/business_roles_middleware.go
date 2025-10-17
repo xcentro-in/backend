@@ -14,6 +14,8 @@ import (
 
 // BusinessRolesMiddleware creates a middleware that fetches user's business roles
 // and injects them into the context. It uses Redis cache with DB fallback.
+// All roles (including empty/null ones) are stored in cache and context.
+// Filtering should be done at the handler level based on specific needs.
 func BusinessRolesMiddleware(
 	businessUserRelRepo business.BusinessUserRelationRepository,
 	rclient *redisClient.RedisClient,
@@ -31,7 +33,7 @@ func BusinessRolesMiddleware(
 			err := rclient.GetJSON(ctx, cacheKey, &rel)
 
 			if err == nil && len(rel) > 0 {
-				// Cache hit
+				// Cache hit - store all roles in context, filtering will be done at handler level
 				c.Set("userRoles", rel)
 				return next(c)
 			}
@@ -46,10 +48,12 @@ func BusinessRolesMiddleware(
 				log.Errorf("%v", err)
 			}
 
+			// Store all roles (including empty ones) in context and cache
+			// Filtering will be done at handler level based on specific needs
 			if len(rel) > 0 {
 				c.Set("userRoles", rel)
 
-				// Update cache asynchronously (fire-and-forget)
+				// Update cache asynchronously with all roles (fire-and-forget)
 				go func() {
 					bgCtx := context.Background()
 					if err := rclient.SetJSON(bgCtx, cacheKey, rel, keys.TTLUserRoles); err != nil {

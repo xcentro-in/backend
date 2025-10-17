@@ -6,15 +6,17 @@ import (
 
 // Business represents a business entity.
 type Business struct {
-	BID          string              `json:"bid"`
-	Name         string              `json:"name"`
-	GSTIN        string              `json:"gstin"`
-	GSTINData    string              `json:"gstinData"`
-	ITID         string              `json:"itid"`
-	KybStatus    shared.KYBstatus    `json:"kybStatus"`
-	BusinessType shared.BusinessType `json:"businessType"`
-	CountryCode  string              `json:"countryCode"`
-	CurrencyCode string              `json:"currencyCode"`
+	BID              string              `json:"bid"`
+	Name             string              `json:"name"`
+	GSTIN            string              `json:"gstin"`
+	GSTINData        string              `json:"gstinData"`
+	ITID             string              `json:"itid"`
+	KybStatus        shared.KYBstatus    `json:"kybStatus"`
+	BusinessType     shared.BusinessType `json:"businessType"`
+	BusinessModel    string              `json:"businessModel"`
+	BusinessTurnover string              `json:"businessTurnover"`
+	CountryCode      string              `json:"countryCode"`
+	CurrencyCode     string              `json:"currencyCode"`
 }
 
 type BusinessKYBData struct {
@@ -33,6 +35,7 @@ type BusinessUserRelation struct {
 	RoleClaim    shared.UserRole `json:"roleClaim"`
 	AddedAt      string          `json:"addedAt"`
 	KybInitiated bool            `json:"kybInitiated"`
+	KycNeeded    bool            `json:"kycNeeded"`
 	Timestamp    string          `json:"timestamp"`
 }
 

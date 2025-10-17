@@ -15,19 +15,10 @@ type SignupResponse struct {
 }
 
 // LoginResponse represents the response after successful login
-// Contains access token, refresh token, and onboarding flags
+// Contains access token and refresh token
 type LoginResponse struct {
 	AccessToken  string `json:"accessToken"`
 	RefreshToken string `json:"refreshToken"`
-	KycNeeded    bool   `json:"kycNeeded"` // Whether user needs to complete KYC
-	KybNeeded    bool   `json:"kybNeeded"` // Whether user needs to complete KYB for their business
-}
-
-// OnboardingStatusCache represents cached onboarding status for login optimization
-// Cached to avoid repeated database queries during login
-type OnboardingStatusCache struct {
-	KycNeeded bool `json:"kycNeeded"`
-	KybNeeded bool `json:"kybNeeded"`
 }
 
 // Session represents a user refresh token session

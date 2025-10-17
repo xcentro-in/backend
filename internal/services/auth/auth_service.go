@@ -13,7 +13,6 @@ import (
 	"xcentro.in/internal/adapters/cache/redis/keys"
 	"xcentro.in/internal/core/auth"
 	"xcentro.in/internal/core/business"
-	"xcentro.in/internal/core/shared"
 	"xcentro.in/internal/core/user"
 	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/logger"
@@ -365,46 +364,8 @@ func (s *AuthService) Login(ctx context.Context, email, password, userAgent stri
 		return nil, fmt.Errorf("failed to create authentication tokens")
 	}
 
-	// Get onboarding status (cached)
-	onboardingStatus := s.getOnboardingStatus(ctx, userObj)
-
 	return &auth.LoginResponse{
 		AccessToken:  accessToken,
 		RefreshToken: refreshToken,
-		KycNeeded:    onboardingStatus.KycNeeded,
-		KybNeeded:    onboardingStatus.KybNeeded,
 	}, nil
-}
-
-// getOnboardingStatus determines KYC and KYB status
-func (s *AuthService) getOnboardingStatus(ctx context.Context, userObj *user.User) *auth.OnboardingStatusCache {
-	// KYC Logic
-	kycNeeded := false
-	if userObj.KycNeeded {
-		if userObj.KycStatus != shared.KYCCompleted && userObj.KycStatus != shared.KYCVerified {
-			kycNeeded = true
-		}
-	}
-
-	// KYB Logic
-	kybNeeded := false
-	onboardingStatus, err := s.businessService.GetOnboardingStatus(ctx, userObj.Id, nil)
-	if err != nil {
-		logger.Warnf("Failed to get business onboarding status: %v", err)
-		kybNeeded = true
-	} else if onboardingStatus != nil && onboardingStatus.KYBInitiated {
-		// User initiated KYB (owns/created business) - check if KYB is completed
-		kybNeeded = onboardingStatus.KYBStatus != shared.KYBCompleted && onboardingStatus.KYBStatus != shared.KYBVerified
-	} else if onboardingStatus != nil && !onboardingStatus.KYBInitiated && onboardingStatus.KYBStatus == shared.KYBNotStarted {
-		// User joined existing business (not initiator) - KYB not needed
-		kybNeeded = false
-	} else if onboardingStatus != nil && onboardingStatus.KYBStatus == shared.KYBNotStarted {
-		// No business relation at all - KYB needed
-		kybNeeded = true
-	}
-
-	return &auth.OnboardingStatusCache{
-		KycNeeded: kycNeeded,
-		KybNeeded: kybNeeded,
-	}
 }

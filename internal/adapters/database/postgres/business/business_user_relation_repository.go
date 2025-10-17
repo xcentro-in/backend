@@ -31,8 +31,8 @@ func (r *PgBusinessUserRelationRepository) WithTx(tx client.Tx) business.Busines
 
 func (r *PgBusinessUserRelationRepository) UpdateKYBInitiated(ctx context.Context, uid string, bid string, initiated bool) error {
 	query := `
-		UPDATE xcentro.business_user_relation 
-		SET kyb_initiated = $3 
+		UPDATE xcentro.business_user_relation
+		SET kyb_initiated = $3
 		WHERE user_id = $1 AND bid = $2
 	`
 
@@ -48,12 +48,32 @@ func (r *PgBusinessUserRelationRepository) UpdateKYBInitiated(ctx context.Contex
 	return nil
 }
 
+// UpdateKycNeeded updates the kyc_needed flag for a user-business relation
+func (r *PgBusinessUserRelationRepository) UpdateKycNeeded(ctx context.Context, userID string, bid string, kycNeeded bool) error {
+	query := `
+		UPDATE xcentro.business_user_relation
+		SET kyc_needed = $3
+		WHERE user_id = $1 AND bid = $2
+	`
+
+	result, err := r.querier.Exec(ctx, query, userID, bid, kycNeeded)
+	if err != nil {
+		return fmt.Errorf("error updating kyc_needed status: %w", err)
+	}
+
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("user-business relation not found")
+	}
+
+	return nil
+}
+
 // FindByUser finds all business relations for a user
 func (r *PgBusinessUserRelationRepository) FindByUser(ctx context.Context, userID string) ([]*business.BusinessUserRelation, error) {
 	query := `
-		SELECT 
-			user_id, bid, role, role_claim, kyb_initiated
-		FROM xcentro.business_user_relation 
+		SELECT
+			user_id, bid, role, role_claim, kyb_initiated, kyc_needed
+		FROM xcentro.business_user_relation
 		WHERE user_id = $1
 	`
 
@@ -67,17 +87,17 @@ func (r *PgBusinessUserRelationRepository) FindByUser(ctx context.Context, userI
 
 	for rows.Next() {
 		var rel business.BusinessUserRelation
-		var role, roleClaim string
+		var role, roleClaim sql.NullString
 
 		err := rows.Scan(
-			&rel.UserID, &rel.BID, &role, &roleClaim, &rel.KybInitiated,
+			&rel.UserID, &rel.BID, &role, &roleClaim, &rel.KybInitiated, &rel.KycNeeded,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("error scanning business relation: %w", err)
 		}
 
-		rel.Role = shared.UserRole(role)
-		rel.RoleClaim = shared.UserRole(roleClaim)
+		rel.Role = shared.UserRole(role.String)
+		rel.RoleClaim = shared.UserRole(roleClaim.String)
 		relations = append(relations, &rel)
 	}
 
@@ -88,7 +108,7 @@ func (r *PgBusinessUserRelationRepository) FindByUser(ctx context.Context, userI
 func (r *PgBusinessUserRelationRepository) FindByBusiness(ctx context.Context, bid string) ([]*business.BusinessUserRelation, error) {
 	query := `
 		SELECT
-			user_id, bid, role, role_claim, added_at::text, kyb_initiated, COALESCE(updated_at::text, '')
+			user_id, bid, role, role_claim, added_at::text, kyb_initiated, kyc_needed, COALESCE(updated_at::text, '')
 		FROM xcentro.business_user_relation
 		WHERE bid = $1
 	`
@@ -103,18 +123,18 @@ func (r *PgBusinessUserRelationRepository) FindByBusiness(ctx context.Context, b
 
 	for rows.Next() {
 		var rel business.BusinessUserRelation
-		var role, roleClaim string
+		var role, roleClaim sql.NullString
 
 		err := rows.Scan(
 			&rel.UserID, &rel.BID, &role, &roleClaim,
-			&rel.AddedAt, &rel.KybInitiated, &rel.Timestamp,
+			&rel.AddedAt, &rel.KybInitiated, &rel.KycNeeded, &rel.Timestamp,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("error scanning business relation: %w", err)
 		}
 
-		rel.Role = shared.UserRole(role)
-		rel.RoleClaim = shared.UserRole(roleClaim)
+		rel.Role = shared.UserRole(role.String)
+		rel.RoleClaim = shared.UserRole(roleClaim.String)
 		relations = append(relations, &rel)
 	}
 
@@ -148,7 +168,7 @@ func (r *PgBusinessUserRelationRepository) GetBusinessUsersWithDetails(ctx conte
 
 	for rows.Next() {
 		var user business.BusinessUserDTO
-		var role, roleClaim string
+		var role, roleClaim sql.NullString
 
 		err := rows.Scan(
 			&user.UserID,
@@ -163,8 +183,8 @@ func (r *PgBusinessUserRelationRepository) GetBusinessUsersWithDetails(ctx conte
 			return nil, fmt.Errorf("error scanning business user: %w", err)
 		}
 
-		user.Role = shared.UserRole(role)
-		user.RoleClaim = shared.UserRole(roleClaim)
+		user.Role = shared.UserRole(role.String)
+		user.RoleClaim = shared.UserRole(roleClaim.String)
 		users = append(users, &user)
 	}
 
@@ -174,14 +194,28 @@ func (r *PgBusinessUserRelationRepository) GetBusinessUsersWithDetails(ctx conte
 // AddUserToBusiness adds a user to a business with a specific role
 func (r *PgBusinessUserRelationRepository) AddUserToBusiness(ctx context.Context, relation *business.BusinessUserRelation) error {
 	query := `
-		INSERT INTO xcentro.business_user_relation 
-			(user_id, bid, role, role_claim, kyb_initiated)
-		VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO xcentro.business_user_relation
+			(user_id, bid, role, role_claim, kyb_initiated, kyc_needed)
+		VALUES ($1, $2, $3, $4, $5, $6)
 	`
 
+	// Convert empty strings to NULL for enum columns
+	var roleParam, roleClaimParam interface{}
+	if relation.Role == "" {
+		roleParam = nil
+	} else {
+		roleParam = relation.Role
+	}
+
+	if relation.RoleClaim == "" {
+		roleClaimParam = nil
+	} else {
+		roleClaimParam = relation.RoleClaim
+	}
+
 	_, err := r.querier.Exec(ctx, query,
-		relation.UserID, relation.BID, relation.Role,
-		relation.RoleClaim, relation.KybInitiated,
+		relation.UserID, relation.BID, roleParam,
+		roleClaimParam, relation.KybInitiated, relation.KycNeeded,
 	)
 
 	if err != nil {
@@ -194,12 +228,20 @@ func (r *PgBusinessUserRelationRepository) AddUserToBusiness(ctx context.Context
 // UpdateUserRole updates a user's role in a business
 func (r *PgBusinessUserRelationRepository) UpdateUserRole(ctx context.Context, userID string, bid string, newRole shared.UserRole) error {
 	query := `
-		UPDATE xcentro.business_user_relation 
-		SET role = $3 
+		UPDATE xcentro.business_user_relation
+		SET role = $3
 		WHERE user_id = $1 AND bid = $2
 	`
 
-	result, err := r.querier.Exec(ctx, query, userID, bid, newRole)
+	// Convert empty string to NULL for enum column
+	var roleParam interface{}
+	if newRole == "" {
+		roleParam = nil
+	} else {
+		roleParam = newRole
+	}
+
+	result, err := r.querier.Exec(ctx, query, userID, bid, roleParam)
 	if err != nil {
 		return fmt.Errorf("error updating user role: %w", err)
 	}
@@ -213,12 +255,20 @@ func (r *PgBusinessUserRelationRepository) UpdateUserRole(ctx context.Context, u
 
 func (r *PgBusinessUserRelationRepository) UpdateRoleClaim(ctx context.Context, userID string, bid string, roleClaim shared.UserRole) error {
 	query := `
-		UPDATE xcentro.business_user_relation 
-		SET role_claim = $3 
+		UPDATE xcentro.business_user_relation
+		SET role_claim = $3
 		WHERE user_id = $1 AND bid = $2
 	`
 
-	result, err := r.querier.Exec(ctx, query, userID, bid, roleClaim)
+	// Convert empty string to NULL for enum column
+	var roleClaimParam interface{}
+	if roleClaim == "" {
+		roleClaimParam = nil
+	} else {
+		roleClaimParam = roleClaim
+	}
+
+	result, err := r.querier.Exec(ctx, query, userID, bid, roleClaimParam)
 	if err != nil {
 		return fmt.Errorf("error updating role claim: %w", err)
 	}
@@ -253,8 +303,7 @@ func (r *PgBusinessUserRelationRepository) GetKYBInitiatedStatus(ctx context.Con
 	var kybData business.BusinessKYBData
 	var bus business.Business
 
-	// Use sql.NullString to safely scan nullable columns without null-scan errors.
-	// Note: add "database/sql" to imports for sql.NullString.
+	// Use sql.NullString for nullable columns only
 	var (
 		nsBusIncomeTax sql.NullString
 		nsBusGstData   sql.NullString
@@ -264,7 +313,7 @@ func (r *PgBusinessUserRelationRepository) GetKYBInitiatedStatus(ctx context.Con
 		nsBid          sql.NullString
 		nsName         sql.NullString
 		nsGstin        sql.NullString
-		nsKybStatus    sql.NullString
+		kybStatusStr   string // NOT NULL with DEFAULT
 		nsBusinessType sql.NullString
 		nsCountryCode  sql.NullString
 		nsCurrencyCode sql.NullString
@@ -294,7 +343,7 @@ func (r *PgBusinessUserRelationRepository) GetKYBInitiatedStatus(ctx context.Con
 
 	err := r.querier.QueryRow(ctx, query, uid).Scan(
 		&nsBusIncomeTax, &nsBusGstData, &nsCid, &nsCidData, &nsDocUrl,
-		&nsBid, &nsName, &nsGstin, &nsKybStatus, &nsBusinessType, &nsCountryCode, &nsCurrencyCode,
+		&nsBid, &nsName, &nsGstin, &kybStatusStr, &nsBusinessType, &nsCountryCode, &nsCurrencyCode,
 	)
 	if err != nil {
 		return nil, nil, fmt.Errorf("error fetching KYB initiated status: %w", err)
@@ -310,7 +359,7 @@ func (r *PgBusinessUserRelationRepository) GetKYBInitiatedStatus(ctx context.Con
 	bus.BID = nsBid.String
 	bus.Name = nsName.String
 	bus.GSTIN = nsGstin.String
-	bus.KybStatus = shared.KYBstatus(nsKybStatus.String)
+	bus.KybStatus = shared.KYBstatus(kybStatusStr)
 	bus.BusinessType = shared.BusinessType(nsBusinessType.String)
 	bus.CountryCode = nsCountryCode.String
 	bus.CurrencyCode = nsCurrencyCode.String

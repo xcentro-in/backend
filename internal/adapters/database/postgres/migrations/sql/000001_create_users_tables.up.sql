@@ -4,7 +4,7 @@
 -- Enum literals (snake_case) for consistency across DB + serialization layers.
 CREATE TYPE xcentro.verification_type AS ENUM ('email_verification', 'mobile_verification','password_reset');
 CREATE TYPE xcentro.kyc_status_enum AS ENUM ('kyc_not_started', 'kyc_in_progress', 'kyc_completed', 'kyc_verified', 'kyc_needs_update', 'kyc_rejected');
-CREATE TYPE xcentro.user_role_enum AS ENUM ('owner', 'admin', 'finance', 'support');
+CREATE TYPE xcentro.user_role_enum AS ENUM ('owner', 'admin', 'manager', 'auditor', 'none');
 CREATE TYPE xcentro.business_type_enum AS ENUM (
     'sole_proprietorship',
     'partnership',
@@ -116,18 +116,18 @@ EXECUTE PROCEDURE xcentro.trigger_set_timestamp();
 -- Table for user accounts, authentication, and KYC data
 CREATE TABLE xcentro.user_table (
     id UUID PRIMARY KEY DEFAULT uuidv7(),
+    name TEXT,
+    dob DATE,
     email VARCHAR(254) UNIQUE NOT NULL,
     pwd_hash TEXT NOT NULL,
     mobile VARCHAR(20),
     tax_id TEXT REFERENCES xcentro.user_identity(tax_id), -- externalized PAN (generic tax identifier)
     kyc_status xcentro.kyc_status_enum NOT NULL DEFAULT 'kyc_not_started',
+    kyc_needed BOOLEAN DEFAULT TRUE, -- kyc_needed column default to TRUE (new users should do KYC by default)
     email_verified BOOLEAN DEFAULT FALSE,
     mobile_verified BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ,
-    name TEXT,
-    dob DATE,
-    kyc_needed BOOLEAN DEFAULT TRUE -- kyc_needed column default to TRUE (new users should do KYC by default)
+    updated_at TIMESTAMPTZ
 );
 COMMENT ON TABLE xcentro.user_table IS 'User accounts, authentication, and KYC data.';
 COMMENT ON COLUMN xcentro.user_table.name IS 'User full name collected during onboarding';
@@ -171,6 +171,8 @@ CREATE TABLE xcentro.business (
     income_tax_id TEXT REFERENCES xcentro.kyb_data(income_tax_id),
     kyb_status xcentro.kyc_status_enum DEFAULT 'kyc_not_started',
     business_type xcentro.business_type_enum,
+    business_model TEXT,
+    business_turnover TEXT,
     country_code VARCHAR(3),
     currency_code VARCHAR(3),
     updated_at TIMESTAMPTZ
@@ -190,6 +192,7 @@ CREATE TABLE xcentro.business_user_relation (
     role xcentro.user_role_enum,
     role_claim xcentro.user_role_enum,
     kyb_initiated BOOLEAN DEFAULT FALSE,
+    kyc_needed BOOLEAN DEFAULT TRUE,
     added_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ,
     PRIMARY KEY (user_id, bid)

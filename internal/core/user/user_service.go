@@ -35,7 +35,6 @@ type UserService interface {
 	// User onboarding methods
 	InitiateOnboarding(ctx context.Context, userID, name, dob, taxID, nationalID string) (*InitiateOnboardingResponseDTO, error)
 	CompleteOnboarding(ctx context.Context, userID, businessID, gstin string, claimedRole shared.UserRole) error
-	JoinBusinessByGSTIN(ctx context.Context, userID string, gstin string, claimedRole shared.UserRole) error
 	GetOnboardingStatus(ctx context.Context, userID string) (*OnboardingStatusDTO, error)
 
 	// Password reset methods
