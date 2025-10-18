@@ -3,8 +3,8 @@ package payment
 // === REQUEST MODELS ===
 
 // FetchWalletRequest represents the request for fetching business wallet information
-// Note: BusinessID is now passed via X-Business-ID header
 type FetchWalletRequest struct {
+	BusinessID string `json:"business_id"`
 }
 
 // GetFeeRulesRequest represents the request for getting fee rules
@@ -71,7 +71,6 @@ type TokenCardDetails struct {
 }
 
 // AddPaymentSourceRequest represents the request for adding a payment source to wallet
-// Note: BusinessID is now passed via X-Business-ID header
 type AddPaymentSourceRequest struct {
 	BusinessID         string              `json:"business_id"`
 	SourceType         string              `json:"source_type"` // bank_account, upi, etc.

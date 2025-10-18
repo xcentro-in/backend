@@ -43,9 +43,10 @@ HTTP → handlers → services → core → repository interface → adapters
 ### Key Domains
 - **User**: Authentication, KYC (`/v1/auth`, `/v1/user`)
 - **Business**: Business entity management, KYB (`/v1/business`)
+- **Wallet**: Payment source management (`/v1/wallet`)
 - **Payment**: Payment processing with gateway orchestration (`/api/v1/process_payment`)
 - **Payee**: Payee onboarding with verification (`/v1/payees`)
-- **Business Rules**: Fee calculation, wallet, bank/GST verification
+- **Business Rules**: Fee calculation, bank/GST verification
 
 ## Technology Stack
 
@@ -324,11 +325,19 @@ DELETE /v1/payees/:payee_id/accounts/:account_id      # Soft delete
 - `POST /v1/business/users/update` - Update user role
 - `DELETE /v1/business/users` - Remove user from business
 
+### Wallet Management APIs (`/v1/wallet`)
+- `POST /v1/wallet/fetch` - Get business wallet with stored cards/banks
+  - Request body: `{"business_id": "uuid-of-business"}`
+  - Returns: Stored cards, bank accounts, UPI details, credit lines
+- `POST /v1/wallet/add_source` - Add bank account or UPI to wallet
+  - Request body: `{"business_id": "uuid-of-business", "source_type": "bank_account", "bank_account_details": {...}}`
+  - Performs verification (penny drop for bank accounts)
+
 ### Payment Processing APIs (`/api/v1/process_payment`)
-**Wallet & Sources**:
-- `POST /api/v1/process_payment/fetch_wallet` - Get business wallet with stored cards/banks
+**Payment Source Selection**:
 - `POST /api/v1/process_payment/get_payment_sources_with_fees` - Get payment sources + fee calculation
-- `POST /api/v1/process_payment/add_payment_source` - Add bank account or UPI
+  - Request body: `{"business_id": "uuid", "payment_context": "vendor_payment", "base_amount": 50000}`
+  - Returns: Filtered payment sources with fee breakdown based on context
 
 **Card Tokenization**:
 - `POST /api/v1/process_payment/tokenize` - Tokenize card (routes to JioPay/Easebuzz)
@@ -731,6 +740,73 @@ POST /api/v1/process_payment/get_payment_sources_with_fees -H "Authorization: Be
         "total_amount": 100000
       }
     ]
+  }
+}
+```
+
+### Example: Wallet Management
+```bash
+# Fetch wallet with all stored payment sources
+POST /v1/wallet/fetch -H "Authorization: Bearer <TOKEN>"
+{
+  "business_id": "uuid-of-business"
+}
+
+# Response:
+{
+  "data": {
+    "business_id": "uuid-of-business",
+    "stored_cards": [
+      {
+        "card_id": "card_uuid_001",
+        "last_four_digits": "1111",
+        "card_type": "visa",
+        "card_category": "credit",
+        "expiry_month": "12",
+        "expiry_year": "25",
+        "is_active": true
+      }
+    ],
+    "bank_accounts": [
+      {
+        "account_id": "bank_uuid_001",
+        "last_five_digits": "67890",
+        "bank_name": "HDFC Bank",
+        "ifsc_code": "HDFC0000123",
+        "account_type": "current",
+        "is_verified": true,
+        "is_active": true
+      }
+    ],
+    "upi_details": [],
+    "credit_lines": []
+  }
+}
+
+# Add bank account to wallet
+POST /v1/wallet/add_source -H "Authorization: Bearer <TOKEN>"
+{
+  "business_id": "uuid-of-business",
+  "source_type": "bank_account",
+  "bank_account_details": {
+    "account_number": "1234567890123456",
+    "ifsc_code": "HDFC0000123",
+    "account_holder_name": "XCentro Pvt Ltd",
+    "bank_name": "HDFC Bank",
+    "branch_name": "MG Road",
+    "account_type": "current"
+  }
+}
+
+# Response (after penny drop verification):
+{
+  "status": "success",
+  "data": {
+    "success": true,
+    "message": "Bank account verified and added successfully",
+    "source_id": "bank_uuid_002",
+    "source_type": "bank_account",
+    "verification_status": "verified"
   }
 }
 ```

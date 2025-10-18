@@ -27,21 +27,31 @@ func NewPaymentHandler(paymentService *payments.PaymentService, paymentSourceSer
 	}
 }
 
-// FetchWallet handles POST /process_payment/fetch_wallet
+// FetchWallet handles POST /wallet/fetch
 func (h *PaymentHandler) FetchWallet(c echo.Context) error {
 	fmt.Println("=== HANDLER: FetchWallet API Called ===")
 
-	// Read BusinessID from X-Business-ID header
-	businessID := c.Request().Header.Get("X-Business-ID")
-	if businessID == "" {
-		fmt.Println("❌ X-Business-ID header is missing")
+	// Parse request body
+	var req FetchWalletRequest
+	if err := c.Bind(&req); err != nil {
+		fmt.Printf("❌ Error binding request: %v\n", err)
 		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "missing_business_id",
-			"message": "X-Business-ID header is required",
+			"error":   "invalid_request",
+			"message": "Invalid request body",
 		})
 	}
 
-	fmt.Printf("📥 Request: Business ID: %s\n", businessID)
+	// Validate business_id
+	if req.BusinessID == "" {
+		fmt.Println("❌ business_id is missing")
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "missing_business_id",
+			"message": "business_id is required in request body",
+		})
+	}
+
+	fmt.Printf("📥 Request: Business ID: %s\n", req.BusinessID)
+	businessID := req.BusinessID
 
 	// Call payment service to get business wallet information
 	fmt.Println("🔄 Calling Payment Service...")
@@ -72,7 +82,7 @@ func (h *PaymentHandler) FetchWallet(c echo.Context) error {
 
 	return c.JSON(http.StatusOK, map[string]any{
 		"message":  "Business wallet retrieved successfully",
-		"endpoint": "POST /v1/process_payment/fetch_wallet",
+		"endpoint": "POST /v1/wallet/fetch",
 		"status":   "success",
 		"data":     response,
 	})
@@ -471,19 +481,9 @@ func (h *PaymentHandler) MakePayment(c echo.Context) error {
 	})
 }
 
-// AddPaymentSource handles POST /process_payment/add_payment_source
+// AddPaymentSource handles POST /wallet/add_source
 func (h *PaymentHandler) AddPaymentSource(c echo.Context) error {
 	fmt.Println("=== HANDLER: AddPaymentSource API Called ===")
-
-	// Read BusinessID from X-Business-ID header
-	businessID := c.Request().Header.Get("X-Business-ID")
-	if businessID == "" {
-		fmt.Println("❌ X-Business-ID header is missing")
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "missing_business_id",
-			"message": "X-Business-ID header is required",
-		})
-	}
 
 	// Parse request body
 	var req AddPaymentSourceRequest
@@ -495,6 +495,16 @@ func (h *PaymentHandler) AddPaymentSource(c echo.Context) error {
 		})
 	}
 
+	// Validate business_id
+	if req.BusinessID == "" {
+		fmt.Println("❌ business_id is missing")
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "missing_business_id",
+			"message": "business_id is required in request body",
+		})
+	}
+
+	businessID := req.BusinessID
 	fmt.Printf("📥 Request: Business ID: %s, Source Type: %s\n", businessID, req.SourceType)
 
 	// Validate request
@@ -576,7 +586,7 @@ func (h *PaymentHandler) handleBankAccountAddition(ctx context.Context, c echo.C
 
 	return c.JSON(http.StatusCreated, map[string]any{
 		"message":  "Payment source added successfully",
-		"endpoint": "POST /v1/process_payment/add_payment_source",
+		"endpoint": "POST /v1/wallet/add_source",
 		"status":   "success",
 		"data":     response,
 	})
@@ -1014,22 +1024,24 @@ func convertPaymentSourcesResponse(serviceResp *payments.GetPaymentSourcesRespon
 	}
 }
 
-// RegisterPaymentRoutes registers all payment routes
+// RegisterPaymentRoutes registers all payment processing routes
 func RegisterPaymentRoutes(group *echo.Group, paymentService *payments.PaymentService, paymentSourceService *payments.PaymentSourceService) {
 	handler := NewPaymentHandler(paymentService, paymentSourceService)
 
 	// Core payment operations
-	group.POST("/fetch_wallet", handler.FetchWallet)
 	group.POST("/get_fee_rules", handler.GetFeeRules)
 	group.POST("/tokenize", handler.Tokenize)
 	group.POST("/make_payment", handler.MakePayment)
-	group.POST("/add_payment_source", handler.AddPaymentSource)
 
 	// Phase 10: Payment source selection with context-aware fees
 	group.POST("/get_payment_sources_with_fees", handler.GetPaymentSourcesWithFees)
+}
 
-	// Webhook endpoints (Phase 3C)
-	// TODO: Webhooks still need orchestrator for now
-	// webhookGroup := group.Group("/webhooks")
-	// RegisterWebhookRoutes(webhookGroup, paymentService)
+// RegisterWalletRoutes registers all wallet management routes
+func RegisterWalletRoutes(group *echo.Group, paymentService *payments.PaymentService, paymentSourceService *payments.PaymentSourceService) {
+	handler := NewPaymentHandler(paymentService, paymentSourceService)
+
+	// Wallet operations
+	group.POST("/fetch", handler.FetchWallet)
+	group.POST("/add_source", handler.AddPaymentSource)
 }

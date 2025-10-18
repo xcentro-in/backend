@@ -138,6 +138,10 @@ func registerV1PaymentRoutes(meta *serverMetaData, group *echo.Group) {
 	processPaymentGroup := group.Group("/process_payment")
 	payment.RegisterPaymentRoutes(processPaymentGroup, paymentService, paymentSourceService)
 
+	// Register wallet routes (wallet management separated from payment processing)
+	walletGroup := group.Group("/wallet")
+	payment.RegisterWalletRoutes(walletGroup, paymentService, paymentSourceService)
+
 	// Register callback handler for payment gateway responses (SURL/FURL)
 	// These are user-facing endpoints where gateways POST payment results
 	callbackHandler := payment.NewCallbackHandler(
