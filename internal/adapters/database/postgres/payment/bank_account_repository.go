@@ -139,6 +139,11 @@ func (r *PgBankAccountRepository) GetBankAccountByID(ctx context.Context, accoun
 		}
 	}
 
+	// Extract last five digits for display
+	if len(account.AccountNumber) >= 5 {
+		account.LastFiveDigits = account.AccountNumber[len(account.AccountNumber)-5:]
+	}
+
 	return &account, nil
 }
 
@@ -201,6 +206,11 @@ func (r *PgBankAccountRepository) GetBankAccountsByBusinessID(ctx context.Contex
 			if err := json.Unmarshal(metadataJSON, &account.Metadata); err != nil {
 				return nil, fmt.Errorf("failed to unmarshal metadata: %w", err)
 			}
+		}
+
+		// Extract last five digits for display
+		if len(account.AccountNumber) >= 5 {
+			account.LastFiveDigits = account.AccountNumber[len(account.AccountNumber)-5:]
 		}
 
 		accounts = append(accounts, &account)
