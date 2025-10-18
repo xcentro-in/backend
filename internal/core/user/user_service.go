@@ -37,10 +37,6 @@ type UserService interface {
 	CompleteOnboarding(ctx context.Context, userID, businessID, gstin string, claimedRole shared.UserRole) error
 	GetOnboardingStatus(ctx context.Context, userID string) (*OnboardingStatusDTO, error)
 
-	// Password reset methods
-	SendPasswordResetEmail(ctx context.Context, email string) error
-	ResetPasswordWithToken(ctx context.Context, token string, newPasswordHash string) error
-
 	// Invited user methods
 	CreateInvitedUser(ctx context.Context, email, name string, kycNeeded bool) (*User, error)
 }

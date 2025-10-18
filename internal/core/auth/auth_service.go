@@ -23,6 +23,12 @@ type AuthService interface {
 	Signup(ctx context.Context, email, password string) (*SignupResponse, error)
 	Login(ctx context.Context, email, password, userAgent string) (*LoginResponse, error)
 
+	// Password reset
+	SendPasswordResetEmail(ctx context.Context, email string) error
+	ResetPasswordWithToken(ctx context.Context, token string, newPassword string) error
+	ChangePassword(ctx context.Context, userID, oldPassword, newPassword string) error
+
+
 	// Utility
 	GetRedisClient() *redis.RedisClient
 }

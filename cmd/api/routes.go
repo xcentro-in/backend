@@ -38,9 +38,22 @@ func registerV1AuthRoutes(meta *serverMetaData, group *echo.Group) {
 		panic("Failed to create verification service: " + err.Error())
 	}
 
+	// Create repositories
+	userRepository := userRepo.NewPgUserRepository(meta.clients.db)
+	sessionRepo := authRepo.NewPgSessionRepository(meta.clients.db)
+
+	// Create business service
+	busSvc := businessSvc.NewBusinessService(
+		business.NewPgBusinessRepository(meta.clients.db),
+		business.NewPgBusinessUserRelationRepository(meta.clients.db),
+		userRepository,
+		meta.clients.txManager,
+		meta.clients.rcache,
+	)
+
 	// Create user service
 	userService := user.NewUserService(
-		userRepo.NewPgUserRepository(meta.clients.db),
+		userRepository,
 		business.NewPgBusinessRepository(meta.clients.db),
 		business.NewPgBusinessUserRelationRepository(meta.clients.db),
 		meta.clients.txManager,
@@ -50,25 +63,16 @@ func registerV1AuthRoutes(meta *serverMetaData, group *echo.Group) {
 		meta.clients.rcache,
 	)
 
-	// Create business service
-	busSvc := businessSvc.NewBusinessService(
-		business.NewPgBusinessRepository(meta.clients.db),
-		business.NewPgBusinessUserRelationRepository(meta.clients.db),
-		userRepo.NewPgUserRepository(meta.clients.db),
-		meta.clients.txManager,
-		meta.clients.rcache,
-	)
-
-	// Create session repository
-	sessionRepo := authRepo.NewPgSessionRepository(meta.clients.db)
-
-	// Create auth service with user and business services
+	// Create auth service with all dependencies
 	authService := authservice.NewAuthService(
 		&meta.config.JWT,
 		meta.clients.rcache,
 		sessionRepo,
+		userRepository,
 		userService,
 		busSvc,
+		meta.clients.emailService,
+		&meta.config,
 	)
 
 	// Register auth routes
@@ -176,9 +180,13 @@ func registerV1BusinessRoutes(meta *serverMetaData, group *echo.Group) {
 		panic("Failed to create verification service: " + err.Error())
 	}
 
+	// Create repositories
+	userRepository := userRepo.NewPgUserRepository(meta.clients.db)
+	sessionRepo := authRepo.NewPgSessionRepository(meta.clients.db)
+
 	// Create user service
 	userService := user.NewUserService(
-		userRepo.NewPgUserRepository(meta.clients.db),
+		userRepository,
 		business.NewPgBusinessRepository(meta.clients.db),
 		business.NewPgBusinessUserRelationRepository(meta.clients.db),
 		meta.clients.txManager,
@@ -192,21 +200,21 @@ func registerV1BusinessRoutes(meta *serverMetaData, group *echo.Group) {
 	busSvc := businessSvc.NewBusinessService(
 		business.NewPgBusinessRepository(meta.clients.db),
 		business.NewPgBusinessUserRelationRepository(meta.clients.db),
-		userRepo.NewPgUserRepository(meta.clients.db),
+		userRepository,
 		meta.clients.txManager,
 		meta.clients.rcache,
 	)
 
-	// Create session repository
-	sessionRepo := authRepo.NewPgSessionRepository(meta.clients.db)
-
-	// Create auth service with updated signature
+	// Create auth service with all dependencies
 	authService := authservice.NewAuthService(
 		&meta.config.JWT,
 		meta.clients.rcache,
 		sessionRepo,
+		userRepository,
 		userService,
 		busSvc,
+		meta.clients.emailService,
+		&meta.config,
 	)
 
 	businessUserRelRepo := business.NewPgBusinessUserRelationRepository(meta.clients.db)
@@ -220,9 +228,13 @@ func registerV1UserRoutes(meta *serverMetaData, group *echo.Group) {
 		panic("Failed to create verification service: " + err.Error())
 	}
 
+	// Create repositories
+	userRepository := userRepo.NewPgUserRepository(meta.clients.db)
+	sessionRepo := authRepo.NewPgSessionRepository(meta.clients.db)
+
 	// Create user service
 	userService := user.NewUserService(
-		userRepo.NewPgUserRepository(meta.clients.db),
+		userRepository,
 		business.NewPgBusinessRepository(meta.clients.db),
 		business.NewPgBusinessUserRelationRepository(meta.clients.db),
 		meta.clients.txManager,
@@ -236,21 +248,21 @@ func registerV1UserRoutes(meta *serverMetaData, group *echo.Group) {
 	busSvc := businessSvc.NewBusinessService(
 		business.NewPgBusinessRepository(meta.clients.db),
 		business.NewPgBusinessUserRelationRepository(meta.clients.db),
-		userRepo.NewPgUserRepository(meta.clients.db),
+		userRepository,
 		meta.clients.txManager,
 		meta.clients.rcache,
 	)
 
-	// Create session repository
-	sessionRepo := authRepo.NewPgSessionRepository(meta.clients.db)
-
-	// Create auth service with updated signature
+	// Create auth service with all dependencies
 	authService := authservice.NewAuthService(
 		&meta.config.JWT,
 		meta.clients.rcache,
 		sessionRepo,
+		userRepository,
 		userService,
 		busSvc,
+		meta.clients.emailService,
+		&meta.config,
 	)
 
 	businessUserRelRepo := business.NewPgBusinessUserRelationRepository(meta.clients.db)

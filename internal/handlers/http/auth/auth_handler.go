@@ -35,12 +35,15 @@ func RegisterAuthRoutes(e *echo.Group, authService auth.AuthService, cfg *config
 	authGroup.POST("/signup", authHandler.HandleSignup)
 	authGroup.POST("/refresh", authHandler.HandleRefreshToken)
 	authGroup.POST("/logout", authHandler.HandleLogout)
+	authGroup.GET("/forgot-password", authHandler.HandleForgotPassword)
+	authGroup.POST("/reset-password", authHandler.HandleResetPassword)
 
 	// Protected routes (require JWT)
 	protectedAuth := authGroup.Group("")
 	protectedAuth.Use(middleware.JWTMiddleware(authService))
 	protectedAuth.POST("/revoke", authHandler.HandleRevokeToken)
 	protectedAuth.POST("/revoke-all", authHandler.HandleRevokeAllTokens)
+	protectedAuth.POST("/change-password", authHandler.HandleChangePassword)
 
 	// OAuth sub group
 	oauthGroup := authGroup.Group("/Oauth")
@@ -67,7 +70,17 @@ func (ah AuthHandler) HandleSignup(c echo.Context) error {
 	response, err := ah.authService.Signup(c.Request().Context(), signupReq.Email, signupReq.Password)
 	if err != nil {
 		logger.Errorf("Signup failed: %v", err)
-		return c.JSON(500, map[string]any{"message": err.Error(), "data": nil})
+		// Return 400 for validation errors
+		if err.Error() == "password must be at least 8 characters long" ||
+			err.Error() == "password must contain at least one uppercase letter, one lowercase letter, one number, and one special character" {
+			return c.JSON(400, map[string]any{"message": err.Error(), "data": nil})
+		}
+		// Return 409 for duplicate user
+		if err.Error() == "user already exists" {
+			return c.JSON(409, map[string]any{"message": "User with this email already exists", "data": nil})
+		}
+		// Return 500 for actual server errors
+		return c.JSON(500, map[string]any{"message": "Failed to create user", "data": nil})
 	}
 
 	return c.JSON(201, map[string]any{
@@ -220,6 +233,102 @@ func (ah AuthHandler) HandleLogout(c echo.Context) error {
 
 	return c.JSON(200, map[string]any{
 		"message": "Logged out successfully",
+		"data":    nil,
+	})
+}
+
+// HandleForgotPassword processes forgot password requests
+// Sends a password reset email with token link
+func (ah AuthHandler) HandleForgotPassword(c echo.Context) error {
+	// Get email from query parameter
+	email := c.QueryParam("email")
+	if email == "" {
+		return c.JSON(400, map[string]any{"message": "Email is required", "data": nil})
+	}
+
+	// Delegate to service (always returns success to prevent email enumeration)
+	if err := ah.authService.SendPasswordResetEmail(c.Request().Context(), email); err != nil {
+		logger.Errorf("Failed to send password reset email: %v", err)
+		// Still return success to user to prevent email enumeration
+	}
+
+	return c.JSON(200, map[string]any{
+		"message": "If the email exists, a password reset link has been sent",
+		"data":    nil,
+	})
+}
+
+// HandleResetPassword processes password reset with token
+func (ah AuthHandler) HandleResetPassword(c echo.Context) error {
+	var req struct {
+		Token       string `json:"token"`
+		NewPassword string `json:"newPassword"`
+	}
+
+	// Bind and validate input
+	if err := c.Bind(&req); err != nil {
+		logger.Errorf("Invalid input: %v", err)
+		return c.JSON(400, map[string]any{"message": "Invalid input provided", "data": nil})
+	}
+
+	if req.Token == "" || req.NewPassword == "" {
+		return c.JSON(400, map[string]any{"message": "Token and new password are required", "data": nil})
+	}
+
+	// Delegate to service
+	if err := ah.authService.ResetPasswordWithToken(c.Request().Context(), req.Token, req.NewPassword); err != nil {
+		logger.Errorf("Password reset failed: %v", err)
+		return c.JSON(400, map[string]any{"message": err.Error(), "data": nil})
+	}
+
+	return c.JSON(200, map[string]any{
+		"message": "Password has been reset successfully. All existing sessions have been invalidated.",
+		"data":    nil,
+	})
+}
+
+// HandleChangePassword processes requests to change the user's password
+func (ah AuthHandler) HandleChangePassword(c echo.Context) error {
+	// Get userID from context (set by middleware)
+	userID, ok := c.Get("userId").(string)
+	if !ok || userID == "" {
+		return c.JSON(401, map[string]any{"message": "Unauthorized", "data": nil})
+	}
+
+	var req struct {
+		OldPassword string `json:"oldPassword"`
+		NewPassword string `json:"newPassword"`
+	}
+
+	// Bind and validate input
+	if err := c.Bind(&req); err != nil {
+		logger.Errorf("Invalid input: %v", err)
+		return c.JSON(400, map[string]any{"message": "Invalid input provided", "data": nil})
+	}
+
+	if req.OldPassword == "" || req.NewPassword == "" {
+		return c.JSON(400, map[string]any{"message": "Old and new passwords are required", "data": nil})
+	}
+
+	// Delegate to service
+	if err := ah.authService.ChangePassword(c.Request().Context(), userID, req.OldPassword, req.NewPassword); err != nil {
+		logger.Errorf("Password change failed: %v", err)
+		// Return 401 for authentication failures (wrong old password)
+		if err.Error() == "invalid old password" {
+			return c.JSON(401, map[string]any{"message": "Current password is incorrect", "data": nil})
+		}
+		// Return 400 for validation errors
+		if err.Error() == "new password cannot be the same as old password" ||
+			err.Error() == "password must be at least 8 characters long" ||
+			err.Error() == "password must contain at least one uppercase letter, one lowercase letter, one number, and one special character" {
+			return c.JSON(400, map[string]any{"message": err.Error(), "data": nil})
+		}
+		// Return 500 for actual server errors
+		return c.JSON(500, map[string]any{"message": "Failed to change password", "data": nil})
+	}
+
+	return c.JSON(200, map[string]any{
+		"message": "Password changed successfully. All existing sessions have been invalidated.",
 		"data":    nil,
 	})
 }

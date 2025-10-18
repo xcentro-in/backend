@@ -33,8 +33,6 @@ func RegisterUserRoutes(e *echo.Group, userService user.UserService, authService
 	// Public routes - don't require authentication
 	userGroup.GET("/verify-email", handler.VerifyEmail)
 	userGroup.POST("/resend-verification", handler.ResendEmailVerification)
-	userGroup.GET("/forgot-password", handler.ForgotPassword)
-	userGroup.POST("/reset-password", handler.ResetPassword)
 
 	// Protected routes requiring authentication
 	protectedUser := userGroup.Group("")
@@ -241,66 +239,6 @@ func (h *UserHandler) GetOnboardingStatus(c echo.Context) error {
 	return c.JSON(200, map[string]interface{}{
 		"message": "Onboarding status fetched successfully",
 		"data":    statusData,
-	})
-}
-
-// ForgotPassword sends password reset email to user
-func (h *UserHandler) ForgotPassword(c echo.Context) error {
-	email := c.QueryParam("email")
-	if email == "" {
-		return c.JSON(400, map[string]string{"message": "Email is required"})
-	}
-
-	// Service always returns success to prevent email enumeration
-	if err := h.userService.SendPasswordResetEmail(c.Request().Context(), email); err != nil {
-		h.logger.Errorf("Error sending password reset email: %v", err)
-		// Still return success to prevent information disclosure
-	}
-
-	return c.JSON(200, map[string]interface{}{
-		"message": "If the email is registered, a password reset code has been sent. Please check your inbox.",
-		"data":    nil,
-	})
-}
-
-// ResetPassword resets user password using token and new password
-func (h *UserHandler) ResetPassword(c echo.Context) error {
-	var dto user.ResetPasswordDTO
-	if err := c.Bind(&dto); err != nil {
-		return c.JSON(400, map[string]string{"message": "Invalid request payload"})
-	}
-
-	if dto.Token == "" || dto.NewPassword == "" {
-		return c.JSON(400, map[string]string{"message": "Token and new password are required"})
-	}
-
-	// Hash the new password before passing to service
-	hashedPassword, err := h.authService.HashPassword(dto.NewPassword)
-	if err != nil {
-		h.logger.Errorf("Error hashing password: %v", err)
-		return c.JSON(500, map[string]string{"message": "Failed to process password"})
-	}
-
-	// Reset password with token
-	if err := h.userService.ResetPasswordWithToken(c.Request().Context(), dto.Token, hashedPassword); err != nil {
-		h.logger.Errorf("Error resetting password: %v", err)
-
-		// Handle specific error cases
-		switch err.Error() {
-		case "reset token not found", "invalid or expired reset token":
-			return c.JSON(404, map[string]string{"message": "Invalid or expired reset token"})
-		case "reset token already used":
-			return c.JSON(400, map[string]string{"message": "Reset token has already been used"})
-		case "reset token has expired":
-			return c.JSON(400, map[string]string{"message": "Reset token has expired"})
-		default:
-			return c.JSON(500, map[string]string{"message": "Failed to reset password"})
-		}
-	}
-
-	return c.JSON(200, map[string]interface{}{
-		"message": "Password reset successfully. You can now log in with your new password.",
-		"data":    nil,
 	})
 }
 

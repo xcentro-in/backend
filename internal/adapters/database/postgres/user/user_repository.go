@@ -65,7 +65,7 @@ func (r *PgUserRepository) CreateUser(ctx context.Context, authPayload auth.Auth
 // GetUserByID retrieves a user by ID
 func (r *PgUserRepository) GetUserByID(ctx context.Context, userID string) (*user.User, error) {
 	query := `
-		SELECT id, email, mobile, name, dob, tax_id, kyc_status, kyc_needed, email_verified, mobile_verified
+		SELECT id, email, pwd_hash, mobile, name, dob, tax_id, kyc_status, kyc_needed, email_verified, mobile_verified
 		FROM xcentro.user_table
 		WHERE id = $1
 	`
@@ -77,6 +77,7 @@ func (r *PgUserRepository) GetUserByID(ctx context.Context, userID string) (*use
 	err := r.querier.QueryRow(ctx, query, userID).Scan(
 		&u.Id,
 		&u.Email,
+		&u.PwdHash,
 		&mobile,
 		&name,
 		&dob,
