@@ -51,12 +51,12 @@ func (cm *CookieManager) SetAccessTokenCookie(c echo.Context, token string) {
 	c.SetCookie(cookie)
 }
 
-// SetRefreshTokenCookie sets the refresh token cookie (restricted to /v1/auth/refresh)
+// SetRefreshTokenCookie sets the refresh token cookie (restricted to /v1/auth routes)
 func (cm *CookieManager) SetRefreshTokenCookie(c echo.Context, token string) {
 	cookie := &http.Cookie{
 		Name:     "refresh_token",
 		Value:    token,
-		Path:     "/v1/auth/refresh",
+		Path:     "/v1/auth",
 		HttpOnly: true,
 		Secure:   cm.config.Cookie.Secure,
 		SameSite: cm.getSameSiteMode(),
@@ -91,7 +91,7 @@ func (cm *CookieManager) ClearRefreshTokenCookie(c echo.Context) {
 	cookie := &http.Cookie{
 		Name:     "refresh_token",
 		Value:    "",
-		Path:     "/v1/auth/refresh",
+		Path:     "/v1/auth",
 		HttpOnly: true,
 		Secure:   cm.config.Cookie.Secure,
 		SameSite: cm.getSameSiteMode(),

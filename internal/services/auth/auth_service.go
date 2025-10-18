@@ -484,30 +484,37 @@ func (s *AuthService) Login(ctx context.Context, email, password, userAgent stri
 // Password Reset Methods
 // ============================================================================
 
-// SendPasswordResetEmail sends password reset token to user's email
-// SECURITY: Always returns success to prevent email enumeration
-func (s *AuthService) SendPasswordResetEmail(ctx context.Context, email string) error {
-	logger.Infof("Password reset requested for email: %s", email)
+// SendPasswordResetEmail sends password reset or invitation token to user's email
+// emailType can be "reset" or "invite"
+// SECURITY: Always returns success to prevent email enumeration (for reset type)
+func (s *AuthService) SendPasswordResetEmail(ctx context.Context, email string, emailType string) error {
+	logger.Infof("Password reset/invitation requested for email: %s, type: %s", email, emailType)
 
 	if email == "" {
 		// Still return nil to prevent enumeration
 		return nil
 	}
 
-	// Get user details - if not found, silently return success
+	// Get user details - if not found, silently return success for reset type
 	userObj, err := s.userRepo.GetUserByEmail(ctx, email)
 	if err != nil || userObj == nil {
-		logger.Infof("Password reset requested for non-existent email: %s", email)
-		// SECURITY: Return success even if user doesn't exist
-		return nil
+		logger.Infof("Password reset/invitation requested for non-existent email: %s", email)
+		// SECURITY: Return success even if user doesn't exist (for reset type only)
+		if emailType == "reset" {
+			return nil
+		}
+		return fmt.Errorf("user not found")
 	}
 
 	// Generate secure verification token (32 bytes = 256 bits)
 	resetToken, err := generateSecureToken()
 	if err != nil {
 		logger.Errorf("Failed to generate reset token: %v", err)
-		// Return success to prevent information disclosure
-		return nil
+		// Return success to prevent information disclosure (for reset type)
+		if emailType == "reset" {
+			return nil
+		}
+		return fmt.Errorf("failed to generate token: %w", err)
 	}
 
 	// Hash the token before storing in database
@@ -531,15 +538,56 @@ func (s *AuthService) SendPasswordResetEmail(ctx context.Context, email string) 
 	// Store verification code in database
 	if err := s.userRepo.CreateVerificationCode(ctx, verificationCode); err != nil {
 		logger.Errorf("Failed to create password reset code: %v", err)
-		// Return success to prevent information disclosure
-		return nil
+		// Return success to prevent information disclosure (for reset type)
+		if emailType == "reset" {
+			return nil
+		}
+		return fmt.Errorf("failed to create verification code: %w", err)
 	}
 
 	// Create password reset URL with token as query parameter
 	resetURL := fmt.Sprintf("http://localhost:8080/reset-password?token=%s", resetToken)
 
-	// Prepare email content with reset link
-	htmlBody := fmt.Sprintf(`
+	// Generate email content based on type
+	var subject, htmlBody, textBody string
+	if emailType == "invite" {
+		subject = "Welcome to Xcentro - Set Your Password"
+		htmlBody = s.generateInvitationEmailHTML(userObj.Name, resetURL)
+		textBody = s.generateInvitationEmailText(userObj.Name, resetURL)
+	} else {
+		subject = "Reset your Xcentro password"
+		htmlBody = s.generatePasswordResetEmailHTML(resetURL)
+		textBody = s.generatePasswordResetEmailText(resetURL)
+	}
+
+	// Create email message
+	emailMsg := &mailers.EmailMessage{
+		To:       []string{userObj.Email},
+		From:     s.appConfig.SES.DefaultFromEmail,
+		FromName: s.appConfig.SES.DefaultFromName,
+		Subject:  subject,
+		HTMLBody: htmlBody,
+		TextBody: textBody,
+	}
+
+	// Send email
+	messageID, err := s.emailService.SendEmail(ctx, emailMsg)
+	if err != nil {
+		logger.Errorf("Failed to send email to %s: %v", userObj.Email, err)
+		// Return success to prevent information disclosure (for reset type)
+		if emailType == "reset" {
+			return nil
+		}
+		return fmt.Errorf("failed to send email: %w", err)
+	}
+
+	logger.Infof("Email sent successfully to %s, Message ID: %s, Type: %s", userObj.Email, messageID, emailType)
+	return nil
+}
+
+// generatePasswordResetEmailHTML generates HTML content for password reset email
+func (s *AuthService) generatePasswordResetEmailHTML(resetURL string) string {
+	return fmt.Sprintf(`
 		<html>
 		<body>
 			<h2>Password Reset - Xcentro</h2>
@@ -555,8 +603,11 @@ func (s *AuthService) SendPasswordResetEmail(ctx context.Context, email string) 
 		</body>
 		</html>
 	`, resetURL, resetURL)
+}
 
-	textBody := fmt.Sprintf(`
+// generatePasswordResetEmailText generates plain text content for password reset email
+func (s *AuthService) generatePasswordResetEmailText(resetURL string) string {
+	return fmt.Sprintf(`
 		Password Reset - Xcentro
 
 		Hi there,
@@ -574,27 +625,64 @@ func (s *AuthService) SendPasswordResetEmail(ctx context.Context, email string) 
 		Best regards,
 		Xcentro Team
 	`, resetURL)
+}
 
-	// Create email message
-	emailMsg := &mailers.EmailMessage{
-		To:       []string{userObj.Email},
-		From:     s.appConfig.SES.DefaultFromEmail,
-		FromName: s.appConfig.SES.DefaultFromName,
-		Subject:  "Reset your Xcentro password",
-		HTMLBody: htmlBody,
-		TextBody: textBody,
-	}
+// generateInvitationEmailHTML generates HTML content for user invitation email
+func (s *AuthService) generateInvitationEmailHTML(name, resetURL string) string {
+	return fmt.Sprintf(`
+		<html>
+		<body>
+			<h2>Welcome to Xcentro!</h2>
+			<p>Hi %s,</p>
+			<p>You have been invited to join a business on the Xcentro platform.</p>
+			<p>To get started, please click the link below to set your password:</p>
+			<p><a href="%s" style="background-color: #28a745; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">Set Your Password</a></p>
+			<p>Or copy and paste this link in your browser:</p>
+			<p>%s</p>
+			<p>This link will expire in 1 hour.</p>
+			<p><strong>What's next?</strong></p>
+			<ul>
+				<li>Set your password using the link above</li>
+				<li>Log in to your Xcentro account</li>
+				<li>Complete your profile and KYC verification</li>
+				<li>Start managing business operations</li>
+			</ul>
+			<p><strong>Security Note:</strong> Never share this link with anyone. Xcentro staff will never ask for your invitation link.</p>
+			<p>If you have any questions, feel free to reach out to our support team.</p>
+			<p>Best regards,<br>Xcentro Team</p>
+		</body>
+		</html>
+	`, name, resetURL, resetURL)
+}
 
-	// Send email
-	messageID, err := s.emailService.SendEmail(ctx, emailMsg)
-	if err != nil {
-		logger.Errorf("Failed to send password reset email to %s: %v", userObj.Email, err)
-		// Return success to prevent information disclosure
-		return nil
-	}
+// generateInvitationEmailText generates plain text content for user invitation email
+func (s *AuthService) generateInvitationEmailText(name, resetURL string) string {
+	return fmt.Sprintf(`
+		Welcome to Xcentro!
 
-	logger.Infof("Password reset email sent successfully to %s, Message ID: %s", userObj.Email, messageID)
-	return nil
+		Hi %s,
+
+		You have been invited to join a business on the Xcentro platform.
+
+		To get started, please click the link below to set your password:
+
+		%s
+
+		This link will expire in 1 hour.
+
+		What's next?
+		- Set your password using the link above
+		- Log in to your Xcentro account
+		- Complete your profile and KYC verification
+		- Start managing business operations
+
+		Security Note: Never share this link with anyone. Xcentro staff will never ask for your invitation link.
+
+		If you have any questions, feel free to reach out to our support team.
+
+		Best regards,
+		Xcentro Team
+	`, name, resetURL)
 }
 
 // ResetPasswordWithToken resets user's password using verification token

@@ -459,6 +459,16 @@ func (h *BusinessHandler) InviteUser(c echo.Context) error {
 		})
 	}
 
+	// Send invitation email using auth service (unified password reset flow)
+	err = h.authService.SendPasswordResetEmail(c.Request().Context(), req.Email, "invite")
+	if err != nil {
+		h.logger.Errorf("Error sending invitation email: %v", err)
+		// Don't fail the invitation if email fails, user is already created
+		h.logger.Warnf("User %s created but invitation email failed to send", createdUser.Id)
+	} else {
+		h.logger.Infof("Invitation email sent successfully to %s", req.Email)
+	}
+
 	return c.JSON(201, map[string]interface{}{
 		"message": "User invited successfully. Invitation email sent.",
 		"data": map[string]interface{}{

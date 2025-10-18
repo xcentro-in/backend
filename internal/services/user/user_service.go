@@ -931,7 +931,9 @@ func (s *UserServiceImpl) generateRandomPassword() (string, error) {
 	return string(password), nil
 }
 
-// CreateInvitedUser creates a new user for business invitation (email-first to avoid deadlock)
+// CreateInvitedUser creates a new user for business invitation
+// Note: This no longer sends emails - caller should use auth service for password reset/invitation emails
+// User is created with empty password hash - they MUST use the invitation link to set their password
 func (s *UserServiceImpl) CreateInvitedUser(ctx context.Context, email, name string, kycNeeded bool) (*user.User, error) {
 	s.logger.Info("Creating invited user with email: %s", email)
 
@@ -950,74 +952,15 @@ func (s *UserServiceImpl) CreateInvitedUser(ctx context.Context, email, name str
 		return nil, fmt.Errorf("user with email %s already exists", email)
 	}
 
-	// Generate random password
-	randomPassword, err := s.generateRandomPassword()
-	if err != nil {
-		return nil, fmt.Errorf("failed to generate random password: %w", err)
-	}
-
-	// IMPORTANT: Send email FIRST before creating user (to avoid deadlock)
-	htmlBody := fmt.Sprintf(`
-		<html>
-		<body>
-			<h2>Welcome to Xcentro!</h2>
-			<p>Hi %s,</p>
-			<p>You have been invited to join a business on Xcentro platform.</p>
-			<p>Your temporary login credentials are:</p>
-			<p><strong>Email:</strong> %s</p>
-			<p><strong>Temporary Password:</strong> <code style="background-color: #f0f0f0; padding: 5px 10px; border-radius: 3px;">%s</code></p>
-			<p><strong>⚠️ IMPORTANT:</strong> Please reset your password immediately after logging in for security purposes.</p>
-			<p>If you didn't expect this invitation, please contact the business administrator.</p>
-			<p>Best regards,<br>Xcentro Team</p>
-		</body>
-		</html>
-	`, name, email, randomPassword)
-
-	textBody := fmt.Sprintf(`
-		Welcome to Xcentro!
-
-		Hi %s,
-
-		You have been invited to join a business on Xcentro platform.
-
-		Your temporary login credentials are:
-		Email: %s
-		Temporary Password: %s
-
-		⚠️ IMPORTANT: Please reset your password immediately after logging in for security purposes.
-
-		If you didn't expect this invitation, please contact the business administrator.
-
-		Best regards,
-		Xcentro Team
-	`, name, email, randomPassword)
-
-	emailMsg := &mailers.EmailMessage{
-		To:       []string{email},
-		From:     s.config.SES.DefaultFromEmail,
-		FromName: s.config.SES.DefaultFromName,
-		Subject:  "You've been invited to Xcentro",
-		HTMLBody: htmlBody,
-		TextBody: textBody,
-	}
-
-	// Send email
-	messageID, err := s.emailService.SendEmail(ctx, emailMsg)
-	if err != nil {
-		s.logger.Errorf("Failed to send invitation email to %s: %v", email, err)
-		return nil, fmt.Errorf("failed to send invitation email: %w", err)
-	}
-
-	s.logger.Info("Invitation email sent successfully to %s, Message ID: %s", email, messageID)
-
-	// Hash the password
-	hashedPasswordBytes, err := bcrypt.GenerateFromPassword([]byte(randomPassword), bcrypt.DefaultCost)
+	// Create empty password hash (user cannot login, must use invitation link to set password)
+	// This is more efficient and semantically correct than generating a random password
+	hashedPasswordBytes, err := bcrypt.GenerateFromPassword([]byte(""), bcrypt.DefaultCost)
 	if err != nil {
 		return nil, fmt.Errorf("failed to hash password: %w", err)
 	}
 	hashedPassword := string(hashedPasswordBytes)
 
-	// Create user with hashed password
+	// Create user with empty password hash
 	createdUser, err := s.userRepo.CreateInvitedUser(ctx, email, hashedPassword, name, kycNeeded)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create invited user: %w", err)

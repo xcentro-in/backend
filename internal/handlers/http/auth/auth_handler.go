@@ -1,6 +1,8 @@
 package auth
 
 import (
+	"context"
+
 	"github.com/labstack/echo/v4"
 	"xcentro.in/internal/core/auth"
 	"xcentro.in/internal/middleware"
@@ -223,14 +225,43 @@ func (ah AuthHandler) HandleRevokeAllTokens(c echo.Context) error {
 	})
 }
 
-// HandleLogout logs out the user by clearing authentication cookies
-// This is a client-side logout that doesn't revoke tokens from the database
+// HandleLogout logs out the user by clearing authentication cookies and revoking the refresh token
+// Cookie clearing is synchronous (fast), token deletion is asynchronous (background cleanup)
 func (ah AuthHandler) HandleLogout(c echo.Context) error {
 	logger.Info("Processing logout request")
 
-	// Clear both access and refresh token cookies
+	// Try to read refresh token from cookie for async deletion
+	cookie, err := c.Cookie("refresh_token")
+	if err == nil && cookie != nil && cookie.Value != "" {
+		refreshToken := cookie.Value
+
+		// Launch async goroutine for token deletion (non-blocking)
+		go func() {
+			bgCtx := context.Background()
+
+			// Validate the refresh token and extract user ID
+			claims, err := ah.authService.ValidateAccessToken(refreshToken)
+			if err == nil && claims != nil && claims.Subject != "" {
+				userID := claims.Subject
+
+				// Delete the specific token from database (keeps table clean)
+				if err := ah.authService.RevokeRefreshToken(bgCtx, userID, refreshToken); err != nil {
+					logger.Warnf("Failed to revoke refresh token during logout (async): %v", err)
+				} else {
+					logger.Infof("Refresh token revoked successfully for user: %s (async)", userID)
+				}
+			} else {
+				logger.Warnf("Invalid or expired refresh token during logout (async): %v", err)
+			}
+		}()
+	} else {
+		logger.Info("No refresh token found in cookies during logout")
+	}
+
+	// Clear both access and refresh token cookies (synchronous - always fast)
 	ah.cookieManager.ClearAllAuthCookies(c)
 
+	// Return immediately (fast logout response)
 	return c.JSON(200, map[string]any{
 		"message": "Logged out successfully",
 		"data":    nil,
@@ -247,7 +278,7 @@ func (ah AuthHandler) HandleForgotPassword(c echo.Context) error {
 	}
 
 	// Delegate to service (always returns success to prevent email enumeration)
-	if err := ah.authService.SendPasswordResetEmail(c.Request().Context(), email); err != nil {
+	if err := ah.authService.SendPasswordResetEmail(c.Request().Context(), email, "reset"); err != nil {
 		logger.Errorf("Failed to send password reset email: %v", err)
 		// Still return success to user to prevent email enumeration
 	}

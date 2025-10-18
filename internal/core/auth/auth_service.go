@@ -24,7 +24,7 @@ type AuthService interface {
 	Login(ctx context.Context, email, password, userAgent string) (*LoginResponse, error)
 
 	// Password reset
-	SendPasswordResetEmail(ctx context.Context, email string) error
+	SendPasswordResetEmail(ctx context.Context, email string, emailType string) error
 	ResetPasswordWithToken(ctx context.Context, token string, newPassword string) error
 	ChangePassword(ctx context.Context, userID, oldPassword, newPassword string) error
 
