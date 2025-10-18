@@ -111,6 +111,7 @@ type BusinessUserDTO struct {
 	Name      string          `json:"name"`
 	Role      shared.UserRole `json:"role"`
 	RoleClaim shared.UserRole `json:"roleClaim"`
+	KycNeeded bool            `json:"kycNeeded"`
 	AddedAt   string          `json:"addedAt"`
 	UpdatedAt string          `json:"updatedAt"`
 }

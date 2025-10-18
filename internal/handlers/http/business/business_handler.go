@@ -430,8 +430,8 @@ func (h *BusinessHandler) InviteUser(c echo.Context) error {
 		})
 	}
 
-	// Create invited user
-	createdUser, err := h.userService.CreateInvitedUser(c.Request().Context(), req.Email, req.Name, req.KycNeeded)
+	// Create invited user (always require KYC for invited users)
+	createdUser, err := h.userService.CreateInvitedUser(c.Request().Context(), req.Email, req.Name, true)
 	if err != nil {
 		h.logger.Errorf("Error creating invited user: %v", err)
 		return c.JSON(500, map[string]interface{}{
@@ -447,7 +447,7 @@ func (h *BusinessHandler) InviteUser(c echo.Context) error {
 		Role:         req.Role,
 		RoleClaim:    req.Role,
 		KybInitiated: false,
-		KycNeeded:    req.KycNeeded,
+		KycNeeded:    true, // Always require KYC for invited users in business relation
 	}
 
 	err = h.businessService.AddUserToBusiness(c.Request().Context(), relation)

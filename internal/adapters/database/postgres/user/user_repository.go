@@ -72,12 +72,12 @@ func (r *PgUserRepository) GetUserByID(ctx context.Context, userID string) (*use
 
 	var u user.User
 	var kycStatusStr string
-	var taxID, name, dob sql.NullString
+	var mobile, taxID, name, dob sql.NullString
 
 	err := r.querier.QueryRow(ctx, query, userID).Scan(
 		&u.Id,
 		&u.Email,
-		&u.Mobile,
+		&mobile,
 		&name,
 		&dob,
 		&taxID,
@@ -91,6 +91,7 @@ func (r *PgUserRepository) GetUserByID(ctx context.Context, userID string) (*use
 		return nil, fmt.Errorf("failed to get user by ID: %w", err)
 	}
 
+	u.Mobile = mobile.String
 	u.TaxID = taxID.String
 	u.Name = name.String
 	u.DOB = dob.String
@@ -283,11 +284,11 @@ func (r *PgUserRepository) GetUserKYCStatus(ctx context.Context, userID string) 
 	`
 
 	var u user.User
-	var userTaxID, userName, userDOB, piTaxID, piTaxIDData, piNationalID, piNationalIDData, piNTxnID sql.NullString
+	var userMobile, userTaxID, userName, userDOB, piTaxID, piTaxIDData, piNationalID, piNationalIDData, piNTxnID sql.NullString
 	var kycStatusStr string
 
 	err := r.querier.QueryRow(ctx, query, userID).Scan(
-		&u.Id, &u.Email, &u.Mobile, &userName, &userDOB, &userTaxID, &kycStatusStr, &u.EmailVerified, &u.MobileVerified,
+		&u.Id, &u.Email, &userMobile, &userName, &userDOB, &userTaxID, &kycStatusStr, &u.EmailVerified, &u.MobileVerified,
 		&piTaxID, &piTaxIDData, &piNationalID, &piNationalIDData, &piNTxnID,
 	)
 
@@ -298,6 +299,7 @@ func (r *PgUserRepository) GetUserKYCStatus(ctx context.Context, userID string) 
 		return nil, nil, fmt.Errorf("failed to get user KYC status: %w", err)
 	}
 
+	u.Mobile = userMobile.String
 	u.TaxID = userTaxID.String
 	u.Name = userName.String
 	u.DOB = userDOB.String

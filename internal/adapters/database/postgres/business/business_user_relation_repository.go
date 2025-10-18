@@ -150,6 +150,7 @@ func (r *PgBusinessUserRelationRepository) GetBusinessUsersWithDetails(ctx conte
 			u.name,
 			bur.role,
 			bur.role_claim,
+			bur.kyc_needed,
 			bur.added_at::text,
 			COALESCE(bur.updated_at::text, '')
 		FROM xcentro.business_user_relation bur
@@ -176,6 +177,7 @@ func (r *PgBusinessUserRelationRepository) GetBusinessUsersWithDetails(ctx conte
 			&user.Name,
 			&role,
 			&roleClaim,
+			&user.KycNeeded,
 			&user.AddedAt,
 			&user.UpdatedAt,
 		)
