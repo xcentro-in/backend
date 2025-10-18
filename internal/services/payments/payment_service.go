@@ -81,7 +81,11 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 	paymentID := uuid.New().String()
 	fmt.Printf("🆔 Generated Payment ID: %s\n", paymentID)
 
-	// Step 3: Create initial payment record with 'pending' status
+	// Step 3: Generate callback URL based on calling device
+	callbackURL := s.generateCallbackURL(req.CallingDevice, paymentID)
+	fmt.Printf("🔗 Generated Callback URL for %s: %s\n", req.CallingDevice, callbackURL)
+
+	// Step 4: Create initial payment record with 'pending' status
 	fmt.Println("💾 Creating initial payment record...")
 	p := &payment.Payment{
 		ID:            paymentID,
@@ -93,7 +97,7 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 		PaymentType:   payment.PaymentTypePayment, // Regular payment
 		Status:        payment.PaymentStatusPending,
 		Description:   req.Description,
-		CallbackURL:   req.CallbackURL,
+		CallbackURL:   callbackURL,
 		FeeAmount:     feeCalculation.FeeAmount,
 		TotalAmount:   feeCalculation.TotalAmount,
 		Metadata:      req.Metadata,
@@ -106,10 +110,10 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 
 	fmt.Printf("✅ Payment record created with ID: %s\n", paymentID)
 
-	// Step 4: Add payment_id to request for orchestrator
+	// Step 5: Add payment_id to request for orchestrator
 	req.PaymentID = paymentID
 
-	// Step 5: Call orchestrator to process payment
+	// Step 6: Call orchestrator to process payment
 	fmt.Println("🔄 Calling Payment Orchestrator...")
 	response, err := s.orchestrator.ProcessPayment(ctx, req)
 
@@ -245,4 +249,28 @@ func getCardCategoryFromRequest(req *payment.PaymentRequest) payment.CardCategor
 		return ""
 	}
 	return ""
+}
+
+// generateCallbackURL generates the appropriate callback URL based on calling device
+func (s *PaymentService) generateCallbackURL(device payment.CallingDevice, paymentID string) string {
+	// TODO: Make base URLs configurable via environment variables
+	baseURL := "https://api.xcentro.in" // Production base URL
+
+	switch device {
+	case payment.CallingDeviceWeb:
+		// Web callback - redirect to web application
+		return fmt.Sprintf("%s/v1/process_payment/callback?payment_id=%s&source=web", baseURL, paymentID)
+
+	case payment.CallingDeviceMobile:
+		// Mobile callback - deep link to mobile app
+		return fmt.Sprintf("%s/v1/process_payment/callback?payment_id=%s&source=mobile", baseURL, paymentID)
+
+	case payment.CallingDevicePOS:
+		// POS callback - return to POS application
+		return fmt.Sprintf("%s/v1/process_payment/callback?payment_id=%s&source=pos", baseURL, paymentID)
+
+	default:
+		// Default to web callback
+		return fmt.Sprintf("%s/v1/process_payment/callback?payment_id=%s&source=web", baseURL, paymentID)
+	}
 }

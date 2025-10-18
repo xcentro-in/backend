@@ -102,7 +102,7 @@ type PaymentRequest struct {
 	Currency          Currency          `json:"currency"`
 	PaymentMethod     PaymentMethod     `json:"payment_method"`
 	Description       string            `json:"description"`
-	CallbackURL       string            `json:"callback_url"`
+	CallingDevice     CallingDevice     `json:"calling_device"`       // Device type initiating payment (web, mobile, pos)
 	CardDetails       *Card             `json:"card_details,omitempty"`
 	TokenCardDetails  *TokenCardDetails `json:"token_card_details,omitempty"`
 	NetBankingDetails *NetBanking       `json:"net_banking_details,omitempty"`

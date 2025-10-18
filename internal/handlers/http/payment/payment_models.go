@@ -27,12 +27,13 @@ type MakePaymentRequest struct {
 	Currency      string             `json:"currency"`
 	PaymentMethod string             `json:"payment_method"` // card, token-card, netbanking, upi, wallet
 	Description   string             `json:"description"`
+	CallingDevice string             `json:"calling_device"` // web, mobile, pos (default: web)
+	VoucherIDs    []string           `json:"voucher_ids,omitempty"` // Optional: Draft voucher IDs to finalize on payment success
 	CardDetails   *CardDetails       `json:"card_details,omitempty"`
 	TokenDetails  *TokenCardDetails  `json:"token_details,omitempty"`
 	NetBanking    *NetBankingDetails `json:"net_banking,omitempty"`
 	UPI           *UPIDetails        `json:"upi,omitempty"`
 	Wallet        *WalletDetails     `json:"wallet,omitempty"`
-	CallbackURL   string             `json:"callback_url"`
 	Metadata      map[string]any     `json:"metadata,omitempty"`
 }
 
@@ -177,18 +178,13 @@ type TokenizeResponse struct {
 }
 
 // MakePaymentResponse represents the response for payment processing
+// Only includes information needed by frontend
 type MakePaymentResponse struct {
-	PaymentID        string         `json:"payment_id"`
-	Status           string         `json:"status"`
-	Amount           int64          `json:"amount"`
-	Currency         string         `json:"currency"`
-	PaymentMethod    string         `json:"payment_method"`
-	GatewayUsed      string         `json:"gateway_used"`
-	GatewayPaymentID string         `json:"gateway_payment_id,omitempty"`
-	RedirectURL      string         `json:"redirect_url,omitempty"`
-	Message          string         `json:"message"`
-	CreatedAt        string         `json:"created_at"`
-	Metadata         map[string]any `json:"metadata,omitempty"`
+	PaymentID   string `json:"payment_id"`            // For tracking payment status
+	Status      string `json:"status"`                // pending, success, failed
+	Amount      int64  `json:"amount"`                // Confirmation of amount in paise
+	RedirectURL string `json:"redirect_url,omitempty"` // URL to redirect user for 3DS/OTP (CRITICAL)
+	Message     string `json:"message"`               // User-facing message
 }
 
 // AddPaymentSourceResponse represents the response for adding a payment source

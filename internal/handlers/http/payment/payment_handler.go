@@ -434,7 +434,8 @@ func (h *PaymentHandler) MakePayment(c echo.Context) error {
 		Currency:      payment.Currency(req.Currency),
 		PaymentMethod: payment.PaymentMethod(req.PaymentMethod),
 		Description:   req.Description,
-		CallbackURL:   req.CallbackURL,
+		CallingDevice: payment.CallingDevice(req.CallingDevice),
+		VoucherIDs:    req.VoucherIDs, // Optional: Draft vouchers to finalize after payment success
 		Metadata:      req.Metadata,
 	}
 
@@ -453,19 +454,13 @@ func (h *PaymentHandler) MakePayment(c echo.Context) error {
 		})
 	}
 
-	// Convert core response to HTTP response
+	// Convert core response to HTTP response (only essential fields for frontend)
 	response := &MakePaymentResponse{
-		PaymentID:        paymentResponse.PaymentID,
-		Status:           string(paymentResponse.Status),
-		Amount:           paymentResponse.Amount,
-		Currency:         string(paymentResponse.Currency),
-		PaymentMethod:    string(paymentResponse.PaymentMethod),
-		GatewayUsed:      string(paymentResponse.GatewayUsed),
-		GatewayPaymentID: paymentResponse.GatewayPaymentID,
-		RedirectURL:      paymentResponse.RedirectURL,
-		Message:          paymentResponse.Message,
-		CreatedAt:        paymentResponse.CreatedAt.Format("2006-01-02T15:04:05Z"),
-		Metadata:         paymentResponse.Metadata,
+		PaymentID:   paymentResponse.PaymentID,
+		Status:      string(paymentResponse.Status),
+		Amount:      paymentResponse.Amount,
+		RedirectURL: paymentResponse.RedirectURL,
+		Message:     paymentResponse.Message,
 	}
 
 	fmt.Printf("✅ Payment initiated successfully: %s\n", paymentResponse.PaymentID)
@@ -687,9 +682,17 @@ func (h *PaymentHandler) validatePaymentRequest(req *MakePaymentRequest) error {
 		return fmt.Errorf("invalid payment method: %s", req.PaymentMethod)
 	}
 
-	// Validate callback URL
-	if req.CallbackURL == "" {
-		return fmt.Errorf("callback_url is required")
+	// Set default calling_device to "web" if not provided
+	if req.CallingDevice == "" {
+		req.CallingDevice = "web"
+	}
+
+	// Validate calling_device
+	validDevices := map[string]bool{
+		"web": true, "mobile": true, "pos": true,
+	}
+	if !validDevices[req.CallingDevice] {
+		return fmt.Errorf("invalid calling_device: %s. Valid values: web, mobile, pos", req.CallingDevice)
 	}
 
 	// Payment method specific validation

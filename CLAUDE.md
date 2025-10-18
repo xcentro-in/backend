@@ -44,7 +44,7 @@ HTTP → handlers → services → core → repository interface → adapters
 - **User**: Authentication, KYC (`/v1/auth`, `/v1/user`)
 - **Business**: Business entity management, KYB (`/v1/business`)
 - **Wallet**: Payment source management (`/v1/wallet`)
-- **Payment**: Payment processing with gateway orchestration (`/api/v1/process_payment`)
+- **Payment**: Payment processing with gateway orchestration (`/v1/process_payment`)
 - **Payee**: Payee onboarding with verification (`/v1/payees`)
 - **Business Rules**: Fee calculation, bank/GST verification
 
@@ -333,41 +333,43 @@ DELETE /v1/payees/:payee_id/accounts/:account_id      # Soft delete
   - Request body: `{"business_id": "uuid-of-business", "source_type": "bank_account", "bank_account_details": {...}}`
   - Performs verification (penny drop for bank accounts)
 
-### Payment Processing APIs (`/api/v1/process_payment`)
+### Payment Processing APIs (`/v1/process_payment`)
 **Payment Source Selection**:
-- `POST /api/v1/process_payment/get_payment_sources_with_fees` - Get payment sources + fee calculation
+- `POST /v1/process_payment/get_payment_sources_with_fees` - Get payment sources + fee calculation
   - Request body: `{"business_id": "uuid", "payment_context": "vendor_payment", "base_amount": 50000}`
   - Returns: Filtered payment sources with fee breakdown based on context
 
 **Card Tokenization**:
-- `POST /api/v1/process_payment/tokenize` - Tokenize card (routes to JioPay/Easebuzz)
+- `POST /v1/process_payment/tokenize` - Tokenize card (routes to JioPay/Easebuzz)
   - Response includes: `token`, `card_id`, `last_four_digits`, `gateway_used`
   - Card automatically stored in database
 
 **Payment Processing**:
-- `POST /api/v1/process_payment/make_payment` - Process payment with auto-routing
+- `POST /v1/process_payment/make_payment` - Process payment with auto-routing
   - Supports: card, token_card, netbanking, upi, wallet
+  - Request body: Includes `calling_device` (web/mobile/pos) for callback URL generation
+  - Backend generates callback URL based on device type
   - Returns: `payment_id`, `redirect_url`, `status`
 
 **Fee Calculation**:
-- `POST /api/v1/process_payment/get_fee_rules` - Get fee rules for payment context
+- `POST /v1/process_payment/get_fee_rules` - Get fee rules for payment context
 
 **Webhooks (Payment Status)**:
-- `POST /api/v1/process_payment/webhooks/payment_status?type=jiopay` - JioPay payment status webhook
-- `POST /api/v1/process_payment/webhooks/payment_status?type=easebuzz` - Easebuzz payment status webhook
+- `POST /v1/process_payment/webhooks/payment_status?type=jiopay` - JioPay payment status webhook
+- `POST /v1/process_payment/webhooks/payment_status?type=easebuzz` - Easebuzz payment status webhook
   - **Purpose**: Real-time payment authorization status (after 3DS/OTP completion)
   - **Updates**: Payment status (success/failed/pending), initializes settlement_status='pending'
   - **Metadata**: Payment-specific fields (txn_id, response_code, etc.)
   - **Timing**: Immediate (within seconds of payment completion)
 
 **Webhooks (Settlement Status)**:
-- `POST /api/v1/process_payment/webhooks/settlement_status?type=jiopay` - JioPay settlement webhook ✅ **IMPLEMENTED**
+- `POST /v1/process_payment/webhooks/settlement_status?type=jiopay` - JioPay settlement webhook ✅ **IMPLEMENTED**
   - **Data Format**: JSON
   - **Processing**: Single transaction per webhook
   - **Purpose**: Settlement notification (actual funds transfer to merchant account)
   - **Timing**: T+1 to T+3 days after successful payment
 
-- `POST /api/v1/process_payment/webhooks/settlement_status?type=easebuzz` - Easebuzz settlement webhook ✅ **IMPLEMENTED**
+- `POST /v1/process_payment/webhooks/settlement_status?type=easebuzz` - Easebuzz settlement webhook ✅ **IMPLEMENTED**
   - **Data Format**: Form-urlencoded (parsed to JSON)
   - **Processing**: Batch (multiple transactions in `settled_transactions[]` array)
   - **Purpose**: Batch settlement notifications (actual funds transfer to merchant account)
@@ -393,14 +395,23 @@ DELETE /v1/payees/:payee_id/accounts/:account_id      # Soft delete
 - `DELETE /v1/payees/:payee_id/accounts/:account_id` - Soft delete payee account
 
 ### Voucher APIs (`/v1/vouchers`)
-- `POST /v1/vouchers` - Create voucher
-- `GET /v1/vouchers` - List vouchers
-- `GET /v1/vouchers/:id` - Get voucher details
-- `PUT /v1/vouchers/:id` - Update voucher
-- `DELETE /v1/vouchers/:id` - Delete voucher
-- `POST /v1/vouchers/:id/submit` - Submit voucher for approval
-- `POST /v1/vouchers/:id/approve` - Approve voucher
-- `POST /v1/vouchers/:id/reject` - Reject voucher
+**Draft Creation:**
+- `POST /v1/vouchers/draft` - Create single draft voucher
+  - Request body: `{"payee_id": "uuid", "account_id": "uuid", "gross_amount": 50000, "net_amount": 47500, "invoice_number": "INV-001"}`
+  - Returns: `{"voucher_id": "uuid", "voucher_number": "PV-2025-00001", "status": "draft"}`
+- `POST /v1/vouchers/multi` - Create multiple vouchers for multi-bill payment
+  - Request body: Array of voucher objects
+  - Useful for paying multiple invoices from same/different payees
+
+**Voucher Management:**
+- `GET /v1/vouchers` - List vouchers with filters
+  - Query params: `?business_id=uuid&status=draft&payee_id=uuid&from_date=2025-01-01&to_date=2025-01-31&page=1&limit=20`
+  - Returns paginated list with voucher details
+- `GET /v1/vouchers/reminders` - Get abandoned draft vouchers (created but not paid within 7 days)
+- `GET /v1/vouchers/:id` - Get detailed voucher information
+- `PUT /v1/vouchers/:id/finalize` - Manually finalize voucher without payment (rare use case)
+
+**Note:** Vouchers are automatically finalized when linked payment succeeds. Status flow: `draft` → `finalized` (auto) → `posted` → `synced`
 
 ### Payout APIs (`/v1/payout`)
 **Webhooks**:
@@ -537,6 +548,16 @@ Orchestrator automatically selects gateway based on payment method and card type
 - Cards auto-added to wallet after tokenization
 - Cryptogram generated fresh for each payment
 
+### Calling Device & Callback URLs
+Backend controls callback URLs based on the device type making the payment:
+- **`calling_device`**: Optional field in payment request (web, mobile, pos)
+- **Default**: `web` (if not provided)
+- **Callback URL Generation**: Backend generates device-specific callback URLs
+  - Web: `https://api.xcentro.in/v1/process_payment/callback?payment_id={id}&source=web`
+  - Mobile: `https://api.xcentro.in/v1/process_payment/callback?payment_id={id}&source=mobile`
+  - POS: `https://api.xcentro.in/v1/process_payment/callback?payment_id={id}&source=pos`
+- **Security**: Frontend cannot control callback URLs, preventing redirect vulnerabilities
+
 ### Context & Timeouts
 - Payment: 30s (standard transactions)
 - Tokenization: 60s (JioPay Vault API, Easebuzz TMS API)
@@ -604,7 +625,7 @@ POST /v1/business -H "Authorization: Bearer <TOKEN>"
 ### Example: Token-Based Card Payment Flow (Complete)
 ```bash
 # Step 1: Tokenize Card (Auto-routes to JioPay or Easebuzz)
-POST /api/v1/process_payment/tokenize -H "Authorization: Bearer <TOKEN>"
+POST /v1/process_payment/tokenize -H "Authorization: Bearer <TOKEN>"
 {
   "business_id": "uuid-of-business",
   "card_details": {
@@ -635,39 +656,37 @@ POST /api/v1/process_payment/tokenize -H "Authorization: Bearer <TOKEN>"
 }
 
 # Step 2: Make Payment with Tokenized Card
-POST /api/v1/process_payment/make_payment -H "Authorization: Bearer <TOKEN>"
+POST /v1/process_payment/make_payment -H "Authorization: Bearer <TOKEN>"
 {
   "business_id": "uuid-of-business",
   "amount": 50000,                            # ₹500.00 in paise
   "currency": "INR",
   "payment_method": "token_card",             # Use saved card
+  "calling_device": "web",                    # web, mobile, or pos (default: web)
   "token_card_details": {
     "card_id": "card_uuid_001"                # Card ID from Step 1
   },
-  "description": "Payment for invoice #12345",
-  "callback_url": "https://yourapp.com/payment/callback"
+  "description": "Payment for invoice #12345"
 }
 
 # Response:
 {
+  "message": "Payment initiated successfully",
+  "endpoint": "POST /v1/process_payment/make_payment",
+  "status": "success",
   "data": {
     "payment_id": "pay_uuid_001",
     "status": "pending",                      # Pending 3DS/OTP
-    "amount": 50000,
-    "fee_amount": 1250,                       # 2.5% fee
-    "total_amount": 51250,
-    "currency": "INR",
-    "payment_method": "token_card",
-    "gateway_used": "jiopay",
-    "redirect_url": "https://uat.jiopay.co.in/tsp/pg/api/v2/authRedirect",
-    "message": "Payment initiated successfully"
+    "amount": 50000,                          # Amount in paise
+    "redirect_url": "https://uat.jiopay.co.in/tsp/pg/api/v2/authRedirect?txnId=pay_uuid_001",
+    "message": "Redirect user to complete 3DS/OTP verification"
   }
 }
 
 # Step 3: User completes 3DS/OTP on redirect_url
 
 # Step 4: Webhook callback (automatic)
-POST https://yourapp.com/api/v1/process_payment/webhooks/payment_status?type=jiopay
+POST https://yourapp.com/v1/process_payment/webhooks/payment_status?type=jiopay
 {
   "payment_id": "pay_uuid_001",
   "status": "success",
@@ -682,12 +701,13 @@ POST https://yourapp.com/api/v1/process_payment/webhooks/payment_status?type=jio
 ### Example: Direct Card Payment Flow (No Tokenization)
 ```bash
 # Make payment with card details (one-time payment)
-POST /api/v1/process_payment/make_payment -H "Authorization: Bearer <TOKEN>"
+POST /v1/process_payment/make_payment -H "Authorization: Bearer <TOKEN>"
 {
   "business_id": "uuid-of-business",
   "amount": 50000,
   "currency": "INR",
   "payment_method": "card",
+  "calling_device": "web",             # web (default), mobile, or pos
   "card_details": {
     "number": "4111111111111111",
     "expiry_month": "12",
@@ -697,8 +717,7 @@ POST /api/v1/process_payment/make_payment -H "Authorization: Bearer <TOKEN>"
     "card_type": "visa",
     "card_category": "credit"
   },
-  "description": "One-time payment",
-  "callback_url": "https://yourapp.com/payment/callback"
+  "description": "One-time payment"
 }
 
 # Gateway auto-routing:
@@ -710,7 +729,7 @@ POST /api/v1/process_payment/make_payment -H "Authorization: Bearer <TOKEN>"
 ```bash
 # Get all payment sources with calculated fees for specific context
 # Note: Returns only real database data (no mock data)
-POST /api/v1/process_payment/get_payment_sources_with_fees -H "Authorization: Bearer <TOKEN>"
+POST /v1/process_payment/get_payment_sources_with_fees -H "Authorization: Bearer <TOKEN>"
 {
   "business_id": "uuid-of-business",         # Required in request body
   "payment_context": "vendor_payment",       # or "payroll", "gst_payment"
@@ -823,6 +842,199 @@ POST /v1/payees -H "Authorization: Bearer <TOKEN>"
   }
 ```
 
+### Example: Voucher-Based Payment Flow (Complete)
+
+#### Scenario: Pay 2 vendors with single payment transaction
+
+**Step 1: Create Draft Vouchers for Each Payee**
+```bash
+# Voucher 1: ABC Industries (₹475 after TDS)
+POST /v1/vouchers/draft -H "Authorization: Bearer <TOKEN>"
+{
+  "business_id": "business-uuid-123",
+  "payee_id": "payee-abc-uuid",
+  "account_id": "account-abc-uuid",
+  "gross_amount": 50000,            # ₹500.00 in paise
+  "net_amount": 47500,              # ₹475.00 after TDS (1%)
+  "tds_amount": 500,                # ₹5.00 TDS
+  "tds_rate": 1.0,
+  "tds_section": "194C",
+  "gst_amount": 9000,               # ₹90.00 GST (18%)
+  "invoice_number": "INV-ABC-001",
+  "invoice_date": "2025-01-10",
+  "description": "Web development services - January 2025"
+}
+
+# Response:
+{
+  "status": "success",
+  "message": "Draft voucher created successfully",
+  "data": {
+    "voucher_id": "voucher-abc-uuid-001",
+    "voucher_number": "PV-2025-00001",
+    "status": "draft",
+    "payee_id": "payee-abc-uuid",
+    "gross_amount": 50000,
+    "net_amount": 47500
+  }
+}
+
+# Voucher 2: XYZ Corp (₹475 after TDS)
+POST /v1/vouchers/draft -H "Authorization: Bearer <TOKEN>"
+{
+  "business_id": "business-uuid-123",
+  "payee_id": "payee-xyz-uuid",
+  "account_id": "account-xyz-uuid",
+  "gross_amount": 50000,
+  "net_amount": 47500,
+  "tds_amount": 500,
+  "tds_rate": 1.0,
+  "tds_section": "194C",
+  "gst_amount": 9000,
+  "invoice_number": "INV-XYZ-002",
+  "invoice_date": "2025-01-12",
+  "description": "Consulting services - January 2025"
+}
+
+# Response:
+{
+  "status": "success",
+  "data": {
+    "voucher_id": "voucher-xyz-uuid-002",
+    "voucher_number": "PV-2025-00002",
+    "status": "draft",
+    "payee_id": "payee-xyz-uuid",
+    "gross_amount": 50000,
+    "net_amount": 47500
+  }
+}
+```
+
+**Step 2: Initiate Single Payment for Both Vouchers**
+```bash
+POST /v1/process_payment/make_payment -H "Authorization: Bearer <TOKEN>"
+{
+  "amount": 95000,                   # Total: ₹475 + ₹475 = ₹950
+  "currency": "INR",
+  "payment_method": "netbanking",
+  "calling_device": "web",
+  "net_banking": {
+    "bank_code": "HDFC",
+    "bank_name": "HDFC Bank"
+  },
+  "voucher_ids": [                   # Link both vouchers to this payment
+    "voucher-abc-uuid-001",
+    "voucher-xyz-uuid-002"
+  ],
+  "description": "Payment for INV-ABC-001 and INV-XYZ-002"
+}
+
+# Response:
+{
+  "message": "Payment initiated successfully",
+  "status": "success",
+  "data": {
+    "payment_id": "payment-uuid-789",
+    "status": "pending",             # Awaiting net banking authentication
+    "amount": 95000,
+    "redirect_url": "https://uat.jiopay.co.in/pg/netbanking?txnId=payment-uuid-789",
+    "message": "Redirect user to complete net banking authentication"
+  }
+}
+```
+
+**Step 3: User Completes Net Banking Authentication**
+```
+User is redirected to bank's net banking portal → Authenticates → Approves payment
+```
+
+**Step 4: Payment Success Webhook (Automatic)**
+```bash
+# Backend receives webhook from gateway
+POST https://yourapp.com/v1/process_payment/webhooks/payment_status?type=jiopay
+{
+  "payment_id": "payment-uuid-789",
+  "status": "success",
+  ...
+}
+
+# Backend automatically:
+# 1. Updates payment.status = "success"
+# 2. Finalizes both vouchers:
+#    - voucher-abc-uuid-001.status = "finalized"
+#    - voucher-xyz-uuid-002.status = "finalized"
+# 3. Links vouchers to payment:
+#    - voucher.payment_id = "payment-uuid-789"
+```
+
+**Step 5: Settlement (T+2 days later) - Automatic**
+```bash
+# Settlement webhook arrives from gateway
+POST https://yourapp.com/v1/process_payment/webhooks/settlement_status?type=jiopay
+{
+  "merchantTxnNo": "payment-uuid-789",
+  "txnAmount": "950.00",
+  "settlementID": "SETTLE-12345",
+  ...
+}
+
+# Backend updates:
+# - payment.settlement_status = "settled"
+# - payment.settled_at = "2025-01-20"
+```
+
+**Step 6: Payout Worker Triggers (Automatic)**
+```
+Payout worker runs every 1 minute:
+1. Finds finalized vouchers with settled payments
+2. Creates 2 payout transfer requests:
+   - Transfer 1: ₹475 to ABC Industries (payee-abc-uuid)
+   - Transfer 2: ₹475 to XYZ Corp (payee-xyz-uuid)
+3. Initiates transfers via Castler API
+4. Tracks status via payout webhooks
+```
+
+**Step 7: Payouts Complete (T+3 to T+5)**
+```
+Payout webhook 1:
+{
+  "transfer_id": "transfer-abc-001",
+  "status": "completed",
+  "utr": "HDFC202501201234567"  # Bank UTR for ABC Industries
+}
+
+Payout webhook 2:
+{
+  "transfer_id": "transfer-xyz-002",
+  "status": "completed",
+  "utr": "HDFC202501201234568"  # Bank UTR for XYZ Corp
+}
+
+Final State:
+- Voucher PV-2025-00001: payout_status = "completed", UTR = HDFC202501201234567
+- Voucher PV-2025-00002: payout_status = "completed", UTR = HDFC202501201234568
+- ABC Industries received ₹475
+- XYZ Corp received ₹475
+```
+
+**Complete Timeline:**
+```
+Day 0:  Create vouchers (draft)
+Day 0:  Initiate payment with voucher_ids → Redirect to bank
+Day 0:  User completes net banking → Payment success webhook → Vouchers finalized
+Day 2:  Settlement webhook → payment.settlement_status = "settled"
+Day 2:  Payout worker → Creates 2 transfer requests
+Day 2:  Castler API → Initiates 2 payouts
+Day 3-5: Payout webhooks → Payees receive funds
+```
+
+**Key Benefits:**
+- ✅ Single payment transaction → Multiple payees
+- ✅ Automatic voucher finalization (no manual step)
+- ✅ Automatic payout triggering (worker-based)
+- ✅ Full audit trail (payment → vouchers → payouts)
+- ✅ Individual UTR tracking per payee
+
 ### Example: Settlement Webhook Flow (JioPay)
 ```bash
 # Timeline: Payment → Settlement (T+1 to T+3 days)
@@ -833,7 +1045,7 @@ POST /v1/payees -H "Authorization: Bearer <TOKEN>"
 # - payment.total_amount = 51250 (₹512.50 with fees)
 
 # Day 2: Settlement completed by JioPay (settlement webhook arrives)
-POST https://yourapp.com/api/v1/process_payment/webhooks/settlement_status?type=jiopay
+POST https://yourapp.com/v1/process_payment/webhooks/settlement_status?type=jiopay
 {
   "aggregatorID": "A001",
   "merchantId": "123243",
@@ -896,7 +1108,7 @@ POST https://yourapp.com/api/v1/process_payment/webhooks/settlement_status?type=
 #   - payment.total_amount = 50000 (₹500.00)
 
 # Day 2: Batch settlement completed by Easebuzz (single webhook for multiple transactions)
-POST https://yourapp.com/api/v1/process_payment/webhooks/settlement_status?type=easebuzz
+POST https://yourapp.com/v1/process_payment/webhooks/settlement_status?type=easebuzz
 Content-Type: application/x-www-form-urlencoded
 
 data={

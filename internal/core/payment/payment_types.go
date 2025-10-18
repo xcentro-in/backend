@@ -127,3 +127,22 @@ const (
 	FeeTypeFixed          FeeType = "fixed"
 	FeeTypePercentagePlus FeeType = "percentage_plus_fixed"
 )
+
+// CallingDevice represents the device type initiating the payment
+type CallingDevice string
+
+const (
+	CallingDeviceWeb    CallingDevice = "web"
+	CallingDeviceMobile CallingDevice = "mobile"
+	CallingDevicePOS    CallingDevice = "pos"
+)
+
+// IsValid checks if the calling device is valid
+func (cd CallingDevice) IsValid() bool {
+	switch cd {
+	case CallingDeviceWeb, CallingDeviceMobile, CallingDevicePOS:
+		return true
+	default:
+		return false
+	}
+}
