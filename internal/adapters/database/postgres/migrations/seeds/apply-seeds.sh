@@ -17,7 +17,7 @@ NC='\033[0m' # No Color
 # Default values - matching your docker setup
 CONTAINER_NAME="${CONTAINER_NAME:-xcentro-postgres}"
 DB_NAME="${DB_NAME:-xcentro}"
-DB_USER="${DB_USER:-xcentro_rw}"
+DB_USER="${DB_USER:-xcentro_rw}"  # Use admin for seeding (has DDL permissions)
 SEED_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # Function to print colored messages
@@ -139,8 +139,14 @@ ${BLUE}EXAMPLES:${NC}
     # Apply wallet test data
     $0 apply 001
 
+    # Apply vendor payees test data
+    $0 apply 002
+
     # Rollback wallet test data
     $0 rollback 001
+
+    # Rollback vendor payees
+    $0 rollback 002
 
     # Apply all seed files
     $0 apply-all
@@ -156,6 +162,7 @@ ${BLUE}ENVIRONMENT VARIABLES:${NC}
 
 ${BLUE}AVAILABLE SEED FILES:${NC}
     001 - Wallet test data (business, stored cards, bank accounts)
+    002 - Vendor payees (3 vendors with bank accounts and relations)
 
 ${BLUE}NOTES:${NC}
     - This script uses Docker exec to run psql inside the container
@@ -255,8 +262,19 @@ case "$COMMAND" in
         check_docker
         check_container
         check_connection
-        apply_seed "${SEED_NUMBER}_seed_wallet_test_data.sql"
-        print_info "✓ Done! Use this business_id in Postman: 01936d7a-7c8e-7890-b123-456789abcdef"
+
+        # Find the seed file matching the number pattern
+        seed_file=$(find "$SEED_DIR" -maxdepth 1 -name "${SEED_NUMBER}_seed_*.sql" ! -name "*_rollback.sql" -type f | head -1)
+
+        if [ -z "$seed_file" ]; then
+            print_error "No seed file found matching pattern: ${SEED_NUMBER}_seed_*.sql"
+            print_info "Available seeds:"
+            list_seeds
+            exit 1
+        fi
+
+        apply_seed "$(basename "$seed_file")"
+        print_info "✓ Seed applied successfully!"
         ;;
     rollback)
         if [ -z "$SEED_NUMBER" ]; then
@@ -266,14 +284,26 @@ case "$COMMAND" in
         check_docker
         check_container
         check_connection
-        rollback_seed "${SEED_NUMBER}_seed_wallet_test_data_rollback.sql"
+
+        # Find the rollback file matching the number pattern
+        rollback_file=$(find "$SEED_DIR" -maxdepth 1 -name "${SEED_NUMBER}_seed_*_rollback.sql" -type f | head -1)
+
+        if [ -z "$rollback_file" ]; then
+            print_error "No rollback file found matching pattern: ${SEED_NUMBER}_seed_*_rollback.sql"
+            print_info "Available rollbacks:"
+            list_seeds
+            exit 1
+        fi
+
+        rollback_seed "$(basename "$rollback_file")"
+        print_info "✓ Rollback completed successfully!"
         ;;
     apply-all)
         check_docker
         check_container
         check_connection
         print_info "Applying all seed files..."
-        local count=0
+        count=0
         for file in "$SEED_DIR"/[0-9][0-9][0-9]_seed_*.sql; do
             if [ -f "$file" ] && [[ ! "$file" =~ _rollback\.sql$ ]]; then
                 apply_seed "$(basename "$file")"
@@ -297,7 +327,7 @@ case "$COMMAND" in
             exit 0
         fi
         print_info "Rolling back all seed files..."
-        local count=0
+        count=0
         for file in "$SEED_DIR"/[0-9][0-9][0-9]_seed_*_rollback.sql; do
             if [ -f "$file" ]; then
                 rollback_seed "$(basename "$file")"

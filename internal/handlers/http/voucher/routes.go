@@ -15,5 +15,6 @@ func RegisterVoucherRoutes(group *echo.Group, voucherService voucherSvc.VoucherS
 	group.GET("", handler.ListVouchers)                 // GET /vouchers - List vouchers with filters
 	group.GET("/reminders", handler.GetDraftReminders)  // GET /vouchers/reminders - Get abandoned drafts
 	group.GET("/:id", handler.GetVoucherDetails)        // GET /vouchers/:id - Get voucher details
+	group.PUT("/:id", handler.UpdateVoucher)            // PUT /vouchers/:id - Update draft voucher
 	group.PUT("/:id/finalize", handler.FinalizeVoucher) // PUT /vouchers/:id/finalize - Finalize voucher
 }

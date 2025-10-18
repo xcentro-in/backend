@@ -167,6 +167,7 @@ type BusinessPayeeRelationRepository interface {
 
 	// CRUD operations
 	CreateRelation(ctx context.Context, relation *BusinessPayeeRelation) error
+	FindRelationByID(ctx context.Context, relationID string) (*BusinessPayeeRelation, error) // New: Lookup by surrogate key
 	FindRelation(ctx context.Context, businessID, payeeID, accountID string) (*BusinessPayeeRelation, error)
 	FindByBusiness(ctx context.Context, businessID string, filters RelationSearchFilters) ([]*BusinessPayeeRelation, error)
 	UpdateRelation(ctx context.Context, relation *BusinessPayeeRelation) error

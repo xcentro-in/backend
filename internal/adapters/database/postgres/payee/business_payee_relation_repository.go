@@ -43,7 +43,7 @@ func (r *PgBusinessPayeeRelationRepository) CreateRelation(ctx context.Context, 
 			is_active, is_favorite, tags,
 			added_by, metadata
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-		RETURNING added_at
+		RETURNING relation_id, added_at
 	`
 
 	var metadataJSON []byte
@@ -69,7 +69,7 @@ func (r *PgBusinessPayeeRelationRepository) CreateRelation(ctx context.Context, 
 		pq.Array(relation.Tags), // PostgreSQL array
 		relation.AddedBy,
 		metadataJSON,
-	).Scan(&relation.AddedAt)
+	).Scan(&relation.RelationID, &relation.AddedAt)
 
 	if err != nil {
 		return fmt.Errorf("failed to create business-payee relation: %w", err)
@@ -79,13 +79,82 @@ func (r *PgBusinessPayeeRelationRepository) CreateRelation(ctx context.Context, 
 	return nil
 }
 
+// FindRelationByID retrieves a business-payee relation by its relation_id (surrogate key)
+func (r *PgBusinessPayeeRelationRepository) FindRelationByID(ctx context.Context, relationID string) (*payee.BusinessPayeeRelation, error) {
+	fmt.Printf("[PgBusinessPayeeRelationRepository] FindRelationByID called - RelationID: %s\n", relationID)
+
+	query := `
+		SELECT relation_id, business_id, payee_id, account_id,
+		       display_name, contact_email, contact_phone, notes,
+		       is_active, is_favorite, tags,
+		       added_at, added_by, last_used_at, updated_at, metadata
+		FROM xcentro.business_payee_relation
+		WHERE relation_id = $1
+	`
+
+	var relation payee.BusinessPayeeRelation
+	var contactEmail, contactPhone, notes sql.NullString
+	var addedBy sql.NullString
+	var lastUsedAt, updatedAt sql.NullTime
+	var metadataJSON []byte
+
+	err := r.querier.QueryRow(ctx, query, relationID).Scan(
+		&relation.RelationID,
+		&relation.BusinessID,
+		&relation.PayeeID,
+		&relation.AccountID,
+		&relation.DisplayName,
+		&contactEmail,
+		&contactPhone,
+		&notes,
+		&relation.IsActive,
+		&relation.IsFavorite,
+		pq.Array(&relation.Tags),
+		&relation.AddedAt,
+		&addedBy,
+		&lastUsedAt,
+		&updatedAt,
+		&metadataJSON,
+	)
+
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, fmt.Errorf("business-payee relation not found")
+		}
+		return nil, fmt.Errorf("failed to find business-payee relation: %w", err)
+	}
+
+	// Handle nullable fields
+	relation.ContactEmail = contactEmail.String
+	relation.ContactPhone = contactPhone.String
+	relation.Notes = notes.String
+	relation.AddedBy = addedBy.String
+	if lastUsedAt.Valid {
+		relation.LastUsedAt = &lastUsedAt.Time
+	}
+	if updatedAt.Valid {
+		relation.UpdatedAt = updatedAt.Time
+	}
+
+	// Deserialize JSONB
+	if len(metadataJSON) > 0 {
+		if err := json.Unmarshal(metadataJSON, &relation.Metadata); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal metadata: %w", err)
+		}
+	}
+
+	fmt.Printf("[PgBusinessPayeeRelationRepository] Relation found - PayeeID: %s, AccountID: %s\n",
+		relation.PayeeID, relation.AccountID)
+	return &relation, nil
+}
+
 // FindRelation retrieves a specific business-payee relation
 func (r *PgBusinessPayeeRelationRepository) FindRelation(ctx context.Context, businessID, payeeID, accountID string) (*payee.BusinessPayeeRelation, error) {
 	fmt.Printf("[PgBusinessPayeeRelationRepository] FindRelation called - BusinessID: %s, PayeeID: %s, AccountID: %s\n",
 		businessID, payeeID, accountID)
 
 	query := `
-		SELECT business_id, payee_id, account_id,
+		SELECT relation_id, business_id, payee_id, account_id,
 		       display_name, contact_email, contact_phone, notes,
 		       is_active, is_favorite, tags,
 		       added_at, added_by, last_used_at, updated_at, metadata
@@ -100,6 +169,7 @@ func (r *PgBusinessPayeeRelationRepository) FindRelation(ctx context.Context, bu
 	var metadataJSON []byte
 
 	err := r.querier.QueryRow(ctx, query, businessID, payeeID, accountID).Scan(
+		&relation.RelationID,
 		&relation.BusinessID,
 		&relation.PayeeID,
 		&relation.AccountID,
@@ -151,7 +221,7 @@ func (r *PgBusinessPayeeRelationRepository) FindByBusiness(ctx context.Context, 
 	fmt.Printf("[PgBusinessPayeeRelationRepository] FindByBusiness called - BusinessID: %s\n", businessID)
 
 	query := `
-		SELECT r.business_id, r.payee_id, r.account_id,
+		SELECT r.relation_id, r.business_id, r.payee_id, r.account_id,
 		       r.display_name, r.contact_email, r.contact_phone, r.notes,
 		       r.is_active, r.is_favorite, r.tags,
 		       r.added_at, r.added_by, r.last_used_at, r.updated_at, r.metadata
@@ -231,6 +301,7 @@ func (r *PgBusinessPayeeRelationRepository) FindByBusiness(ctx context.Context, 
 		var metadataJSON []byte
 
 		err := rows.Scan(
+			&relation.RelationID,
 			&relation.BusinessID,
 			&relation.PayeeID,
 			&relation.AccountID,
@@ -410,4 +481,27 @@ func (r *PgBusinessPayeeRelationRepository) GetPayeeCountByType(ctx context.Cont
 	}
 
 	return count, nil
+}
+
+// ValidateRelationForBusiness validates that a relation_id belongs to a business and returns payee/account IDs
+// This is used by voucher service to resolve relation_id without circular dependencies
+func (r *PgBusinessPayeeRelationRepository) ValidateRelationForBusiness(ctx context.Context, businessID, relationID string) (payeeID, accountID string, err error) {
+	fmt.Printf("[PgBusinessPayeeRelationRepository] ValidateRelationForBusiness - BusinessID: %s, RelationID: %s\n", businessID, relationID)
+
+	query := `
+		SELECT payee_id, account_id
+		FROM xcentro.business_payee_relation
+		WHERE business_id = $1 AND relation_id = $2 AND is_active = TRUE
+	`
+
+	err = r.querier.QueryRow(ctx, query, businessID, relationID).Scan(&payeeID, &accountID)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return "", "", fmt.Errorf("relation not found or does not belong to business")
+		}
+		return "", "", fmt.Errorf("failed to validate relation: %w", err)
+	}
+
+	fmt.Printf("[PgBusinessPayeeRelationRepository] Relation validated - PayeeID: %s, AccountID: %s\n", payeeID, accountID)
+	return payeeID, accountID, nil
 }

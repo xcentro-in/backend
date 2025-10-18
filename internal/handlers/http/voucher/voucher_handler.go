@@ -48,8 +48,8 @@ func (h *VoucherHandler) CreateDraftVoucher(c echo.Context) error {
 		req.UserID = uuid.MustParse("00000000-0000-0000-0000-000000000000") // Placeholder
 	}
 
-	fmt.Printf("📥 Request: PayeeID: %s, Invoice: %s, Amount: ₹%.2f\n",
-		req.PayeeID, req.InvoiceNumber, float64(req.NetAmount)/100)
+	fmt.Printf("📥 Request: RelationID: %s, Invoice: %s, Amount: ₹%.2f\n",
+		req.RelationID, req.InvoiceNumber, float64(req.NetAmount)/100)
 
 	// Call service
 	fmt.Println("🔄 Calling Voucher Service...")
@@ -135,6 +135,52 @@ func (h *VoucherHandler) GetVoucherDetails(c echo.Context) error {
 
 	return c.JSON(http.StatusOK, map[string]any{
 		"message": "Voucher details retrieved successfully",
+		"status":  "success",
+		"data":    resp,
+	})
+}
+
+// UpdateVoucher handles PUT /vouchers/:id - Update draft voucher
+func (h *VoucherHandler) UpdateVoucher(c echo.Context) error {
+	fmt.Println("=== HANDLER: UpdateVoucher API Called ===")
+
+	// Parse voucher_id from path
+	voucherIDStr := c.Param("id")
+	voucherID, err := uuid.Parse(voucherIDStr)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "invalid_voucher_id",
+			"message": "Invalid voucher ID format",
+		})
+	}
+
+	// Parse request body
+	var req voucherSvc.UpdateVoucherRequest
+	if err := c.Bind(&req); err != nil {
+		fmt.Printf("❌ Error binding request: %v\n", err)
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "invalid_request",
+			"message": "Invalid request body",
+		})
+	}
+
+	// Set voucher_id from URL path
+	req.VoucherID = voucherID
+
+	fmt.Printf("📥 Voucher ID: %s, Updating fields...\n", voucherID)
+
+	// Call service
+	fmt.Println("🔄 Calling Voucher Service...")
+	resp, err := h.voucherService.UpdateVoucher(c.Request().Context(), &req)
+	if err != nil {
+		fmt.Printf("❌ Update voucher error: %v\n", err)
+		return h.handleError(c, err)
+	}
+
+	fmt.Printf("✅ Voucher updated: %s (%d fields changed)\n", resp.VoucherNumber, len(resp.UpdatedFields))
+
+	return c.JSON(http.StatusOK, map[string]any{
+		"message": "Voucher updated successfully",
 		"status":  "success",
 		"data":    resp,
 	})

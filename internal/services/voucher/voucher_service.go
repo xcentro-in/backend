@@ -23,6 +23,9 @@ type VoucherService interface {
 	// GetVoucherDetails retrieves enriched voucher details with payee information
 	GetVoucherDetails(ctx context.Context, voucherID uuid.UUID) (*VoucherDetailsResponse, error)
 
+	// UpdateVoucher updates a draft voucher (only draft vouchers can be updated)
+	UpdateVoucher(ctx context.Context, req *UpdateVoucherRequest) (*UpdateVoucherResponse, error)
+
 	// ListVouchersForBusiness lists vouchers for a business with filters and pagination
 	ListVouchersForBusiness(ctx context.Context, businessID uuid.UUID, filters voucher.VoucherFilters) (*VoucherListResponse, error)
 
@@ -44,12 +47,11 @@ type VoucherService interface {
 
 // VoucherServiceImpl implements the VoucherService interface
 type VoucherServiceImpl struct {
-	voucherRepo  voucher.VoucherRepository
-	approvalRepo voucher.ApprovalRepository
-	queueRepo    voucher.ERPSyncQueueRepository
-	voucherCore  voucher.VoucherService // Domain service for business logic
-	// TODO: Add payeeRepo when needed for enrichment
-	// payeeRepo    payee.PayeeRepository
+	voucherRepo     voucher.VoucherRepository
+	approvalRepo    voucher.ApprovalRepository
+	queueRepo       voucher.ERPSyncQueueRepository
+	voucherCore     voucher.VoucherService // Domain service for business logic
+	businessPayeeRepo interface{} // payee.BusinessPayeeRelationRepository, using interface{} to avoid circular import
 }
 
 // NewVoucherService creates a new instance of VoucherService
@@ -58,23 +60,24 @@ func NewVoucherService(
 	approvalRepo voucher.ApprovalRepository,
 	queueRepo voucher.ERPSyncQueueRepository,
 	voucherCore voucher.VoucherService,
+	businessPayeeRepo interface{}, // Repository to resolve relation_id
 ) VoucherService {
 	return &VoucherServiceImpl{
-		voucherRepo:  voucherRepo,
-		approvalRepo: approvalRepo,
-		queueRepo:    queueRepo,
-		voucherCore:  voucherCore,
+		voucherRepo:       voucherRepo,
+		approvalRepo:      approvalRepo,
+		queueRepo:         queueRepo,
+		voucherCore:       voucherCore,
+		businessPayeeRepo: businessPayeeRepo,
 	}
 }
 
 // CreateDraftVoucher creates a draft voucher
 func (s *VoucherServiceImpl) CreateDraftVoucher(ctx context.Context, req *CreateDraftVoucherRequest) (*CreateDraftVoucherResponse, error) {
-	// 1. Validate payee-account relationship exists
-	// TODO: Uncomment when payee repository is integrated
-	// relation, err := s.payeeRepo.GetRelation(ctx, req.BusinessID, req.PayeeID, req.AccountID)
-	// if err != nil {
-	//     return nil, voucher.ErrPayeeNotFound
-	// }
+	// 1. Resolve relation_id to payee_id and account_id (validates business ownership)
+	payeeID, accountID, err := s.resolveRelationID(ctx, req.BusinessID, req.RelationID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve relation_id: %w", err)
+	}
 
 	// 2. Generate voucher number
 	now := time.Now()
@@ -101,8 +104,8 @@ func (s *VoucherServiceImpl) CreateDraftVoucher(ctx context.Context, req *Create
 		AccountingPeriod: accountingPeriod,
 		VoucherType:      voucher.VoucherTypePayment,
 		BusinessID:       req.BusinessID,
-		PayeeID:          req.PayeeID,
-		AccountID:        req.AccountID,
+		PayeeID:          payeeID,
+		AccountID:        accountID,
 		InvoiceNumber:    req.InvoiceNumber,
 		InvoiceDate:      req.InvoiceDate,
 		InvoiceDueDate:   req.InvoiceDueDate,
@@ -210,8 +213,7 @@ func (s *VoucherServiceImpl) CreateMultiVouchers(ctx context.Context, req *Creat
 		draftReq := &CreateDraftVoucherRequest{
 			BusinessID:       req.BusinessID,
 			UserID:           req.UserID,
-			PayeeID:          bill.PayeeID,
-			AccountID:        bill.AccountID,
+			RelationID:       bill.RelationID, // Use relation_id instead of payee_id + account_id
 			InvoiceNumber:    bill.InvoiceNumber,
 			InvoiceDate:      bill.InvoiceDate,
 			GrossAmount:      bill.GrossAmount,
@@ -235,6 +237,165 @@ func (s *VoucherServiceImpl) CreateMultiVouchers(ctx context.Context, req *Creat
 	return &CreateMultiVouchersResponse{
 		Vouchers: responses,
 		Message:  fmt.Sprintf("Successfully created %d draft vouchers", len(responses)),
+	}, nil
+}
+
+// UpdateVoucher updates a draft voucher (only draft vouchers can be updated)
+func (s *VoucherServiceImpl) UpdateVoucher(ctx context.Context, req *UpdateVoucherRequest) (*UpdateVoucherResponse, error) {
+	// 1. Fetch existing voucher
+	v, err := s.voucherRepo.GetByID(ctx, req.VoucherID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get voucher: %w", err)
+	}
+
+	// 2. Verify voucher is in draft status (only drafts can be updated)
+	if v.Status != voucher.StatusDraft {
+		return nil, fmt.Errorf("can only update draft vouchers (current status: %s)", v.Status)
+	}
+
+	// 3. Track updated fields
+	var updatedFields []string
+
+	// 4. If relation_id is provided, resolve it and update payee/account
+	if req.RelationID != nil {
+		// Validate and resolve relation_id (validates business ownership)
+		payeeID, accountID, err := s.resolveRelationID(ctx, v.BusinessID, *req.RelationID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve relation_id: %w", err)
+		}
+
+		v.PayeeID = payeeID
+		v.AccountID = accountID
+		updatedFields = append(updatedFields, "payee_id", "account_id")
+	}
+
+	// 5. Apply partial updates for invoice details
+	if req.InvoiceNumber != nil {
+		v.InvoiceNumber = *req.InvoiceNumber
+		updatedFields = append(updatedFields, "invoice_number")
+	}
+	if req.InvoiceDate != nil {
+		v.InvoiceDate = req.InvoiceDate
+		updatedFields = append(updatedFields, "invoice_date")
+	}
+	if req.InvoiceDueDate != nil {
+		v.InvoiceDueDate = req.InvoiceDueDate
+		updatedFields = append(updatedFields, "invoice_due_date")
+	}
+
+	// 6. Apply partial updates for amounts
+	if req.GrossAmount != nil {
+		v.GrossAmount = *req.GrossAmount
+		updatedFields = append(updatedFields, "gross_amount")
+	}
+	if req.NetAmount != nil {
+		v.NetAmount = *req.NetAmount
+		updatedFields = append(updatedFields, "net_amount")
+	}
+	if req.Currency != nil {
+		v.Currency = *req.Currency
+		updatedFields = append(updatedFields, "currency")
+	}
+	if req.GSTAmount != nil {
+		v.GSTAmount = *req.GSTAmount
+		updatedFields = append(updatedFields, "gst_amount")
+	}
+	if req.GSTRate != nil {
+		v.GSTRate = *req.GSTRate
+		updatedFields = append(updatedFields, "gst_rate")
+	}
+	if req.CGSTAmount != nil {
+		v.CGSTAmount = *req.CGSTAmount
+		updatedFields = append(updatedFields, "cgst_amount")
+	}
+	if req.SGSTAmount != nil {
+		v.SGSTAmount = *req.SGSTAmount
+		updatedFields = append(updatedFields, "sgst_amount")
+	}
+	if req.IGSTAmount != nil {
+		v.IGSTAmount = *req.IGSTAmount
+		updatedFields = append(updatedFields, "igst_amount")
+	}
+	if req.TDSAmount != nil {
+		v.TDSAmount = *req.TDSAmount
+		updatedFields = append(updatedFields, "tds_amount")
+	}
+	if req.TDSRate != nil {
+		v.TDSRate = *req.TDSRate
+		updatedFields = append(updatedFields, "tds_rate")
+	}
+	if req.TDSSection != nil {
+		v.TDSSection = *req.TDSSection
+		updatedFields = append(updatedFields, "tds_section")
+	}
+	if req.FeeAmount != nil {
+		v.FeeAmount = *req.FeeAmount
+		updatedFields = append(updatedFields, "fee_amount")
+	}
+	if req.DiscountAmount != nil {
+		v.DiscountAmount = *req.DiscountAmount
+		updatedFields = append(updatedFields, "discount_amount")
+	}
+
+	// 7. Apply partial updates for additional details
+	if req.FinancialDetails != nil {
+		v.FinancialDetails = *req.FinancialDetails
+		updatedFields = append(updatedFields, "financial_details")
+	}
+	if req.Attachments != nil {
+		v.Attachments = *req.Attachments
+		updatedFields = append(updatedFields, "attachments")
+	}
+	if req.ExpenseCategory != nil {
+		v.ExpenseCategory = *req.ExpenseCategory
+		updatedFields = append(updatedFields, "expense_category")
+	}
+	if req.Description != nil {
+		v.Description = *req.Description
+		updatedFields = append(updatedFields, "description")
+	}
+
+	// 8. Apply partial updates for GL codes
+	if req.GLExpenseAccount != nil {
+		v.GLExpenseAccount = *req.GLExpenseAccount
+		updatedFields = append(updatedFields, "gl_expense_account")
+	}
+	if req.GLBankAccount != nil {
+		v.GLBankAccount = *req.GLBankAccount
+		updatedFields = append(updatedFields, "gl_bank_account")
+	}
+	if req.CostCenter != nil {
+		v.CostCenter = *req.CostCenter
+		updatedFields = append(updatedFields, "cost_center")
+	}
+
+	// 9. Apply partial updates for metadata
+	if req.Metadata != nil {
+		v.Metadata = *req.Metadata
+		updatedFields = append(updatedFields, "metadata")
+	}
+
+	// 10. Update timestamp
+	now := time.Now()
+	v.UpdatedAt = &now
+
+	// 11. Validate updated voucher data
+	if err := s.voucherCore.ValidateVoucherData(ctx, v); err != nil {
+		return nil, fmt.Errorf("voucher validation failed: %w", err)
+	}
+
+	// 12. Save updated voucher to database
+	if err := s.voucherRepo.Update(ctx, v); err != nil {
+		return nil, fmt.Errorf("failed to update voucher: %w", err)
+	}
+
+	// 13. Return response with updated fields
+	return &UpdateVoucherResponse{
+		VoucherID:     v.VoucherID,
+		VoucherNumber: v.VoucherNumber,
+		Status:        v.Status,
+		Message:       fmt.Sprintf("Voucher %s updated successfully", v.VoucherNumber),
+		UpdatedFields: updatedFields,
 	}, nil
 }
 
@@ -575,6 +736,36 @@ func (s *VoucherServiceImpl) ApproveCancellation(ctx context.Context, req *Appro
 }
 
 // Helper functions
+
+// resolveRelationID validates relation_id belongs to business and returns payee/account IDs
+func (s *VoucherServiceImpl) resolveRelationID(ctx context.Context, businessID uuid.UUID, relationID uuid.UUID) (payeeID, accountID uuid.UUID, err error) {
+	// Type assert to access ValidateRelationForBusiness method
+	repo, ok := s.businessPayeeRepo.(interface {
+		ValidateRelationForBusiness(ctx context.Context, businessID, relationID string) (payeeID, accountID string, err error)
+	})
+	if !ok {
+		return uuid.Nil, uuid.Nil, fmt.Errorf("businessPayeeRepo does not implement ValidateRelationForBusiness")
+	}
+
+	// Simple SQL query validates and returns IDs
+	payeeIDStr, accountIDStr, err := repo.ValidateRelationForBusiness(ctx, businessID.String(), relationID.String())
+	if err != nil {
+		return uuid.Nil, uuid.Nil, fmt.Errorf("failed to resolve relation_id: %w", err)
+	}
+
+	// Parse UUIDs
+	payeeID, err = uuid.Parse(payeeIDStr)
+	if err != nil {
+		return uuid.Nil, uuid.Nil, fmt.Errorf("invalid payee_id: %w", err)
+	}
+
+	accountID, err = uuid.Parse(accountIDStr)
+	if err != nil {
+		return uuid.Nil, uuid.Nil, fmt.Errorf("invalid account_id: %w", err)
+	}
+
+	return payeeID, accountID, nil
+}
 
 // maskAccountNumber masks account number for security (show last 4 digits only)
 func maskAccountNumber(accountNumber string) string {

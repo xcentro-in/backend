@@ -13,9 +13,8 @@ type CreateDraftVoucherRequest struct {
 	BusinessID uuid.UUID `json:"business_id"`
 	UserID     uuid.UUID `json:"user_id"` // created_by
 
-	// Payee reference
-	PayeeID   uuid.UUID `json:"payee_id"`
-	AccountID uuid.UUID `json:"account_id"`
+	// Payee reference (simplified with surrogate key)
+	RelationID uuid.UUID `json:"relation_id"` // Single identifier for business-payee-account relationship
 
 	// Invoice details
 	InvoiceNumber  string     `json:"invoice_number"`
@@ -62,6 +61,57 @@ type CreateDraftVoucherResponse struct {
 	Status           voucher.VoucherStatus `json:"status"`
 	ERPSyncStatus    voucher.ERPSyncStatus `json:"erp_sync_status"`
 	Message          string                `json:"message"`
+}
+
+// UpdateVoucherRequest represents the request to update a draft voucher
+type UpdateVoucherRequest struct {
+	VoucherID uuid.UUID `json:"-"` // From URL path parameter, not request body
+
+	// Payee reference (can be updated to change payee/account)
+	RelationID *uuid.UUID `json:"relation_id,omitempty"`
+
+	// Invoice details
+	InvoiceNumber  *string     `json:"invoice_number,omitempty"`
+	InvoiceDate    *time.Time  `json:"invoice_date,omitempty"`
+	InvoiceDueDate *time.Time  `json:"invoice_due_date,omitempty"`
+
+	// Amounts (all in paise)
+	GrossAmount    *int64   `json:"gross_amount,omitempty"`
+	NetAmount      *int64   `json:"net_amount,omitempty"`
+	Currency       *string  `json:"currency,omitempty"`
+	GSTAmount      *int64   `json:"gst_amount,omitempty"`
+	GSTRate        *float64 `json:"gst_rate,omitempty"`
+	CGSTAmount     *int64   `json:"cgst_amount,omitempty"`
+	SGSTAmount     *int64   `json:"sgst_amount,omitempty"`
+	IGSTAmount     *int64   `json:"igst_amount,omitempty"`
+	TDSAmount      *int64   `json:"tds_amount,omitempty"`
+	TDSRate        *float64 `json:"tds_rate,omitempty"`
+	TDSSection     *string  `json:"tds_section,omitempty"`
+	FeeAmount      *int64   `json:"fee_amount,omitempty"`
+	DiscountAmount *int64   `json:"discount_amount,omitempty"`
+
+	// Additional details
+	FinancialDetails *map[string]interface{} `json:"financial_details,omitempty"`
+	Attachments      *map[string]interface{} `json:"attachments,omitempty"`
+	ExpenseCategory  *string                 `json:"expense_category,omitempty"`
+	Description      *string                 `json:"description,omitempty"`
+
+	// General ledger codes
+	GLExpenseAccount *string `json:"gl_expense_account,omitempty"`
+	GLBankAccount    *string `json:"gl_bank_account,omitempty"`
+	CostCenter       *string `json:"cost_center,omitempty"`
+
+	// Metadata
+	Metadata *map[string]interface{} `json:"metadata,omitempty"`
+}
+
+// UpdateVoucherResponse represents the response after updating a voucher
+type UpdateVoucherResponse struct {
+	VoucherID        uuid.UUID             `json:"voucher_id"`
+	VoucherNumber    string                `json:"voucher_number"`
+	Status           voucher.VoucherStatus `json:"status"`
+	Message          string                `json:"message"`
+	UpdatedFields    []string              `json:"updated_fields"` // List of fields that were updated
 }
 
 // FinalizeVoucherRequest represents the request to finalize a voucher
@@ -188,8 +238,7 @@ type CreateMultiVouchersRequest struct {
 
 // BillVoucherRequest represents a single bill in multi-bill payment
 type BillVoucherRequest struct {
-	PayeeID          uuid.UUID              `json:"payee_id"`
-	AccountID        uuid.UUID              `json:"account_id"`
+	RelationID       uuid.UUID              `json:"relation_id"` // Single identifier for business-payee-account relationship
 	InvoiceNumber    string                 `json:"invoice_number"`
 	InvoiceDate      *time.Time             `json:"invoice_date,omitempty"`
 	GrossAmount      int64                  `json:"gross_amount"`

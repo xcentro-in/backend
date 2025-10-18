@@ -89,8 +89,9 @@ type OnboardEmployeeData struct {
 
 // OnboardPayeeResponse represents the response after payee onboarding
 type OnboardPayeeResponse struct {
-	PayeeID   string `json:"payee_id"`
-	AccountID string `json:"account_id"`
+	RelationID string `json:"relation_id"` // Surrogate key for simplified frontend API
+	PayeeID    string `json:"payee_id"`
+	AccountID  string `json:"account_id"`
 
 	// Verification results
 	GSTVerificationStatus   VerificationStatus `json:"gst_verification_status"`

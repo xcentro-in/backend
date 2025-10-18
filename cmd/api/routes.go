@@ -4,6 +4,7 @@ import (
 	"github.com/labstack/echo/v4"
 	authRepo "xcentro.in/internal/adapters/database/postgres/auth"
 	"xcentro.in/internal/adapters/database/postgres/business"
+	payeeRepo "xcentro.in/internal/adapters/database/postgres/payee"
 	paymentRepo "xcentro.in/internal/adapters/database/postgres/payment"
 	payoutRepo "xcentro.in/internal/adapters/database/postgres/payout"
 	userRepo "xcentro.in/internal/adapters/database/postgres/user"
@@ -119,11 +120,16 @@ func registerV1PaymentRoutes(meta *serverMetaData, group *echo.Group) {
 	approvalRepository := voucherRepo.NewPostgresApprovalRepository(meta.clients.db)
 	queueRepository := voucherRepo.NewPostgresERPSyncQueueRepository(meta.clients.db)
 	voucherCoreService := coreVoucher.NewVoucherService(voucherRepository)
+
+	// Create business-payee relation repository for voucher relation_id resolution
+	businessPayeeRelationRepo := payeeRepo.NewPgBusinessPayeeRelationRepository(meta.clients.db)
+
 	voucherService := voucherSvc.NewVoucherService(
 		voucherRepository,
 		approvalRepository,
 		queueRepository,
 		voucherCoreService,
+		businessPayeeRelationRepo, // Pass repository to resolve relation_id
 	)
 
 	// Create payment service layer (Phase 4.4+ / Phase 6)
@@ -288,12 +294,16 @@ func registerV1VoucherRoutes(meta *serverMetaData, group *echo.Group) {
 	// Create voucher core service (domain logic)
 	voucherCoreService := coreVoucher.NewVoucherService(voucherRepository)
 
+	// Create business-payee relation repository for voucher relation_id resolution
+	businessPayeeRelationRepo := payeeRepo.NewPgBusinessPayeeRelationRepository(meta.clients.db)
+
 	// Create voucher service layer (orchestration)
 	voucherService := voucherSvc.NewVoucherService(
 		voucherRepository,
 		approvalRepository,
 		queueRepository,
 		voucherCoreService,
+		businessPayeeRelationRepo, // Pass repository to resolve relation_id
 	)
 
 	// Register voucher routes

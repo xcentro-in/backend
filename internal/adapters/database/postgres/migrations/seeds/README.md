@@ -39,6 +39,48 @@ This directory contains SQL seed files for populating test data in development a
    - ⏳ 1 Unverified (for testing filtering)
    - ❌ 1 Inactive (for testing filtering)
 
+### 2. Vendor Payees Test Data
+
+**File:** `002_seed_vendor_payees.sql`
+**Purpose:** Seeds vendor payees with bank accounts for voucher/payment testing
+**Rollback:** `002_seed_vendor_payees_rollback.sql`
+**Business ID:** `0199f7c6-39ab-77a1-b611-385a4cb8f24b`
+
+#### What It Creates
+
+1. **Vendor 1: TechCorp Solutions Pvt Ltd** (IT Services)
+   - Payee ID: `0199f7c7-1234-7001-a001-111111111111`
+   - Relation ID: `0199f7c7-1234-7001-a003-111111111111`
+   - GSTIN: `29AABCT1234M1Z5`
+   - Location: Bangalore, Karnataka
+   - Bank: HDFC Bank (Current Account)
+   - Tags: IT Services, Software Development, Consulting
+   - Is Favorite: ✅
+
+2. **Vendor 2: Global Office Supplies India Pvt Ltd** (Office Supplies)
+   - Payee ID: `0199f7c7-1234-7002-a001-222222222222`
+   - Relation ID: `0199f7c7-1234-7002-a003-222222222222`
+   - GSTIN: `27AADCG5432N1ZP`
+   - Location: Mumbai, Maharashtra
+   - Bank: ICICI Bank (Current Account)
+   - Tags: Office Supplies, Stationery, Furniture
+
+3. **Vendor 3: BuildRight Constructions LLP** (Contractor)
+   - Payee ID: `0199f7c7-1234-7003-a001-333333333333`
+   - Relation ID: `0199f7c7-1234-7003-a003-333333333333`
+   - GSTIN: `06AABFB9876K1ZL`
+   - Location: Gurgaon, Haryana
+   - Bank: State Bank of India (Current Account)
+   - Tags: Construction, Contractor, Civil Works
+   - Is Favorite: ✅
+
+**All vendors include:**
+- ✅ GST verification (status: success)
+- ✅ Bank account verification (penny drop: success)
+- ✅ Cross-verification (name match: 92-98%)
+- ✅ Active status
+- ✅ Complete business details (directors, turnover, registration)
+
 ## How to Use
 
 ### Running Seed Scripts
@@ -52,8 +94,14 @@ cd internal/adapters/database/postgres/migrations/seeds
 # Apply wallet test data
 ./apply-seeds.sh apply 001
 
+# Apply vendor payees test data
+./apply-seeds.sh apply 002
+
 # Rollback wallet test data
 ./apply-seeds.sh rollback 001
+
+# Rollback vendor payees
+./apply-seeds.sh rollback 002
 
 # List available seed files
 ./apply-seeds.sh list
@@ -209,6 +257,126 @@ SELECT
     (SELECT COUNT(*) FROM xcentro.bank_accounts
      WHERE business_id = '01936d7a-7c8e-7890-b123-456789abcdef'
      AND is_verified = TRUE AND is_active = TRUE) as verified_accounts;
+```
+
+### Testing Vendor Payees (Seed 002)
+
+Use the vendor payees for creating vouchers and testing voucher/payee workflows:
+
+**Business ID:** `0199f7c6-39ab-77a1-b611-385a4cb8f24b`
+
+#### Example: Create Draft Voucher
+
+**Endpoint:** `POST /v1/vouchers/draft`
+
+**Request Body:**
+```json
+{
+  "business_id": "0199f7c6-39ab-77a1-b611-385a4cb8f24b",
+  "user_id": "<your-user-id>",
+  "relation_id": "0199f7c7-1234-7001-a003-111111111111",
+  "invoice_number": "INV-2024-001",
+  "invoice_date": "2024-10-01T00:00:00Z",
+  "gross_amount": 118000,
+  "net_amount": 100000,
+  "currency": "INR",
+  "gst_amount": 18000,
+  "gst_rate": 18.0,
+  "tds_amount": 0,
+  "expense_category": "IT Services",
+  "description": "Software development services for Q4 2024"
+}
+```
+
+#### Example: List Vendor Payees
+
+**Endpoint:** `GET /v1/payees?bid=0199f7c6-39ab-77a1-b611-385a4cb8f24b`
+
+**Expected Response:**
+```json
+{
+  "status": "success",
+  "data": {
+    "payees": [
+      {
+        "relation_id": "0199f7c7-1234-7001-a003-111111111111",
+        "display_name": "TechCorp IT Services",
+        "gstin": "29AABCT1234M1Z5",
+        "tags": ["IT Services", "Software Development", "Consulting"],
+        "is_favorite": true
+      },
+      // ... more vendors
+    ]
+  }
+}
+```
+
+### Vendor Payee Verification Queries
+
+```sql
+-- Check all 3 vendors were created
+SELECT
+    pm.payee_id,
+    pm.display_name,
+    pv.gstin,
+    pv.legal_name,
+    pv.city,
+    pv.state
+FROM xcentro.payee_master pm
+JOIN xcentro.payee_vendor pv ON pm.payee_id = pv.payee_id
+WHERE pm.payee_id IN (
+    '0199f7c7-1234-7001-a001-111111111111'::UUID,
+    '0199f7c7-1234-7002-a001-222222222222'::UUID,
+    '0199f7c7-1234-7003-a001-333333333333'::UUID
+);
+
+-- Check business-payee relations
+SELECT
+    bpr.relation_id,
+    bpr.display_name,
+    bpr.contact_email,
+    bpr.tags,
+    bpr.is_favorite,
+    pm.display_name as payee_legal_name
+FROM xcentro.business_payee_relation bpr
+JOIN xcentro.payee_master pm ON bpr.payee_id = pm.payee_id
+WHERE bpr.business_id = '0199f7c6-39ab-77a1-b611-385a4cb8f24b'::UUID
+ORDER BY bpr.added_at;
+
+-- Check bank accounts are verified
+SELECT
+    pba.account_id,
+    pm.display_name,
+    pba.bank_name,
+    pba.ifsc_code,
+    pba.is_verified,
+    pba.bank_verification_status,
+    pba.cross_verification_status,
+    pba.name_match_score
+FROM xcentro.payee_bank_accounts pba
+JOIN xcentro.payee_master pm ON pba.payee_id = pm.payee_id
+WHERE pba.payee_id IN (
+    '0199f7c7-1234-7001-a001-111111111111'::UUID,
+    '0199f7c7-1234-7002-a001-222222222222'::UUID,
+    '0199f7c7-1234-7003-a001-333333333333'::UUID
+);
+
+-- Summary: Should show 3 vendors, 3 accounts, 3 relations
+SELECT
+    (SELECT COUNT(*) FROM xcentro.payee_master
+     WHERE payee_id IN (
+        '0199f7c7-1234-7001-a001-111111111111'::UUID,
+        '0199f7c7-1234-7002-a001-222222222222'::UUID,
+        '0199f7c7-1234-7003-a001-333333333333'::UUID
+     )) as vendor_count,
+    (SELECT COUNT(*) FROM xcentro.payee_bank_accounts
+     WHERE payee_id IN (
+        '0199f7c7-1234-7001-a001-111111111111'::UUID,
+        '0199f7c7-1234-7002-a001-222222222222'::UUID,
+        '0199f7c7-1234-7003-a001-333333333333'::UUID
+     ) AND is_verified = TRUE) as verified_accounts,
+    (SELECT COUNT(*) FROM xcentro.business_payee_relation
+     WHERE business_id = '0199f7c6-39ab-77a1-b611-385a4cb8f24b'::UUID) as business_relations;
 ```
 
 ## Clean Up
