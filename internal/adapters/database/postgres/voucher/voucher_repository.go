@@ -2,6 +2,7 @@ package voucher
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -633,6 +634,10 @@ func (r *PostgresVoucherRepository) scanVoucher(row pgx.Row) (*voucher.Voucher, 
 	var v voucher.Voucher
 	var financialDetailsJSON, attachmentsJSON, erpMetadataJSON, payoutMetadataJSON, refundMetadataJSON, metadataJSON []byte
 
+	// Nullable string fields
+	var erpReferenceID, payoutReferenceID, payoutUTR, cancellationReason, refundReferenceID sql.NullString
+	var glExpenseAccount, glBankAccount, costCenter sql.NullString
+
 	err := row.Scan(
 		&v.VoucherID, &v.VoucherNumber, &v.VoucherDate, &v.FiscalYear, &v.AccountingPeriod, &v.VoucherType,
 		&v.BusinessID, &v.PayeeID, &v.AccountID,
@@ -644,15 +649,41 @@ func (r *PostgresVoucherRepository) scanVoucher(row pgx.Row) (*voucher.Voucher, 
 		&financialDetailsJSON, &attachmentsJSON,
 		&v.ExpenseCategory, &v.Description,
 		&v.Status, &v.PaymentID,
-		&v.ERPSyncStatus, &v.ERPReferenceID, &v.ERPPostingDate, &v.ERPLastSyncAt, &v.ERPSyncAttempts, &erpMetadataJSON,
-		&v.PayoutStatus, &v.PayoutInitiatedAt, &v.PayoutInitiatedBy, &v.PayoutCompletedAt, &v.PayoutReferenceID, &v.PayoutUTR, &payoutMetadataJSON,
-		&v.CancellationStatus, &v.CancellationRequestedAt, &v.CancellationRequestedBy, &v.CancellationReason,
-		&v.CancellationApprovedAt, &v.CancellationApprovedBy, &v.RefundStatus, &v.RefundInitiatedAt, &v.RefundReferenceID, &refundMetadataJSON,
-		&v.GLExpenseAccount, &v.GLBankAccount, &v.CostCenter,
+		&v.ERPSyncStatus, &erpReferenceID, &v.ERPPostingDate, &v.ERPLastSyncAt, &v.ERPSyncAttempts, &erpMetadataJSON,
+		&v.PayoutStatus, &v.PayoutInitiatedAt, &v.PayoutInitiatedBy, &v.PayoutCompletedAt, &payoutReferenceID, &payoutUTR, &payoutMetadataJSON,
+		&v.CancellationStatus, &v.CancellationRequestedAt, &v.CancellationRequestedBy, &cancellationReason,
+		&v.CancellationApprovedAt, &v.CancellationApprovedBy, &v.RefundStatus, &v.RefundInitiatedAt, &refundReferenceID, &refundMetadataJSON,
+		&glExpenseAccount, &glBankAccount, &costCenter,
 		&v.CreatedAt, &v.CreatedByID, &v.UpdatedAt, &metadataJSON,
 	)
 	if err != nil {
 		return nil, err
+	}
+
+	// Handle nullable strings
+	if erpReferenceID.Valid {
+		v.ERPReferenceID = erpReferenceID.String
+	}
+	if payoutReferenceID.Valid {
+		v.PayoutReferenceID = payoutReferenceID.String
+	}
+	if payoutUTR.Valid {
+		v.PayoutUTR = payoutUTR.String
+	}
+	if cancellationReason.Valid {
+		v.CancellationReason = cancellationReason.String
+	}
+	if refundReferenceID.Valid {
+		v.RefundReferenceID = refundReferenceID.String
+	}
+	if glExpenseAccount.Valid {
+		v.GLExpenseAccount = glExpenseAccount.String
+	}
+	if glBankAccount.Valid {
+		v.GLBankAccount = glBankAccount.String
+	}
+	if costCenter.Valid {
+		v.CostCenter = costCenter.String
 	}
 
 	// Unmarshal JSONB fields
@@ -700,6 +731,10 @@ func (r *PostgresVoucherRepository) scanVoucherRow(rows pgx.Rows) (*voucher.Vouc
 	var v voucher.Voucher
 	var financialDetailsJSON, attachmentsJSON, erpMetadataJSON, payoutMetadataJSON, refundMetadataJSON, metadataJSON []byte
 
+	// Nullable string fields
+	var erpReferenceID, payoutReferenceID, payoutUTR, cancellationReason, refundReferenceID sql.NullString
+	var glExpenseAccount, glBankAccount, costCenter sql.NullString
+
 	err := rows.Scan(
 		&v.VoucherID, &v.VoucherNumber, &v.VoucherDate, &v.FiscalYear, &v.AccountingPeriod, &v.VoucherType,
 		&v.BusinessID, &v.PayeeID, &v.AccountID,
@@ -711,15 +746,41 @@ func (r *PostgresVoucherRepository) scanVoucherRow(rows pgx.Rows) (*voucher.Vouc
 		&financialDetailsJSON, &attachmentsJSON,
 		&v.ExpenseCategory, &v.Description,
 		&v.Status, &v.PaymentID,
-		&v.ERPSyncStatus, &v.ERPReferenceID, &v.ERPPostingDate, &v.ERPLastSyncAt, &v.ERPSyncAttempts, &erpMetadataJSON,
-		&v.PayoutStatus, &v.PayoutInitiatedAt, &v.PayoutInitiatedBy, &v.PayoutCompletedAt, &v.PayoutReferenceID, &v.PayoutUTR, &payoutMetadataJSON,
-		&v.CancellationStatus, &v.CancellationRequestedAt, &v.CancellationRequestedBy, &v.CancellationReason,
-		&v.CancellationApprovedAt, &v.CancellationApprovedBy, &v.RefundStatus, &v.RefundInitiatedAt, &v.RefundReferenceID, &refundMetadataJSON,
-		&v.GLExpenseAccount, &v.GLBankAccount, &v.CostCenter,
+		&v.ERPSyncStatus, &erpReferenceID, &v.ERPPostingDate, &v.ERPLastSyncAt, &v.ERPSyncAttempts, &erpMetadataJSON,
+		&v.PayoutStatus, &v.PayoutInitiatedAt, &v.PayoutInitiatedBy, &v.PayoutCompletedAt, &payoutReferenceID, &payoutUTR, &payoutMetadataJSON,
+		&v.CancellationStatus, &v.CancellationRequestedAt, &v.CancellationRequestedBy, &cancellationReason,
+		&v.CancellationApprovedAt, &v.CancellationApprovedBy, &v.RefundStatus, &v.RefundInitiatedAt, &refundReferenceID, &refundMetadataJSON,
+		&glExpenseAccount, &glBankAccount, &costCenter,
 		&v.CreatedAt, &v.CreatedByID, &v.UpdatedAt, &metadataJSON,
 	)
 	if err != nil {
 		return nil, err
+	}
+
+	// Handle nullable strings
+	if erpReferenceID.Valid {
+		v.ERPReferenceID = erpReferenceID.String
+	}
+	if payoutReferenceID.Valid {
+		v.PayoutReferenceID = payoutReferenceID.String
+	}
+	if payoutUTR.Valid {
+		v.PayoutUTR = payoutUTR.String
+	}
+	if cancellationReason.Valid {
+		v.CancellationReason = cancellationReason.String
+	}
+	if refundReferenceID.Valid {
+		v.RefundReferenceID = refundReferenceID.String
+	}
+	if glExpenseAccount.Valid {
+		v.GLExpenseAccount = glExpenseAccount.String
+	}
+	if glBankAccount.Valid {
+		v.GLBankAccount = glBankAccount.String
+	}
+	if costCenter.Valid {
+		v.CostCenter = costCenter.String
 	}
 
 	// Unmarshal JSONB fields
