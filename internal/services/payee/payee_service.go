@@ -1395,3 +1395,35 @@ func (s *PayeeService) GetVendorsForDropdown(ctx context.Context, businessID str
 	fmt.Printf("=== PAYEE SERVICE: GetVendorsForDropdown - Found %d vendors ===\n", len(vendors))
 	return response, nil
 }
+
+// GetPayeeDetailsByRelation retrieves complete payee details by relation_id (polymorphic)
+// Returns vendor, employee, or biller details with bank/account information
+// Validates that the relation belongs to the specified business
+func (s *PayeeService) GetPayeeDetailsByRelation(ctx context.Context, businessID, relationID string) (*payee.PayeeFullDetails, error) {
+	fmt.Printf("=== PAYEE SERVICE: GetPayeeDetailsByRelation - BusinessID: %s, RelationID: %s ===\n", businessID, relationID)
+
+	// Input validation
+	if businessID == "" {
+		return nil, fmt.Errorf("business_id is required")
+	}
+	if relationID == "" {
+		return nil, fmt.Errorf("relation_id is required")
+	}
+
+	// Validate UUID formats
+	if _, err := uuid.Parse(businessID); err != nil {
+		return nil, fmt.Errorf("invalid business_id format: %w", err)
+	}
+	if _, err := uuid.Parse(relationID); err != nil {
+		return nil, fmt.Errorf("invalid relation_id format: %w", err)
+	}
+
+	// Fetch full details from repository (handles polymorphism and business validation)
+	details, err := s.businessPayeeRelationRepo.GetPayeeFullDetailsByRelation(ctx, businessID, relationID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get payee details: %w", err)
+	}
+
+	fmt.Printf("=== PAYEE SERVICE: GetPayeeDetailsByRelation - Found payee type: %s ===\n", details.PayeeType)
+	return details, nil
+}

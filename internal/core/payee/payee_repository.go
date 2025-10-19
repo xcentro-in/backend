@@ -185,6 +185,10 @@ type BusinessPayeeRelationRepository interface {
 
 	// Validation helper (used by voucher service)
 	ValidateRelationForBusiness(ctx context.Context, businessID, relationID string) (payeeID, accountID string, err error)
+
+	// Get full payee details by relation_id (polymorphic - vendor/employee/biller)
+	// Validates that relation belongs to the specified business
+	GetPayeeFullDetailsByRelation(ctx context.Context, businessID, relationID string) (*PayeeFullDetails, error)
 }
 
 // ############################################################################

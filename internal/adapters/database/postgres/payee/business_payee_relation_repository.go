@@ -553,3 +553,239 @@ func (r *PgBusinessPayeeRelationRepository) ValidateRelationForBusiness(ctx cont
 	fmt.Printf("[PgBusinessPayeeRelationRepository] Relation validated - PayeeID: %s, AccountID: %s\n", payeeID, accountID)
 	return payeeID, accountID, nil
 }
+
+// GetPayeeFullDetailsByRelation fetches complete payee details by relation_id (polymorphic)
+// Joins: business_payee_relation → payee_master → type-specific table → bank/biller account
+// Validates that the relation belongs to the specified business
+func (r *PgBusinessPayeeRelationRepository) GetPayeeFullDetailsByRelation(ctx context.Context, businessID, relationID string) (*payee.PayeeFullDetails, error) {
+	fmt.Printf("[PgBusinessPayeeRelationRepository] GetPayeeFullDetailsByRelation - BusinessID: %s, RelationID: %s\n", businessID, relationID)
+
+	// First, get the relation and determine payee type
+	// IMPORTANT: WHERE clause includes business_id validation for security
+	query := `
+		SELECT
+			bpr.relation_id,
+			bpr.display_name,
+			COALESCE(bpr.contact_email, '') as contact_email,
+			COALESCE(bpr.contact_phone, '') as contact_phone,
+			bpr.tags,
+			bpr.is_favorite,
+			bpr.payee_id,
+			bpr.account_id,
+			pm.payee_type
+		FROM xcentro.business_payee_relation bpr
+		INNER JOIN xcentro.payee_master pm ON bpr.payee_id = pm.payee_id
+		WHERE bpr.relation_id = $1
+		  AND bpr.business_id = $2
+		  AND bpr.is_active = TRUE
+	`
+
+	var details payee.PayeeFullDetails
+	var payeeID, accountID, payeeType string
+
+	err := r.querier.QueryRow(ctx, query, relationID, businessID).Scan(
+		&details.RelationID,
+		&details.DisplayName,
+		&details.ContactEmail,
+		&details.ContactPhone,
+		&details.Tags,
+		&details.IsFavorite,
+		&payeeID,
+		&accountID,
+		&payeeType,
+	)
+
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, fmt.Errorf("payee relation not found or does not belong to this business")
+		}
+		return nil, fmt.Errorf("failed to fetch payee relation: %w", err)
+	}
+
+	details.PayeeType = payeeType
+
+	fmt.Printf("[PgBusinessPayeeRelationRepository] Relation validated for business - PayeeType: %s\n", payeeType)
+
+	// Route to type-specific query based on payee_type
+	switch payeeType {
+	case "vendor":
+		return r.fetchVendorDetails(ctx, &details, payeeID, accountID)
+	case "employee":
+		return r.fetchEmployeeDetails(ctx, &details, payeeID, accountID)
+	case "biller":
+		return r.fetchBillerDetails(ctx, &details, payeeID, accountID)
+	default:
+		return nil, fmt.Errorf("unknown payee type: %s", payeeType)
+	}
+}
+
+// fetchVendorDetails populates vendor-specific fields and bank details
+func (r *PgBusinessPayeeRelationRepository) fetchVendorDetails(ctx context.Context, details *payee.PayeeFullDetails, payeeID, accountID string) (*payee.PayeeFullDetails, error) {
+	// Get vendor details
+	vendorQuery := `
+		SELECT
+			gstin,
+			legal_name,
+			gst_status,
+			COALESCE(city, '') as city,
+			COALESCE(state, '') as state
+		FROM xcentro.payee_vendor
+		WHERE payee_id = $1
+	`
+
+	err := r.querier.QueryRow(ctx, vendorQuery, payeeID).Scan(
+		&details.GSTIN,
+		&details.LegalName,
+		&details.GSTStatus,
+		&details.City,
+		&details.State,
+	)
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch vendor details: %w", err)
+	}
+
+	// Get bank account details
+	bankQuery := `
+		SELECT
+			account_number_encrypted,
+			ifsc_code,
+			bank_name,
+			COALESCE(branch_name, '') as branch_name,
+			account_type,
+			account_holder_name,
+			is_verified,
+			is_primary
+		FROM xcentro.payee_bank_accounts
+		WHERE account_id = $1
+	`
+
+	var bankDetails payee.PayeeBankDetails
+	err = r.querier.QueryRow(ctx, bankQuery, accountID).Scan(
+		&bankDetails.AccountNumber,
+		&bankDetails.IFSCCode,
+		&bankDetails.BankName,
+		&bankDetails.BranchName,
+		&bankDetails.AccountType,
+		&bankDetails.AccountHolderName,
+		&bankDetails.IsVerified,
+		&bankDetails.IsPrimary,
+	)
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch bank details: %w", err)
+	}
+
+	details.BankDetails = &bankDetails
+	return details, nil
+}
+
+// fetchEmployeeDetails populates employee-specific fields and bank details
+func (r *PgBusinessPayeeRelationRepository) fetchEmployeeDetails(ctx context.Context, details *payee.PayeeFullDetails, payeeID, accountID string) (*payee.PayeeFullDetails, error) {
+	// Get employee details
+	employeeQuery := `
+		SELECT
+			pan,
+			full_name,
+			COALESCE(employee_code, '') as employee_code,
+			COALESCE(designation, '') as designation,
+			COALESCE(department, '') as department,
+			COALESCE(employment_type, '') as employment_type
+		FROM xcentro.payee_employee
+		WHERE payee_id = $1
+	`
+
+	err := r.querier.QueryRow(ctx, employeeQuery, payeeID).Scan(
+		&details.PAN,
+		&details.FullName,
+		&details.EmployeeCode,
+		&details.Designation,
+		&details.Department,
+		&details.EmploymentType,
+	)
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch employee details: %w", err)
+	}
+
+	// Get bank account details
+	bankQuery := `
+		SELECT
+			account_number_encrypted,
+			ifsc_code,
+			bank_name,
+			COALESCE(branch_name, '') as branch_name,
+			account_type,
+			account_holder_name,
+			is_verified,
+			is_primary
+		FROM xcentro.payee_bank_accounts
+		WHERE account_id = $1
+	`
+
+	var bankDetails payee.PayeeBankDetails
+	err = r.querier.QueryRow(ctx, bankQuery, accountID).Scan(
+		&bankDetails.AccountNumber,
+		&bankDetails.IFSCCode,
+		&bankDetails.BankName,
+		&bankDetails.BranchName,
+		&bankDetails.AccountType,
+		&bankDetails.AccountHolderName,
+		&bankDetails.IsVerified,
+		&bankDetails.IsPrimary,
+	)
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch bank details: %w", err)
+	}
+
+	details.BankDetails = &bankDetails
+	return details, nil
+}
+
+// fetchBillerDetails populates biller-specific fields (no bank details for billers)
+func (r *PgBusinessPayeeRelationRepository) fetchBillerDetails(ctx context.Context, details *payee.PayeeFullDetails, payeeID, accountID string) (*payee.PayeeFullDetails, error) {
+	// Get biller details
+	billerQuery := `
+		SELECT
+			biller_name,
+			biller_category
+		FROM xcentro.payee_biller
+		WHERE payee_id = $1
+	`
+
+	err := r.querier.QueryRow(ctx, billerQuery, payeeID).Scan(
+		&details.BillerName,
+		&details.BillerCategory,
+	)
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch biller details: %w", err)
+	}
+
+	// Get biller account configuration
+	billerAccountQuery := `
+		SELECT
+			mobile_number,
+			COALESCE(last_bill_amount, 0) as last_bill_amount,
+			COALESCE(last_bill_due_date::text, '') as last_bill_due_date
+		FROM xcentro.payee_biller_accounts
+		WHERE biller_account_id = $1
+	`
+
+	var lastBillAmountPaise int64
+	err = r.querier.QueryRow(ctx, billerAccountQuery, accountID).Scan(
+		&details.MobileNumber,
+		&lastBillAmountPaise,
+		&details.LastBillDueDate,
+	)
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch biller account details: %w", err)
+	}
+
+	// Convert paise to rupees
+	details.LastBillAmount = float64(lastBillAmountPaise) / 100.0
+
+	return details, nil
+}

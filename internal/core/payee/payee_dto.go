@@ -262,3 +262,57 @@ type VendorDropdownListResponse struct {
 	Vendors []*VendorDropdownItem `json:"vendors"`
 	Count   int                   `json:"count"`
 }
+
+// ############################################################################
+// # Payee Full Details (Polymorphic Response by Relation ID)
+// ############################################################################
+
+// PayeeFullDetails represents complete payee information for a relation
+// Polymorphic - fields populated based on payee_type
+type PayeeFullDetails struct {
+	// Common fields (from business_payee_relation)
+	RelationID   string   `json:"relation_id"`
+	PayeeType    string   `json:"payee_type"` // vendor, employee, biller
+	DisplayName  string   `json:"display_name"`
+	ContactEmail string   `json:"contact_email,omitempty"`
+	ContactPhone string   `json:"contact_phone,omitempty"`
+	Tags         []string `json:"tags,omitempty"`
+	IsFavorite   bool     `json:"is_favorite"`
+
+	// Vendor-specific fields
+	GSTIN      string `json:"gstin,omitempty"`       // Vendor only
+	LegalName  string `json:"legal_name,omitempty"`  // Vendor only
+	GSTStatus  string `json:"gst_status,omitempty"`  // Vendor only
+	City       string `json:"city,omitempty"`        // Vendor only
+	State      string `json:"state,omitempty"`       // Vendor only
+
+	// Employee-specific fields
+	PAN            string `json:"pan,omitempty"`             // Employee only
+	FullName       string `json:"full_name,omitempty"`       // Employee only
+	EmployeeCode   string `json:"employee_code,omitempty"`   // Employee only
+	Designation    string `json:"designation,omitempty"`     // Employee only
+	Department     string `json:"department,omitempty"`      // Employee only
+	EmploymentType string `json:"employment_type,omitempty"` // Employee only
+
+	// Biller-specific fields
+	BillerName        string  `json:"biller_name,omitempty"`         // Biller only
+	BillerCategory    string  `json:"biller_category,omitempty"`     // Biller only
+	MobileNumber      string  `json:"mobile_number,omitempty"`       // Biller only
+	LastBillAmount    float64 `json:"last_bill_amount,omitempty"`    // Biller only (in rupees)
+	LastBillDueDate   string  `json:"last_bill_due_date,omitempty"`  // Biller only
+
+	// Bank details (for vendor and employee only, not for biller)
+	BankDetails *PayeeBankDetails `json:"bank_details,omitempty"`
+}
+
+// PayeeBankDetails represents bank account information
+type PayeeBankDetails struct {
+	AccountNumber     string `json:"account_number"`
+	IFSCCode          string `json:"ifsc_code"`
+	BankName          string `json:"bank_name"`
+	BranchName        string `json:"branch_name,omitempty"`
+	AccountType       string `json:"account_type"` // savings, current, cc, od
+	AccountHolderName string `json:"account_holder_name"`
+	IsVerified        bool   `json:"is_verified"`
+	IsPrimary         bool   `json:"is_primary"`
+}

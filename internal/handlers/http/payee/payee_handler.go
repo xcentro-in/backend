@@ -201,24 +201,35 @@ func (h *PayeeHandler) GetPayees(c echo.Context) error {
 	})
 }
 
-// GetPayeeDetails handles GET /payees/:payee_id/accounts/:account_id - Get detailed payee information
+// GetPayeeDetails handles GET /payees/details/:relation_id - Get detailed payee information by relation_id
+// Returns polymorphic response (vendor/employee/biller) with complete details including bank info
 func (h *PayeeHandler) GetPayeeDetails(c echo.Context) error {
 	fmt.Println("=== HANDLER: GetPayeeDetails API Called ===")
 
-	// Extract path parameters
-	payeeID := c.Param("payee_id")
-	accountID := c.Param("account_id")
+	// Extract relation_id from path parameter
+	relationID := c.Param("relation_id")
+	if relationID == "" {
+		fmt.Println("❌ Missing relation_id path parameter")
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "invalid_request",
+			"message": "relation_id path parameter is required",
+		})
+	}
 
-	fmt.Printf("📥 Path params: payee_id=%s, account_id=%s\n", payeeID, accountID)
+	// Extract business_id from X-Business-ID header
+	businessID := c.Request().Header.Get("X-Business-ID")
+	if businessID == "" {
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "MISSING_BUSINESS_ID",
+			"message": "X-Business-ID header is required",
+		})
+	}
 
-	// Extract business_id from JWT
-	// TODO: Extract from JWT token claims
-	businessID := "bid12345"
-	fmt.Printf("🔐 Business ID (from JWT): %s\n", businessID)
+	fmt.Printf("📥 Path param: relation_id=%s, Business ID (from header): %s\n", relationID, businessID)
 
-	// Call payee service
+	// Call payee service with business_id validation
 	fmt.Println("🔄 Calling Payee Service...")
-	details, err := h.payeeService.GetPayeeDetails(c.Request().Context(), businessID, payeeID, accountID)
+	details, err := h.payeeService.GetPayeeDetailsByRelation(c.Request().Context(), businessID, relationID)
 	if err != nil {
 		fmt.Printf("❌ Fetch error: %v\n", err)
 		return c.JSON(http.StatusNotFound, map[string]any{
@@ -231,9 +242,8 @@ func (h *PayeeHandler) GetPayeeDetails(c echo.Context) error {
 	fmt.Println("=== HANDLER: GetPayeeDetails Complete ===")
 
 	return c.JSON(http.StatusOK, map[string]any{
-		"message": "Payee details retrieved successfully",
-		"status":  "success",
-		"data":    details,
+		"status": "success",
+		"data":   details,
 	})
 }
 
