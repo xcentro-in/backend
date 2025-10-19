@@ -1,7 +1,7 @@
 // XCentro Backend Database Schema
-// Generated from migrations 000001-000005
+// Generated from migrations 000001-000015
 // Schema: xcentro
-// Last updated: 2025-10-04 (Phase 6 Complete)
+// Last updated: 2025-10-19 (Complete Schema)
 
 // =============================================================================
 // ENUMS
@@ -10,6 +10,7 @@
 Enum "verification_type" {
   "email_verification"
   "mobile_verification"
+  "password_reset"
 }
 
 Enum "kyc_status_enum" {
@@ -24,8 +25,9 @@ Enum "kyc_status_enum" {
 Enum "user_role_enum" {
   "owner"
   "admin"
-  "finance"
-  "support"
+  "manager"
+  "auditor"
+  "none"
 }
 
 Enum "business_type_enum" {
@@ -119,6 +121,65 @@ Enum "bank_account_type_enum" {
   "od"
 }
 
+Enum "settlement_status_enum" {
+  "pending"
+  "settled"
+  "failed"
+  "refunded"
+}
+
+Enum "cancellation_status_enum" {
+  "not_cancelled"
+  "cancellation_requested"
+  "cancelled"
+}
+
+Enum "refund_status_enum" {
+  "not_applicable"
+  "pending"
+  "initiated"
+  "completed"
+  "failed"
+}
+
+Enum "payee_onboarding_status_enum" {
+  "not_onboarded"
+  "pending"
+  "active"
+  "failed"
+  "suspended"
+  "deactivated"
+}
+
+Enum "payout_provider_enum" {
+  "castler"
+  "razorpay"
+  "bank_api"
+}
+
+Enum "payout_transfer_status_enum" {
+  "pending_approval"
+  "approved"
+  "initiated"
+  "processing"
+  "completed"
+  "failed"
+  "cancelled"
+  "timeout"
+}
+
+Enum "fee_type_enum" {
+  "percentage"
+  "fixed"
+  "hybrid"
+}
+
+Enum "payment_type" {
+  "payment"
+  "tokenization"
+  "refund"
+}
+
 // =============================================================================
 // USER & IDENTITY TABLES
 // =============================================================================
@@ -136,11 +197,14 @@ Table "user_identity" {
 
 Table "user_table" {
   "id" uuid [pk, default: `uuidv7()`]
+  "name" text
+  "dob" date
   "email" varchar(254) [unique, not null]
   "pwd_hash" text [not null]
   "mobile" varchar(20)
   "tax_id" text [ref: > user_identity.tax_id]
   "kyc_status" kyc_status_enum [not null, default: 'kyc_not_started']
+  "kyc_needed" boolean [default: true]
   "email_verified" boolean [default: false]
   "mobile_verified" boolean [default: false]
   "created_at" timestamptz [default: `NOW()`]
@@ -157,6 +221,22 @@ Table "user_verification_codes" {
   "created_at" timestamptz [default: `NOW()`]
   "used" boolean [default: false]
   "retry_attempts" integer [default: 0]
+}
+
+Table "user_tokens" {
+  "session_id" uuid [pk, default: `gen_random_uuid()`]
+  "user_id" uuid [not null, ref: > user_table.id, note: 'ON DELETE CASCADE']
+  "refresh_token_hash" text [not null]
+  "expires_at" timestamptz [not null]
+  "created_at" timestamptz [default: `NOW()`]
+  "last_used_at" timestamptz [default: `NOW()`]
+  "user_agent" text
+
+  indexes {
+    (user_id, refresh_token_hash) [name: 'idx_user_tokens_user_token']
+    expires_at [name: 'idx_user_tokens_expires_at']
+  }
+  Note: 'JWT refresh token tracking'
 }
 
 // =============================================================================
@@ -180,6 +260,8 @@ Table "business" {
   "income_tax_id" text [ref: > kyb_data.income_tax_id]
   "kyb_status" kyc_status_enum [default: 'kyc_not_started']
   "business_type" business_type_enum
+  "business_model" text
+  "business_turnover" text
   "country_code" varchar(3)
   "currency_code" varchar(3)
   "updated_at" timestamptz
@@ -192,6 +274,7 @@ Table "business_user_relation" {
   "role" user_role_enum
   "role_claim" user_role_enum
   "kyb_initiated" boolean [default: false]
+  "kyc_needed" boolean [default: true]
   "added_at" timestamptz [default: `NOW()`]
   "updated_at" timestamptz
 
@@ -277,11 +360,51 @@ Table "payments" {
   "metadata" jsonb [note: 'Gateway responses, payment attempts, failure reasons']
   "created_at" timestamptz [default: `NOW()`]
   "updated_at" timestamptz
+  "settlement_status" settlement_status_enum [default: 'pending']
+  "settled_at" timestamptz
+  "settlement_reference_id" varchar(255)
+  "settlement_utr" varchar(100)
+  "settlement_metadata" jsonb
+  "settlement_amount" bigint [note: 'Actual amount settled by gateway']
+  "mdr_amount" bigint [default: 0, note: 'Merchant Discount Rate - gateway fees']
+  "net_settlement_amount" bigint [note: 'Final amount received after all deductions']
+  "payment_type" payment_type [not null, default: 'payment']
 
   indexes {
     (gateway_payment_id) [unique, name: 'idx_payments_gateway_payment_id_unique', note: 'WHERE gateway_payment_id IS NOT NULL']
+    (settlement_status, settled_at) [name: 'idx_payments_settlement']
+    (business_id, settlement_status, settlement_amount, total_amount) [name: 'idx_payments_settlement_amounts']
+    (gateway_used, settled_at, mdr_amount) [name: 'idx_payments_mdr_tracking']
+    payment_type [name: 'idx_payments_payment_type']
   }
-  Note: 'Main payment transaction records with gateway routing and fee tracking'
+  Note: 'Main payment transaction records with gateway routing, fee tracking, and settlement'
+}
+
+Table "payment_fee_rules" {
+  "rule_id" uuid [pk, default: `uuidv7()`]
+  "payment_method" payment_method_enum [not null]
+  "card_type" card_type_enum [note: 'NULL = applies to all card types']
+  "card_category" card_category_enum [note: 'NULL = applies to all categories']
+  "fee_type" fee_type_enum [not null]
+  "percentage_fee" "decimal(5,2)" [note: 'e.g., 1.90 for 1.9%']
+  "fixed_fee" bigint [default: 0, note: 'in paise (e.g., 2800 for ₹28)']
+  "min_fee" bigint [default: 0]
+  "max_fee" bigint
+  "gst_percentage" "decimal(5,2)" [default: 18.00]
+  "gst_applicable" boolean [default: true]
+  "priority" int [default: 0, note: 'higher priority rules take precedence']
+  "is_active" boolean [default: true]
+  "effective_from" timestamptz [not null, default: `NOW()`]
+  "effective_until" timestamptz
+  "created_at" timestamptz [not null, default: `NOW()`]
+  "created_by" uuid [ref: > user_table.id]
+  "updated_at" timestamptz [default: `NOW()`]
+
+  indexes {
+    (is_active, effective_from) [name: 'idx_fee_rules_active']
+    (payment_method, card_type, card_category, priority) [name: 'idx_fee_rules_lookup']
+  }
+  Note: 'Configurable convenience fee rules for payment methods - enables quarterly fee updates without code deployment'
 }
 
 // =============================================================================
@@ -441,6 +564,7 @@ Table "payee_bank_accounts" {
 }
 
 Table "business_payee_relation" {
+  "relation_id" uuid [pk, note: 'Surrogate key for simplified frontend API']
   "business_id" uuid [not null, ref: > business.bid, note: 'ON DELETE CASCADE']
   "payee_id" uuid [not null, ref: > payee_master.payee_id, note: 'ON DELETE CASCADE']
   "account_id" uuid [not null, note: 'Polymorphic: bank/virtual/biller account']
@@ -459,9 +583,37 @@ Table "business_payee_relation" {
   "metadata" jsonb
 
   indexes {
-    (business_id, payee_id, account_id) [pk]
+    (business_id, payee_id, account_id) [unique, name: 'business_payee_relation_business_payee_account_key']
+    business_id [name: 'idx_business_payee_relation_business_id']
+    payee_id [name: 'idx_business_payee_relation_payee_id']
   }
   Note: 'Customer-payee relationships (polymorphic - all payee types)'
+}
+
+Table "payee_provider_mappings" {
+  "mapping_id" uuid [pk, default: `uuidv7()`]
+  "payee_id" uuid [not null, ref: > payee_master.payee_id, note: 'ON DELETE RESTRICT']
+  "account_id" uuid [not null, ref: > payee_bank_accounts.account_id, note: 'ON DELETE RESTRICT']
+  "provider" payout_provider_enum [not null]
+  "provider_beneficiary_id" varchar(255) [note: 'Provider-generated beneficiary ID (e.g., Castler beneficiary_id, Razorpay contact_id)']
+  "provider_account_id" varchar(255)
+  "onboarding_status" payee_onboarding_status_enum [not null, default: 'not_onboarded']
+  "onboarded_at" timestamptz
+  "onboarding_error_code" varchar(100)
+  "onboarding_error_message" text
+  "provider_metadata" jsonb [note: 'Provider-specific metadata (Castler: beneficiary details, Razorpay: contact info, etc.)']
+  "created_at" timestamptz [not null, default: `NOW()`]
+  "created_by" uuid [ref: > user_table.id]
+  "updated_at" timestamptz [default: `NOW()`]
+  "last_synced_at" timestamptz
+
+  indexes {
+    (payee_id, account_id, provider) [unique]
+    (payee_id, account_id) [name: 'idx_provider_mappings_payee_account']
+    (provider, onboarding_status) [name: 'idx_provider_mappings_provider']
+    (onboarding_status, created_at) [name: 'idx_provider_mappings_pending']
+  }
+  Note: 'Maps payees to payout providers (Castler, Razorpay, etc.) - supports multi-provider routing'
 }
 
 // =============================================================================
@@ -510,19 +662,31 @@ Table "payment_vouchers" {
   "cost_center" varchar(50)
   "erp_metadata" jsonb [note: 'Vendor-specific ERP fields']
   "payout_status" varchar(50) [default: 'pending', note: 'pending→initiated→completed→failed']
-  "payout_initiated_at" timestamptz
+  "payout_initiated_at" timestamp
   "payout_initiated_by" uuid [ref: > user_table.id, note: 'Operations user']
-  "payout_completed_at" timestamptz
+  "payout_completed_at" timestamp
   "payout_reference_id" varchar(255) [note: 'Payout gateway txn ID']
   "payout_utr" varchar(100) [note: 'Bank UTR for reconciliation']
   "payout_metadata" jsonb
+  "cancellation_status" cancellation_status_enum [default: 'not_cancelled']
+  "cancellation_requested_at" timestamptz
+  "cancellation_requested_by" uuid [ref: > user_table.id]
+  "cancellation_reason" text
+  "cancellation_approved_at" timestamptz
+  "cancellation_approved_by" uuid [ref: > user_table.id]
+  "refund_status" refund_status_enum [default: 'not_applicable']
+  "refund_initiated_at" timestamptz
+  "refund_reference_id" varchar(255)
+  "refund_metadata" jsonb
   "created_at" timestamptz [not null, default: `NOW()`]
   "created_by_user_id" uuid [ref: > user_table.id, note: 'ON DELETE SET NULL']
   "updated_at" timestamptz
   "metadata" jsonb
 
   indexes {
-    (business_id, payee_id, account_id) [name: 'fk_business_payee_relation']
+    (payout_status, payee_id) [name: 'idx_vouchers_payout_pending']
+    (payee_id, payout_completed_at) [name: 'idx_vouchers_payout_history']
+    (cancellation_status, cancellation_requested_at) [name: 'idx_vouchers_cancellation']
   }
   Note: 'Payment vouchers for accounting and ERP integration (draft-first approach)'
 }
@@ -563,4 +727,76 @@ Table "erp_sync_queue" {
   "started_at" timestamptz
   "completed_at" timestamptz
   Note: 'Async queue for ERP synchronization workers'
+}
+
+// =============================================================================
+// PAYOUT SYSTEM TABLES
+// =============================================================================
+
+Table "payout_transfer_requests" {
+  "transfer_request_id" uuid [pk, default: `uuidv7()`]
+  "voucher_id" uuid [not null, unique, ref: > payment_vouchers.voucher_id, note: 'ON DELETE RESTRICT']
+  "provider" varchar(50) [not null]
+  "provider_beneficiary_id" varchar(255) [not null]
+  "provider_transfer_id" varchar(255) [note: 'Castler transfer ID (set after initiation)']
+  "amount" bigint [not null]
+  "currency" varchar(3) [not null, default: 'INR']
+  "purpose" varchar(255)
+  "reference" varchar(255)
+  "narration" text
+  "transfer_mode" varchar(50) [note: 'NEFT, RTGS, IMPS']
+  "requires_approval" boolean [not null, default: false]
+  "approval_mode" varchar(20) [note: 'auto, manual']
+  "approved_by" uuid [ref: > user_table.id]
+  "approved_at" timestamptz
+  "status" payout_transfer_status_enum [not null, default: 'approved']
+  "initiated_at" timestamptz
+  "processing_at" timestamptz
+  "completed_at" timestamptz
+  "failed_at" timestamptz
+  "failure_reason" text
+  "utr" varchar(100) [note: 'Bank UTR from webhook']
+  "retry_count" int [not null, default: 0]
+  "max_retries" int [not null, default: 3]
+  "next_retry_at" timestamptz
+  "last_retry_at" timestamptz
+  "last_webhook_at" timestamptz
+  "webhook_timeout_at" timestamptz [note: 'Flag if no webhook received']
+  "webhook_history" "jsonb[]" [note: 'Array of all webhook payloads']
+  "provider_metadata" jsonb
+  "created_at" timestamptz [not null, default: `NOW()`]
+  "updated_at" timestamptz [default: `NOW()`]
+
+  indexes {
+    voucher_id [name: 'idx_payout_transfers_voucher']
+    status [name: 'idx_payout_transfers_status']
+    provider_transfer_id [name: 'idx_payout_transfers_provider_transfer_id']
+    (status, amount) [name: 'idx_payout_pending_approval']
+    (status, created_at) [name: 'idx_payout_approved']
+    (status, initiated_at) [name: 'idx_payout_initiated']
+    webhook_timeout_at [name: 'idx_payout_timeout']
+    (next_retry_at, retry_count) [name: 'idx_payout_retry']
+  }
+  Note: 'Audit trail for all payout transfer attempts with webhook-driven status updates'
+}
+
+Table "payout_configuration" {
+  "config_id" uuid [pk, default: `uuidv7()`]
+  "business_id" uuid [unique, ref: > business.bid, note: 'NULL = global default, specific UUID = per-business']
+  "auto_approval_enabled" boolean [not null, default: true]
+  "auto_approval_limit" bigint [not null, default: 20000000, note: '₹2,00,000 in paise']
+  "preferred_transfer_mode" varchar(50) [not null, default: 'NEFT']
+  "max_retry_attempts" int [not null, default: 3]
+  "retry_delay_minutes" int [not null, default: 15]
+  "retry_backoff_multiplier" "decimal(3,1)" [not null, default: 2.0]
+  "webhook_timeout_minutes" int [not null, default: 60]
+  "batch_size" int [not null, default: 100]
+  "worker_enabled" boolean [not null, default: true]
+  "created_at" timestamptz [not null, default: `NOW()`]
+  "updated_at" timestamptz [default: `NOW()`]
+
+  indexes {
+    business_id [name: 'idx_payout_config_business']
+  }
+  Note: 'Payout system configuration including auto-approval limits and retry settings'
 }
