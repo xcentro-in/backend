@@ -21,6 +21,7 @@ import (
 	"xcentro.in/internal/core/shared"
 	"xcentro.in/internal/core/user"
 	"xcentro.in/internal/services/verification"
+	sharedClients "xcentro.in/internal/shared/clients"
 	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/logger"
 	"xcentro.in/internal/shared/types"
@@ -37,29 +38,30 @@ type UserServiceImpl struct {
 	config              *config.Config
 	rclient             *redisClient.RedisClient
 	logger              *logger.Logger
+	// metrics can be added here when needed: metrics metrics.MetricsProvider
 }
 
 // NewUserService creates a new user service with dependency injection
+// Accept repositories directly (already created), clients for extracting what we need, and config
 func NewUserService(
 	userRepo *userRepo.PgUserRepository,
 	businessRepo businessRepo.BusinessRepository,
 	businessUserRelRepo businessRepo.BusinessUserRelationRepository,
-	txManager client.TxManager,
-	emailService mailers.EmailService,
 	verificationService *verification.DocumentVerificationService,
-	config *config.Config,
-	rclient *redisClient.RedisClient,
+	clients sharedClients.ExternalClients, // Extract needed clients from here
+	cfg *config.Config,
 ) user.UserService {
 	return &UserServiceImpl{
 		userRepo:            userRepo,
 		businessRepo:        businessRepo,
 		businessUserRelRepo: businessUserRelRepo,
-		txManager:           txManager,
-		emailService:        emailService,
+		txManager:           clients.GetTxManager(),       // Extract from clients
+		emailService:        clients.GetEmailService(),    // Extract from clients
 		verificationService: verificationService,
-		config:              config,
-		rclient:             rclient,
+		config:              cfg,
+		rclient:             clients.GetRedisClient(),     // Extract from clients
 		logger:              logger.GetDefault(),
+		// When needed: metrics: clients.GetMetrics().(metrics.MetricsProvider),
 	}
 }
 

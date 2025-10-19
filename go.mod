@@ -10,7 +10,7 @@ require (
 	github.com/jackc/pgx/v5 v5.7.6
 	github.com/labstack/echo/v4 v4.13.4
 	github.com/lib/pq v1.10.9
-	github.com/redis/go-redis/v9 v9.14.0
+	github.com/redis/go-redis/v9 v9.14.1
 )
 
 require (
@@ -44,6 +44,7 @@ require (
 require (
 	github.com/aws/aws-sdk-go-v2 v1.39.3
 	github.com/aws/aws-sdk-go-v2/config v1.31.13
+	github.com/aws/aws-sdk-go-v2/service/cloudwatch v1.51.2
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.88.5
 	github.com/aws/aws-sdk-go-v2/service/ses v1.34.6
 	github.com/ilyakaznacheev/cleanenv v1.5.0

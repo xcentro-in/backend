@@ -30,9 +30,10 @@ import (
 	"xcentro.in/internal/services/user"
 	"xcentro.in/internal/services/verification"
 	voucherSvc "xcentro.in/internal/services/voucher"
+	"xcentro.in/internal/shared/config"
 )
 
-func registerV1AuthRoutes(meta *serverMetaData, group *echo.Group) {
+func registerV1AuthRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
 	// Create verification service
 	verificationService, err := verification.NewDocumentVerificationService()
 	if err != nil {
@@ -40,89 +41,85 @@ func registerV1AuthRoutes(meta *serverMetaData, group *echo.Group) {
 	}
 
 	// Create repositories
-	userRepository := userRepo.NewPgUserRepository(meta.clients.db)
-	sessionRepo := authRepo.NewPgSessionRepository(meta.clients.db)
+	userRepository := userRepo.NewPgUserRepository(clients.db)
+	sessionRepo := authRepo.NewPgSessionRepository(clients.db)
 
-	// Create business service
+	// Create business service - pass clients and config
 	busSvc := businessSvc.NewBusinessService(
-		business.NewPgBusinessRepository(meta.clients.db),
-		business.NewPgBusinessUserRelationRepository(meta.clients.db),
+		business.NewPgBusinessRepository(clients.db),
+		business.NewPgBusinessUserRelationRepository(clients.db),
 		userRepository,
-		meta.clients.txManager,
-		meta.clients.rcache,
+		clients,
+		cfg,
 	)
 
-	// Create user service
+	// Create user service - pass clients and config
 	userService := user.NewUserService(
 		userRepository,
-		business.NewPgBusinessRepository(meta.clients.db),
-		business.NewPgBusinessUserRelationRepository(meta.clients.db),
-		meta.clients.txManager,
-		meta.clients.emailService,
+		business.NewPgBusinessRepository(clients.db),
+		business.NewPgBusinessUserRelationRepository(clients.db),
 		verificationService,
-		&meta.config,
-		meta.clients.rcache,
+		clients,
+		cfg,
 	)
 
-	// Create auth service with all dependencies
+	// Create auth service - pass clients and config
 	authService := authservice.NewAuthService(
-		&meta.config.JWT,
-		meta.clients.rcache,
 		sessionRepo,
 		userRepository,
 		userService,
 		busSvc,
-		meta.clients.emailService,
-		&meta.config,
+		clients,
+		cfg,
 	)
 
 	// Register auth routes
-	auth.RegisterAuthRoutes(group, authService, &meta.config)
+	auth.RegisterAuthRoutes(group, authService, cfg)
 }
 
-func registerV1PaymentRoutes(meta *serverMetaData, group *echo.Group) {
+func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
 	// Create payment repository instances (Phase 4.2)
-	paymentRepository := paymentRepo.NewPgPaymentRepository(meta.clients.db)
-	storedCardRepository := paymentRepo.NewPgStoredCardRepository(meta.clients.db)
-	bankAccountRepository := paymentRepo.NewPgBankAccountRepository(meta.clients.db)
+	paymentRepository := paymentRepo.NewPgPaymentRepository(clients.db)
+	storedCardRepository := paymentRepo.NewPgStoredCardRepository(clients.db)
+	bankAccountRepository := paymentRepo.NewPgBankAccountRepository(clients.db)
 
 	// Create real payment gateway clients
 	easebuzzClient := easebuzz.NewEasebuzzClient(
-		meta.config.Easebuzz.BaseURL,
-		meta.config.Easebuzz.MerchantKey,
-		meta.config.Easebuzz.Salt,
-		meta.config.Easebuzz.APIKey,
+		cfg.Easebuzz.BaseURL,
+		cfg.Easebuzz.MerchantKey,
+		cfg.Easebuzz.Salt,
+		cfg.Easebuzz.APIKey,
 	)
 
 	jioPayClient := jiopay.NewJioPayClient(
-		meta.config.JioPay.BaseURL,
-		meta.config.JioPay.TokenizationBaseURL,
-		meta.config.JioPay.MerchantID,
-		meta.config.JioPay.APIKey,
-		meta.config.JioPay.AppID,
-		meta.config.JioPay.EncryptionKey,
+		cfg.JioPay.BaseURL,
+		cfg.JioPay.TokenizationBaseURL,
+		cfg.JioPay.MerchantID,
+		cfg.JioPay.APIKey,
+		cfg.JioPay.AppID,
+		cfg.JioPay.EncryptionKey,
 	)
 
 	// Create business rules services
 	orchestrator := corePayment.NewMockPaymentOrchestrator(paymentRepository, storedCardRepository, jioPayClient, easebuzzClient)
 	feeCalculator := business_rules.NewMockFeeCalculator()
-	walletService := business_rules.NewMockWalletService(storedCardRepository, bankAccountRepository, meta.clients.txManager)
+	walletService := business_rules.NewMockWalletService(storedCardRepository, bankAccountRepository, clients.txManager)
 
 	// Phase 10: Create database-backed fee calculator
-	feeRulesRepository := paymentRepo.NewPostgresFeeRulesRepository(meta.clients.db)
+	feeRulesRepository := paymentRepo.NewPostgresFeeRulesRepository(clients.db)
 	databaseFeeCalculator := business_rules.NewDatabaseFeeCalculator(feeRulesRepository)
 
 	// Phase 10: Create payment source service
 	paymentSourceService := payments.NewPaymentSourceService(walletService, databaseFeeCalculator)
 
 	// PHASE 6: Create voucher service for payment integration
-	voucherRepository := voucherRepo.NewPostgresVoucherRepository(meta.clients.db)
-	approvalRepository := voucherRepo.NewPostgresApprovalRepository(meta.clients.db)
-	queueRepository := voucherRepo.NewPostgresERPSyncQueueRepository(meta.clients.db)
+	voucherRepository := voucherRepo.NewPostgresVoucherRepository(clients.db)
+	approvalRepository := voucherRepo.NewPostgresApprovalRepository(clients.db)
+	queueRepository := voucherRepo.NewPostgresERPSyncQueueRepository(clients.db)
 	voucherCoreService := coreVoucher.NewVoucherService(voucherRepository)
 
 	// Create business-payee relation repository for voucher relation_id resolution
-	businessPayeeRelationRepo := payeeRepo.NewPgBusinessPayeeRelationRepository(meta.clients.db)
+	businessPayeeRelationRepo := payeeRepo.NewPgBusinessPayeeRelationRepository(clients.db)
 
 	voucherService := voucherSvc.NewVoucherService(
 		voucherRepository,
@@ -140,7 +137,7 @@ func registerV1PaymentRoutes(meta *serverMetaData, group *echo.Group) {
 		bankAccountRepository,
 		walletService,
 		feeCalculator,
-		meta.clients.txManager,
+		clients.txManager,
 		voucherService, // PHASE 6: Inject voucher service
 	)
 
@@ -179,7 +176,7 @@ func registerV1PaymentRoutes(meta *serverMetaData, group *echo.Group) {
 	webhookGroup.POST("/settlement_status", webhookHandler.HandleSettlementStatusWebhook)
 }
 
-func registerV1BusinessRoutes(meta *serverMetaData, group *echo.Group) {
+func registerV1BusinessRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
 	// Create verification service
 	verificationService, err := verification.NewDocumentVerificationService()
 	if err != nil {
@@ -187,47 +184,43 @@ func registerV1BusinessRoutes(meta *serverMetaData, group *echo.Group) {
 	}
 
 	// Create repositories
-	userRepository := userRepo.NewPgUserRepository(meta.clients.db)
-	sessionRepo := authRepo.NewPgSessionRepository(meta.clients.db)
+	userRepository := userRepo.NewPgUserRepository(clients.db)
+	sessionRepo := authRepo.NewPgSessionRepository(clients.db)
 
-	// Create user service
+	// Create user service - pass clients and config
 	userService := user.NewUserService(
 		userRepository,
-		business.NewPgBusinessRepository(meta.clients.db),
-		business.NewPgBusinessUserRelationRepository(meta.clients.db),
-		meta.clients.txManager,
-		meta.clients.emailService,
+		business.NewPgBusinessRepository(clients.db),
+		business.NewPgBusinessUserRelationRepository(clients.db),
 		verificationService,
-		&meta.config,
-		meta.clients.rcache,
+		clients,
+		cfg,
 	)
 
-	// Create business service
+	// Create business service - pass clients and config
 	busSvc := businessSvc.NewBusinessService(
-		business.NewPgBusinessRepository(meta.clients.db),
-		business.NewPgBusinessUserRelationRepository(meta.clients.db),
+		business.NewPgBusinessRepository(clients.db),
+		business.NewPgBusinessUserRelationRepository(clients.db),
 		userRepository,
-		meta.clients.txManager,
-		meta.clients.rcache,
+		clients,
+		cfg,
 	)
 
-	// Create auth service with all dependencies
+	// Create auth service - pass clients and config
 	authService := authservice.NewAuthService(
-		&meta.config.JWT,
-		meta.clients.rcache,
 		sessionRepo,
 		userRepository,
 		userService,
 		busSvc,
-		meta.clients.emailService,
-		&meta.config,
+		clients,
+		cfg,
 	)
 
-	businessUserRelRepo := business.NewPgBusinessUserRelationRepository(meta.clients.db)
-	businessHandler.RegisterBusinessRoutes(group, busSvc, authService, userService, &meta.config.S3, businessUserRelRepo, meta.clients.rcache)
+	businessUserRelRepo := business.NewPgBusinessUserRelationRepository(clients.db)
+	businessHandler.RegisterBusinessRoutes(group, busSvc, authService, userService, &cfg.S3, businessUserRelRepo, clients.rcache)
 }
 
-func registerV1UserRoutes(meta *serverMetaData, group *echo.Group) {
+func registerV1UserRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
 	// Create verification service
 	verificationService, err := verification.NewDocumentVerificationService()
 	if err != nil {
@@ -235,49 +228,45 @@ func registerV1UserRoutes(meta *serverMetaData, group *echo.Group) {
 	}
 
 	// Create repositories
-	userRepository := userRepo.NewPgUserRepository(meta.clients.db)
-	sessionRepo := authRepo.NewPgSessionRepository(meta.clients.db)
+	userRepository := userRepo.NewPgUserRepository(clients.db)
+	sessionRepo := authRepo.NewPgSessionRepository(clients.db)
 
-	// Create user service
+	// Create user service - pass clients and config
 	userService := user.NewUserService(
 		userRepository,
-		business.NewPgBusinessRepository(meta.clients.db),
-		business.NewPgBusinessUserRelationRepository(meta.clients.db),
-		meta.clients.txManager,
-		meta.clients.emailService,
+		business.NewPgBusinessRepository(clients.db),
+		business.NewPgBusinessUserRelationRepository(clients.db),
 		verificationService,
-		&meta.config,
-		meta.clients.rcache,
+		clients,
+		cfg,
 	)
 
-	// Create business service
+	// Create business service - pass clients and config
 	busSvc := businessSvc.NewBusinessService(
-		business.NewPgBusinessRepository(meta.clients.db),
-		business.NewPgBusinessUserRelationRepository(meta.clients.db),
+		business.NewPgBusinessRepository(clients.db),
+		business.NewPgBusinessUserRelationRepository(clients.db),
 		userRepository,
-		meta.clients.txManager,
-		meta.clients.rcache,
+		clients,
+		cfg,
 	)
 
-	// Create auth service with all dependencies
+	// Create auth service - pass clients and config
 	authService := authservice.NewAuthService(
-		&meta.config.JWT,
-		meta.clients.rcache,
 		sessionRepo,
 		userRepository,
 		userService,
 		busSvc,
-		meta.clients.emailService,
-		&meta.config,
+		clients,
+		cfg,
 	)
 
-	businessUserRelRepo := business.NewPgBusinessUserRelationRepository(meta.clients.db)
-	userHandler.RegisterUserRoutes(group, userService, authService, businessUserRelRepo, meta.clients.rcache)
+	businessUserRelRepo := business.NewPgBusinessUserRelationRepository(clients.db)
+	userHandler.RegisterUserRoutes(group, userService, authService, businessUserRelRepo, clients.rcache)
 }
 
-func registerV1PayeeRoutes(meta *serverMetaData, group *echo.Group) {
+func registerV1PayeeRoutes(clients *externalClients, group *echo.Group) {
 	// Use factory pattern to create PayeeService with all dependencies
-	factory := payeeSvc.NewPayeeServiceFactory(meta.clients.db, meta.clients.txManager)
+	factory := payeeSvc.NewPayeeServiceFactory(clients.db, clients.txManager)
 	payeeService := factory.NewPayeeService()
 
 	// Register payee routes
@@ -285,17 +274,17 @@ func registerV1PayeeRoutes(meta *serverMetaData, group *echo.Group) {
 	payee.RegisterPayeeRoutes(payeeGroup, payeeService)
 }
 
-func registerV1VoucherRoutes(meta *serverMetaData, group *echo.Group) {
+func registerV1VoucherRoutes(clients *externalClients, group *echo.Group) {
 	// Create voucher repository instances
-	voucherRepository := voucherRepo.NewPostgresVoucherRepository(meta.clients.db)
-	approvalRepository := voucherRepo.NewPostgresApprovalRepository(meta.clients.db)
-	queueRepository := voucherRepo.NewPostgresERPSyncQueueRepository(meta.clients.db)
+	voucherRepository := voucherRepo.NewPostgresVoucherRepository(clients.db)
+	approvalRepository := voucherRepo.NewPostgresApprovalRepository(clients.db)
+	queueRepository := voucherRepo.NewPostgresERPSyncQueueRepository(clients.db)
 
 	// Create voucher core service (domain logic)
 	voucherCoreService := coreVoucher.NewVoucherService(voucherRepository)
 
 	// Create business-payee relation repository for voucher relation_id resolution
-	businessPayeeRelationRepo := payeeRepo.NewPgBusinessPayeeRelationRepository(meta.clients.db)
+	businessPayeeRelationRepo := payeeRepo.NewPgBusinessPayeeRelationRepository(clients.db)
 
 	// Create voucher service layer (orchestration)
 	voucherService := voucherSvc.NewVoucherService(
@@ -311,18 +300,18 @@ func registerV1VoucherRoutes(meta *serverMetaData, group *echo.Group) {
 	voucherHandler.RegisterVoucherRoutes(voucherGroup, voucherService)
 }
 
-func registerV1PayoutRoutes(meta *serverMetaData, group *echo.Group) {
+func registerV1PayoutRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
 	// Create payout repository instances
-	transferRepository := payoutRepo.NewPostgresPayoutTransferRepository(meta.clients.db)
-	configRepository := payoutRepo.NewPostgresPayoutConfigurationRepository(meta.clients.db)
-	mappingRepository := payoutRepo.NewPostgresPayoutProviderMappingRepository(meta.clients.db)
-	voucherRepository := voucherRepo.NewPostgresVoucherRepository(meta.clients.db)
+	transferRepository := payoutRepo.NewPostgresPayoutTransferRepository(clients.db)
+	configRepository := payoutRepo.NewPostgresPayoutConfigurationRepository(clients.db)
+	mappingRepository := payoutRepo.NewPostgresPayoutProviderMappingRepository(clients.db)
+	voucherRepository := voucherRepo.NewPostgresVoucherRepository(clients.db)
 
 	// Get webhook secret from configuration
-	webhookSecret := meta.config.Castler.WebhookSecret
+	webhookSecret := cfg.Castler.WebhookSecret
 
 	// Create provider factory
-	providerFactory := factory.NewPayoutProviderFactory(&meta.config)
+	providerFactory := factory.NewPayoutProviderFactory(cfg)
 
 	// Create payout service
 	payoutService := payoutSvc.NewPayoutService(
@@ -390,26 +379,30 @@ func registerV1Routes(s *xcentroServer) {
 		})
 	})
 
+	// Get references to clients and config
+	clients := &s.meta.clients
+	cfg := &s.meta.config
+
 	// Authentication Routes
-	registerV1AuthRoutes(&s.meta, v1)
+	registerV1AuthRoutes(clients, cfg, v1)
 
 	// Payment Routes
-	registerV1PaymentRoutes(&s.meta, v1)
+	registerV1PaymentRoutes(clients, cfg, v1)
 
 	// User Routes
-	registerV1UserRoutes(&s.meta, v1)
+	registerV1UserRoutes(clients, cfg, v1)
 
 	// Business Routes
-	registerV1BusinessRoutes(&s.meta, v1)
+	registerV1BusinessRoutes(clients, cfg, v1)
 
 	// Payee Routes
-	registerV1PayeeRoutes(&s.meta, v1)
+	registerV1PayeeRoutes(clients, v1)
 
 	// Voucher Routes
-	registerV1VoucherRoutes(&s.meta, v1)
+	registerV1VoucherRoutes(clients, v1)
 
 	// Payout Routes (Phase 9: Webhooks + Operations Dashboard)
-	registerV1PayoutRoutes(&s.meta, v1)
+	registerV1PayoutRoutes(clients, cfg, v1)
 }
 
 func registerRouters(s *xcentroServer) {

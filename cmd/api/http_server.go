@@ -3,12 +3,18 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	redis "xcentro.in/internal/adapters/cache/redis/client"
 	"xcentro.in/internal/adapters/database/postgres/client"
 	"xcentro.in/internal/adapters/providers/mailers"
+	metricsProvider "xcentro.in/internal/adapters/providers/metrics"
+	"xcentro.in/internal/core/metrics"
 	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/logger"
 )
@@ -18,6 +24,28 @@ type externalClients struct {
 	txManager    client.TxManager
 	rcache       *redis.RedisClient
 	emailService mailers.EmailService
+	metrics      metrics.MetricsProvider
+}
+
+// Getter methods for services to extract what they need
+func (e *externalClients) GetDB() client.DB {
+	return e.db
+}
+
+func (e *externalClients) GetTxManager() client.TxManager {
+	return e.txManager
+}
+
+func (e *externalClients) GetRedisClient() *redis.RedisClient {
+	return e.rcache
+}
+
+func (e *externalClients) GetEmailService() mailers.EmailService {
+	return e.emailService
+}
+
+func (e *externalClients) GetMetrics() interface{} {
+	return e.metrics
 }
 
 type serverMetaData struct {
@@ -115,6 +143,19 @@ func (s *xcentroServer) registerClients() {
 	}
 	s.log.Info("Email service created successfully")
 	s.meta.clients.emailService = emailService
+
+	// Metrics provider (CloudWatch)
+	metricsClient, err := metricsProvider.NewMetricsProvider(s.meta.config)
+	if err != nil {
+		s.log.Warnf("Failed to create metrics provider: %v (using no-op provider)", err)
+		metricsClient = metrics.NewNoOpMetricsProvider()
+	}
+	if s.meta.config.CloudWatch.Enabled {
+		s.log.Info("CloudWatch metrics provider created successfully")
+	} else {
+		s.log.Info("Metrics provider disabled (using no-op)")
+	}
+	s.meta.clients.metrics = metricsClient
 }
 
 func (s *xcentroServer) registerRouters() {
@@ -130,17 +171,48 @@ func (s *xcentroServer) start() {
 	}
 }
 
-// func (s *xcentroServer) stop() {
-// 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-// 	defer cancel()
+func (s *xcentroServer) stop() {
+	s.log.Info("Shutting down server gracefully...")
 
-// 	err := s.echo.Shutdown(ctx)
-// 	if err != nil {
-// 		s.log.Errorf("Failed to shutdown server error %v", err)
-// 	}
-// }
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Flush pending metrics before shutdown
+	if err := s.meta.clients.metrics.Flush(ctx); err != nil {
+		s.log.Errorf("Failed to flush metrics: %v", err)
+	} else {
+		s.log.Info("Metrics flushed successfully")
+	}
+
+	// Close metrics provider
+	if err := s.meta.clients.metrics.Close(); err != nil {
+		s.log.Errorf("Failed to close metrics provider: %v", err)
+	} else {
+		s.log.Info("Metrics provider closed successfully")
+	}
+
+	// Shutdown HTTP server
+	err := s.echo.Shutdown(ctx)
+	if err != nil {
+		s.log.Errorf("Failed to shutdown server: %v", err)
+	} else {
+		s.log.Info("Server shutdown complete")
+	}
+}
 
 func main() {
 	server := NewXcentroServer()
-	server.start()
+
+	// Setup graceful shutdown
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+
+	// Start server in goroutine
+	go func() {
+		server.start()
+	}()
+
+	// Wait for shutdown signal
+	<-sigChan
+	server.stop()
 }

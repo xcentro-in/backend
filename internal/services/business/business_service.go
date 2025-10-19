@@ -12,6 +12,8 @@ import (
 	"xcentro.in/internal/core/shared"
 	"xcentro.in/internal/core/user"
 	"xcentro.in/internal/services/verification"
+	sharedClients "xcentro.in/internal/shared/clients"
+	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/logger"
 	"xcentro.in/internal/shared/types"
 )
@@ -32,8 +34,8 @@ func NewBusinessService(
 	businessRepo business.BusinessRepository,
 	businessUserRelRepo business.BusinessUserRelationRepository,
 	userRepo user.UserRepository,
-	txManager client.TxManager,
-	rclient *redisClient.RedisClient,
+	clients sharedClients.ExternalClients,
+	cfg *config.Config,
 ) business.BusinessService {
 	// Initialize verification service (handle error in production)
 	verificationSvc, err := verification.NewDocumentVerificationService()
@@ -45,8 +47,8 @@ func NewBusinessService(
 		businessRepo:        businessRepo,
 		businessUserRelRepo: businessUserRelRepo,
 		userRepo:            userRepo,
-		txManager:           txManager,
-		rclient:             rclient,
+		txManager:           clients.GetTxManager(),    // Extract from clients
+		rclient:             clients.GetRedisClient(),  // Extract from clients
 		verificationService: verificationSvc,
 		logger:              logger.GetDefault(),
 	}

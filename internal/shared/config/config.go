@@ -24,6 +24,7 @@ type Config struct {
 	Castler           CastlerConfig           `json:"castler"`
 	JioPay            JioPayConfig            `json:"jiopay"`
 	Easebuzz          EasebuzzConfig          `json:"easebuzz"`
+	CloudWatch        CloudWatchConfig        `json:"cloudwatch"`
 }
 
 // JWTSecretConfig holds JWT secret configuration.
@@ -97,6 +98,22 @@ type EasebuzzConfig struct {
 	EncryptionKey string `json:"-" env:"EASEBUZZ_ENCRYPTION_KEY"` // AES encryption key (sensitive, optional)
 	EncryptionIV  string `json:"-" env:"EASEBUZZ_ENCRYPTION_IV"`  // Fixed AES IV in base64 (sensitive, optional)
 	WebhookSecret string `json:"-" env:"EASEBUZZ_WEBHOOK_SECRET"` // Webhook signature verification (sensitive)
+}
+
+// CloudWatchConfig holds AWS CloudWatch metrics configuration.
+type CloudWatchConfig struct {
+	Enabled        bool          `json:"enabled" env:"CLOUDWATCH_ENABLED" env-default:"false"`                     // Enable/disable CloudWatch metrics
+	Namespace      string        `json:"namespace" env:"CLOUDWATCH_NAMESPACE" env-default:"XCentro/Backend"`       // CloudWatch namespace
+	Region         string        `json:"region" env:"CLOUDWATCH_REGION" env-default:"us-east-1"`                   // AWS region
+	Endpoint       string        `json:"endpoint" env:"CLOUDWATCH_ENDPOINT"`                                       // Optional custom endpoint (localstack)
+	AccessKey      string        `json:"-" env:"CLOUDWATCH_ACCESS_KEY"`                                            // Optional static credentials
+	SecretKey      string        `json:"-" env:"CLOUDWATCH_SECRET_KEY"`                                            // Optional static credentials
+	SessionToken   string        `json:"-" env:"CLOUDWATCH_SESSION_TOKEN"`                                         // Optional session token
+	Profile        string        `json:"profile" env:"AWS_PROFILE"`                                                // Optional shared profile
+	BatchInterval  time.Duration `json:"batch_interval" env:"CLOUDWATCH_BATCH_INTERVAL" env-default:"30s"`         // Batch metrics every N seconds
+	BatchSize      int           `json:"batch_size" env:"CLOUDWATCH_BATCH_SIZE" env-default:"20"`                  // Max metrics per batch (CloudWatch limit: 1000)
+	MaxRetries     int           `json:"max_retries" env:"CLOUDWATCH_MAX_RETRIES" env-default:"5"`                 // Max retry attempts with exponential backoff
+	FlushOnShutdown bool         `json:"flush_on_shutdown" env:"CLOUDWATCH_FLUSH_ON_SHUTDOWN" env-default:"true"` // Flush pending metrics on shutdown
 }
 
 // RedisConfig holds Redis cache configuration.

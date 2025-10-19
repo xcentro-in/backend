@@ -15,8 +15,10 @@ import (
 	"xcentro.in/internal/adapters/providers/mailers"
 	"xcentro.in/internal/core/auth"
 	"xcentro.in/internal/core/business"
+	"xcentro.in/internal/core/metrics"
 	"xcentro.in/internal/core/shared"
 	"xcentro.in/internal/core/user"
+	sharedClients "xcentro.in/internal/shared/clients"
 	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/logger"
 )
@@ -29,28 +31,28 @@ type AuthService struct {
 	userService     user.UserService
 	businessService business.BusinessService
 	emailService    mailers.EmailService
+	metrics         metrics.MetricsProvider
 	appConfig       *config.Config
 }
 
 func NewAuthService(
-	cfg *config.JWTSecretConfig,
-	rclient *redis.RedisClient,
 	sessionRepo auth.SessionRepository,
 	userRepo user.UserRepository,
 	userService user.UserService,
 	businessService business.BusinessService,
-	emailService mailers.EmailService,
-	appConfig *config.Config,
+	clients sharedClients.ExternalClients,
+	cfg *config.Config,
 ) *AuthService {
 	return &AuthService{
-		config:          cfg,
-		rclient:         rclient,
+		config:          &cfg.JWT,                 // Extract JWT config
+		rclient:         clients.GetRedisClient(), // Extract from clients
 		sessionRepo:     sessionRepo,
 		userRepo:        userRepo,
 		userService:     userService,
 		businessService: businessService,
-		emailService:    emailService,
-		appConfig:       appConfig,
+		emailService:    clients.GetEmailService(), // Extract from clients
+		metrics:         clients.GetMetrics().(metrics.MetricsProvider),
+		appConfig:       cfg,
 	}
 }
 
@@ -474,12 +476,15 @@ func (s *AuthService) Login(ctx context.Context, email, password, userAgent stri
 		return nil, fmt.Errorf("failed to create authentication tokens")
 	}
 
+	s.metrics.Counter(ctx, "auth.loginsucess", 1, metrics.MetricLabels{"Test": "Check"})
+
 	return &auth.LoginResponse{
 		AccessToken:  accessToken,
 		RefreshToken: refreshToken,
 	}, nil
 
 }
+
 // ============================================================================
 // Password Reset Methods
 // ============================================================================
