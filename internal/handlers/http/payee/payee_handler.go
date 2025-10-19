@@ -155,10 +155,15 @@ func (h *PayeeHandler) GetPayees(c echo.Context) error {
 	fmt.Printf("📥 Query: display_name=%s, is_active=%v, is_favorite=%v, page=%d, page_size=%d\n",
 		displayName, isActive, isFavorite, page, pageSize)
 
-	// Extract business_id from JWT
-	// TODO: Extract from JWT token claims
-	businessID := "bid12345"
-	fmt.Printf("🔐 Business ID (from JWT): %s\n", businessID)
+	// Extract business_id from X-Business-ID header
+	businessID := c.Request().Header.Get("X-Business-ID")
+	if businessID == "" {
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "MISSING_BUSINESS_ID",
+			"message": "X-Business-ID header is required",
+		})
+	}
+	fmt.Printf("🔐 Business ID (from header): %s\n", businessID)
 
 	// Convert to service filters
 	filters := payee.RelationSearchFilters{

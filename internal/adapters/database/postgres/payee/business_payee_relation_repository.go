@@ -7,7 +7,6 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/lib/pq"
 	"xcentro.in/internal/adapters/database/postgres/client"
 	"xcentro.in/internal/core/payee"
 )
@@ -66,7 +65,7 @@ func (r *PgBusinessPayeeRelationRepository) CreateRelation(ctx context.Context, 
 		relation.Notes,
 		relation.IsActive,
 		relation.IsFavorite,
-		pq.Array(relation.Tags), // PostgreSQL array
+		relation.Tags, // PostgreSQL array (pgx/v5 handles []string natively)
 		relation.AddedBy,
 		metadataJSON,
 	).Scan(&relation.RelationID, &relation.AddedAt)
@@ -109,7 +108,7 @@ func (r *PgBusinessPayeeRelationRepository) FindRelationByID(ctx context.Context
 		&notes,
 		&relation.IsActive,
 		&relation.IsFavorite,
-		pq.Array(&relation.Tags),
+		&relation.Tags,
 		&relation.AddedAt,
 		&addedBy,
 		&lastUsedAt,
@@ -179,7 +178,7 @@ func (r *PgBusinessPayeeRelationRepository) FindRelation(ctx context.Context, bu
 		&notes,
 		&relation.IsActive,
 		&relation.IsFavorite,
-		pq.Array(&relation.Tags),
+		&relation.Tags,
 		&relation.AddedAt,
 		&addedBy,
 		&lastUsedAt,
@@ -267,7 +266,7 @@ func (r *PgBusinessPayeeRelationRepository) FindByBusiness(ctx context.Context, 
 
 	if len(filters.Tags) > 0 {
 		query += fmt.Sprintf(" AND r.tags && $%d", argIdx) // Array overlap operator
-		args = append(args, pq.Array(filters.Tags))
+		args = append(args, filters.Tags)
 		argIdx++
 	}
 
@@ -311,7 +310,7 @@ func (r *PgBusinessPayeeRelationRepository) FindByBusiness(ctx context.Context, 
 			&notes,
 			&relation.IsActive,
 			&relation.IsFavorite,
-			pq.Array(&relation.Tags),
+			&relation.Tags,
 			&relation.AddedAt,
 			&addedBy,
 			&lastUsedAt,
@@ -384,7 +383,7 @@ func (r *PgBusinessPayeeRelationRepository) UpdateRelation(ctx context.Context, 
 		relation.Notes,
 		relation.IsActive,
 		relation.IsFavorite,
-		pq.Array(relation.Tags),
+		relation.Tags,
 		metadataJSON,
 	)
 

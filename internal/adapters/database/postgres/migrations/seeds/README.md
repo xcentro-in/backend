@@ -81,6 +81,54 @@ This directory contains SQL seed files for populating test data in development a
 - ✅ Active status
 - ✅ Complete business details (directors, turnover, registration)
 
+### 3. Employee & Biller Payees Test Data
+
+**File:** `003_seed_employee_biller_payees.sql`
+**Purpose:** Seeds employee payees (payroll) and biller payees (BBPS) for payee diversity testing
+**Rollback:** `003_seed_employee_biller_payees_rollback.sql`
+**Business ID:** `0199f7c6-39ab-77a1-b611-385a4cb8f24b` (same as seed 002)
+
+#### What It Creates
+
+1. **Employee 1: Rajesh Kumar** (Senior Software Engineer)
+   - Payee ID: `0199f7c8-1234-8001-e001-111111111111`
+   - Relation ID: `0199f7c8-1234-8001-e003-111111111111`
+   - Employee Code: EMP001
+   - PAN: `ABCDE1234F`
+   - Department: Engineering
+   - Bank: HDFC Bank (Savings Account)
+   - Tags: Employee, Engineering, Payroll
+   - Is Favorite: ❌
+
+2. **Employee 2: Priya Sharma** (HR Manager)
+   - Payee ID: `0199f7c8-1234-8002-e001-222222222222`
+   - Relation ID: `0199f7c8-1234-8002-e003-222222222222`
+   - Employee Code: EMP002
+   - PAN: `FGHIJ5678K`
+   - Department: Human Resources
+   - Bank: ICICI Bank (Savings Account)
+   - Tags: Employee, HR, Payroll, Management
+   - Is Favorite: ✅
+
+3. **Biller 1: Airtel Mobile Postpaid** (Telecom)
+   - Payee ID: `0199f7c8-1234-9001-b001-333333333333`
+   - Relation ID: `0199f7c8-1234-9001-b003-333333333333`
+   - Biller ID: `AIRTEL_MOBILE`
+   - Category: Telecom
+   - Mobile: +91-9988776655
+   - Last Bill: ₹2499.00
+   - Auto-fetch: ✅ Enabled (monthly, day 5)
+   - Tags: Telecom, Utility, Monthly Bills
+   - Is Favorite: ✅
+
+**All payees include:**
+- ✅ PAN verification for employees (status: success)
+- ✅ Bank account verification for employees (penny drop: success)
+- ✅ Cross-verification (name match: 96-98%)
+- ✅ BBPS registration for biller (NPCI registered)
+- ✅ Active status
+- ✅ Complete employment/biller details
+
 ## How to Use
 
 ### Running Seed Scripts
@@ -97,11 +145,17 @@ cd internal/adapters/database/postgres/migrations/seeds
 # Apply vendor payees test data
 ./apply-seeds.sh apply 002
 
+# Apply employee & biller payees test data
+./apply-seeds.sh apply 003
+
 # Rollback wallet test data
 ./apply-seeds.sh rollback 001
 
 # Rollback vendor payees
 ./apply-seeds.sh rollback 002
+
+# Rollback employee & biller payees
+./apply-seeds.sh rollback 003
 
 # List available seed files
 ./apply-seeds.sh list
