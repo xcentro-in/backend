@@ -1,7 +1,7 @@
 root = "."
-tmp_dir = "tmp"
+tmp_dir = "bin"
 
 [build]
-  bin = "./tmp/api"
-  cmd = "go build -o ./tmp/api ./cmd/api"
+  bin = "./bin/api"
+  cmd = "go build -o ./bin/api ./cmd/api"
   include_ext = ["go"]
