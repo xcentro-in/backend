@@ -483,6 +483,55 @@ func (r *PgBusinessPayeeRelationRepository) GetPayeeCountByType(ctx context.Cont
 	return count, nil
 }
 
+// GetVendorsForDropdown retrieves lightweight vendor list for dropdown (voucher creation)
+// Returns only vendors (not employees, billers, or GST payees) with minimal fields
+func (r *PgBusinessPayeeRelationRepository) GetVendorsForDropdown(ctx context.Context, businessID string) ([]*payee.VendorDropdownItem, error) {
+	fmt.Printf("[PgBusinessPayeeRelationRepository] GetVendorsForDropdown - BusinessID: %s\n", businessID)
+
+	query := `
+		SELECT
+			bpr.relation_id,
+			bpr.display_name,
+			COALESCE(bpr.contact_email, '') as contact_email,
+			COALESCE(bpr.contact_phone, '') as contact_phone
+		FROM xcentro.business_payee_relation bpr
+		INNER JOIN xcentro.payee_master pm ON bpr.payee_id = pm.payee_id
+		WHERE bpr.business_id = $1
+		  AND pm.payee_type = 'vendor'
+		  AND bpr.is_active = TRUE
+		  AND pm.is_active = TRUE
+		ORDER BY bpr.display_name ASC
+	`
+
+	rows, err := r.querier.Query(ctx, query, businessID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query vendors for dropdown: %w", err)
+	}
+	defer rows.Close()
+
+	var vendors []*payee.VendorDropdownItem
+	for rows.Next() {
+		var vendor payee.VendorDropdownItem
+		err := rows.Scan(
+			&vendor.RelationID,
+			&vendor.DisplayName,
+			&vendor.ContactEmail,
+			&vendor.ContactPhone,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan vendor dropdown item: %w", err)
+		}
+		vendors = append(vendors, &vendor)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating vendor rows: %w", err)
+	}
+
+	fmt.Printf("[PgBusinessPayeeRelationRepository] Found %d vendors for dropdown\n", len(vendors))
+	return vendors, nil
+}
+
 // ValidateRelationForBusiness validates that a relation_id belongs to a business and returns payee/account IDs
 // This is used by voucher service to resolve relation_id without circular dependencies
 func (r *PgBusinessPayeeRelationRepository) ValidateRelationForBusiness(ctx context.Context, businessID, relationID string) (payeeID, accountID string, err error) {

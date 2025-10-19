@@ -332,3 +332,40 @@ func (h *PayeeHandler) DeactivatePayee(c echo.Context) error {
 		"status":  "success",
 	})
 }
+
+// GetVendorsForDropdown handles GET /vendors?bid=xxx - Get lightweight vendor list for dropdown
+// Returns only active vendors with minimal fields for voucher creation UI
+func (h *PayeeHandler) GetVendorsForDropdown(c echo.Context) error {
+	fmt.Println("=== HANDLER: GetVendorsForDropdown API Called ===")
+
+	// Extract business_id from query parameter
+	businessID := c.QueryParam("bid")
+	if businessID == "" {
+		fmt.Println("❌ Missing business_id query parameter")
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "invalid_request",
+			"message": "business_id (bid) query parameter is required",
+		})
+	}
+
+	fmt.Printf("📥 Query param: bid=%s\n", businessID)
+
+	// Call payee service
+	fmt.Println("🔄 Calling Payee Service...")
+	resp, err := h.payeeService.GetVendorsForDropdown(c.Request().Context(), businessID)
+	if err != nil {
+		fmt.Printf("❌ Error fetching vendors: %v\n", err)
+		return c.JSON(http.StatusInternalServerError, map[string]any{
+			"error":   "fetch_failed",
+			"message": err.Error(),
+		})
+	}
+
+	fmt.Printf("✅ Found %d vendors for dropdown\n", resp.Count)
+	fmt.Println("=== HANDLER: GetVendorsForDropdown Complete ===")
+
+	return c.JSON(http.StatusOK, map[string]any{
+		"status": "success",
+		"data":   resp,
+	})
+}

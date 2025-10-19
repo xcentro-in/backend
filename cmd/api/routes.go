@@ -272,6 +272,9 @@ func registerV1PayeeRoutes(clients *externalClients, group *echo.Group) {
 	// Register payee routes
 	payeeGroup := group.Group("/payees")
 	payee.RegisterPayeeRoutes(payeeGroup, payeeService)
+
+	// Register vendor dropdown route (lightweight API for voucher creation)
+	payee.RegisterVendorDropdownRoute(group, payeeService)
 }
 
 func registerV1VoucherRoutes(clients *externalClients, group *echo.Group) {

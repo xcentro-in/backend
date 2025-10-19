@@ -1359,3 +1359,39 @@ func (s *PayeeService) populateEmployeeDetails(ctx context.Context, payeeID, acc
 
 	return nil
 }
+
+// ############################################################################
+// # Vendor Dropdown (Lightweight API for Voucher Creation)
+// ############################################################################
+
+// GetVendorsForDropdown retrieves lightweight vendor list for dropdown selection
+// Returns only active vendors with minimal fields (relation_id, display_name, contact info)
+// This is optimized for voucher creation UI where only relation_id is needed
+func (s *PayeeService) GetVendorsForDropdown(ctx context.Context, businessID string) (*payee.VendorDropdownListResponse, error) {
+	fmt.Printf("=== PAYEE SERVICE: GetVendorsForDropdown - BusinessID: %s ===\n", businessID)
+
+	// Input validation
+	if businessID == "" {
+		return nil, fmt.Errorf("business_id is required")
+	}
+
+	// Validate UUID format
+	if _, err := uuid.Parse(businessID); err != nil {
+		return nil, fmt.Errorf("invalid business_id format: %w", err)
+	}
+
+	// Fetch vendors from repository (simple pass-through)
+	vendors, err := s.businessPayeeRelationRepo.GetVendorsForDropdown(ctx, businessID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get vendors for dropdown: %w", err)
+	}
+
+	// Build response
+	response := &payee.VendorDropdownListResponse{
+		Vendors: vendors,
+		Count:   len(vendors),
+	}
+
+	fmt.Printf("=== PAYEE SERVICE: GetVendorsForDropdown - Found %d vendors ===\n", len(vendors))
+	return response, nil
+}

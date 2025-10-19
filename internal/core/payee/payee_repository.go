@@ -179,6 +179,12 @@ type BusinessPayeeRelationRepository interface {
 	// Aggregations
 	GetPayeeCount(ctx context.Context, businessID string) (int, error)
 	GetPayeeCountByType(ctx context.Context, businessID string, payeeType PayeeType) (int, error)
+
+	// Vendor Dropdown (lightweight query for voucher creation)
+	GetVendorsForDropdown(ctx context.Context, businessID string) ([]*VendorDropdownItem, error)
+
+	// Validation helper (used by voucher service)
+	ValidateRelationForBusiness(ctx context.Context, businessID, relationID string) (payeeID, accountID string, err error)
 }
 
 // ############################################################################

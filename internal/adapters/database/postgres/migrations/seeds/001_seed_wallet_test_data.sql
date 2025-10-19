@@ -14,28 +14,28 @@
 
 -- Insert a test business for wallet testing
 -- Using a fixed UUID for easy reference in API testing
-INSERT INTO xcentro.business (
-    bid,
-    name,
-    gstin,
-    gst_data,
-    kyb_status,
-    business_type,
-    country_code,
-    currency_code
-) VALUES (
-    '01936d7a-7c8e-7890-b123-456789abcdef'::uuid,  -- Fixed UUID for testing
-    'Test Business Pvt Ltd',
-    '29ABCDE1234F1Z5',
-    '{"legal_name": "Test Business Private Limited", "registration_date": "2020-01-15", "registered_address": "123 Test Street, Bangalore, Karnataka 560001"}'::jsonb,
-    'kyc_completed'::xcentro.kyc_status_enum,
-    'private_limited_company'::xcentro.business_type_enum,
-    'IND',
-    'INR'
-)
-ON CONFLICT (bid) DO NOTHING;  -- Prevent duplicate insertion if already exists
+-- INSERT INTO xcentro.business (
+--     bid,
+--     name,
+--     gstin,
+--     gst_data,
+--     kyb_status,
+--     business_type,
+--     country_code,
+--     currency_code
+-- ) VALUES (
+--     '01936d7a-7c8e-7890-b123-456789abcdef'::uuid,  -- Fixed UUID for testing
+--     'Test Business Pvt Ltd',
+--     '29ABCDE1234F1Z5',
+--     '{"legal_name": "Test Business Private Limited", "registration_date": "2020-01-15", "registered_address": "123 Test Street, Bangalore, Karnataka 560001"}'::jsonb,
+--     'kyc_completed'::xcentro.kyc_status_enum,
+--     'private_limited_company'::xcentro.business_type_enum,
+--     'IND',
+--     'INR'
+-- )
+-- ON CONFLICT (bid) DO NOTHING;  -- Prevent duplicate insertion if already exists
 
-COMMENT ON TABLE xcentro.business IS 'Added test business: Test Business Pvt Ltd for wallet testing';
+-- COMMENT ON TABLE xcentro.business IS 'Added test business: Test Business Pvt Ltd for wallet testing';
 
 
 -- #############################################################################
@@ -60,7 +60,7 @@ INSERT INTO xcentro.stored_cards (
     metadata
 ) VALUES (
     '01936d7a-8000-7890-c001-111111111111'::uuid,
-    '01936d7a-7c8e-7890-b123-456789abcdef'::uuid,  -- References test business
+    '0199f7c6-39ab-77a1-b611-385a4cb8f24b'::uuid,  -- References test business
     'jio_tok_visa_test_4532',
     '4532',
     'visa'::xcentro.card_type_enum,
@@ -95,7 +95,7 @@ INSERT INTO xcentro.stored_cards (
     metadata
 ) VALUES (
     '01936d7a-8000-7890-c002-222222222222'::uuid,
-    '01936d7a-7c8e-7890-b123-456789abcdef'::uuid,
+    '0199f7c6-39ab-77a1-b611-385a4cb8f24b'::uuid,
     'ebz_tok_master_test_8765',
     '8765',
     'mastercard'::xcentro.card_type_enum,
@@ -130,7 +130,7 @@ INSERT INTO xcentro.stored_cards (
     metadata
 ) VALUES (
     '01936d7a-8000-7890-c003-333333333333'::uuid,
-    '01936d7a-7c8e-7890-b123-456789abcdef'::uuid,
+    '0199f7c6-39ab-77a1-b611-385a4cb8f24b'::uuid,
     'jio_tok_rupay_test_5678',
     '5678',
     'rupay'::xcentro.card_type_enum,
@@ -164,7 +164,7 @@ INSERT INTO xcentro.stored_cards (
     metadata
 ) VALUES (
     '01936d7a-8000-7890-c004-444444444444'::uuid,
-    '01936d7a-7c8e-7890-b123-456789abcdef'::uuid,
+    '0199f7c6-39ab-77a1-b611-385a4cb8f24b'::uuid,
     'ebz_tok_amex_test_1234',
     '1234',
     'amex'::xcentro.card_type_enum,
@@ -198,7 +198,7 @@ INSERT INTO xcentro.stored_cards (
     metadata
 ) VALUES (
     '01936d7a-8000-7890-c005-555555555555'::uuid,
-    '01936d7a-7c8e-7890-b123-456789abcdef'::uuid,
+    '0199f7c6-39ab-77a1-b611-385a4cb8f24b'::uuid,
     'jio_tok_visa_test_9999',
     '9999',
     'visa'::xcentro.card_type_enum,
@@ -241,7 +241,7 @@ INSERT INTO xcentro.bank_accounts (
     metadata
 ) VALUES (
     '01936d7a-9000-7890-a001-111111111111'::uuid,
-    '01936d7a-7c8e-7890-b123-456789abcdef'::uuid,
+    '0199f7c6-39ab-77a1-b611-385a4cb8f24b'::uuid,
     encode(sha256('1234567890123456'::bytea), 'hex'),  -- SHA-256 hash of account number
     'ENCRYPTED_1234567890123456',  -- Placeholder - in production would be AES-256-GCM encrypted
     'HDFC0001234',
@@ -273,7 +273,7 @@ INSERT INTO xcentro.bank_accounts (
     metadata
 ) VALUES (
     '01936d7a-9000-7890-a002-222222222222'::uuid,
-    '01936d7a-7c8e-7890-b123-456789abcdef'::uuid,
+    '0199f7c6-39ab-77a1-b611-385a4cb8f24b'::uuid,
     encode(sha256('9876543210987654'::bytea), 'hex'),
     'ENCRYPTED_9876543210987654',
     'ICIC0001234',
@@ -305,7 +305,7 @@ INSERT INTO xcentro.bank_accounts (
     metadata
 ) VALUES (
     '01936d7a-9000-7890-a003-333333333333'::uuid,
-    '01936d7a-7c8e-7890-b123-456789abcdef'::uuid,
+    '0199f7c6-39ab-77a1-b611-385a4cb8f24b'::uuid,
     encode(sha256('5555666677778888'::bytea), 'hex'),
     'ENCRYPTED_5555666677778888',
     'SBIN0001234',
@@ -337,7 +337,7 @@ INSERT INTO xcentro.bank_accounts (
     metadata
 ) VALUES (
     '01936d7a-9000-7890-a004-444444444444'::uuid,
-    '01936d7a-7c8e-7890-b123-456789abcdef'::uuid,
+    '0199f7c6-39ab-77a1-b611-385a4cb8f24b'::uuid,
     encode(sha256('1111222233334444'::bytea), 'hex'),
     'ENCRYPTED_1111222233334444',
     'UTIB0001234',
@@ -369,7 +369,7 @@ INSERT INTO xcentro.bank_accounts (
     metadata
 ) VALUES (
     '01936d7a-9000-7890-a005-555555555555'::uuid,
-    '01936d7a-7c8e-7890-b123-456789abcdef'::uuid,
+    '0199f7c6-39ab-77a1-b611-385a4cb8f24b'::uuid,
     encode(sha256('7777888899990000'::bytea), 'hex'),
     'ENCRYPTED_7777888899990000',
     'HDFC0005678',
@@ -400,16 +400,16 @@ DECLARE
     accounts_count INT;
     verified_accounts_count INT;
 BEGIN
-    SELECT COUNT(*) INTO business_count FROM xcentro.business WHERE bid = '01936d7a-7c8e-7890-b123-456789abcdef'::uuid;
-    SELECT COUNT(*) INTO cards_count FROM xcentro.stored_cards WHERE business_id = '01936d7a-7c8e-7890-b123-456789abcdef'::uuid;
-    SELECT COUNT(*) INTO active_cards_count FROM xcentro.stored_cards WHERE business_id = '01936d7a-7c8e-7890-b123-456789abcdef'::uuid AND is_active = TRUE;
-    SELECT COUNT(*) INTO accounts_count FROM xcentro.bank_accounts WHERE business_id = '01936d7a-7c8e-7890-b123-456789abcdef'::uuid;
-    SELECT COUNT(*) INTO verified_accounts_count FROM xcentro.bank_accounts WHERE business_id = '01936d7a-7c8e-7890-b123-456789abcdef'::uuid AND is_verified = TRUE AND is_active = TRUE;
+    SELECT COUNT(*) INTO business_count FROM xcentro.business WHERE bid = '0199f7c6-39ab-77a1-b611-385a4cb8f24b'::uuid;
+    SELECT COUNT(*) INTO cards_count FROM xcentro.stored_cards WHERE business_id = '0199f7c6-39ab-77a1-b611-385a4cb8f24b'::uuid;
+    SELECT COUNT(*) INTO active_cards_count FROM xcentro.stored_cards WHERE business_id = '0199f7c6-39ab-77a1-b611-385a4cb8f24b'::uuid AND is_active = TRUE;
+    SELECT COUNT(*) INTO accounts_count FROM xcentro.bank_accounts WHERE business_id = '0199f7c6-39ab-77a1-b611-385a4cb8f24b'::uuid;
+    SELECT COUNT(*) INTO verified_accounts_count FROM xcentro.bank_accounts WHERE business_id = '0199f7c6-39ab-77a1-b611-385a4cb8f24b'::uuid AND is_verified = TRUE AND is_active = TRUE;
 
     RAISE NOTICE '========================================';
     RAISE NOTICE 'Wallet Test Data Seeding Complete!';
     RAISE NOTICE '========================================';
-    RAISE NOTICE 'Test Business ID: 01936d7a-7c8e-7890-b123-456789abcdef';
+    RAISE NOTICE 'Test Business ID: 0199f7c6-39ab-77a1-b611-385a4cb8f24b';
     RAISE NOTICE 'Businesses: %', business_count;
     RAISE NOTICE 'Total Stored Cards: % (% active)', cards_count, active_cards_count;
     RAISE NOTICE 'Total Bank Accounts: % (% verified & active)', accounts_count, verified_accounts_count;

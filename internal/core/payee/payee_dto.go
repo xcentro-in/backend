@@ -243,3 +243,22 @@ type PayeeSearchRequest struct {
 	Page        int       `json:"page"`
 	PageSize    int       `json:"page_size"`
 }
+
+// ############################################################################
+// # Vendor Dropdown (Lightweight API for Voucher Creation)
+// ############################################################################
+
+// VendorDropdownItem represents minimal vendor info for dropdown selection
+// Used in voucher creation UI where only relation_id is needed
+type VendorDropdownItem struct {
+	RelationID   string `json:"relation_id"`   // Surrogate key for voucher API
+	DisplayName  string `json:"display_name"`  // How customer refers to vendor
+	ContactEmail string `json:"contact_email"` // Customer's contact point
+	ContactPhone string `json:"contact_phone"` // Customer's contact phone
+}
+
+// VendorDropdownListResponse represents the response for vendor dropdown
+type VendorDropdownListResponse struct {
+	Vendors []*VendorDropdownItem `json:"vendors"`
+	Count   int                   `json:"count"`
+}
