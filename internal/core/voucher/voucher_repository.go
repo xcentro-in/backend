@@ -58,6 +58,11 @@ type VoucherRepository interface {
 	// GetVouchersReadyForPayout retrieves vouchers ready for payout processing (Phase 9)
 	// Returns finalized, paid, non-cancelled vouchers with payout_status = 'pending'
 	GetVouchersReadyForPayout(ctx context.Context, limit int) ([]*Voucher, error)
+
+	// GetVouchersByRelation retrieves all vouchers for a specific payee relation with payment method details
+	// Validates that the relation belongs to the business (security check via business_payee_relation join)
+	// Returns vouchers with payment source information (card/bank last digits)
+	GetVouchersByRelation(ctx context.Context, businessID, relationID string, limit, offset int) ([]*VoucherWithPaymentInfo, int64, error)
 }
 
 // VoucherFilters defines filter criteria for listing vouchers

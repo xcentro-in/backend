@@ -310,3 +310,37 @@ type ApproveCancellationResponse struct {
 	RefundStatus       string    `json:"refund_status,omitempty"`
 	Message            string    `json:"message"`
 }
+
+// GetVouchersByPayeeRequest represents request to get vouchers for a specific payee
+type GetVouchersByPayeeRequest struct {
+	BusinessID uuid.UUID `json:"business_id"` // From X-Business-ID header
+	RelationID uuid.UUID `json:"relation_id"` // From path parameter
+	Page       int       `json:"page"`        // Page number (1-based)
+	PageSize   int       `json:"page_size"`   // Items per page
+}
+
+// VoucherByPayeeItem represents a single voucher item in payee voucher list
+type VoucherByPayeeItem struct {
+	VoucherID     uuid.UUID `json:"voucher_id"`
+	InvoiceNumber string    `json:"invoice_number"`
+	NetAmount     int64     `json:"net_amount"`      // Amount actually paid (in paise)
+	CreatedAt     time.Time `json:"created_at"`      // Voucher creation date
+	Status        string    `json:"status"`          // "Draft" or payment status
+	PaymentMethod string    `json:"payment_method"`  // e.g., "Card ****1234", "Bank ****67890"
+	Description   string    `json:"description"`     // Voucher description
+}
+
+// GetVouchersByPayeeResponse represents paginated response of vouchers for a payee
+type GetVouchersByPayeeResponse struct {
+	Vouchers   []VoucherByPayeeItem      `json:"vouchers"`
+	Pagination *voucher.PaginationResult `json:"pagination"`
+	Summary    *VouchersByPayeeSummary   `json:"summary,omitempty"`
+}
+
+// VouchersByPayeeSummary provides aggregate statistics for payee vouchers
+type VouchersByPayeeSummary struct {
+	TotalVouchers  int64 `json:"total_vouchers"`
+	TotalAmount    int64 `json:"total_amount"`   // Sum of net amounts (in paise)
+	DraftCount     int64 `json:"draft_count"`
+	CompletedCount int64 `json:"completed_count"`
+}

@@ -43,6 +43,9 @@ type VoucherService interface {
 
 	// ApproveCancellation approves or rejects a cancellation request (Phase 7)
 	ApproveCancellation(ctx context.Context, req *ApproveCancellationRequest) (*ApproveCancellationResponse, error)
+
+	// GetVouchersByPayee retrieves all vouchers for a specific payee (by relation_id) with business validation
+	GetVouchersByPayee(ctx context.Context, req *GetVouchersByPayeeRequest) (*GetVouchersByPayeeResponse, error)
 }
 
 // VoucherServiceImpl implements the VoucherService interface
@@ -773,4 +776,115 @@ func maskAccountNumber(accountNumber string) string {
 		return "****"
 	}
 	return "****" + accountNumber[len(accountNumber)-4:]
+}
+
+// GetVouchersByPayee retrieves all vouchers for a specific payee with business validation
+func (s *VoucherServiceImpl) GetVouchersByPayee(ctx context.Context, req *GetVouchersByPayeeRequest) (*GetVouchersByPayeeResponse, error) {
+	// 1. Validate inputs
+	if req.BusinessID == uuid.Nil {
+		return nil, fmt.Errorf("business_id is required")
+	}
+	if req.RelationID == uuid.Nil {
+		return nil, fmt.Errorf("relation_id is required")
+	}
+
+	// Set default pagination if not provided
+	if req.Page <= 0 {
+		req.Page = 1
+	}
+	if req.PageSize <= 0 || req.PageSize > 100 {
+		req.PageSize = 10
+	}
+
+	offset := (req.Page - 1) * req.PageSize
+
+	// 2. Call repository (validates business ownership via INNER JOIN)
+	vouchersWithPayment, totalCount, err := s.voucherRepo.GetVouchersByRelation(
+		ctx,
+		req.BusinessID.String(),
+		req.RelationID.String(),
+		req.PageSize,
+		offset,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get vouchers by payee: %w", err)
+	}
+
+	// 3. Transform to response DTOs
+	var voucherItems []VoucherByPayeeItem
+	var totalAmount int64
+	var draftCount, completedCount int64
+
+	for _, v := range vouchersWithPayment {
+		// Build payment method string
+		status := "Draft"
+		paymentMethod := ""
+
+		if v.PaymentID != nil {
+			// Not a draft - has payment
+			status = v.PaymentStatus
+			if v.PaymentSourceType != "" {
+				switch v.PaymentSourceType {
+				case "card":
+					paymentMethod = fmt.Sprintf("Card ****%s", v.PaymentSourceDigits)
+				case "bank_account":
+					paymentMethod = fmt.Sprintf("Bank *****%s", v.PaymentSourceDigits)
+				case "upi":
+					paymentMethod = "UPI"
+				case "wallet":
+					paymentMethod = "Wallet"
+				default:
+					paymentMethod = v.PaymentSourceType
+				}
+			}
+
+			if status == "success" {
+				completedCount++
+			}
+		} else {
+			// Draft voucher
+			draftCount++
+			status = "Draft"
+			paymentMethod = "N/A"
+		}
+
+		voucherItems = append(voucherItems, VoucherByPayeeItem{
+			VoucherID:     v.VoucherID,
+			InvoiceNumber: v.InvoiceNumber,
+			NetAmount:     v.NetAmount,
+			CreatedAt:     v.CreatedAt,
+			Status:        status,
+			PaymentMethod: paymentMethod,
+			Description:   v.Description,
+		})
+
+		totalAmount += v.NetAmount
+	}
+
+	// 4. Build pagination
+	totalPages := int(totalCount) / req.PageSize
+	if int(totalCount)%req.PageSize != 0 {
+		totalPages++
+	}
+
+	pagination := &voucher.PaginationResult{
+		Page:       req.Page,
+		Limit:      req.PageSize,
+		Total:      totalCount,
+		TotalPages: totalPages,
+	}
+
+	// 5. Build summary
+	summary := &VouchersByPayeeSummary{
+		TotalVouchers:  totalCount,
+		TotalAmount:    totalAmount,
+		DraftCount:     draftCount,
+		CompletedCount: completedCount,
+	}
+
+	return &GetVouchersByPayeeResponse{
+		Vouchers:   voucherItems,
+		Pagination: pagination,
+		Summary:    summary,
+	}, nil
 }

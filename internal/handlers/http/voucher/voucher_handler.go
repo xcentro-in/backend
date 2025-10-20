@@ -3,6 +3,7 @@ package voucher
 import (
 	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -562,4 +563,95 @@ func (h *VoucherHandler) handleError(c echo.Context, err error) error {
 			"message": err.Error(),
 		})
 	}
+}
+
+// GetVouchersByPayee handles GET /vouchers/payee/:relation_id - Get all vouchers for a specific payee
+func (h *VoucherHandler) GetVouchersByPayee(c echo.Context) error {
+	fmt.Println("=== HANDLER: GetVouchersByPayee API Called ===")
+
+	// Extract relation_id from path parameter
+	relationIDStr := c.Param("relation_id")
+	if relationIDStr == "" {
+		fmt.Println("❌ Missing relation_id path parameter")
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "invalid_request",
+			"message": "relation_id path parameter is required",
+		})
+	}
+
+	relationID, err := uuid.Parse(relationIDStr)
+	if err != nil {
+		fmt.Printf("❌ Invalid relation_id format: %v\n", err)
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "invalid_request",
+			"message": "Invalid relation_id format",
+		})
+	}
+
+	// Extract business_id from X-Business-ID header
+	businessIDStr := c.Request().Header.Get("X-Business-ID")
+	if businessIDStr == "" {
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "MISSING_BUSINESS_ID",
+			"message": "X-Business-ID header is required",
+		})
+	}
+
+	businessID, err := uuid.Parse(businessIDStr)
+	if err != nil {
+		fmt.Printf("❌ Invalid business_id format: %v\n", err)
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "invalid_request",
+			"message": "Invalid business_id format",
+		})
+	}
+
+	// Parse pagination query parameters
+	page := 1
+	pageSize := 10
+
+	if pageStr := c.QueryParam("page"); pageStr != "" {
+		if p, err := parseIntParam(pageStr); err == nil && p > 0 {
+			page = p
+		}
+	}
+	if pageSizeStr := c.QueryParam("page_size"); pageSizeStr != "" {
+		if ps, err := parseIntParam(pageSizeStr); err == nil && ps > 0 && ps <= 100 {
+			pageSize = ps
+		}
+	}
+
+	fmt.Printf("📥 Path param: relation_id=%s, Business ID (from header): %s, page=%d, page_size=%d\n",
+		relationID, businessID, page, pageSize)
+
+	// Call voucher service
+	fmt.Println("🔄 Calling Voucher Service...")
+	resp, err := h.voucherService.GetVouchersByPayee(c.Request().Context(), &voucherSvc.GetVouchersByPayeeRequest{
+		BusinessID: businessID,
+		RelationID: relationID,
+		Page:       page,
+		PageSize:   pageSize,
+	})
+	if err != nil {
+		fmt.Printf("❌ Fetch error: %v\n", err)
+		return c.JSON(http.StatusInternalServerError, map[string]any{
+			"error":   "fetch_failed",
+			"message": err.Error(),
+		})
+	}
+
+	fmt.Printf("✅ Fetched %d vouchers for relation %s\n", len(resp.Vouchers), relationID)
+	fmt.Println("=== HANDLER: GetVouchersByPayee Complete ===")
+
+	return c.JSON(http.StatusOK, map[string]any{
+		"status":     "success",
+		"vouchers":   resp.Vouchers,
+		"pagination": resp.Pagination,
+		"summary":    resp.Summary,
+	})
+}
+
+// Helper function to parse integer query parameters
+func parseIntParam(s string) (int, error) {
+	return strconv.Atoi(s)
 }

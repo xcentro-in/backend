@@ -280,3 +280,20 @@ func (v *Voucher) ValidateAmountCalculation() bool {
 	expectedNet := v.GrossAmount - v.TDSAmount - v.DiscountAmount
 	return v.NetAmount == expectedNet
 }
+
+// VoucherWithPaymentInfo represents a voucher with enriched payment source details
+// Used for displaying vouchers with payment method information in frontend tables
+type VoucherWithPaymentInfo struct {
+	VoucherID     uuid.UUID     `json:"voucher_id"`
+	InvoiceNumber string        `json:"invoice_number"`
+	NetAmount     int64         `json:"net_amount"`      // Amount actually paid (in paise)
+	CreatedAt     time.Time     `json:"created_at"`      // Voucher creation date
+	Status        VoucherStatus `json:"status"`          // Voucher status (draft, finalized, etc.)
+	Description   string        `json:"description"`     // Voucher description
+
+	// Payment information (NULL for draft vouchers)
+	PaymentID          *uuid.UUID `json:"payment_id,omitempty"`
+	PaymentStatus      string     `json:"payment_status,omitempty"`       // Payment status (success, pending, failed)
+	PaymentSourceType  string     `json:"payment_source_type,omitempty"`  // card, bank_account, upi, wallet
+	PaymentSourceDigits string    `json:"payment_source_digits,omitempty"` // Last 4/5 digits
+}
