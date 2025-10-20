@@ -55,6 +55,14 @@ func (r *PgBusinessPayeeRelationRepository) CreateRelation(ctx context.Context, 
 		}
 	}
 
+	// Handle empty AddedBy as NULL (UUID field)
+	var addedBy interface{}
+	if relation.AddedBy != "" {
+		addedBy = relation.AddedBy
+	} else {
+		addedBy = nil
+	}
+
 	err = r.querier.QueryRow(ctx, query,
 		relation.BusinessID,
 		relation.PayeeID,
@@ -66,7 +74,7 @@ func (r *PgBusinessPayeeRelationRepository) CreateRelation(ctx context.Context, 
 		relation.IsActive,
 		relation.IsFavorite,
 		relation.Tags, // PostgreSQL array (pgx/v5 handles []string natively)
-		relation.AddedBy,
+		addedBy,
 		metadataJSON,
 	).Scan(&relation.RelationID, &relation.AddedAt)
 

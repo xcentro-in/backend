@@ -32,16 +32,15 @@ func (r *PgPayeeMasterRepository) WithTx(tx client.Tx) payee.PayeeMasterReposito
 func (r *PgPayeeMasterRepository) Create(ctx context.Context, master *payee.PayeeMaster) error {
 	query := `
 		INSERT INTO xcentro.payee_master (
-			payee_id, payee_type, is_active
-		) VALUES ($1, $2, $3)
-		RETURNING created_at, updated_at
+			payee_type, is_active
+		) VALUES ($1, $2)
+		RETURNING payee_id, created_at
 	`
 
 	err := r.querier.QueryRow(ctx, query,
-		master.PayeeID,
 		master.PayeeType,
 		master.IsActive,
-	).Scan(&master.CreatedAt, &master.UpdatedAt)
+	).Scan(&master.PayeeID, &master.CreatedAt)
 
 	if err != nil {
 		return fmt.Errorf("failed to create payee master: %w", err)

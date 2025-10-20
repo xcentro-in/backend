@@ -13,7 +13,8 @@ import (
 // OnboardPayeeRequest represents a polymorphic request to onboard a new payee
 // The PayeeType field determines which type-specific fields are required
 type OnboardPayeeRequest struct {
-	BusinessID string     `json:"business_id"` // Our customer (extracted from JWT)
+	BusinessID string     `json:"business_id"` // Our customer (extracted from header)
+	AddedBy    string     `json:"-"`           // User who is adding this payee (extracted from JWT, not from request body)
 	PayeeType  PayeeType  `json:"payee_type"`  // Type discriminator: vendor, gst_payment, biller, employee
 
 	// Customer-specific metadata (common to all types)
@@ -37,8 +38,8 @@ type OnboardVendorData struct {
 	AccountNumber     string                  `json:"account_number"`
 	IFSCCode          string                  `json:"ifsc_code"`
 	AccountHolderName string                  `json:"account_holder_name"`
-	BankName          string                  `json:"bank_name"`
-	AccountType       payment.BankAccountType `json:"account_type"`
+	BankName          string                  `json:"bank_name,omitempty"`
+	AccountType       payment.BankAccountType `json:"account_type,omitempty"` // Optional - defaults to "current"
 	AccountLabel      string                  `json:"account_label,omitempty"`
 }
 
@@ -79,8 +80,8 @@ type OnboardEmployeeData struct {
 	AccountNumber     string                  `json:"account_number"`
 	IFSCCode          string                  `json:"ifsc_code"`
 	AccountHolderName string                  `json:"account_holder_name"`
-	BankName          string                  `json:"bank_name"`
-	AccountType       payment.BankAccountType `json:"account_type"`
+	BankName          string                  `json:"bank_name,omitempty"`
+	AccountType       payment.BankAccountType `json:"account_type,omitempty"` // Optional - defaults to "current"
 	AccountLabel      string                  `json:"account_label,omitempty"`
 
 	// Remuneration document (salary slip, contract, etc.)

@@ -11,6 +11,7 @@ import (
 	"xcentro.in/internal/adapters/database/postgres/client"
 	"xcentro.in/internal/core/business_rules"
 	"xcentro.in/internal/core/payee"
+	"xcentro.in/internal/core/payment"
 	"xcentro.in/internal/core/payout"
 )
 
@@ -224,6 +225,13 @@ func (s *PayeeService) onboardVendor(ctx context.Context, req payee.OnboardPayee
 	} else {
 		fmt.Println("🆕 Bank account not found, verifying via penny drop...")
 
+		// Default account_type to "current" if not provided
+		accountType := vendor.AccountType
+		if accountType == "" {
+			accountType = payment.BankAccountTypeCurrent
+			fmt.Println("ℹ️  account_type not provided, defaulting to 'current'")
+		}
+
 		// Step 5: Verify bank account (penny drop)
 		bankReq := business_rules.BankVerificationRequest{
 			BusinessID:        req.BusinessID,
@@ -232,7 +240,7 @@ func (s *PayeeService) onboardVendor(ctx context.Context, req payee.OnboardPayee
 			IFSCCode:          vendor.IFSCCode,
 			AccountHolderName: vendor.AccountHolderName,
 			BankName:          vendor.BankName,
-			AccountType:       vendor.AccountType,
+			AccountType:       accountType,
 		}
 
 		bankResp, err := s.bankVerificationSvc.VerifyBankAccount(ctx, bankReq)
@@ -304,7 +312,7 @@ func (s *PayeeService) onboardVendor(ctx context.Context, req payee.OnboardPayee
 			IFSCCode:                 vendor.IFSCCode,
 			BankName:                 bankResp.BankName,
 			BranchName:               bankResp.BranchName,
-			AccountType:              vendor.AccountType,
+			AccountType:              accountType, // Use the defaulted account type
 			AccountHolderName:        bankResp.VerifiedAccountName,
 			IsVerified:               true,
 			VerifiedAt:               &time.Time{},
@@ -371,7 +379,7 @@ func (s *PayeeService) onboardVendor(ctx context.Context, req payee.OnboardPayee
 			IsActive:     true,
 			IsFavorite:   false,
 			Tags:         []string{},
-			AddedBy:      "", // TODO: Extract from JWT
+			AddedBy:      req.AddedBy, // User ID from JWT
 		}
 
 		if err := txRelationRepo.CreateRelation(ctx, relation); err != nil {
@@ -830,6 +838,13 @@ func (s *PayeeService) onboardEmployee(ctx context.Context, req payee.OnboardPay
 	}
 
 	if bankAccount == nil {
+		// Default account_type to "current" if not provided
+		accountType := employee.AccountType
+		if accountType == "" {
+			accountType = payment.BankAccountTypeCurrent
+			fmt.Println("ℹ️  account_type not provided, defaulting to 'current'")
+		}
+
 		// Step 7: Perform penny drop verification
 		fmt.Printf("🏦 Step 7: Verifying bank account (penny drop): %s...\n", employee.AccountNumber)
 		verifyReq := business_rules.BankVerificationRequest{
@@ -858,7 +873,7 @@ func (s *PayeeService) onboardEmployee(ctx context.Context, req payee.OnboardPay
 			IFSCCode:                employee.IFSCCode,
 			AccountHolderName:       employee.AccountHolderName,
 			BankName:                employee.BankName,
-			AccountType:             employee.AccountType,
+			AccountType:             accountType, // Use the defaulted account type
 			AccountLabel:            employee.AccountLabel,
 			IsPrimary:               len(existingAccounts) == 0, // First account is primary
 			IsActive:                true,
@@ -902,7 +917,7 @@ func (s *PayeeService) onboardEmployee(ctx context.Context, req payee.OnboardPay
 		IsActive:     true,
 		IsFavorite:   false,
 		Tags:         []string{"employee", "payroll"},
-		AddedBy:      "", // TODO: Extract from JWT
+		AddedBy:      req.AddedBy, // User ID from JWT
 	}
 
 	if err := s.businessPayeeRelationRepo.CreateRelation(ctx, relation); err != nil {
@@ -921,7 +936,7 @@ func (s *PayeeService) onboardEmployee(ctx context.Context, req payee.OnboardPay
 		IFSCCode:          employee.IFSCCode,
 		AccountHolderName: bankAccount.AccountHolderName,
 		BankName:          bankAccount.BankName,
-		AccountType:       string(employee.AccountType),
+		AccountType:       string(bankAccount.AccountType), // Use the account type from the created bank account
 		PAN:               employee.PAN,
 		LegalName:         employee.FullName,
 		Email:             employee.Email,

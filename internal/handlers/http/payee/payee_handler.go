@@ -7,7 +7,6 @@ import (
 
 	"github.com/labstack/echo/v4"
 	"xcentro.in/internal/core/payee"
-	"xcentro.in/internal/core/payment"
 	payeeSvc "xcentro.in/internal/services/payee"
 )
 
@@ -23,27 +22,12 @@ func NewPayeeHandler(payeeService *payeeSvc.PayeeService) *PayeeHandler {
 	}
 }
 
-// OnboardPayee handles POST /payees - Onboard a new payee
+// OnboardPayee handles POST /payees - Onboard a new payee (polymorphic)
 func (h *PayeeHandler) OnboardPayee(c echo.Context) error {
 	fmt.Println("=== HANDLER: OnboardPayee API Called ===")
 
-	// Parse request body (vendor-specific for Phase 1)
-	// TODO: Phase 7 - Make this polymorphic to support all payee types
-	var req struct {
-		PayeeType         string `json:"payee_type"` // "vendor" for now
-		GSTIN             string `json:"gstin"`
-		AccountNumber     string `json:"account_number"`
-		IFSCCode          string `json:"ifsc_code"`
-		AccountHolderName string `json:"account_holder_name"`
-		BankName          string `json:"bank_name"`
-		AccountType       string `json:"account_type"`
-		AccountLabel      string `json:"account_label"`
-		DisplayName       string `json:"display_name"`
-		ContactEmail      string `json:"contact_email"`
-		ContactPhone      string `json:"contact_phone"`
-		Notes             string `json:"notes"`
-	}
-
+	// Parse polymorphic request body
+	var req payee.OnboardPayeeRequest
 	if err := c.Bind(&req); err != nil {
 		fmt.Printf("❌ Error binding request: %v\n", err)
 		return c.JSON(http.StatusBadRequest, map[string]any{
@@ -52,41 +36,79 @@ func (h *PayeeHandler) OnboardPayee(c echo.Context) error {
 		})
 	}
 
-	fmt.Printf("📥 Request: PayeeType: %s, GSTIN: %s, Display Name: %s\n", req.PayeeType, req.GSTIN, req.DisplayName)
+	// Extract userId from JWT context (set by JWTMiddleware)
+	userID, ok := c.Get("userId").(string)
+	if !ok || userID == "" {
+		fmt.Println("❌ Missing userId in context")
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "MISSING_USER_ID",
+			"message": "User ID not found in token",
+		})
+	}
+	fmt.Printf("🔐 User ID (from JWT): %s\n", userID)
 
-	// Extract business_id from JWT (TODO: implement JWT extraction)
-	// TODO: Extract from JWT token claims
-	businessID := "bid12345"
-	fmt.Printf("🔐 Business ID (from JWT): %s\n", businessID)
+	// Extract business_id from X-Business-ID header
+	businessID := c.Request().Header.Get("X-Business-ID")
+	if businessID == "" {
+		fmt.Println("❌ Missing X-Business-ID header")
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "MISSING_BUSINESS_ID",
+			"message": "X-Business-ID header is required",
+		})
+	}
+	req.BusinessID = businessID
+	req.AddedBy = userID // Set the user who is adding this payee
+	fmt.Printf("🔐 Business ID (from header): %s\n", businessID)
 
 	// Default to vendor if not specified (backward compatibility)
-	payeeType := req.PayeeType
-	if payeeType == "" {
-		payeeType = "vendor"
+	if req.PayeeType == "" {
+		req.PayeeType = payee.PayeeTypeVendor
 	}
 
-	// Convert to service request with polymorphic structure
-	serviceReq := payee.OnboardPayeeRequest{
-		BusinessID:   businessID,
-		PayeeType:    payee.PayeeType(payeeType),
-		DisplayName:  req.DisplayName,
-		ContactEmail: req.ContactEmail,
-		ContactPhone: req.ContactPhone,
-		Notes:        req.Notes,
-		Vendor: &payee.OnboardVendorData{
-			GSTIN:             req.GSTIN,
-			AccountNumber:     req.AccountNumber,
-			IFSCCode:          req.IFSCCode,
-			AccountHolderName: req.AccountHolderName,
-			BankName:          req.BankName,
-			AccountType:       payment.BankAccountType(req.AccountType),
-			AccountLabel:      req.AccountLabel,
-		},
+	// Validate type-specific data is provided
+	switch req.PayeeType {
+	case payee.PayeeTypeVendor:
+		if req.Vendor == nil {
+			return c.JSON(http.StatusBadRequest, map[string]any{
+				"error":   "invalid_request",
+				"message": "vendor data is required for payee_type=vendor",
+			})
+		}
+		fmt.Printf("📥 Vendor: GSTIN=%s, DisplayName=%s\n", req.Vendor.GSTIN, req.DisplayName)
+	case payee.PayeeTypeEmployee:
+		if req.Employee == nil {
+			return c.JSON(http.StatusBadRequest, map[string]any{
+				"error":   "invalid_request",
+				"message": "employee data is required for payee_type=employee",
+			})
+		}
+		fmt.Printf("📥 Employee: PAN=%s, DisplayName=%s\n", req.Employee.PAN, req.DisplayName)
+	case payee.PayeeTypeBiller:
+		if req.Biller == nil {
+			return c.JSON(http.StatusBadRequest, map[string]any{
+				"error":   "invalid_request",
+				"message": "biller data is required for payee_type=biller",
+			})
+		}
+		fmt.Printf("📥 Biller: BillerID=%s, DisplayName=%s\n", req.Biller.BillerID, req.DisplayName)
+	case payee.PayeeTypeGST:
+		if req.GST == nil {
+			return c.JSON(http.StatusBadRequest, map[string]any{
+				"error":   "invalid_request",
+				"message": "gst data is required for payee_type=gst_payment",
+			})
+		}
+		fmt.Printf("📥 GST: TaxPeriod=%s, DisplayName=%s\n", req.GST.TaxPeriod, req.DisplayName)
+	default:
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "invalid_payee_type",
+			"message": fmt.Sprintf("unsupported payee_type: %s", req.PayeeType),
+		})
 	}
 
 	// Call payee service to onboard payee
 	fmt.Println("🔄 Calling Payee Service...")
-	resp, err := h.payeeService.OnboardPayee(c.Request().Context(), serviceReq)
+	resp, err := h.payeeService.OnboardPayee(c.Request().Context(), req)
 	if err != nil {
 		fmt.Printf("❌ Onboarding error: %v\n", err)
 		return c.JSON(http.StatusInternalServerError, map[string]any{
@@ -97,6 +119,7 @@ func (h *PayeeHandler) OnboardPayee(c echo.Context) error {
 
 	// Convert to response
 	response := map[string]any{
+		"relation_id":               resp.RelationID,
 		"payee_id":                  resp.PayeeID,
 		"account_id":                resp.AccountID,
 		"gst_verification_status":   string(resp.GSTVerificationStatus),

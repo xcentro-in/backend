@@ -2,12 +2,17 @@ package payee
 
 import (
 	"github.com/labstack/echo/v4"
+	"xcentro.in/internal/core/auth"
+	"xcentro.in/internal/middleware"
 	payeeSvc "xcentro.in/internal/services/payee"
 )
 
 // RegisterPayeeRoutes registers all payee-related routes
-func RegisterPayeeRoutes(group *echo.Group, payeeService *payeeSvc.PayeeService) {
+func RegisterPayeeRoutes(group *echo.Group, payeeService *payeeSvc.PayeeService, authService auth.AuthService) {
 	handler := NewPayeeHandler(payeeService)
+
+	// Apply JWT middleware to all payee routes
+	group.Use(middleware.JWTMiddleware(authService))
 
 	// Payee management endpoints
 	group.POST("", handler.OnboardPayee)                       // POST /payees

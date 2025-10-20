@@ -264,14 +264,47 @@ func registerV1UserRoutes(clients *externalClients, cfg *config.Config, group *e
 	userHandler.RegisterUserRoutes(group, userService, authService, businessUserRelRepo, clients.rcache)
 }
 
-func registerV1PayeeRoutes(clients *externalClients, group *echo.Group) {
+func registerV1PayeeRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
+	// Create auth service for JWT middleware
+	userRepository := userRepo.NewPgUserRepository(clients.db)
+	sessionRepo := authRepo.NewPgSessionRepository(clients.db)
+
+	// Create business service
+	busSvc := businessSvc.NewBusinessService(
+		business.NewPgBusinessRepository(clients.db),
+		business.NewPgBusinessUserRelationRepository(clients.db),
+		userRepository,
+		clients,
+		cfg,
+	)
+
+	// Create user service
+	userService := user.NewUserService(
+		userRepository,
+		business.NewPgBusinessRepository(clients.db),
+		business.NewPgBusinessUserRelationRepository(clients.db),
+		nil, // verificationService not needed for JWT
+		clients,
+		cfg,
+	)
+
+	// Create auth service
+	authService := authservice.NewAuthService(
+		sessionRepo,
+		userRepository,
+		userService,
+		busSvc,
+		clients,
+		cfg,
+	)
+
 	// Use factory pattern to create PayeeService with all dependencies
 	factory := payeeSvc.NewPayeeServiceFactory(clients.db, clients.txManager)
 	payeeService := factory.NewPayeeService()
 
-	// Register payee routes
+	// Register payee routes with auth middleware
 	payeeGroup := group.Group("/payees")
-	payee.RegisterPayeeRoutes(payeeGroup, payeeService)
+	payee.RegisterPayeeRoutes(payeeGroup, payeeService, authService)
 
 	// Register vendor dropdown route (lightweight API for voucher creation)
 	payee.RegisterVendorDropdownRoute(group, payeeService)
@@ -399,7 +432,7 @@ func registerV1Routes(s *xcentroServer) {
 	registerV1BusinessRoutes(clients, cfg, v1)
 
 	// Payee Routes
-	registerV1PayeeRoutes(clients, v1)
+	registerV1PayeeRoutes(clients, cfg, v1)
 
 	// Voucher Routes
 	registerV1VoucherRoutes(clients, v1)
