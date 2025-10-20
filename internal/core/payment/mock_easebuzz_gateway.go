@@ -41,8 +41,8 @@ func (g *MockEasebuzzGateway) TokenizeCard(ctx context.Context, request GatewayT
 	time.Sleep(3 * time.Second) // Simulate API call delay
 
 	// Generate token
-	token := fmt.Sprintf("eb_tok_%s_%s", request.CardDetails.CardType, uuid.New().String()[:8])
-	cardID := uuid.New().String()
+	token := fmt.Sprintf("eb_tok_%s_%s", request.CardDetails.CardType, uuid.Must(uuid.NewV7()).String()[:8])
+	cardID := uuid.Must(uuid.NewV7()).String()
 
 	// Mock successful response
 	response := &GatewayTokenizeResponse{
@@ -92,26 +92,26 @@ func (g *MockEasebuzzGateway) InitiatePayment(ctx context.Context, request Gatew
 		if request.Token != "" {
 			fmt.Printf("💳 Using tokenized card: %s\n", request.Token)
 			fmt.Printf("🔐 Cryptogram: %s\n", request.Cryptogram)
-			gatewayPaymentID = fmt.Sprintf("eb_card_token_%s", uuid.New().String()[:8])
+			gatewayPaymentID = fmt.Sprintf("eb_card_token_%s", uuid.Must(uuid.NewV7()).String()[:8])
 		} else {
 			fmt.Println("💳 Using direct card payment")
-			gatewayPaymentID = fmt.Sprintf("eb_card_direct_%s", uuid.New().String()[:8])
+			gatewayPaymentID = fmt.Sprintf("eb_card_direct_%s", uuid.Must(uuid.NewV7()).String()[:8])
 		}
 		redirectURL = fmt.Sprintf("https://mock-easebuzz.com/card-auth/%s", gatewayPaymentID)
 
 	case PaymentMethodNetBanking:
 		fmt.Printf("🏦 NetBanking: %s (%s)\n", request.NetBankingDetails.BankName, request.NetBankingDetails.BankCode)
-		gatewayPaymentID = fmt.Sprintf("eb_nb_%s", uuid.New().String()[:8])
+		gatewayPaymentID = fmt.Sprintf("eb_nb_%s", uuid.Must(uuid.NewV7()).String()[:8])
 		redirectURL = fmt.Sprintf("https://mock-easebuzz.com/netbanking/%s", gatewayPaymentID)
 
 	case PaymentMethodUPI:
 		fmt.Printf("📱 UPI: %s\n", request.UPIDetails.VPA)
-		gatewayPaymentID = fmt.Sprintf("eb_upi_%s", uuid.New().String()[:8])
+		gatewayPaymentID = fmt.Sprintf("eb_upi_%s", uuid.Must(uuid.NewV7()).String()[:8])
 		redirectURL = fmt.Sprintf("https://mock-easebuzz.com/upi/%s", gatewayPaymentID)
 
 	case PaymentMethodWallet:
 		fmt.Printf("👛 Wallet: %s\n", request.WalletDetails.WalletID)
-		gatewayPaymentID = fmt.Sprintf("eb_wallet_%s", uuid.New().String()[:8])
+		gatewayPaymentID = fmt.Sprintf("eb_wallet_%s", uuid.Must(uuid.NewV7()).String()[:8])
 		redirectURL = fmt.Sprintf("https://mock-easebuzz.com/wallet/%s", gatewayPaymentID)
 
 	default:

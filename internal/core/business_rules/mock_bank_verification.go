@@ -111,7 +111,7 @@ func (s *MockBankVerificationService) simulateVerificationResponse(request BankV
 func (s *MockBankVerificationService) createSuccessfulResponse(request BankVerificationRequest) (*BankVerificationResponse, error) {
 	// Generate verification details
 	verificationAmount := int64(100) // ₹1 in paise
-	transactionReference := fmt.Sprintf("UTR%d%s", time.Now().Unix(), uuid.New().String()[:6])
+	transactionReference := fmt.Sprintf("UTR%d%s", time.Now().Unix(), uuid.Must(uuid.NewV7()).String()[:6])
 
 	// For mock, we'll slightly modify the name to simulate bank response
 	verifiedName := s.generateVerifiedName(request.AccountHolderName)
@@ -133,7 +133,7 @@ func (s *MockBankVerificationService) createSuccessfulResponse(request BankVerif
 		Metadata: map[string]any{
 			"verification_method": "penny_drop",
 			"api_response_time":   s.apiDelay.String(),
-			"mock_data":          true,
+			"mock_data":           true,
 		},
 	}
 

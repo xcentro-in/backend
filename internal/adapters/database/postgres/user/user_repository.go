@@ -327,7 +327,7 @@ func (r *PgUserRepository) CreateVerificationCode(ctx context.Context, code *use
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 	`
 
-	codeID := uuid.New().String()
+	codeID := uuid.Must(uuid.NewV7()).String()
 	_, err := r.querier.Exec(ctx, query,
 		codeID,
 		code.UserID,

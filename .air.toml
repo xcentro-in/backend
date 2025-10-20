@@ -5,3 +5,5 @@ tmp_dir = "bin"
   bin = "./bin/api"
   cmd = "go build -o ./bin/api ./cmd/api"
   include_ext = ["go"]
+  stop_on_error = true
+  rerun = false

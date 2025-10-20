@@ -207,7 +207,7 @@ func (r *PostgresFeeRulesRepository) CreateFeeRule(ctx context.Context, rule *bu
 		)
 	`
 
-	ruleID := uuid.New().String()
+	ruleID := uuid.Must(uuid.NewV7()).String()
 
 	_, err := r.querier.Exec(ctx, query,
 		ruleID,

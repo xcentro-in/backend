@@ -78,7 +78,7 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 		feeCalculation.TotalAmount, feeCalculation.Currency)
 
 	// Step 2: Generate UUID for payment at application level
-	paymentID := uuid.New().String()
+	paymentID := uuid.Must(uuid.NewV7()).String()
 	fmt.Printf("🆔 Generated Payment ID: %s\n", paymentID)
 
 	// Step 3: Generate callback URL based on calling device
@@ -150,23 +150,23 @@ func (s *PaymentService) TokenizeCard(ctx context.Context, req payment.TokenizeR
 	fmt.Printf("=== PAYMENT SERVICE: TokenizeCard Called - BusinessID: %s ===\n", req.BusinessID)
 
 	// Step 1: Generate UUID for tokenization payment at application level
-	paymentID := uuid.New().String()
+	paymentID := uuid.Must(uuid.NewV7()).String()
 	fmt.Printf("🆔 Generated Payment ID for tokenization: %s\n", paymentID)
 
 	// Step 2: Create payment record for ₹1 tokenization transaction
 	fmt.Println("💾 Creating tokenization payment record...")
 	p := &payment.Payment{
 		ID:            paymentID,
-		UserID:        "",                                  // Tokenization is business-level, no specific user
+		UserID:        "", // Tokenization is business-level, no specific user
 		BusinessID:    req.BusinessID,
-		Amount:        100,                                 // ₹1.00 in paise (tokenization charge)
+		Amount:        100, // ₹1.00 in paise (tokenization charge)
 		Currency:      payment.CurrencyINR,
 		PaymentMethod: payment.PaymentMethodCard,
-		PaymentType:   payment.PaymentTypeTokenization,    // Mark as tokenization payment
+		PaymentType:   payment.PaymentTypeTokenization, // Mark as tokenization payment
 		Status:        payment.PaymentStatusPending,
 		Description:   "Card tokenization (₹1 verification charge)",
-		CallbackURL:   "", // No callback URL needed for tokenization
-		FeeAmount:     0,  // No fee for tokenization
+		CallbackURL:   "",  // No callback URL needed for tokenization
+		FeeAmount:     0,   // No fee for tokenization
 		TotalAmount:   100, // ₹1.00 total
 		Metadata: map[string]any{
 			"card_type":     string(req.CardDetails.CardType),

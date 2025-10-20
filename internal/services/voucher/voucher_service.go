@@ -50,11 +50,11 @@ type VoucherService interface {
 
 // VoucherServiceImpl implements the VoucherService interface
 type VoucherServiceImpl struct {
-	voucherRepo     voucher.VoucherRepository
-	approvalRepo    voucher.ApprovalRepository
-	queueRepo       voucher.ERPSyncQueueRepository
-	voucherCore     voucher.VoucherService // Domain service for business logic
-	businessPayeeRepo interface{} // payee.BusinessPayeeRelationRepository, using interface{} to avoid circular import
+	voucherRepo       voucher.VoucherRepository
+	approvalRepo      voucher.ApprovalRepository
+	queueRepo         voucher.ERPSyncQueueRepository
+	voucherCore       voucher.VoucherService // Domain service for business logic
+	businessPayeeRepo interface{}            // payee.BusinessPayeeRelationRepository, using interface{} to avoid circular import
 }
 
 // NewVoucherService creates a new instance of VoucherService
@@ -100,7 +100,7 @@ func (s *VoucherServiceImpl) CreateDraftVoucher(ctx context.Context, req *Create
 
 	// 4. Create voucher entity
 	v := &voucher.Voucher{
-		VoucherID:        uuid.New(),
+		VoucherID:        uuid.Must(uuid.NewV7()),
 		VoucherNumber:    voucherNumber,
 		VoucherDate:      now,
 		FiscalYear:       fiscalYear,
@@ -564,7 +564,7 @@ func (s *VoucherServiceImpl) EnqueueForERPSync(ctx context.Context, voucherID uu
 
 	// 3. Create queue entry
 	queueEntry := &voucher.ERPSyncQueue{
-		QueueID:       uuid.New(),
+		QueueID:       uuid.Must(uuid.NewV7()),
 		VoucherID:     voucherID,
 		SyncDirection: "push", // Push to ERP
 		QueueStatus:   "pending",

@@ -23,7 +23,7 @@ func GenerateUploadKey(directory string, filename string) string {
 	return fmt.Sprintf("%s/%s/%s%s",
 		directory,
 		time.Now().Format("2006/01/02"),
-		uuid.New().String(),
+		uuid.Must(uuid.NewV7()).String(),
 		ext,
 	)
 }
@@ -195,7 +195,7 @@ func (s *S3Client) GenerateMultipartUploadURLs(ctx context.Context, filename str
 	ext := filepath.Ext(filename)
 	key := fmt.Sprintf("uploads/%s/%s%s",
 		time.Now().Format("2006/01/02"),
-		uuid.New().String(),
+		uuid.Must(uuid.NewV7()).String(),
 		ext,
 	)
 

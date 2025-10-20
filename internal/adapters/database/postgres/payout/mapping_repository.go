@@ -28,7 +28,7 @@ func NewPostgresPayoutProviderMappingRepository(db client.DB) payout.PayoutProvi
 func (r *PostgresPayoutProviderMappingRepository) Create(ctx context.Context, mapping *payout.PayoutProviderMapping) error {
 	// Generate UUID if not provided
 	if mapping.MappingID == "" {
-		mapping.MappingID = uuid.New().String()
+		mapping.MappingID = uuid.Must(uuid.NewV7()).String()
 	}
 
 	query := `

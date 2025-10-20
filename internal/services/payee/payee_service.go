@@ -22,12 +22,12 @@ type PayeeService struct {
 	payeeMasterRepo payee.PayeeMasterRepository
 
 	// Type-specific repositories
-	payeeVendorRepo              payee.PayeeVendorRepository
-	payeeGSTRepo                 payee.PayeeGSTRepository
-	payeeGSTVirtualAccountRepo   payee.PayeeGSTVirtualAccountRepository
-	payeeBillerRepo              payee.PayeeBillerRepository
-	payeeBillerAccountRepo       payee.PayeeBillerAccountRepository
-	payeeEmployeeRepo            payee.PayeeEmployeeRepository
+	payeeVendorRepo            payee.PayeeVendorRepository
+	payeeGSTRepo               payee.PayeeGSTRepository
+	payeeGSTVirtualAccountRepo payee.PayeeGSTVirtualAccountRepository
+	payeeBillerRepo            payee.PayeeBillerRepository
+	payeeBillerAccountRepo     payee.PayeeBillerAccountRepository
+	payeeEmployeeRepo          payee.PayeeEmployeeRepository
 
 	// Shared repositories
 	payeeBankAccountRepo      payee.PayeeBankAccountRepository
@@ -65,21 +65,21 @@ func NewPayeeService(
 	txManager client.TxManager,
 ) *PayeeService {
 	return &PayeeService{
-		payeeMasterRepo:              payeeMasterRepo,
-		payeeVendorRepo:              payeeVendorRepo,
-		payeeGSTRepo:                 payeeGSTRepo,
-		payeeGSTVirtualAccountRepo:   payeeGSTVirtualAccountRepo,
-		payeeBillerRepo:              payeeBillerRepo,
-		payeeBillerAccountRepo:       payeeBillerAccountRepo,
-		payeeEmployeeRepo:            payeeEmployeeRepo,
-		payeeBankAccountRepo:         payeeBankAccountRepo,
-		businessPayeeRelationRepo:    businessPayeeRelationRepo,
-		providerMappingRepo:          providerMappingRepo,
-		payoutProvider:               payoutProvider,
-		gstVerificationSvc:           gstVerificationSvc,
-		bankVerificationSvc:          bankVerificationSvc,
-		crossVerificationSvc:         crossVerificationSvc,
-		txManager:                    txManager,
+		payeeMasterRepo:            payeeMasterRepo,
+		payeeVendorRepo:            payeeVendorRepo,
+		payeeGSTRepo:               payeeGSTRepo,
+		payeeGSTVirtualAccountRepo: payeeGSTVirtualAccountRepo,
+		payeeBillerRepo:            payeeBillerRepo,
+		payeeBillerAccountRepo:     payeeBillerAccountRepo,
+		payeeEmployeeRepo:          payeeEmployeeRepo,
+		payeeBankAccountRepo:       payeeBankAccountRepo,
+		businessPayeeRelationRepo:  businessPayeeRelationRepo,
+		providerMappingRepo:        providerMappingRepo,
+		payoutProvider:             payoutProvider,
+		gstVerificationSvc:         gstVerificationSvc,
+		bankVerificationSvc:        bankVerificationSvc,
+		crossVerificationSvc:       crossVerificationSvc,
+		txManager:                  txManager,
 	}
 }
 
@@ -306,23 +306,23 @@ func (s *PayeeService) onboardVendor(ctx context.Context, req payee.OnboardPayee
 
 		// Create PayeeBankAccount entity
 		bankAccount = &payee.PayeeBankAccount{
-			PayeeID:                  payeeID,
-			AccountNumber:            vendor.AccountNumber,
-			AccountNumberHash:        accountHash,
-			IFSCCode:                 vendor.IFSCCode,
-			BankName:                 bankResp.BankName,
-			BranchName:               bankResp.BranchName,
-			AccountType:              accountType, // Use the defaulted account type
-			AccountHolderName:        bankResp.VerifiedAccountName,
-			IsVerified:               true,
-			VerifiedAt:               &time.Time{},
-			BankVerificationStatus:   payee.VerificationStatusSuccess,
-			CrossVerificationStatus:  payee.VerificationStatusSuccess,
-			NameMatchScore:           crossResp.MatchScore,
-			IsActive:                 true,
-			IsPrimary:                false, // Will check if this should be primary
-			AccountLabel:             vendor.AccountLabel,
-			VerificationData:         bankResp.Metadata,
+			PayeeID:                 payeeID,
+			AccountNumber:           vendor.AccountNumber,
+			AccountNumberHash:       accountHash,
+			IFSCCode:                vendor.IFSCCode,
+			BankName:                bankResp.BankName,
+			BranchName:              bankResp.BranchName,
+			AccountType:             accountType, // Use the defaulted account type
+			AccountHolderName:       bankResp.VerifiedAccountName,
+			IsVerified:              true,
+			VerifiedAt:              &time.Time{},
+			BankVerificationStatus:  payee.VerificationStatusSuccess,
+			CrossVerificationStatus: payee.VerificationStatusSuccess,
+			NameMatchScore:          crossResp.MatchScore,
+			IsActive:                true,
+			IsPrimary:               false, // Will check if this should be primary
+			AccountLabel:            vendor.AccountLabel,
+			VerificationData:        bankResp.Metadata,
 		}
 		*bankAccount.VerifiedAt = time.Now()
 	}
@@ -423,7 +423,7 @@ func (s *PayeeService) onboardVendor(ctx context.Context, req payee.OnboardPayee
 		// Store provider mapping
 		now := time.Now()
 		mapping := &payout.PayoutProviderMapping{
-			MappingID:             uuid.New().String(),
+			MappingID:             uuid.Must(uuid.NewV7()).String(),
 			PayeeID:               payeeID,
 			AccountID:             accountID,
 			Provider:              s.payoutProvider.GetProviderType(),
@@ -951,7 +951,7 @@ func (s *PayeeService) onboardEmployee(ctx context.Context, req payee.OnboardPay
 		// Store provider mapping
 		now := time.Now()
 		mapping := &payout.PayoutProviderMapping{
-			MappingID:             uuid.New().String(),
+			MappingID:             uuid.Must(uuid.NewV7()).String(),
 			PayeeID:               payeeID,
 			AccountID:             bankAccount.AccountID,
 			Provider:              s.payoutProvider.GetProviderType(),

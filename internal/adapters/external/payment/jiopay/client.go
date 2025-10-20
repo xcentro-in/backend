@@ -104,7 +104,7 @@ func (c *JioPayClient) TokenizeCard(ctx context.Context, request payment.Gateway
 	if request.CardDetails.CardType == payment.CardTypeRupay {
 		// For RuPay, this should come from prior authentication
 		// For now, generate a placeholder
-		cardObj.AuthenticationReferenceID = fmt.Sprintf("AUTHREF_%s", uuid.New().String()[:10])
+		cardObj.AuthenticationReferenceID = fmt.Sprintf("AUTHREF_%s", uuid.Must(uuid.NewV7()).String()[:10])
 		fmt.Println("📝 RuPay card detected: Added Authentication Reference Id")
 	}
 

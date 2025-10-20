@@ -28,7 +28,7 @@ func NewPostgresPayoutTransferRepository(db client.DB) payout.PayoutTransferRepo
 func (r *PostgresPayoutTransferRepository) Create(ctx context.Context, transfer *payout.PayoutTransferRequest) error {
 	// Generate UUID if not provided
 	if transfer.TransferRequestID == "" {
-		transfer.TransferRequestID = uuid.New().String()
+		transfer.TransferRequestID = uuid.Must(uuid.NewV7()).String()
 	}
 
 	query := `

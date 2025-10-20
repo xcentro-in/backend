@@ -47,8 +47,8 @@ func NewBusinessService(
 		businessRepo:        businessRepo,
 		businessUserRelRepo: businessUserRelRepo,
 		userRepo:            userRepo,
-		txManager:           clients.GetTxManager(),    // Extract from clients
-		rclient:             clients.GetRedisClient(),  // Extract from clients
+		txManager:           clients.GetTxManager(),   // Extract from clients
+		rclient:             clients.GetRedisClient(), // Extract from clients
 		verificationService: verificationSvc,
 		logger:              logger.GetDefault(),
 	}
@@ -124,7 +124,7 @@ func (s *BusinessServiceImpl) InitiateOnboarding(ctx context.Context, uid string
 	// Step 4: Verify GSTIN via AuthBridge
 	var gstDataJSON string
 	if s.verificationService != nil {
-		transID := uuid.New().String()
+		transID := uuid.Must(uuid.NewV7()).String()
 		gstData, err := s.verificationService.VerifyGSTIN(ctx, gstin, transID)
 		if err != nil {
 			s.logger.Errorf("GSTIN verification failed: %v", err)
@@ -140,7 +140,7 @@ func (s *BusinessServiceImpl) InitiateOnboarding(ctx context.Context, uid string
 	// Step 4.1: Verify PAN via AuthBridge PAN_COM
 	var itidDataJSON string
 	if s.verificationService != nil {
-		transID := uuid.New().String()
+		transID := uuid.Must(uuid.NewV7()).String()
 		panData, err := s.verificationService.VerifyPANCOM(ctx, pan, transID)
 		if err != nil {
 			s.logger.Errorf("PAN verification failed: %v", err)
@@ -272,7 +272,7 @@ func (s *BusinessServiceImpl) CompleteKYB(ctx context.Context, uid string, userR
 	// Step 6: Verify CIN if required
 	var cidDataJSON string
 	if shared.RequiresCIN(req.BusinessType) && s.verificationService != nil {
-		transID := uuid.New().String()
+		transID := uuid.Must(uuid.NewV7()).String()
 		cinData, err := s.verificationService.VerifyCIN(ctx, req.CID, transID)
 		if err != nil {
 			s.logger.Errorf("CIN verification failed: %v", err)

@@ -14,7 +14,7 @@ type MockERPIntegrationService struct {
 	DelayMilliseconds int
 
 	// Simulate errors
-	ShouldFail      bool
+	ShouldFail       bool
 	FailureErrorCode string
 }
 
@@ -22,7 +22,7 @@ type MockERPIntegrationService struct {
 func NewMockERPIntegrationService() ERPIntegrationService {
 	return &MockERPIntegrationService{
 		DelayMilliseconds: 500, // Simulate 500ms API delay
-		ShouldFail:       false,
+		ShouldFail:        false,
 	}
 }
 
@@ -40,16 +40,16 @@ func (m *MockERPIntegrationService) PushVoucher(ctx context.Context, request *ER
 			errorCode = ERPErrorServerError
 		}
 		return &ERPSyncResponse{
-			Success:      false,
-			ErrorCode:    errorCode,
-			ErrorMessage: "Mock ERP integration failure (simulated)",
-		}, &ERPIntegrationError{
-			Provider:     request.Provider,
-			Operation:    "push",
-			ErrorCode:    errorCode,
-			ErrorMessage: "Mock ERP integration failure (simulated)",
-			Retryable:    errorCode == ERPErrorNetworkTimeout || errorCode == ERPErrorServerError,
-		}
+				Success:      false,
+				ErrorCode:    errorCode,
+				ErrorMessage: "Mock ERP integration failure (simulated)",
+			}, &ERPIntegrationError{
+				Provider:     request.Provider,
+				Operation:    "push",
+				ErrorCode:    errorCode,
+				ErrorMessage: "Mock ERP integration failure (simulated)",
+				Retryable:    errorCode == ERPErrorNetworkTimeout || errorCode == ERPErrorServerError,
+			}
 	}
 
 	// Simulate successful sync
@@ -61,10 +61,10 @@ func (m *MockERPIntegrationService) PushVoucher(ctx context.Context, request *ER
 		PostingDate:    time.Now(),
 		Message:        fmt.Sprintf("Voucher %s synced successfully to %s", request.Voucher.VoucherNumber, request.Provider),
 		RawResponse: map[string]interface{}{
-			"mock": true,
+			"mock":       true,
 			"voucher_id": erpReferenceID,
-			"status": "posted",
-			"timestamp": time.Now().Format(time.RFC3339),
+			"status":     "posted",
+			"timestamp":  time.Now().Format(time.RFC3339),
 		},
 	}, nil
 }
@@ -90,8 +90,8 @@ func (m *MockERPIntegrationService) PullVoucher(ctx context.Context, provider ER
 	// Return a mock voucher
 	now := time.Now()
 	return &ERPVoucher{
-		BusinessID:    uuid.New(),
-		VoucherID:     uuid.New(),
+		BusinessID:    uuid.Must(uuid.NewV7()),
+		VoucherID:     uuid.Must(uuid.NewV7()),
 		VoucherNumber: "PV-2024-MOCK",
 		VoucherDate:   now,
 		VoucherType:   "payment",
@@ -109,7 +109,7 @@ func (m *MockERPIntegrationService) PullVoucher(ctx context.Context, provider ER
 		TDSRate:       1.0,
 		TDSSection:    "194C",
 		Metadata: map[string]interface{}{
-			"mock": true,
+			"mock":             true,
 			"erp_reference_id": erpReferenceID,
 		},
 	}, nil
@@ -191,6 +191,6 @@ func generateMockERPReferenceID(provider ERPProvider, voucherNumber string) stri
 	case ERPProviderQuickBooks:
 		return fmt.Sprintf("QB-BILL-%d", time.Now().Unix()%10000)
 	default:
-		return fmt.Sprintf("ERP-%s", uuid.New().String()[:8])
+		return fmt.Sprintf("ERP-%s", uuid.Must(uuid.NewV7()).String()[:8])
 	}
 }

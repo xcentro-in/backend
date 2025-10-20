@@ -41,8 +41,8 @@ func (g *MockJioPayGateway) TokenizeCard(ctx context.Context, request GatewayTok
 	time.Sleep(2 * time.Second) // Simulate network delay
 
 	// Mock transaction response
-	transactionID := fmt.Sprintf("jio_txn_%s", uuid.New().String()[:8])
-	authResponseCode := fmt.Sprintf("AUTH_%s_%d", uuid.New().String()[:6], time.Now().Unix()%10000)
+	transactionID := fmt.Sprintf("jio_txn_%s", uuid.Must(uuid.NewV7()).String()[:8])
+	authResponseCode := fmt.Sprintf("AUTH_%s_%d", uuid.Must(uuid.NewV7()).String()[:6], time.Now().Unix()%10000)
 
 	fmt.Printf("✅ Transaction successful: %s\n", transactionID)
 	fmt.Printf("🔐 Auth Response Code: %s\n", authResponseCode)
@@ -58,8 +58,8 @@ func (g *MockJioPayGateway) TokenizeCard(ctx context.Context, request GatewayTok
 	time.Sleep(1 * time.Second) // Simulate tokenization API call
 
 	// Generate token
-	token := fmt.Sprintf("jio_tok_%s_%s", request.CardDetails.CardType, uuid.New().String()[:8])
-	cardID := uuid.New().String()
+	token := fmt.Sprintf("jio_tok_%s_%s", request.CardDetails.CardType, uuid.Must(uuid.NewV7()).String()[:8])
+	cardID := uuid.Must(uuid.NewV7()).String()
 
 	// Mock tokenization response
 	response := &GatewayTokenizeResponse{
@@ -109,26 +109,26 @@ func (g *MockJioPayGateway) InitiatePayment(ctx context.Context, request Gateway
 		if request.Token != "" {
 			fmt.Printf("💳 Using tokenized card: %s\n", request.Token)
 			fmt.Printf("🔐 Cryptogram: %s\n", request.Cryptogram)
-			gatewayPaymentID = fmt.Sprintf("jio_card_token_%s", uuid.New().String()[:8])
+			gatewayPaymentID = fmt.Sprintf("jio_card_token_%s", uuid.Must(uuid.NewV7()).String()[:8])
 		} else {
 			fmt.Println("💳 Using direct card payment")
-			gatewayPaymentID = fmt.Sprintf("jio_card_direct_%s", uuid.New().String()[:8])
+			gatewayPaymentID = fmt.Sprintf("jio_card_direct_%s", uuid.Must(uuid.NewV7()).String()[:8])
 		}
 		redirectURL = fmt.Sprintf("https://mock-jiopay.com/card-auth/%s", gatewayPaymentID)
 
 	case PaymentMethodNetBanking:
 		fmt.Printf("🏦 NetBanking: %s (%s)\n", request.NetBankingDetails.BankName, request.NetBankingDetails.BankCode)
-		gatewayPaymentID = fmt.Sprintf("jio_nb_%s", uuid.New().String()[:8])
+		gatewayPaymentID = fmt.Sprintf("jio_nb_%s", uuid.Must(uuid.NewV7()).String()[:8])
 		redirectURL = fmt.Sprintf("https://mock-jiopay.com/netbanking/%s", gatewayPaymentID)
 
 	case PaymentMethodUPI:
 		fmt.Printf("📱 UPI: %s\n", request.UPIDetails.VPA)
-		gatewayPaymentID = fmt.Sprintf("jio_upi_%s", uuid.New().String()[:8])
+		gatewayPaymentID = fmt.Sprintf("jio_upi_%s", uuid.Must(uuid.NewV7()).String()[:8])
 		redirectURL = fmt.Sprintf("https://mock-jiopay.com/upi/%s", gatewayPaymentID)
 
 	case PaymentMethodWallet:
 		fmt.Printf("👛 Wallet: %s\n", request.WalletDetails.WalletID)
-		gatewayPaymentID = fmt.Sprintf("jio_wallet_%s", uuid.New().String()[:8])
+		gatewayPaymentID = fmt.Sprintf("jio_wallet_%s", uuid.Must(uuid.NewV7()).String()[:8])
 		redirectURL = fmt.Sprintf("https://mock-jiopay.com/wallet/%s", gatewayPaymentID)
 
 	default:

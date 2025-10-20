@@ -115,7 +115,7 @@ func (s *PayoutService) InitiatePayoutForVoucher(ctx context.Context, voucherID 
 
 	// Step 7: Create transfer request
 	transferReq := &payout.PayoutTransferRequest{
-		TransferRequestID:     uuid.New().String(),
+		TransferRequestID:     uuid.Must(uuid.NewV7()).String(),
 		VoucherID:             voucherID,
 		Provider:              mapping.Provider,
 		ProviderBeneficiaryID: mapping.ProviderBeneficiaryID,

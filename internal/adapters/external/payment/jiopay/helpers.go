@@ -68,7 +68,7 @@ func sanitizePhone(phone string) string {
 // buildConsentObject generates a consent object with unique ID and current timestamp
 func buildConsentObject() ConsentObject {
 	return ConsentObject{
-		ID:        fmt.Sprintf("CONSENT_%s", uuid.New().String()[:8]),
+		ID:        fmt.Sprintf("CONSENT_%s", uuid.Must(uuid.NewV7()).String()[:8]),
 		Timestamp: time.Now().UTC().Format(time.RFC3339Nano), // ISO 8601 format
 	}
 }
@@ -77,7 +77,7 @@ func buildConsentObject() ConsentObject {
 func buildAuditObject() AuditObject {
 	return AuditObject{
 		Authorized:        true,
-		AuthorizationCode: fmt.Sprintf("AUTH_%s_%d", uuid.New().String()[:6], time.Now().Unix()%100000),
+		AuthorizationCode: fmt.Sprintf("AUTH_%s_%d", uuid.Must(uuid.NewV7()).String()[:6], time.Now().Unix()%100000),
 	}
 }
 
@@ -211,7 +211,7 @@ func generateXTimestampID() string {
 // generateXTraceID generates a UUID for request tracing
 // Returns uppercase UUID without hyphens
 func generateXTraceID() string {
-	return strings.ReplaceAll(strings.ToUpper(uuid.New().String()), "-", "")
+	return strings.ReplaceAll(strings.ToUpper(uuid.Must(uuid.NewV7()).String()), "-", "")
 }
 
 // generateXAppToken generates the x-app-token header using AES-128 encryption
