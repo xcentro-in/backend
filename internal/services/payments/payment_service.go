@@ -6,6 +6,7 @@ import (
 
 	"github.com/google/uuid"
 	"xcentro.in/internal/adapters/database/postgres/client"
+	"xcentro.in/internal/core/business"
 	"xcentro.in/internal/core/business_rules"
 	"xcentro.in/internal/core/payment"
 )
@@ -20,6 +21,7 @@ type PaymentService struct {
 	feeCalculator   business_rules.FeeCalculator
 	txManager       client.TxManager
 	voucherService  interface{} // voucher.VoucherService, using interface{} to avoid circular import (Phase 6)
+	businessService business.BusinessService
 }
 
 // NewPaymentService creates a new payment service with all dependencies
@@ -32,6 +34,7 @@ func NewPaymentService(
 	feeCalculator business_rules.FeeCalculator,
 	txManager client.TxManager,
 	voucherService interface{}, // Phase 6: Voucher service for payment integration
+	businessService business.BusinessService,
 ) *PaymentService {
 	s := &PaymentService{
 		orchestrator:    orchestrator,
@@ -42,6 +45,7 @@ func NewPaymentService(
 		feeCalculator:   feeCalculator,
 		txManager:       txManager,
 		voucherService:  voucherService,
+		businessService: businessService,
 	}
 
 	// Inject voucher service into orchestrator (Phase 6)
@@ -126,6 +130,19 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 	fmt.Printf("✅ Payment processed successfully: %s\n", response.PaymentID)
 	fmt.Printf("🏦 Gateway Used: %s\n", response.GatewayUsed)
 	fmt.Printf("🌐 Redirect URL: %s\n", response.RedirectURL)
+
+	// Update onboarding flag (non-blocking, first-time only)
+	if s.businessService != nil {
+		go func(bizID string) {
+			bgCtx := context.Background()
+			flags, err := s.businessService.GetBusinessOnboardingFlags(bgCtx, bizID)
+			if err == nil && !flags.HasCreatedFirstPayment {
+				_ = s.businessService.UpdateOnboardingStatus(bgCtx, bizID, "has_created_first_payment", true)
+				fmt.Printf("🎯 Onboarding flag updated: has_created_first_payment = true for business %s\n", bizID)
+			}
+		}(req.BusinessID)
+	}
+
 	fmt.Println("=== PAYMENT SERVICE: ProcessPayment Complete ===")
 
 	return response, nil

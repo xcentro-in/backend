@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"xcentro.in/internal/adapters/database/postgres/client"
+	"xcentro.in/internal/core/business"
 	"xcentro.in/internal/core/business_rules"
 	"xcentro.in/internal/core/payee"
 	"xcentro.in/internal/core/payment"
@@ -44,6 +45,9 @@ type PayeeService struct {
 
 	// Transaction manager
 	txManager client.TxManager
+
+	// Business service for onboarding flags
+	businessService business.BusinessService
 }
 
 // NewPayeeService creates a new payee service with all dependencies
@@ -63,6 +67,7 @@ func NewPayeeService(
 	bankVerificationSvc business_rules.BankVerificationService,
 	crossVerificationSvc business_rules.CrossVerificationService,
 	txManager client.TxManager,
+	businessService business.BusinessService,
 ) *PayeeService {
 	return &PayeeService{
 		payeeMasterRepo:            payeeMasterRepo,
@@ -80,6 +85,7 @@ func NewPayeeService(
 		bankVerificationSvc:        bankVerificationSvc,
 		crossVerificationSvc:       crossVerificationSvc,
 		txManager:                  txManager,
+		businessService:            businessService,
 	}
 }
 
@@ -398,6 +404,18 @@ func (s *PayeeService) onboardVendor(ctx context.Context, req payee.OnboardPayee
 	}
 
 	fmt.Println("✅ Payee onboarding complete!")
+
+	// Update onboarding flag (non-blocking, first-time only)
+	if s.businessService != nil {
+		go func(bizID string) {
+			bgCtx := context.Background()
+			flags, err := s.businessService.GetBusinessOnboardingFlags(bgCtx, bizID)
+			if err == nil && !flags.HasAddedVendor {
+				_ = s.businessService.UpdateOnboardingStatus(bgCtx, bizID, "has_added_vendor", true)
+				fmt.Printf("🎯 Onboarding flag updated: has_added_vendor = true for business %s\n", bizID)
+			}
+		}(req.BusinessID)
+	}
 
 	// Step 11: Onboard to payout provider (Phase 8)
 	fmt.Println("🚀 Step 11: Onboarding payee to payout provider (Castler)...")

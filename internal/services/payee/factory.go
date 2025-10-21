@@ -5,21 +5,24 @@ import (
 	payeeRepo "xcentro.in/internal/adapters/database/postgres/payee"
 	payoutRepo "xcentro.in/internal/adapters/database/postgres/payout"
 	"xcentro.in/internal/adapters/external/payout/castler"
+	"xcentro.in/internal/core/business"
 	"xcentro.in/internal/core/business_rules"
 )
 
 // PayeeServiceFactory creates PayeeService with all dependencies
 // This pattern keeps routes.go clean and centralizes dependency management
 type PayeeServiceFactory struct {
-	db        client.DB
-	txManager client.TxManager
+	db              client.DB
+	txManager       client.TxManager
+	businessService business.BusinessService
 }
 
 // NewPayeeServiceFactory creates a new factory for PayeeService
-func NewPayeeServiceFactory(db client.DB, txManager client.TxManager) *PayeeServiceFactory {
+func NewPayeeServiceFactory(db client.DB, txManager client.TxManager, businessService business.BusinessService) *PayeeServiceFactory {
 	return &PayeeServiceFactory{
-		db:        db,
-		txManager: txManager,
+		db:              db,
+		txManager:       txManager,
+		businessService: businessService,
 	}
 }
 
@@ -68,5 +71,6 @@ func (f *PayeeServiceFactory) NewPayeeService() *PayeeService {
 		bankVerificationSvc,
 		crossVerificationSvc,
 		f.txManager,
+		f.businessService,
 	)
 }

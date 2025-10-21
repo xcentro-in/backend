@@ -83,6 +83,15 @@ func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group
 	storedCardRepository := paymentRepo.NewPgStoredCardRepository(clients.db)
 	bankAccountRepository := paymentRepo.NewPgBankAccountRepository(clients.db)
 
+	// Create business service for onboarding flags
+	busSvc := businessSvc.NewBusinessService(
+		business.NewPgBusinessRepository(clients.db),
+		business.NewPgBusinessUserRelationRepository(clients.db),
+		userRepo.NewPgUserRepository(clients.db),
+		clients,
+		cfg,
+	)
+
 	// Create real payment gateway clients
 	easebuzzClient := easebuzz.NewEasebuzzClient(
 		cfg.Easebuzz.BaseURL,
@@ -103,7 +112,7 @@ func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group
 	// Create business rules services
 	orchestrator := corePayment.NewMockPaymentOrchestrator(paymentRepository, storedCardRepository, jioPayClient, easebuzzClient)
 	feeCalculator := business_rules.NewMockFeeCalculator()
-	walletService := business_rules.NewMockWalletService(storedCardRepository, bankAccountRepository, clients.txManager)
+	walletService := business_rules.NewMockWalletService(storedCardRepository, bankAccountRepository, clients.txManager, busSvc)
 
 	// Phase 10: Create database-backed fee calculator
 	feeRulesRepository := paymentRepo.NewPostgresFeeRulesRepository(clients.db)
@@ -139,6 +148,7 @@ func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group
 		feeCalculator,
 		clients.txManager,
 		voucherService, // PHASE 6: Inject voucher service
+		busSvc,         // Business service for onboarding flags
 	)
 
 	// Register payment routes with payment service (Phase 10: Added paymentSourceService)
@@ -299,7 +309,7 @@ func registerV1PayeeRoutes(clients *externalClients, cfg *config.Config, group *
 	)
 
 	// Use factory pattern to create PayeeService with all dependencies
-	factory := payeeSvc.NewPayeeServiceFactory(clients.db, clients.txManager)
+	factory := payeeSvc.NewPayeeServiceFactory(clients.db, clients.txManager, busSvc)
 	payeeService := factory.NewPayeeService()
 
 	// Register payee routes with auth middleware

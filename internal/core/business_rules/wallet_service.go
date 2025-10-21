@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"xcentro.in/internal/adapters/database/postgres/client"
+	"xcentro.in/internal/core/business"
 	"xcentro.in/internal/core/payment"
 )
 
@@ -36,6 +37,8 @@ type MockWalletService struct {
 	bankAccountRepo payment.BankAccountRepository
 	// Transaction manager (Phase 4.4)
 	txManager client.TxManager
+	// Business service for onboarding flags
+	businessService business.BusinessService
 }
 
 // NewMockWalletService creates a new mock wallet service
@@ -43,7 +46,7 @@ type MockWalletService struct {
 // - Rename to NewWalletService()
 // - Add parameters: storedCardRepo, bankAccountRepo, bankVerificationLogRepo
 // - Remove map initialization, initialize repo dependencies instead
-func NewMockWalletService(storedCardRepo payment.StoredCardRepository, bankAccountRepo payment.BankAccountRepository, txManager client.TxManager) WalletService {
+func NewMockWalletService(storedCardRepo payment.StoredCardRepository, bankAccountRepo payment.BankAccountRepository, txManager client.TxManager, businessService business.BusinessService) WalletService {
 	return &MockWalletService{
 		storedCards:             make(map[string][]*payment.StoredCard),
 		bankAccounts:            make(map[string][]*payment.BankAccount),
@@ -51,6 +54,7 @@ func NewMockWalletService(storedCardRepo payment.StoredCardRepository, bankAccou
 		storedCardRepo:          storedCardRepo,
 		bankAccountRepo:         bankAccountRepo,
 		txManager:               txManager,
+		businessService:         businessService,
 	}
 }
 
@@ -289,6 +293,18 @@ func (ws *MockWalletService) AddPaymentSource(businessID string, source payment.
 	fmt.Printf("✅ Payment source added successfully\n")
 	fmt.Printf("📋 Source Info: %+v\n", source.GetDisplayInfo())
 	fmt.Printf("📊 Total stored cards for business: %d\n", len(ws.storedCards[businessID]))
+
+	// Update onboarding flag (non-blocking, first-time only)
+	if ws.businessService != nil {
+		go func(bizID string) {
+			bgCtx := context.Background()
+			flags, err := ws.businessService.GetBusinessOnboardingFlags(bgCtx, bizID)
+			if err == nil && !flags.HasAddedPaymentMethod {
+				_ = ws.businessService.UpdateOnboardingStatus(bgCtx, bizID, "has_added_payment_method", true)
+				fmt.Printf("🎯 Onboarding flag updated: has_added_payment_method = true for business %s\n", bizID)
+			}
+		}(businessID)
+	}
 
 	fmt.Println("=== WALLET SERVICE: AddPaymentSource Complete ===")
 	return nil
