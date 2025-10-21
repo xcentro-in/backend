@@ -174,7 +174,7 @@ func (s *PaymentService) TokenizeCard(ctx context.Context, req payment.TokenizeR
 	fmt.Println("💾 Creating tokenization payment record...")
 	p := &payment.Payment{
 		ID:            paymentID,
-		UserID:        "", // Tokenization is business-level, no specific user
+		UserID:        req.UserID,
 		BusinessID:    req.BusinessID,
 		Amount:        100, // ₹1.00 in paise (tokenization charge)
 		Currency:      payment.CurrencyINR,

@@ -4,7 +4,7 @@ package payment
 
 // FetchWalletRequest represents the request for fetching business wallet information
 type FetchWalletRequest struct {
-	BusinessID string `json:"business_id"`
+	// No fields needed - businessID comes from X-Business-ID header
 }
 
 // GetFeeRulesRequest represents the request for getting fee rules
@@ -17,7 +17,6 @@ type GetFeeRulesRequest struct {
 
 // TokenizeRequest represents the request for card tokenization
 type TokenizeRequest struct {
-	BusinessID  string       `json:"business_id"`
 	CardDetails *CardDetails `json:"card_details"`
 }
 

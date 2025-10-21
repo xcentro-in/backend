@@ -8,8 +8,10 @@ import (
 	"time"
 
 	"github.com/labstack/echo/v4"
+	"xcentro.in/internal/core/auth"
 	"xcentro.in/internal/core/business_rules"
 	"xcentro.in/internal/core/payment"
+	"xcentro.in/internal/middleware"
 	"xcentro.in/internal/services/payments"
 )
 
@@ -31,27 +33,27 @@ func NewPaymentHandler(paymentService *payments.PaymentService, paymentSourceSer
 func (h *PaymentHandler) FetchWallet(c echo.Context) error {
 	fmt.Println("=== HANDLER: FetchWallet API Called ===")
 
-	// Parse request body
-	var req FetchWalletRequest
-	if err := c.Bind(&req); err != nil {
-		fmt.Printf("❌ Error binding request: %v\n", err)
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "invalid_request",
-			"message": "Invalid request body",
+	// Extract userId from JWT context (set by JWTMiddleware)
+	userID, ok := c.Get("userId").(string)
+	if !ok || userID == "" {
+		fmt.Println("❌ Missing userId in context")
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "MISSING_USER_ID",
+			"message": "User ID not found in token",
 		})
 	}
+	fmt.Printf("🔐 User ID (from JWT): %s\n", userID)
 
-	// Validate business_id
-	if req.BusinessID == "" {
-		fmt.Println("❌ business_id is missing")
+	// Extract business_id from X-Business-ID header
+	businessID := c.Request().Header.Get("X-Business-ID")
+	if businessID == "" {
+		fmt.Println("❌ Missing X-Business-ID header")
 		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "missing_business_id",
-			"message": "business_id is required in request body",
+			"error":   "MISSING_BUSINESS_ID",
+			"message": "X-Business-ID header is required",
 		})
 	}
-
-	fmt.Printf("📥 Request: Business ID: %s\n", req.BusinessID)
-	businessID := req.BusinessID
+	fmt.Printf("🔐 Business ID (from header): %s\n", businessID)
 
 	// Call payment service to get business wallet information
 	fmt.Println("🔄 Calling Payment Service...")
@@ -290,6 +292,28 @@ func (h *PaymentHandler) GetFeeRules(c echo.Context) error {
 func (h *PaymentHandler) Tokenize(c echo.Context) error {
 	fmt.Println("=== HANDLER: Tokenize API Called ===")
 
+	// Extract userId from JWT context (set by JWTMiddleware)
+	userID, ok := c.Get("userId").(string)
+	if !ok || userID == "" {
+		fmt.Println("❌ Missing userId in context")
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "MISSING_USER_ID",
+			"message": "User ID not found in token",
+		})
+	}
+	fmt.Printf("🔐 User ID (from JWT): %s\n", userID)
+
+	// Extract business_id from X-Business-ID header
+	businessID := c.Request().Header.Get("X-Business-ID")
+	if businessID == "" {
+		fmt.Println("❌ Missing X-Business-ID header")
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "MISSING_BUSINESS_ID",
+			"message": "X-Business-ID header is required",
+		})
+	}
+	fmt.Printf("🔐 Business ID (from header): %s\n", businessID)
+
 	// Parse request body
 	var req TokenizeRequest
 	if err := c.Bind(&req); err != nil {
@@ -300,7 +324,7 @@ func (h *PaymentHandler) Tokenize(c echo.Context) error {
 		})
 	}
 
-	fmt.Printf("📥 Request: Business ID: %s, Card: %s %s\n", req.BusinessID, req.CardDetails.CardCategory, req.CardDetails.CardType)
+	fmt.Printf("📥 Request: Card: %s %s\n", req.CardDetails.CardCategory, req.CardDetails.CardType)
 
 	// Validate card details
 	if err := h.validateTokenizeRequest(&req); err != nil {
@@ -317,7 +341,8 @@ func (h *PaymentHandler) Tokenize(c echo.Context) error {
 
 	// Convert HTTP request to core domain request
 	coreRequest := payment.TokenizeRequest{
-		BusinessID: req.BusinessID, // TODO-DB-4.1: Extract from JWT token in production
+		UserID:     userID,
+		BusinessID: businessID,
 		CardDetails: payment.Card{
 			Number:         req.CardDetails.CardNumber,
 			ExpiryMonth:    req.CardDetails.ExpiryMonth,
@@ -400,6 +425,28 @@ func (h *PaymentHandler) Tokenize(c echo.Context) error {
 func (h *PaymentHandler) MakePayment(c echo.Context) error {
 	fmt.Println("=== HANDLER: MakePayment API Called ===")
 
+	// Extract userId from JWT context (set by JWTMiddleware)
+	userID, ok := c.Get("userId").(string)
+	if !ok || userID == "" {
+		fmt.Println("❌ Missing userId in context")
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "MISSING_USER_ID",
+			"message": "User ID not found in token",
+		})
+	}
+	fmt.Printf("🔐 User ID (from JWT): %s\n", userID)
+
+	// Extract business_id from X-Business-ID header
+	businessID := c.Request().Header.Get("X-Business-ID")
+	if businessID == "" {
+		fmt.Println("❌ Missing X-Business-ID header")
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "MISSING_BUSINESS_ID",
+			"message": "X-Business-ID header is required",
+		})
+	}
+	fmt.Printf("🔐 Business ID (from header): %s\n", businessID)
+
 	// Parse request body
 	var req MakePaymentRequest
 	if err := c.Bind(&req); err != nil {
@@ -420,11 +467,6 @@ func (h *PaymentHandler) MakePayment(c echo.Context) error {
 			"message": err.Error(),
 		})
 	}
-
-	// Extract user_id and business_id from JWT token
-	// TODO: Implement proper JWT extraction from token claims
-	userID := "uid12345"     // TODO: Extract from JWT
-	businessID := "bid12345" // TODO: Extract from JWT
 
 	// Convert HTTP request to core domain request
 	coreRequest := payment.PaymentRequest{
@@ -838,10 +880,6 @@ func (h *PaymentHandler) populatePaymentMethodDetails(coreReq *payment.PaymentRe
 
 // validateTokenizeRequest validates the tokenization request
 func (h *PaymentHandler) validateTokenizeRequest(req *TokenizeRequest) error {
-	if req.BusinessID == "" {
-		return fmt.Errorf("user_id is required")
-	}
-
 	if req.CardDetails == nil {
 		return fmt.Errorf("card_details are required")
 	}
@@ -1028,8 +1066,11 @@ func convertPaymentSourcesResponse(serviceResp *payments.GetPaymentSourcesRespon
 }
 
 // RegisterPaymentRoutes registers all payment processing routes
-func RegisterPaymentRoutes(group *echo.Group, paymentService *payments.PaymentService, paymentSourceService *payments.PaymentSourceService) {
+func RegisterPaymentRoutes(group *echo.Group, paymentService *payments.PaymentService, paymentSourceService *payments.PaymentSourceService, authService auth.AuthService) {
 	handler := NewPaymentHandler(paymentService, paymentSourceService)
+
+	// Apply JWT middleware to all payment routes
+	group.Use(middleware.JWTMiddleware(authService))
 
 	// Core payment operations
 	group.POST("/get_fee_rules", handler.GetFeeRules)
@@ -1041,8 +1082,11 @@ func RegisterPaymentRoutes(group *echo.Group, paymentService *payments.PaymentSe
 }
 
 // RegisterWalletRoutes registers all wallet management routes
-func RegisterWalletRoutes(group *echo.Group, paymentService *payments.PaymentService, paymentSourceService *payments.PaymentSourceService) {
+func RegisterWalletRoutes(group *echo.Group, paymentService *payments.PaymentService, paymentSourceService *payments.PaymentSourceService, authService auth.AuthService) {
 	handler := NewPaymentHandler(paymentService, paymentSourceService)
+
+	// Apply JWT middleware to all wallet routes
+	group.Use(middleware.JWTMiddleware(authService))
 
 	// Wallet operations
 	group.POST("/fetch", handler.FetchWallet)

@@ -151,13 +151,32 @@ func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group
 		busSvc,         // Business service for onboarding flags
 	)
 
+	// Create auth service for JWT middleware
+	sessionRepo := authRepo.NewPgSessionRepository(clients.db)
+	userService := user.NewUserService(
+		userRepo.NewPgUserRepository(clients.db),
+		business.NewPgBusinessRepository(clients.db),
+		business.NewPgBusinessUserRelationRepository(clients.db),
+		nil, // verificationService not needed for JWT
+		clients,
+		cfg,
+	)
+	authService := authservice.NewAuthService(
+		sessionRepo,
+		userRepo.NewPgUserRepository(clients.db),
+		userService,
+		busSvc,
+		clients,
+		cfg,
+	)
+
 	// Register payment routes with payment service (Phase 10: Added paymentSourceService)
 	processPaymentGroup := group.Group("/process_payment")
-	payment.RegisterPaymentRoutes(processPaymentGroup, paymentService, paymentSourceService)
+	payment.RegisterPaymentRoutes(processPaymentGroup, paymentService, paymentSourceService, authService)
 
 	// Register wallet routes (wallet management separated from payment processing)
 	walletGroup := group.Group("/wallet")
-	payment.RegisterWalletRoutes(walletGroup, paymentService, paymentSourceService)
+	payment.RegisterWalletRoutes(walletGroup, paymentService, paymentSourceService, authService)
 
 	// Register callback handler for payment gateway responses (SURL/FURL)
 	// These are user-facing endpoints where gateways POST payment results
