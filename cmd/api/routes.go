@@ -74,7 +74,7 @@ func registerV1AuthRoutes(clients *externalClients, cfg *config.Config, group *e
 	)
 
 	// Register auth routes
-	auth.RegisterAuthRoutes(group, authService, cfg)
+	auth.RegisterAuthRoutes(group, authService, busSvc, cfg)
 }
 
 func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {

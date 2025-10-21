@@ -567,3 +567,64 @@ func (s *BusinessServiceImpl) GetBusinessDetails(ctx context.Context, bid string
 
 	return response, nil
 }
+
+// GetBusinessOnboardingFlags retrieves the onboarding flags for a business (cached).
+func (s *BusinessServiceImpl) GetBusinessOnboardingFlags(ctx context.Context, bid string) (*business.BusinessOnboardingStatusDTO, error) {
+	// Try cache first
+	cacheKey := keys.Business.OnboardingStatus(bid)
+	var cachedStatus business.BusinessOnboardingStatusDTO
+	err := s.rclient.GetJSON(ctx, cacheKey, &cachedStatus)
+
+	if err == nil {
+		s.logger.Infof("Business onboarding status cache hit for BID: %s", bid)
+		return &cachedStatus, nil
+	}
+
+	// Cache miss - fetch from database
+	bus, err := s.businessRepo.FindByID(ctx, bid)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch business details: %w", err)
+	}
+
+	// Prepare response
+	status := &business.BusinessOnboardingStatusDTO{
+		HasCompletedOnboarding: bus.HasCompletedOnboarding,
+		HasAddedPaymentMethod:  bus.HasAddedPaymentMethod,
+		HasAddedVendor:         bus.HasAddedVendor,
+		HasCreatedFirstPayment: bus.HasCreatedFirstPayment,
+	}
+
+	// Cache response asynchronously (with no TTL)
+	go func() {
+		bgCtx := context.Background()
+		if err := s.rclient.SetJSON(bgCtx, cacheKey, status, 0); err != nil {
+			s.logger.Warnf("Failed to cache business onboarding status: %v", err)
+		}
+	}()
+
+	return status, nil
+}
+
+// UpdateOnboardingStatus updates a specific onboarding flag for a business and invalidates the cache.
+func (s *BusinessServiceImpl) UpdateOnboardingStatus(ctx context.Context, bid string, flagName string, value bool) error {
+	if bid == "" || flagName == "" {
+		return fmt.Errorf("business ID and flag name are required")
+	}
+
+	// Update the database
+	err := s.businessRepo.UpdateOnboardingFlag(ctx, bid, flagName, value)
+	if err != nil {
+		return fmt.Errorf("error updating onboarding flag in DB: %w", err)
+	}
+
+	// Invalidate the cache asynchronously
+	go func() {
+		bgCtx := context.Background()
+		invalidationKey := keys.Business.OnboardingStatus(bid)
+		if err := s.rclient.Delete(bgCtx, invalidationKey); err != nil {
+			s.logger.Warnf("Failed to invalidate business onboarding status cache for BID %s: %v", bid, err)
+		}
+	}()
+
+	return nil
+}

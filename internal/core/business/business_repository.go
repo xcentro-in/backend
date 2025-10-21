@@ -19,6 +19,7 @@ type BusinessRepository interface {
 	// New onboarding-specific methods
 	UpdateGSTData(ctx context.Context, bid string, gstDataJSON string) error
 	GetBusinessWithKYBData(ctx context.Context, bid string) (*Business, *BusinessKYBData, error)
+	UpdateOnboardingFlag(ctx context.Context, bid string, flagName string, value bool) error
 }
 
 // BusinessUserRelationRepository defines the interface for the relationship data.

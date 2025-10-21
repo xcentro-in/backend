@@ -5,6 +5,7 @@ import (
 
 	"github.com/labstack/echo/v4"
 	"xcentro.in/internal/core/auth"
+	"xcentro.in/internal/core/business"
 	"xcentro.in/internal/middleware"
 	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/httputil"
@@ -17,18 +18,20 @@ func placeHolderFn(c echo.Context) error { return c.String(200, "Not Implemented
 // Delegates all business logic to AuthService
 type AuthHandler struct {
 	authService   auth.AuthService
+	businessService business.BusinessService
 	cookieManager *httputil.CookieManager
 }
 
-func NewAuthHandler(authService auth.AuthService, cfg *config.Config) *AuthHandler {
+func NewAuthHandler(authService auth.AuthService, businessService business.BusinessService, cfg *config.Config) *AuthHandler {
 	return &AuthHandler{
 		authService:   authService,
+		businessService: businessService,
 		cookieManager: httputil.NewCookieManager(cfg),
 	}
 }
 
-func RegisterAuthRoutes(e *echo.Group, authService auth.AuthService, cfg *config.Config) {
-	authHandler := NewAuthHandler(authService, cfg)
+func RegisterAuthRoutes(e *echo.Group, authService auth.AuthService, businessService business.BusinessService, cfg *config.Config) {
+	authHandler := NewAuthHandler(authService, businessService, cfg)
 
 	authGroup := e.Group("/auth")
 
@@ -46,6 +49,7 @@ func RegisterAuthRoutes(e *echo.Group, authService auth.AuthService, cfg *config
 	protectedAuth.POST("/revoke", authHandler.HandleRevokeToken)
 	protectedAuth.POST("/revoke-all", authHandler.HandleRevokeAllTokens)
 	protectedAuth.POST("/change-password", authHandler.HandleChangePassword)
+	protectedAuth.GET("/onboarding-status", authHandler.HandleGetBusinessOnboardingFlags)
 
 	// OAuth sub group
 	oauthGroup := authGroup.Group("/Oauth")
@@ -361,5 +365,28 @@ func (ah AuthHandler) HandleChangePassword(c echo.Context) error {
 	return c.JSON(200, map[string]any{
 		"message": "Password changed successfully. All existing sessions have been invalidated.",
 		"data":    nil,
+	})
+}
+
+// HandleGetBusinessOnboardingFlags retrieves the onboarding status flags for a business.
+func (ah AuthHandler) HandleGetBusinessOnboardingFlags(c echo.Context) error {
+	// Get businessID from header
+	businessID := c.Request().Header.Get("X-Business-ID")
+	if businessID == "" {
+		return c.JSON(400, map[string]interface{}{
+			"error":   "MISSING_BUSINESS_ID",
+			"message": "X-Business-ID header is required",
+		})
+	}
+
+	status, err := ah.businessService.GetBusinessOnboardingFlags(c.Request().Context(), businessID)
+	if err != nil {
+		logger.Errorf("Failed to get business onboarding flags: %v", err)
+		return c.JSON(500, map[string]any{"message": "Failed to retrieve onboarding status", "data": nil})
+	}
+
+	return c.JSON(200, map[string]any{
+		"message": "Business onboarding status retrieved successfully",
+		"data":    status,
 	})
 }

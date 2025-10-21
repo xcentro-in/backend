@@ -47,6 +47,12 @@ func (businessKeys) UserRoles(userID string) string {
 	return fmt.Sprintf("%s:business:user:%s:roles", keyPrefix, userID)
 }
 
+// OnboardingStatus returns cache key for business onboarding status
+// Pattern: xcentro:business:{businessId}:onboarding
+func (businessKeys) OnboardingStatus(businessID string) string {
+	return fmt.Sprintf("%s:business:%s:onboarding", keyPrefix, businessID)
+}
+
 // RevokedTokens returns cache key for user's revoked refresh tokens (Redis hash)
 // Pattern: xcentro:user:{userId}:token
 // Usage: HSET key tokenHash 1, HEXISTS key tokenHash

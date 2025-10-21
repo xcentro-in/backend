@@ -35,7 +35,8 @@ func (r *PgBusinessRepository) FindByID(ctx context.Context, bid string) (*busin
 	query := `
 		SELECT
 			bid, name, gstin, gst_data, income_tax_id, kyb_status,
-			business_type, business_model, business_turnover, country_code, currency_code
+			business_type, business_model, business_turnover, country_code, currency_code,
+			has_completed_onboarding, has_added_payment_method, has_added_vendor, has_created_first_payment
 		FROM xcentro.business
 		WHERE bid = $1
 	`
@@ -46,10 +47,12 @@ func (r *PgBusinessRepository) FindByID(ctx context.Context, bid string) (*busin
 	var kybStatusStr string // NOT NULL with DEFAULT
 	var businessType, businessModel, businessTurnover sql.NullString
 	var countryCode, currencyCode sql.NullString
+	var hasCompletedOnboarding, hasAddedPaymentMethod, hasAddedVendor, hasCreatedFirstPayment sql.NullBool
 
 	err := r.querier.QueryRow(ctx, query, bid).Scan(
 		&b.BID, &b.Name, &b.GSTIN, &gstData, &incomeTexID, &kybStatusStr,
 		&businessType, &businessModel, &businessTurnover, &countryCode, &currencyCode,
+		&hasCompletedOnboarding, &hasAddedPaymentMethod, &hasAddedVendor, &hasCreatedFirstPayment,
 	)
 
 	if err != nil {
@@ -67,6 +70,10 @@ func (r *PgBusinessRepository) FindByID(ctx context.Context, bid string) (*busin
 	b.BusinessTurnover = businessTurnover.String
 	b.CountryCode = countryCode.String
 	b.CurrencyCode = currencyCode.String
+	b.HasCompletedOnboarding = hasCompletedOnboarding.Bool
+	b.HasAddedPaymentMethod = hasAddedPaymentMethod.Bool
+	b.HasAddedVendor = hasAddedVendor.Bool
+	b.HasCreatedFirstPayment = hasCreatedFirstPayment.Bool
 
 	return &b, nil
 }
@@ -304,4 +311,28 @@ func (r *PgBusinessRepository) GetBusinessWithKYBData(ctx context.Context, bid s
 	}
 
 	return &b, nil, nil
+}
+
+// UpdateOnboardingFlag updates a specific onboarding flag for a business.
+func (r *PgBusinessRepository) UpdateOnboardingFlag(ctx context.Context, bid string, flagName string, value bool) error {
+	query := `
+		UPDATE xcentro.business
+		SET
+			has_completed_onboarding = CASE WHEN $2 = 'hasCompletedOnboarding' THEN $3 ELSE has_completed_onboarding END,
+			has_added_payment_method = CASE WHEN $2 = 'hasAddedPaymentMethod' THEN $3 ELSE has_added_payment_method END,
+			has_added_vendor = CASE WHEN $2 = 'hasAddedVendor' THEN $3 ELSE has_added_vendor END,
+			has_created_first_payment = CASE WHEN $2 = 'hasCreatedFirstPayment' THEN $3 ELSE has_created_first_payment END
+		WHERE bid = $1
+	`
+
+	result, err := r.querier.Exec(ctx, query, bid, flagName, value)
+	if err != nil {
+		return fmt.Errorf("error updating onboarding flag '%s' for business %s: %w", flagName, bid, err)
+	}
+
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("business %s not found or flag '%s' not updated", bid, flagName)
+	}
+
+	return nil
 }

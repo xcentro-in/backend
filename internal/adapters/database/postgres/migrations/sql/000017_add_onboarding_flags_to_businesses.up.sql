@@ -1,0 +1,5 @@
+ALTER TABLE xcentro.business
+ADD COLUMN has_completed_onboarding BOOLEAN NOT NULL DEFAULT FALSE,
+ADD COLUMN has_added_payment_method BOOLEAN NOT NULL DEFAULT FALSE,
+ADD COLUMN has_added_vendor BOOLEAN NOT NULL DEFAULT FALSE,
+ADD COLUMN has_created_first_payment BOOLEAN NOT NULL DEFAULT FALSE;

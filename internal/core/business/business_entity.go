@@ -17,6 +17,10 @@ type Business struct {
 	BusinessTurnover string              `json:"businessTurnover"`
 	CountryCode      string              `json:"countryCode"`
 	CurrencyCode     string              `json:"currencyCode"`
+	HasCompletedOnboarding bool 		 `json:"hasCompletedOnboarding"`
+	HasAddedPaymentMethod  bool 		 `json:"hasAddedPaymentMethod"`
+	HasAddedVendor   	   bool 		 `json:"hasAddedVendor"`
+	HasCreatedFirstPayment bool 		 `json:"hasCreatedFirstPayment"`
 }
 
 type BusinessKYBData struct {
@@ -124,4 +128,12 @@ type BusinessDetailsResponse struct {
 	PAN          string              `json:"pan"`
 	BusinessType shared.BusinessType `json:"businessType"`
 	UserRole     shared.UserRole     `json:"userRole"`
+}
+
+// BusinessOnboardingStatusDTO represents the onboarding status flags for a business.
+type BusinessOnboardingStatusDTO struct {
+	HasCompletedOnboarding bool `json:"hasCompletedOnboarding"`
+	HasAddedPaymentMethod  bool `json:"hasAddedPaymentMethod"`
+	HasAddedVendor         bool `json:"hasAddedVendor"`
+	HasCreatedFirstPayment bool `json:"hasCreatedFirstPayment"`
 }

@@ -19,6 +19,10 @@ type BusinessService interface {
 	// Business details
 	GetBusinessDetails(ctx context.Context, bid string, userRole shared.UserRole) (*BusinessDetailsResponse, error)
 
+	GetBusinessOnboardingFlags(ctx context.Context, bid string) (*BusinessOnboardingStatusDTO, error)
+
+	UpdateOnboardingStatus(ctx context.Context, bid string, flagName string, value bool) error
+
 	// User management methods
 	AddUserToBusiness(ctx context.Context, relation *BusinessUserRelation) error
 	GetBusinessUsers(ctx context.Context, bid string) ([]*BusinessUserDTO, error)
