@@ -38,7 +38,8 @@ type OnboardVendorData struct {
 	AccountNumber     string                  `json:"account_number"`
 	IFSCCode          string                  `json:"ifsc_code"`
 	AccountHolderName string                  `json:"account_holder_name"`
-	BankName          string                  `json:"bank_name,omitempty"`
+	BankName          string                  `json:"bank_name"`        // Required - fetched from IFSC check at frontend
+	BranchName        string                  `json:"branch_name"`      // Required - fetched from IFSC check at frontend
 	AccountType       payment.BankAccountType `json:"account_type,omitempty"` // Optional - defaults to "current"
 	AccountLabel      string                  `json:"account_label,omitempty"`
 }
@@ -80,7 +81,8 @@ type OnboardEmployeeData struct {
 	AccountNumber     string                  `json:"account_number"`
 	IFSCCode          string                  `json:"ifsc_code"`
 	AccountHolderName string                  `json:"account_holder_name"`
-	BankName          string                  `json:"bank_name,omitempty"`
+	BankName          string                  `json:"bank_name"`        // Required - fetched from IFSC check at frontend
+	BranchName        string                  `json:"branch_name"`      // Required - fetched from IFSC check at frontend
 	AccountType       payment.BankAccountType `json:"account_type,omitempty"` // Optional - defaults to "current"
 	AccountLabel      string                  `json:"account_label,omitempty"`
 

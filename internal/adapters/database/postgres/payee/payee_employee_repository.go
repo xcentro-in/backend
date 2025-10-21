@@ -38,7 +38,7 @@ func (r *PgPayeeEmployeeRepository) Create(ctx context.Context, employee *payee.
 			employment_type, date_of_joining, remuneration_doc_url, remuneration_doc_uploaded_at,
 			is_sensitive, pan_verification_status, pan_verified_at, metadata
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
-		RETURNING created_at, updated_at
+		RETURNING created_at
 	`
 
 	// Serialize JSONB fields
@@ -69,7 +69,7 @@ func (r *PgPayeeEmployeeRepository) Create(ctx context.Context, employee *payee.
 		employee.PANVerificationStatus,
 		employee.PANVerifiedAt,
 		metadataJSON,
-	).Scan(&employee.CreatedAt, &employee.UpdatedAt)
+	).Scan(&employee.CreatedAt)
 
 	if err != nil {
 		return fmt.Errorf("failed to create employee payee: %w", err)

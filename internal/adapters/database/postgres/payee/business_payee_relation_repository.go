@@ -231,8 +231,10 @@ func (r *PgBusinessPayeeRelationRepository) FindByBusiness(ctx context.Context, 
 		SELECT r.relation_id, r.business_id, r.payee_id, r.account_id,
 		       r.display_name, r.contact_email, r.contact_phone, r.notes,
 		       r.is_active, r.is_favorite, r.tags,
-		       r.added_at, r.added_by, r.last_used_at, r.updated_at, r.metadata
+		       r.added_at, r.added_by, r.last_used_at, r.updated_at, r.metadata,
+			   m.payee_type
 		FROM xcentro.business_payee_relation r
+		INNER JOIN xcentro.payee_master m ON r.payee_id = m.payee_id
 	`
 
 	// Join with payee_master if filtering by payee_type
@@ -324,6 +326,7 @@ func (r *PgBusinessPayeeRelationRepository) FindByBusiness(ctx context.Context, 
 			&lastUsedAt,
 			&updatedAt,
 			&metadataJSON,
+			&relation.PayeeType, // Scan payee_type from joined payee_master table
 		)
 
 		if err != nil {

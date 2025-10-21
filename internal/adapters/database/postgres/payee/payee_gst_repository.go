@@ -134,7 +134,7 @@ func (r *PgPayeeGSTVirtualAccountRepository) Create(ctx context.Context, account
 			tax_period, financial_year, tax_type, valid_from, valid_until, is_active,
 			challan_document_url, uploaded_at, metadata
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-		RETURNING created_at, updated_at
+		RETURNING created_at
 	`
 
 	var metadataJSON []byte
@@ -162,7 +162,7 @@ func (r *PgPayeeGSTVirtualAccountRepository) Create(ctx context.Context, account
 		account.ChallanDocumentURL,
 		account.UploadedAt,
 		metadataJSON,
-	).Scan(&account.CreatedAt, &account.UpdatedAt)
+	).Scan(&account.CreatedAt)
 
 	if err != nil {
 		return fmt.Errorf("failed to create GST virtual account: %w", err)

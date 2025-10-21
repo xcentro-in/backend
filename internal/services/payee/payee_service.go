@@ -240,6 +240,7 @@ func (s *PayeeService) onboardVendor(ctx context.Context, req payee.OnboardPayee
 			IFSCCode:          vendor.IFSCCode,
 			AccountHolderName: vendor.AccountHolderName,
 			BankName:          vendor.BankName,
+			BranchName:        vendor.BranchName,
 			AccountType:       accountType,
 		}
 
@@ -306,23 +307,23 @@ func (s *PayeeService) onboardVendor(ctx context.Context, req payee.OnboardPayee
 
 		// Create PayeeBankAccount entity
 		bankAccount = &payee.PayeeBankAccount{
-			PayeeID:                 payeeID,
-			AccountNumber:           vendor.AccountNumber,
-			AccountNumberHash:       accountHash,
-			IFSCCode:                vendor.IFSCCode,
-			BankName:                bankResp.BankName,
-			BranchName:              bankResp.BranchName,
-			AccountType:             accountType, // Use the defaulted account type
-			AccountHolderName:       bankResp.VerifiedAccountName,
-			IsVerified:              true,
-			VerifiedAt:              &time.Time{},
-			BankVerificationStatus:  payee.VerificationStatusSuccess,
-			CrossVerificationStatus: payee.VerificationStatusSuccess,
-			NameMatchScore:          crossResp.MatchScore,
-			IsActive:                true,
-			IsPrimary:               false, // Will check if this should be primary
-			AccountLabel:            vendor.AccountLabel,
-			VerificationData:        bankResp.Metadata,
+			PayeeID:                  payeeID,
+			AccountNumber:            vendor.AccountNumber,
+			AccountNumberHash:        accountHash,
+			IFSCCode:                 vendor.IFSCCode,
+			BankName:                 vendor.BankName,   // Use bank name from frontend IFSC check
+			BranchName:               vendor.BranchName, // Use branch name from frontend IFSC check
+			AccountType:              accountType,       // Use the defaulted account type
+			AccountHolderName:        bankResp.VerifiedAccountName,
+			IsVerified:               true,
+			VerifiedAt:               &time.Time{},
+			BankVerificationStatus:   payee.VerificationStatusSuccess,
+			CrossVerificationStatus:  payee.VerificationStatusSuccess,
+			NameMatchScore:           crossResp.MatchScore,
+			IsActive:                 true,
+			IsPrimary:                false, // Will check if this should be primary
+			AccountLabel:             vendor.AccountLabel,
+			VerificationData:         bankResp.Metadata,
 		}
 		*bankAccount.VerifiedAt = time.Now()
 	}
@@ -848,9 +849,14 @@ func (s *PayeeService) onboardEmployee(ctx context.Context, req payee.OnboardPay
 		// Step 7: Perform penny drop verification
 		fmt.Printf("🏦 Step 7: Verifying bank account (penny drop): %s...\n", employee.AccountNumber)
 		verifyReq := business_rules.BankVerificationRequest{
+			BusinessID:        req.BusinessID,
+			RequestID:         fmt.Sprintf("onboard_emp_%s_%d", req.BusinessID, time.Now().Unix()),
 			AccountNumber:     employee.AccountNumber,
 			IFSCCode:          employee.IFSCCode,
 			AccountHolderName: employee.AccountHolderName,
+			BankName:          employee.BankName,
+			BranchName:        employee.BranchName,
+			AccountType:       accountType,
 		}
 
 		verifyResp, err := s.bankVerificationSvc.VerifyBankAccount(ctx, verifyReq)
@@ -872,8 +878,9 @@ func (s *PayeeService) onboardEmployee(ctx context.Context, req payee.OnboardPay
 			AccountNumberHash:       accountHash,
 			IFSCCode:                employee.IFSCCode,
 			AccountHolderName:       employee.AccountHolderName,
-			BankName:                employee.BankName,
-			AccountType:             accountType, // Use the defaulted account type
+			BankName:                employee.BankName,   // Use bank name from frontend IFSC check
+			BranchName:              employee.BranchName, // Use branch name from frontend IFSC check
+			AccountType:             accountType,         // Use the defaulted account type
 			AccountLabel:            employee.AccountLabel,
 			IsPrimary:               len(existingAccounts) == 0, // First account is primary
 			IsActive:                true,

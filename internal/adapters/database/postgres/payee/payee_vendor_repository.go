@@ -38,7 +38,7 @@ func (r *PgPayeeVendorRepository) Create(ctx context.Context, vendor *payee.Paye
 			building_name, street, city, state, pincode,
 			gst_verification_status, gst_verified_at, gst_data, metadata
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-		RETURNING created_at, updated_at
+		RETURNING created_at
 	`
 
 	// Serialize JSONB fields
@@ -75,7 +75,7 @@ func (r *PgPayeeVendorRepository) Create(ctx context.Context, vendor *payee.Paye
 		vendor.GSTVerifiedAt,
 		gstDataJSON,
 		metadataJSON,
-	).Scan(&vendor.CreatedAt, &vendor.UpdatedAt)
+	).Scan(&vendor.CreatedAt)
 
 	if err != nil {
 		return fmt.Errorf("failed to create vendor payee: %w", err)

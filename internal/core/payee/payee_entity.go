@@ -243,10 +243,11 @@ type PayeeBankAccount struct {
 // relates to a payee and WHICH account they use for payments
 // Polymorphic: account_id can reference bank_account, virtual_account, or biller_account
 type BusinessPayeeRelation struct {
-	RelationID string `json:"relation_id"` // Surrogate key (UUID) for simplified frontend API
-	BusinessID string `json:"business_id"` // FK → business.bid
-	PayeeID    string `json:"payee_id"`    // FK → payee_master.payee_id
-	AccountID  string `json:"account_id"`  // Polymorphic FK
+	RelationID string    `json:"relation_id"` // Surrogate key (UUID) for simplified frontend API
+	BusinessID string    `json:"business_id"` // FK → business.bid
+	PayeeID    string    `json:"payee_id"`    // FK → payee_master.payee_id
+	PayeeType  PayeeType `json:"payee_type"`  // Type discriminator from payee_master (vendor, employee, biller, gst_payment)
+	AccountID  string    `json:"account_id"`  // Polymorphic FK
 
 	// Customer-specific metadata (how THIS customer sees the payee)
 	DisplayName  string `json:"display_name"`

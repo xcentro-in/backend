@@ -43,7 +43,7 @@ func (r *PgPayeeBillerRepository) Create(ctx context.Context, biller *payee.Paye
 			bbps_biller_code, npci_registered, supports_adhoc, supports_recurring,
 			payment_modes, avg_processing_time_hours, metadata
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-		RETURNING created_at, updated_at
+		RETURNING created_at
 	`
 
 	var metadataJSON []byte
@@ -69,7 +69,7 @@ func (r *PgPayeeBillerRepository) Create(ctx context.Context, biller *payee.Paye
 		pq.Array(biller.PaymentModes),
 		biller.AvgProcessingTimeHours,
 		metadataJSON,
-	).Scan(&biller.CreatedAt, &biller.UpdatedAt)
+	).Scan(&biller.CreatedAt)
 
 	if err != nil {
 		return fmt.Errorf("failed to create biller payee: %w", err)
@@ -355,7 +355,7 @@ func (r *PgPayeeBillerAccountRepository) Create(ctx context.Context, account *pa
 			auto_fetch_enabled, fetch_schedule, preferred_fetch_day,
 			last_bill_fetched_at, last_bill_amount, last_bill_due_date, is_active, metadata
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-		RETURNING created_at, updated_at
+		RETURNING created_at
 	`
 
 	var customerParamsJSON, metadataJSON []byte
@@ -389,7 +389,7 @@ func (r *PgPayeeBillerAccountRepository) Create(ctx context.Context, account *pa
 		account.LastBillDueDate,
 		account.IsActive,
 		metadataJSON,
-	).Scan(&account.CreatedAt, &account.UpdatedAt)
+	).Scan(&account.CreatedAt)
 
 	if err != nil {
 		return fmt.Errorf("failed to create biller account: %w", err)
