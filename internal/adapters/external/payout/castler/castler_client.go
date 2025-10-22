@@ -3,33 +3,62 @@ package castler
 import (
 	"bytes"
 	"context"
+	"crypto/aes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"xcentro.in/internal/core/payout"
+	"xcentro.in/internal/shared/crypto"
 )
 
 // CastlerClient implements the PayoutProvider interface for Castler
 type CastlerClient struct {
-	baseURL    string
-	apiKey     string
-	secretKey  string
-	httpClient *http.Client
+	baseURL       string
+	apiKey        string
+	secretKey     string
+	httpClient    *http.Client
+	encryptionKey string // Optional: AES encryption key
+	fixedIV       []byte // Optional: Fixed IV for AES encryption
 }
 
 // NewCastlerClient creates a new Castler payout client
-func NewCastlerClient(baseURL, apiKey, secretKey string) *CastlerClient {
+// Parameters:
+//   - baseURL: Castler API base URL
+//   - apiKey: API authentication key
+//   - secretKey: API signing secret
+//   - encryptionKey: Optional AES-256 encryption key (empty string to disable encryption)
+//   - encryptionIVBase64: Optional fixed IV in base64 format (e.g., "TkMwVjAkMFQwTDAzMFJNRQ==")
+func NewCastlerClient(baseURL, apiKey, secretKey, encryptionKey, encryptionIVBase64 string) (*CastlerClient, error) {
+	var fixedIV []byte
+	var err error
+
+	// Decode fixed IV if encryption is enabled
+	if encryptionKey != "" && encryptionIVBase64 != "" {
+		fixedIV, err = base64.StdEncoding.DecodeString(encryptionIVBase64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid encryption IV (must be base64): %w", err)
+		}
+		if len(fixedIV) != aes.BlockSize {
+			return nil, fmt.Errorf("invalid IV length: expected %d bytes, got %d bytes", aes.BlockSize, len(fixedIV))
+		}
+	}
+
 	return &CastlerClient{
-		baseURL:   baseURL,
-		apiKey:    apiKey,
-		secretKey: secretKey,
+		baseURL:       baseURL,
+		apiKey:        apiKey,
+		secretKey:     secretKey,
+		encryptionKey: encryptionKey,
+		fixedIV:       fixedIV,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
-	}
+	}, nil
 }
 
 // GetProviderType returns the provider identifier
@@ -235,6 +264,45 @@ func (c *CastlerClient) GetTransferStatus(ctx context.Context, providerTransferI
 	}, nil
 }
 
+// OnboardPayeeToCastler registers a payee with Castler after penny-drop verification
+// API: POST /api/v1/payee
+func (c *CastlerClient) OnboardPayeeToCastler(ctx context.Context, accountHolder, email, mobile, accountNumber, ifsc, bankName string) (*CastlerPayeeOnboardResponse, error) {
+	// Convert mobile string to int64 (Castler expects integer)
+	mobileInt, err := strconv.ParseInt(mobile, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid mobile number: %w", err)
+	}
+
+	// Build Castler payee onboarding request
+	castlerReq := CastlerPayeeOnboardRequest{
+		AccountHolder: accountHolder,
+		Email:         email,
+		Mobile:        mobileInt,
+		AccountNumber: accountNumber,
+		IFSC:          ifsc,
+		BankName:      bankName,
+	}
+
+	// Call Castler payee onboarding API
+	var castlerResp CastlerPayeeOnboardResponse
+	if err := c.post(ctx, "/api/v1/payee", castlerReq, &castlerResp); err != nil {
+		return nil, fmt.Errorf("castler payee onboarding failed: %w", err)
+	}
+
+	// Check if onboarding was successful
+	if !castlerResp.Success {
+		errorMsg := "payee onboarding failed"
+		if len(castlerResp.Errors) > 0 {
+			errorMsg = castlerResp.Errors[0]
+		} else if castlerResp.Message != nil {
+			errorMsg = *castlerResp.Message
+		}
+		return nil, fmt.Errorf("payee onboarding failed: %s", errorMsg)
+	}
+
+	return &castlerResp, nil
+}
+
 // CancelTransfer cancels a pending transfer
 func (c *CastlerClient) CancelTransfer(ctx context.Context, providerTransferID string) error {
 	endpoint := fmt.Sprintf("/v1/transfers/%s/cancel", providerTransferID)
@@ -254,14 +322,41 @@ func (c *CastlerClient) CancelTransfer(ctx context.Context, providerTransferID s
 
 // HTTP helper methods
 
+// setCommonHeaders injects standard Castler API headers into HTTP requests
+// This is the centralized place where all Castler API authentication headers are set
+func (c *CastlerClient) setCommonHeaders(req *http.Request, isEncrypted bool) {
+	// Set content type based on encryption status
+	if isEncrypted {
+		req.Header.Set("Content-Type", "text/plain") // Encrypted data is sent as plain text
+	} else {
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	// Set Castler authentication headers (required for all requests)
+	req.Header.Set("X-API-Key", c.apiKey)
+	req.Header.Set("X-Client-Key", c.secretKey)
+}
+
 func (c *CastlerClient) post(ctx context.Context, endpoint string, reqBody interface{}, respBody interface{}) error {
 	var bodyReader io.Reader
+
 	if reqBody != nil {
+		// Marshal to JSON
 		jsonData, err := json.Marshal(reqBody)
 		if err != nil {
 			return fmt.Errorf("failed to marshal request: %w", err)
 		}
-		bodyReader = bytes.NewReader(jsonData)
+
+		// Encrypt if encryption is enabled
+		if c.encryptionKey != "" && c.fixedIV != nil {
+			encryptedData, err := crypto.EncryptForCastler(string(jsonData), c.encryptionKey, c.fixedIV)
+			if err != nil {
+				return fmt.Errorf("failed to encrypt request: %w", err)
+			}
+			bodyReader = strings.NewReader(encryptedData)
+		} else {
+			bodyReader = bytes.NewReader(jsonData)
+		}
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+endpoint, bodyReader)
@@ -269,9 +364,9 @@ func (c *CastlerClient) post(ctx context.Context, endpoint string, reqBody inter
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-API-Key", c.apiKey)
-	req.Header.Set("X-Secret-Key", c.secretKey)
+	// Inject common headers (authentication + content-type)
+	isEncrypted := c.encryptionKey != "" && c.fixedIV != nil
+	c.setCommonHeaders(req, isEncrypted)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -284,9 +379,28 @@ func (c *CastlerClient) post(ctx context.Context, endpoint string, reqBody inter
 		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(bodyBytes))
 	}
 
+	// Read and parse response
 	if respBody != nil {
-		if err := json.NewDecoder(resp.Body).Decode(respBody); err != nil {
-			return fmt.Errorf("failed to decode response: %w", err)
+		bodyBytes, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return fmt.Errorf("failed to read response: %w", err)
+		}
+
+		// Decrypt if encryption is enabled
+		if c.encryptionKey != "" && c.fixedIV != nil {
+			decryptedData, err := crypto.DecryptFromCastler(string(bodyBytes), c.encryptionKey, c.fixedIV)
+			if err != nil {
+				return fmt.Errorf("failed to decrypt response: %w", err)
+			}
+			// Parse decrypted JSON
+			if err := json.Unmarshal([]byte(decryptedData), respBody); err != nil {
+				return fmt.Errorf("failed to parse decrypted response: %w", err)
+			}
+		} else {
+			// Parse plain JSON
+			if err := json.Unmarshal(bodyBytes, respBody); err != nil {
+				return fmt.Errorf("failed to parse response: %w", err)
+			}
 		}
 	}
 
@@ -299,8 +413,8 @@ func (c *CastlerClient) get(ctx context.Context, endpoint string, respBody inter
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 
-	req.Header.Set("X-API-Key", c.apiKey)
-	req.Header.Set("X-Secret-Key", c.secretKey)
+	// Inject common headers (authentication headers, GET requests are never encrypted)
+	c.setCommonHeaders(req, false)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {

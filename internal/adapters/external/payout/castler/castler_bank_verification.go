@@ -2,6 +2,7 @@ package castler
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"xcentro.in/internal/core/business_rules"
@@ -26,45 +27,81 @@ func (s *CastlerBankVerificationService) GetProviderType() business_rules.BankVe
 }
 
 // VerifyBankAccount performs penny drop verification using Castler's API
+// API: POST /api/v1/payee/validation
 func (s *CastlerBankVerificationService) VerifyBankAccount(ctx context.Context, req business_rules.BankVerificationRequest) (*business_rules.BankVerificationResponse, error) {
-	// TODO: Implement Castler penny drop API call
-	// API endpoint: POST /v1/bank-verification/penny-drop
-	// Request body: {
-	//   "account_number": req.AccountNumber,
-	//   "ifsc_code": req.IFSCCode,
-	//   "account_holder_name": req.AccountHolderName
-	// }
-	// Response: {
-	//   "verification_id": "string",
-	//   "status": "success" | "failed",
-	//   "account_holder_name": "string",
-	//   "name_match": true | false,
-	//   "penny_amount": 1.00
-	// }
+	// Extract email and phone from metadata (passed from payee onboarding)
+	email := ""
+	phone := ""
+	if req.Metadata != nil {
+		if e, ok := req.Metadata["email"].(string); ok {
+			email = e
+		}
+		if p, ok := req.Metadata["phone"].(string); ok {
+			phone = p
+		}
+	}
 
-	// Placeholder: Simulate API delay
-	time.Sleep(2 * time.Second)
+	// Build Castler penny-drop request
+	castlerReq := CastlerPennyDropRequest{
+		Payees: []CastlerPayeeValidation{
+			{
+				AccountHolder: req.AccountHolderName,
+				Email:         email,
+				Mobile:        phone,
+				AccountNumber: req.AccountNumber,
+				IFSC:          req.IFSCCode,
+				BankName:      req.BankName,
+				BranchName:    req.BranchName,
+			},
+		},
+	}
 
-	// Placeholder: Return success response
-	// In production, this will call s.client.post() to Castler's penny drop endpoint
+	// Call Castler penny-drop API
+	var castlerResp CastlerPennyDropResponse
+	if err := s.client.post(ctx, "/api/v1/payee/validation", castlerReq, &castlerResp); err != nil {
+		return nil, fmt.Errorf("castler penny-drop API failed: %w", err)
+	}
+
+	// Check if verification was successful
+	if !castlerResp.Success {
+		errorMsg := "penny-drop verification failed"
+		if len(castlerResp.Errors) > 0 {
+			errorMsg = castlerResp.Errors[0]
+		} else if castlerResp.Message != nil {
+			errorMsg = *castlerResp.Message
+		}
+
+		return &business_rules.BankVerificationResponse{
+			RequestID: req.RequestID,
+			Status:    business_rules.BankVerificationStatusFailed,
+			Provider:  business_rules.BankVerificationProviderCastler,
+			Metadata: map[string]any{
+				"error":  errorMsg,
+				"errors": castlerResp.Errors,
+			},
+		}, fmt.Errorf("penny-drop failed: %s", errorMsg)
+	}
+
+	// Success: Return verified bank details
 	return &business_rules.BankVerificationResponse{
 		RequestID:            req.RequestID,
 		Status:               business_rules.BankVerificationStatusSuccess,
-		VerifiedAccountName:  req.AccountHolderName,
+		VerifiedAccountName:  req.AccountHolderName, // Castler validates the account
 		BankName:             req.BankName,
 		BranchName:           req.BranchName,
 		IFSCCode:             req.IFSCCode,
 		AccountNumber:        req.AccountNumber,
 		AccountType:          req.AccountType,
 		IsAccountActive:      true,
-		VerificationAmount:   100, // ₹1.00 in paise
-		TransactionReference: "CASTLER_TXN_" + req.AccountNumber[len(req.AccountNumber)-6:],
+		VerificationAmount:   100, // ₹1.00 in paise (standard penny drop amount)
+		TransactionReference: castlerResp.Result,
 		VerifiedAt:           time.Now(),
 		Provider:             business_rules.BankVerificationProviderCastler,
 		Metadata: map[string]any{
 			"provider":        "castler",
-			"verification_id": "CASTLER_VERIFY_" + req.AccountNumber[len(req.AccountNumber)-6:],
-			"note":            "Placeholder implementation - TODO: Integrate Castler penny drop API",
+			"validation_id":   castlerResp.Result,
+			"message":         castlerResp.Message,
+			"total_elements":  castlerResp.TotalElements,
 		},
 	}, nil
 }

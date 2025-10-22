@@ -328,7 +328,7 @@ func registerV1PayeeRoutes(clients *externalClients, cfg *config.Config, group *
 	)
 
 	// Use factory pattern to create PayeeService with all dependencies
-	factory := payeeSvc.NewPayeeServiceFactory(clients.db, clients.txManager, busSvc)
+	factory := payeeSvc.NewPayeeServiceFactory(clients.db, clients.txManager, busSvc, cfg)
 	payeeService := factory.NewPayeeService()
 
 	// Register payee routes with auth middleware

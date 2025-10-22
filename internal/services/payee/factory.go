@@ -7,6 +7,7 @@ import (
 	"xcentro.in/internal/adapters/external/payout/castler"
 	"xcentro.in/internal/core/business"
 	"xcentro.in/internal/core/business_rules"
+	"xcentro.in/internal/shared/config"
 )
 
 // PayeeServiceFactory creates PayeeService with all dependencies
@@ -15,14 +16,16 @@ type PayeeServiceFactory struct {
 	db              client.DB
 	txManager       client.TxManager
 	businessService business.BusinessService
+	config          *config.Config
 }
 
 // NewPayeeServiceFactory creates a new factory for PayeeService
-func NewPayeeServiceFactory(db client.DB, txManager client.TxManager, businessService business.BusinessService) *PayeeServiceFactory {
+func NewPayeeServiceFactory(db client.DB, txManager client.TxManager, businessService business.BusinessService, cfg *config.Config) *PayeeServiceFactory {
 	return &PayeeServiceFactory{
 		db:              db,
 		txManager:       txManager,
 		businessService: businessService,
+		config:          cfg,
 	}
 }
 
@@ -42,16 +45,21 @@ func (f *PayeeServiceFactory) NewPayeeService() *PayeeService {
 	// Create payout provider repositories (Phase 8)
 	providerMappingRepo := payoutRepo.NewPostgresProviderMappingRepository(f.db)
 
-	// Create payout provider client (Castler - TODO: make configurable)
-	castlerClient := castler.NewCastlerClient(
-		"https://api.castler.in", // TODO: from config
-		"dummy-api-key",          // TODO: from config
-		"dummy-secret-key",       // TODO: from config
+	// Create payout provider client (Castler with encryption support)
+	castlerClient, err := castler.NewCastlerClient(
+		f.config.Castler.BaseURL,
+		f.config.Castler.APIKey,
+		f.config.Castler.SecretKey,
+		f.config.Castler.EncryptionKey,
+		f.config.Castler.EncryptionIV,
 	)
+	if err != nil {
+		panic("Failed to create Castler client: " + err.Error())
+	}
 
-	// Create verification services (mock implementations for now)
+	// Create verification services
 	gstVerificationSvc := business_rules.NewMockGSTVerificationService()
-	bankVerificationSvc := business_rules.NewMockBankVerificationService()
+	bankVerificationSvc := castler.NewCastlerBankVerificationService(castlerClient) // Use Castler for penny-drop
 	crossVerificationSvc := business_rules.NewMockCrossVerificationService()
 
 	// Create and return PayeeService with all dependencies
@@ -66,7 +74,8 @@ func (f *PayeeServiceFactory) NewPayeeService() *PayeeService {
 		payeeBankAccountRepo,
 		businessPayeeRelationRepo,
 		providerMappingRepo,
-		castlerClient,
+		castlerClient,      // payout provider (for transfers)
+		castlerClient,      // castler client (for payee onboarding)
 		gstVerificationSvc,
 		bankVerificationSvc,
 		crossVerificationSvc,

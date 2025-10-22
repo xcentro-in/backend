@@ -9,12 +9,18 @@ import (
 
 	"github.com/google/uuid"
 	"xcentro.in/internal/adapters/database/postgres/client"
+	"xcentro.in/internal/adapters/external/payout/castler"
 	"xcentro.in/internal/core/business"
 	"xcentro.in/internal/core/business_rules"
 	"xcentro.in/internal/core/payee"
 	"xcentro.in/internal/core/payment"
 	"xcentro.in/internal/core/payout"
 )
+
+// CastlerPayeeOnboarder interface for Castler-specific payee onboarding operations
+type CastlerPayeeOnboarder interface {
+	OnboardPayeeToCastler(ctx context.Context, accountHolder, email, mobile, accountNumber, ifsc, bankName string) (*castler.CastlerPayeeOnboardResponse, error)
+}
 
 // PayeeService orchestrates the complete payee onboarding and management flow
 // Supports polymorphic payee types: Vendor, GST Payment, Biller, Employee
@@ -37,6 +43,7 @@ type PayeeService struct {
 	// Payout provider integration (Phase 8)
 	providerMappingRepo payout.PayoutProviderMappingRepository
 	payoutProvider      payout.PayoutProvider
+	castlerClient       CastlerPayeeOnboarder // For Castler-specific payee onboarding
 
 	// Verification services
 	gstVerificationSvc   business_rules.GSTVerificationService
@@ -63,6 +70,7 @@ func NewPayeeService(
 	businessPayeeRelationRepo payee.BusinessPayeeRelationRepository,
 	providerMappingRepo payout.PayoutProviderMappingRepository,
 	payoutProvider payout.PayoutProvider,
+	castlerClient CastlerPayeeOnboarder,
 	gstVerificationSvc business_rules.GSTVerificationService,
 	bankVerificationSvc business_rules.BankVerificationService,
 	crossVerificationSvc business_rules.CrossVerificationService,
@@ -81,6 +89,7 @@ func NewPayeeService(
 		businessPayeeRelationRepo:  businessPayeeRelationRepo,
 		providerMappingRepo:        providerMappingRepo,
 		payoutProvider:             payoutProvider,
+		castlerClient:              castlerClient,
 		gstVerificationSvc:         gstVerificationSvc,
 		bankVerificationSvc:        bankVerificationSvc,
 		crossVerificationSvc:       crossVerificationSvc,
@@ -248,6 +257,10 @@ func (s *PayeeService) onboardVendor(ctx context.Context, req payee.OnboardPayee
 			BankName:          vendor.BankName,
 			BranchName:        vendor.BranchName,
 			AccountType:       accountType,
+			Metadata: map[string]any{
+				"email": req.ContactEmail,
+				"phone": req.ContactPhone,
+			},
 		}
 
 		bankResp, err := s.bankVerificationSvc.VerifyBankAccount(ctx, bankReq)
@@ -310,6 +323,22 @@ func (s *PayeeService) onboardVendor(ctx context.Context, req payee.OnboardPayee
 		}
 
 		fmt.Println("✅ Money rotation check passed")
+
+		// Step 7.5: Onboard payee to Castler (after all verifications pass)
+		fmt.Println("🏦 Step 7.5: Onboarding payee to Castler...")
+		castlerPayeeResp, err := s.castlerClient.OnboardPayeeToCastler(
+			ctx,
+			vendor.AccountHolderName,
+			req.ContactEmail,
+			req.ContactPhone,
+			vendor.AccountNumber,
+			vendor.IFSCCode,
+			vendor.BankName,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("castler payee onboarding failed: %w", err)
+		}
+		fmt.Printf("✅ Payee onboarded to Castler: PayeeID=%s\n", castlerPayeeResp.Result)
 
 		// Create PayeeBankAccount entity
 		bankAccount = &payee.PayeeBankAccount{

@@ -10,6 +10,19 @@ import (
 	"strings"
 )
 
+// EncryptionOptions provides flexible encryption configuration for different providers
+type EncryptionOptions struct {
+	KeySize   int    // 16 for AES-128, 32 for AES-256
+	IncludeIV bool   // true = return "encrypted:iv", false = return "encrypted" only
+	IV        []byte // nil = random IV, or provide fixed IV bytes
+}
+
+// DecryptionOptions provides flexible decryption configuration for different providers
+type DecryptionOptions struct {
+	KeySize int    // 16 for AES-128, 32 for AES-256
+	IV      []byte // Required for formats without IV (like Castler)
+}
+
 // EncryptAES256CBC encrypts the input data using AES-256-CBC with PKCS7 padding.
 //
 // Parameters:
@@ -133,10 +146,25 @@ func GenerateRandomIV() ([]byte, error) {
 
 // DeriveKeyFromPassword derives a 16-byte encryption key from a password using SHA512.
 // The key is the first 16 characters of the SHA512 hex digest.
+// Deprecated: Use deriveKey() with explicit keySize instead
 func DeriveKeyFromPassword(password string) []byte {
+	return deriveKey(password, 16)
+}
+
+// deriveKey derives an encryption key of specified size from a password using SHA512
+// Parameters:
+//   - password: Password string to derive key from
+//   - keySize: Size of key in bytes (16 for AES-128, 32 for AES-256)
+// Returns:
+//   - Key bytes of specified length
+func deriveKey(password string, keySize int) []byte {
 	hash := sha512.Sum512([]byte(password))
-	// Convert hash to hex string and take first 16 characters as key
-	return []byte(fmt.Sprintf("%x", hash)[:16])
+	// Convert hash to hex string and take first keySize characters
+	hexStr := fmt.Sprintf("%x", hash)
+	if keySize > len(hexStr) {
+		keySize = len(hexStr)
+	}
+	return []byte(hexStr[:keySize])
 }
 
 // pkcs7Pad adds PKCS7 padding to data to make it a multiple of blockSize.
@@ -168,4 +196,257 @@ func pkcs7Unpad(data []byte) ([]byte, error) {
 	}
 
 	return data[:len(data)-padding], nil
+}
+
+// EncryptAES_CBC encrypts data using AES-CBC with flexible options
+// This is the enhanced generic function that supports both AES-128 and AES-256
+//
+// Parameters:
+//   - data: Plaintext string to encrypt
+//   - password: Password used to derive encryption key
+//   - opts: Encryption options (KeySize, IncludeIV, IV)
+//
+// Returns:
+//   - Encrypted data as base64 string (format depends on opts.IncludeIV)
+//   - Error if encryption fails
+func EncryptAES_CBC(data string, password string, opts EncryptionOptions) (string, error) {
+	// Validate and set defaults
+	if opts.KeySize != 16 && opts.KeySize != 32 {
+		return "", fmt.Errorf("invalid KeySize: must be 16 (AES-128) or 32 (AES-256)")
+	}
+
+	// Handle IV
+	iv := opts.IV
+	if iv == nil {
+		var err error
+		iv, err = GenerateRandomIV()
+		if err != nil {
+			return "", fmt.Errorf("failed to generate IV: %w", err)
+		}
+	} else if len(iv) != aes.BlockSize {
+		return "", fmt.Errorf("invalid IV length: expected %d bytes, got %d bytes", aes.BlockSize, len(iv))
+	}
+
+	// Derive key based on specified size
+	key := deriveKey(password, opts.KeySize)
+
+	// Create AES cipher
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", fmt.Errorf("failed to create cipher: %w", err)
+	}
+
+	// Pad the data using PKCS7
+	paddedData := pkcs7Pad([]byte(data), aes.BlockSize)
+
+	// Encrypt using CBC mode
+	mode := cipher.NewCBCEncrypter(block, iv)
+	encrypted := make([]byte, len(paddedData))
+	mode.CryptBlocks(encrypted, paddedData)
+
+	// Encode to base64
+	encryptedB64 := base64.StdEncoding.EncodeToString(encrypted)
+
+	// Return format based on IncludeIV option
+	if opts.IncludeIV {
+		ivB64 := base64.StdEncoding.EncodeToString(iv)
+		return fmt.Sprintf("%s:%s", encryptedB64, ivB64), nil
+	}
+
+	// Castler format: encrypted data only
+	return encryptedB64, nil
+}
+
+// DecryptAES_CBC decrypts data using AES-CBC with flexible options
+// This is the enhanced generic function that supports both AES-128 and AES-256
+//
+// Parameters:
+//   - encryptedData: Base64 encoded encrypted string (may or may not include IV)
+//   - password: Password used to derive decryption key
+//   - opts: Decryption options (KeySize, IV if not in encryptedData)
+//
+// Returns:
+//   - Decrypted plaintext string
+//   - Error if decryption fails
+func DecryptAES_CBC(encryptedData string, password string, opts DecryptionOptions) (string, error) {
+	// Validate KeySize
+	if opts.KeySize != 16 && opts.KeySize != 32 {
+		return "", fmt.Errorf("invalid KeySize: must be 16 (AES-128) or 32 (AES-256)")
+	}
+
+	var encrypted []byte
+	var iv []byte
+	var err error
+
+	// Check if IV is provided separately (Castler format)
+	if opts.IV != nil {
+		// IV provided in options, data is just encrypted content
+		if len(opts.IV) != aes.BlockSize {
+			return "", fmt.Errorf("invalid IV length: expected %d bytes, got %d bytes", aes.BlockSize, len(opts.IV))
+		}
+		iv = opts.IV
+
+		// Decode encrypted data
+		encrypted, err = base64.StdEncoding.DecodeString(encryptedData)
+		if err != nil {
+			return "", fmt.Errorf("failed to decode encrypted data: %w", err)
+		}
+	} else {
+		// Standard format: encrypted:iv
+		parts := strings.Split(encryptedData, ":")
+		if len(parts) != 2 {
+			return "", fmt.Errorf("invalid encrypted data format. Expected 'encrypted_data:iv', got %d parts", len(parts))
+		}
+
+		encryptedB64, ivB64 := parts[0], parts[1]
+
+		// Decode from base64
+		encrypted, err = base64.StdEncoding.DecodeString(encryptedB64)
+		if err != nil {
+			return "", fmt.Errorf("failed to decode encrypted data: %w", err)
+		}
+
+		iv, err = base64.StdEncoding.DecodeString(ivB64)
+		if err != nil {
+			return "", fmt.Errorf("failed to decode IV: %w", err)
+		}
+
+		if len(iv) != aes.BlockSize {
+			return "", fmt.Errorf("invalid IV length: expected %d bytes, got %d bytes", aes.BlockSize, len(iv))
+		}
+	}
+
+	// Derive key based on specified size
+	key := deriveKey(password, opts.KeySize)
+
+	// Create AES cipher
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", fmt.Errorf("failed to create cipher: %w", err)
+	}
+
+	// Decrypt using CBC mode
+	mode := cipher.NewCBCDecrypter(block, iv)
+	decrypted := make([]byte, len(encrypted))
+	mode.CryptBlocks(decrypted, encrypted)
+
+	// Remove padding
+	unpaddedData, err := pkcs7Unpad(decrypted)
+	if err != nil {
+		return "", fmt.Errorf("failed to unpad data: %w", err)
+	}
+
+	return string(unpaddedData), nil
+}
+
+// ============================================================================
+// Provider-Specific Convenience Wrappers
+// ============================================================================
+
+// EncryptForCastler encrypts data for Castler API using AES-256-CBC with fixed IV
+// Returns base64 encoded encrypted data (IV not included in output)
+//
+// Parameters:
+//   - data: JSON string to encrypt
+//   - encryptionKey: Secret key from config
+//   - fixedIV: Fixed IV bytes (should be "NC0V0$0T0L030RME")
+//
+// Returns:
+//   - Base64 encoded encrypted data
+//   - Error if encryption fails
+func EncryptForCastler(data string, encryptionKey string, fixedIV []byte) (string, error) {
+	return EncryptAES_CBC(data, encryptionKey, EncryptionOptions{
+		KeySize:   32,    // AES-256
+		IncludeIV: false, // Castler: don't include IV in output
+		IV:        fixedIV,
+	})
+}
+
+// DecryptFromCastler decrypts response from Castler API using AES-256-CBC with fixed IV
+// Expects base64 encoded encrypted data (without IV)
+//
+// Parameters:
+//   - encryptedData: Base64 encoded encrypted string
+//   - encryptionKey: Secret key from config
+//   - fixedIV: Fixed IV bytes (should be "NC0V0$0T0L030RME")
+//
+// Returns:
+//   - Decrypted JSON string
+//   - Error if decryption fails
+func DecryptFromCastler(encryptedData string, encryptionKey string, fixedIV []byte) (string, error) {
+	return DecryptAES_CBC(encryptedData, encryptionKey, DecryptionOptions{
+		KeySize: 32, // AES-256
+		IV:      fixedIV,
+	})
+}
+
+// EncryptForJioPay encrypts data for JioPay API using AES-128-CBC with random IV
+// Returns format: "base64_encrypted:base64_iv"
+//
+// Parameters:
+//   - data: JSON string to encrypt
+//   - encryptionKey: Secret key from config
+//
+// Returns:
+//   - Encrypted data in format "encrypted:iv"
+//   - Error if encryption fails
+func EncryptForJioPay(data string, encryptionKey string) (string, error) {
+	return EncryptAES_CBC(data, encryptionKey, EncryptionOptions{
+		KeySize:   16,   // AES-128
+		IncludeIV: true, // JioPay: include IV in output
+		IV:        nil,  // Random IV
+	})
+}
+
+// DecryptFromJioPay decrypts response from JioPay API using AES-128-CBC
+// Expects format: "base64_encrypted:base64_iv"
+//
+// Parameters:
+//   - encryptedData: Encrypted string in format "encrypted:iv"
+//   - encryptionKey: Secret key from config
+//
+// Returns:
+//   - Decrypted JSON string
+//   - Error if decryption fails
+func DecryptFromJioPay(encryptedData string, encryptionKey string) (string, error) {
+	return DecryptAES_CBC(encryptedData, encryptionKey, DecryptionOptions{
+		KeySize: 16, // AES-128
+		IV:      nil, // IV is in the data
+	})
+}
+
+// EncryptForEasebuzz encrypts data for Easebuzz API using AES-128-CBC with fixed IV
+// Returns format: "base64_encrypted:base64_iv"
+//
+// Parameters:
+//   - data: JSON string to encrypt
+//   - encryptionKey: Secret key from config
+//   - fixedIV: Fixed IV bytes from config
+//
+// Returns:
+//   - Encrypted data in format "encrypted:iv"
+//   - Error if encryption fails
+func EncryptForEasebuzz(data string, encryptionKey string, fixedIV []byte) (string, error) {
+	return EncryptAES_CBC(data, encryptionKey, EncryptionOptions{
+		KeySize:   16,   // AES-128
+		IncludeIV: true, // Easebuzz: include IV in output
+		IV:        fixedIV,
+	})
+}
+
+// DecryptFromEasebuzz decrypts response from Easebuzz API using AES-128-CBC
+// Expects format: "base64_encrypted:base64_iv"
+//
+// Parameters:
+//   - encryptedData: Encrypted string in format "encrypted:iv"
+//   - encryptionKey: Secret key from config
+//
+// Returns:
+//   - Decrypted JSON string
+//   - Error if decryption fails
+func DecryptFromEasebuzz(encryptedData string, encryptionKey string) (string, error) {
+	return DecryptAES_CBC(encryptedData, encryptionKey, DecryptionOptions{
+		KeySize: 16, // AES-128
+		IV:      nil, // IV is in the data
+	})
 }
