@@ -1,7 +1,6 @@
 package castler
 
 import (
-	"bytes"
 	"context"
 	"crypto/aes"
 	"encoding/base64"
@@ -23,30 +22,34 @@ type CastlerClient struct {
 	apiKey        string
 	secretKey     string
 	httpClient    *http.Client
-	encryptionKey string // Optional: AES encryption key
-	fixedIV       []byte // Optional: Fixed IV for AES encryption
+	encryptionKey string // AES-256 encryption key (required)
+	fixedIV       []byte // Fixed IV for AES encryption (required)
 }
 
 // NewCastlerClient creates a new Castler payout client
+// All requests and responses are encrypted using AES-256-CBC
 // Parameters:
 //   - baseURL: Castler API base URL
 //   - apiKey: API authentication key
 //   - secretKey: API signing secret
-//   - encryptionKey: Optional AES-256 encryption key (empty string to disable encryption)
-//   - encryptionIVBase64: Optional fixed IV in base64 format (e.g., "TkMwVjAkMFQwTDAzMFJNRQ==")
+//   - encryptionKey: AES-256 encryption key (32 bytes, required)
+//   - encryptionIVBase64: Fixed IV in base64 format (16 bytes, required, e.g., "TkMwVjAkMFQwTDAzMFJNRQ==")
 func NewCastlerClient(baseURL, apiKey, secretKey, encryptionKey, encryptionIVBase64 string) (*CastlerClient, error) {
-	var fixedIV []byte
-	var err error
+	// Validate required parameters
+	if encryptionKey == "" {
+		return nil, fmt.Errorf("encryption key is required for Castler API")
+	}
+	if encryptionIVBase64 == "" {
+		return nil, fmt.Errorf("encryption IV is required for Castler API")
+	}
 
-	// Decode fixed IV if encryption is enabled
-	if encryptionKey != "" && encryptionIVBase64 != "" {
-		fixedIV, err = base64.StdEncoding.DecodeString(encryptionIVBase64)
-		if err != nil {
-			return nil, fmt.Errorf("invalid encryption IV (must be base64): %w", err)
-		}
-		if len(fixedIV) != aes.BlockSize {
-			return nil, fmt.Errorf("invalid IV length: expected %d bytes, got %d bytes", aes.BlockSize, len(fixedIV))
-		}
+	// Decode fixed IV
+	fixedIV, err := base64.StdEncoding.DecodeString(encryptionIVBase64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid encryption IV (must be base64): %w", err)
+	}
+	if len(fixedIV) != aes.BlockSize {
+		return nil, fmt.Errorf("invalid IV length: expected %d bytes, got %d bytes", aes.BlockSize, len(fixedIV))
 	}
 
 	return &CastlerClient{
@@ -324,7 +327,7 @@ func (c *CastlerClient) CancelTransfer(ctx context.Context, providerTransferID s
 
 // setCommonHeaders injects standard Castler API headers into HTTP requests
 // This is the centralized place where all Castler API authentication headers are set
-func (c *CastlerClient) setCommonHeaders(req *http.Request, isEncrypted bool) {
+func (c *CastlerClient) setCommonHeaders(req *http.Request) {
 
 	req.Header.Set("Content-Type", "application/json")
 
@@ -336,6 +339,7 @@ func (c *CastlerClient) setCommonHeaders(req *http.Request, isEncrypted bool) {
 func (c *CastlerClient) post(ctx context.Context, endpoint string, reqBody interface{}, respBody interface{}) error {
 	var bodyReader io.Reader
 
+	// Encrypt request body (always encrypted)
 	if reqBody != nil {
 		// Marshal to JSON
 		jsonData, err := json.Marshal(reqBody)
@@ -343,16 +347,12 @@ func (c *CastlerClient) post(ctx context.Context, endpoint string, reqBody inter
 			return fmt.Errorf("failed to marshal request: %w", err)
 		}
 
-		// Encrypt if encryption is enabled
-		if c.encryptionKey != "" && c.fixedIV != nil {
-			encryptedData, err := crypto.EncryptForCastler(string(jsonData), c.encryptionKey, c.fixedIV)
-			if err != nil {
-				return fmt.Errorf("failed to encrypt request: %w", err)
-			}
-			bodyReader = strings.NewReader(encryptedData)
-		} else {
-			bodyReader = bytes.NewReader(jsonData)
+		// Encrypt request
+		encryptedData, err := crypto.EncryptForCastler(string(jsonData), c.encryptionKey, c.fixedIV)
+		if err != nil {
+			return fmt.Errorf("failed to encrypt request: %w", err)
 		}
+		bodyReader = strings.NewReader(encryptedData)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+endpoint, bodyReader)
@@ -361,8 +361,7 @@ func (c *CastlerClient) post(ctx context.Context, endpoint string, reqBody inter
 	}
 
 	// Inject common headers (authentication + content-type)
-	isEncrypted := c.encryptionKey != "" && c.fixedIV != nil
-	c.setCommonHeaders(req, isEncrypted)
+	c.setCommonHeaders(req)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -370,33 +369,27 @@ func (c *CastlerClient) post(ctx context.Context, endpoint string, reqBody inter
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode >= 400 {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(bodyBytes))
+	// Read response body (always encrypted, including error responses)
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read response: %w", err)
 	}
 
-	// Read and parse response
-	if respBody != nil {
-		bodyBytes, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return fmt.Errorf("failed to read response: %w", err)
-		}
+	// Decrypt response (error responses are also encrypted)
+	decryptedData, err := crypto.DecryptFromCastler(string(bodyBytes), c.encryptionKey, c.fixedIV)
+	if err != nil {
+		return fmt.Errorf("failed to decrypt response: %w", err)
+	}
 
-		// Decrypt if encryption is enabled
-		if c.encryptionKey != "" && c.fixedIV != nil {
-			decryptedData, err := crypto.DecryptFromCastler(string(bodyBytes), c.encryptionKey, c.fixedIV)
-			if err != nil {
-				return fmt.Errorf("failed to decrypt response: %w", err)
-			}
-			// Parse decrypted JSON
-			if err := json.Unmarshal([]byte(decryptedData), respBody); err != nil {
-				return fmt.Errorf("failed to parse decrypted response: %w", err)
-			}
-		} else {
-			// Parse plain JSON
-			if err := json.Unmarshal(bodyBytes, respBody); err != nil {
-				return fmt.Errorf("failed to parse response: %w", err)
-			}
+	// Check status code after decryption
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, decryptedData)
+	}
+
+	// Parse decrypted JSON into response body
+	if respBody != nil {
+		if err := json.Unmarshal([]byte(decryptedData), respBody); err != nil {
+			return fmt.Errorf("failed to parse decrypted response: %w", err)
 		}
 	}
 
@@ -409,8 +402,8 @@ func (c *CastlerClient) get(ctx context.Context, endpoint string, respBody inter
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 
-	// Inject common headers (authentication headers, GET requests are never encrypted)
-	c.setCommonHeaders(req, false)
+	// Inject common headers (authentication headers)
+	c.setCommonHeaders(req)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -418,13 +411,28 @@ func (c *CastlerClient) get(ctx context.Context, endpoint string, respBody inter
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode >= 400 {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(bodyBytes))
+	// Read response body (always encrypted, including error responses)
+	bodyBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read response: %w", err)
 	}
 
-	if err := json.NewDecoder(resp.Body).Decode(respBody); err != nil {
-		return fmt.Errorf("failed to decode response: %w", err)
+	// Decrypt response (error responses are also encrypted)
+	decryptedData, err := crypto.DecryptFromCastler(string(bodyBytes), c.encryptionKey, c.fixedIV)
+	if err != nil {
+		return fmt.Errorf("failed to decrypt response: %w", err)
+	}
+
+	// Check status code after decryption
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, decryptedData)
+	}
+
+	// Parse decrypted JSON into response body
+	if respBody != nil {
+		if err := json.Unmarshal([]byte(decryptedData), respBody); err != nil {
+			return fmt.Errorf("failed to parse decrypted response: %w", err)
+		}
 	}
 
 	return nil
