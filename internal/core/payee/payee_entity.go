@@ -220,9 +220,8 @@ type PayeeBankAccount struct {
 	BankVerificationStatus VerificationStatus `json:"bank_verification_status"`
 	VerificationData       map[string]any     `json:"verification_data,omitempty"`
 
-	// Cross-verification with GST/PAN
+	// Cross-verification with GST/PAN (money rotation check)
 	CrossVerificationStatus VerificationStatus `json:"cross_verification_status"`
-	NameMatchScore          float64            `json:"name_match_score"` // 0.0 to 1.0
 
 	// Account status
 	IsActive     bool   `json:"is_active"`

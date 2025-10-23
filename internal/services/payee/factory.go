@@ -60,7 +60,7 @@ func (f *PayeeServiceFactory) NewPayeeService() *PayeeService {
 	// Create verification services
 	gstVerificationSvc := business_rules.NewMockGSTVerificationService()
 	bankVerificationSvc := castler.NewCastlerBankVerificationService(castlerClient) // Use Castler for penny-drop
-	crossVerificationSvc := business_rules.NewMockCrossVerificationService()
+	crossVerificationSvc := business_rules.NewCrossVerificationService()
 
 	// Create and return PayeeService with all dependencies
 	return NewPayeeService(

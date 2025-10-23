@@ -568,6 +568,22 @@ func (s *BusinessServiceImpl) GetBusinessDetails(ctx context.Context, bid string
 	return response, nil
 }
 
+// GetBusinessKYBData retrieves the KYB data for a business including company director information
+// This is used for money rotation checks during payee onboarding
+func (s *BusinessServiceImpl) GetBusinessKYBData(ctx context.Context, bid string) (*business.BusinessKYBData, error) {
+	// Fetch business with KYB data from repository
+	_, kybData, err := s.businessRepo.GetBusinessWithKYBData(ctx, bid)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch business KYB data: %w", err)
+	}
+
+	if kybData == nil {
+		return nil, fmt.Errorf("KYB data not found for business: %s", bid)
+	}
+
+	return kybData, nil
+}
+
 // GetBusinessOnboardingFlags retrieves the onboarding flags for a business (cached).
 func (s *BusinessServiceImpl) GetBusinessOnboardingFlags(ctx context.Context, bid string) (*business.BusinessOnboardingStatusDTO, error) {
 	// Try cache first

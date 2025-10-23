@@ -18,6 +18,7 @@ type BusinessService interface {
 
 	// Business details
 	GetBusinessDetails(ctx context.Context, bid string, userRole shared.UserRole) (*BusinessDetailsResponse, error)
+	GetBusinessKYBData(ctx context.Context, bid string) (*BusinessKYBData, error)
 
 	GetBusinessOnboardingFlags(ctx context.Context, bid string) (*BusinessOnboardingStatusDTO, error)
 

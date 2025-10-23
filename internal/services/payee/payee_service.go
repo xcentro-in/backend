@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -274,55 +275,10 @@ func (s *PayeeService) onboardVendor(ctx context.Context, req payee.OnboardPayee
 
 		fmt.Printf("✅ Bank verified: %s at %s\n", bankResp.VerifiedAccountName, bankResp.BankName)
 
-		// Step 6: Cross-verify GST name vs Bank name
-		fmt.Println("🔗 Step 6: Cross-verifying GST name vs Bank account name...")
-		crossReq := business_rules.CrossVerificationRequest{
-			GSTIN:           vendor.GSTIN,
-			GSTLegalName:    vendorPayee.LegalName,
-			BankAccountName: bankResp.VerifiedAccountName,
-			BankIFSC:        vendor.IFSCCode,
+		// Step 6: Money rotation check
+		if err := s.checkMoneyRotation(ctx, req.BusinessID, bankResp.VerifiedAccountName); err != nil {
+			return nil, err
 		}
-
-		crossResp, err := s.crossVerificationSvc.VerifyGSTBankMatch(ctx, crossReq)
-		if err != nil {
-			return nil, fmt.Errorf("cross-verification failed: %w", err)
-		}
-
-		if crossResp.RecommendedAction == "reject" {
-			return nil, fmt.Errorf("cross-verification failed: name mismatch (score: %.2f)", crossResp.MatchScore)
-		}
-
-		fmt.Printf("✅ Cross-verification passed: Match score %.2f (%s)\n", crossResp.MatchScore, crossResp.RecommendedAction)
-
-		// Step 7: Money rotation check (placeholder for now)
-		fmt.Println("💰 Step 7: Checking for money rotation...")
-
-		// Extract director names from GST data
-		var directorNames []string
-		if vendorPayee.GSTData != nil {
-			if directors, ok := vendorPayee.GSTData["directors"].([]business_rules.GSTDirector); ok {
-				for _, dir := range directors {
-					directorNames = append(directorNames, dir.Name)
-				}
-			}
-		}
-
-		moneyRotationReq := business_rules.MoneyRotationCheckRequest{
-			CustomerBusinessID: req.BusinessID,
-			PayeeAccountName:   bankResp.VerifiedAccountName,
-			PayeeGSTDirectors:  directorNames,
-		}
-
-		moneyRotationResp, err := s.crossVerificationSvc.CheckMoneyRotation(ctx, moneyRotationReq)
-		if err != nil {
-			return nil, fmt.Errorf("money rotation check failed: %w", err)
-		}
-
-		if moneyRotationResp.IsMoneyRotation {
-			return nil, fmt.Errorf("money rotation detected: %s", moneyRotationResp.Details)
-		}
-
-		fmt.Println("✅ Money rotation check passed")
 
 		// Step 7.5: Onboard payee to Castler (after all verifications pass)
 		fmt.Println("🏦 Step 7.5: Onboarding payee to Castler...")
@@ -342,23 +298,22 @@ func (s *PayeeService) onboardVendor(ctx context.Context, req payee.OnboardPayee
 
 		// Create PayeeBankAccount entity
 		bankAccount = &payee.PayeeBankAccount{
-			PayeeID:                  payeeID,
-			AccountNumber:            vendor.AccountNumber,
-			AccountNumberHash:        accountHash,
-			IFSCCode:                 vendor.IFSCCode,
-			BankName:                 vendor.BankName,   // Use bank name from frontend IFSC check
-			BranchName:               vendor.BranchName, // Use branch name from frontend IFSC check
-			AccountType:              accountType,       // Use the defaulted account type
-			AccountHolderName:        bankResp.VerifiedAccountName,
-			IsVerified:               true,
-			VerifiedAt:               &time.Time{},
-			BankVerificationStatus:   payee.VerificationStatusSuccess,
-			CrossVerificationStatus:  payee.VerificationStatusSuccess,
-			NameMatchScore:           crossResp.MatchScore,
-			IsActive:                 true,
-			IsPrimary:                false, // Will check if this should be primary
-			AccountLabel:             vendor.AccountLabel,
-			VerificationData:         bankResp.Metadata,
+			PayeeID:                 payeeID,
+			AccountNumber:           vendor.AccountNumber,
+			AccountNumberHash:       accountHash,
+			IFSCCode:                vendor.IFSCCode,
+			BankName:                vendor.BankName,   // Use bank name from frontend IFSC check
+			BranchName:              vendor.BranchName, // Use branch name from frontend IFSC check
+			AccountType:             accountType,       // Use the defaulted account type
+			AccountHolderName:       vendor.AccountHolderName,
+			IsVerified:              true,
+			VerifiedAt:              &time.Time{},
+			BankVerificationStatus:  payee.VerificationStatusSuccess,
+			CrossVerificationStatus: payee.VerificationStatusSuccess,
+			IsActive:                true,
+			IsPrimary:               false, // Will check if this should be primary
+			AccountLabel:            vendor.AccountLabel,
+			VerificationData:        map[string]any{"test": "test"},
 		}
 		*bankAccount.VerifiedAt = time.Now()
 	}
@@ -1282,6 +1237,67 @@ func (s *PayeeService) maskAccountNumber(accountNumber string) string {
 		return accountNumber
 	}
 	return "****" + accountNumber[len(accountNumber)-5:]
+}
+
+// checkMoneyRotation performs money rotation fraud detection by comparing payee account holder
+// name against the directors of the business that is onboarding the payee.
+// This prevents scenarios where business directors create fake vendors with their own bank accounts.
+//
+// Future enhancements:
+// - ML-based name matching (fuzzy matching, nicknames, aliases)
+// - Historical transaction pattern analysis
+// - Cross-business director checks
+// - Risk scoring instead of binary pass/fail
+func (s *PayeeService) checkMoneyRotation(ctx context.Context, businessID string, payeeAccountHolderName string) error {
+	fmt.Println("💰 Checking for money rotation...")
+
+	// Extract director names from BUSINESS's KYB data
+	var directorNames []string
+
+	// Fetch business KYB data
+	kybData, err := s.businessService.GetBusinessKYBData(ctx, businessID)
+	if err != nil {
+		fmt.Printf("⚠️  Warning: Could not fetch business KYB data for money rotation check: %v\n", err)
+		// Continue without director names (money rotation check will have empty list)
+	} else if kybData.CIDData != "" {
+		// Parse company_id_data JSON to extract director names
+		var companyData map[string]interface{}
+		if err := json.Unmarshal([]byte(kybData.CIDData), &companyData); err != nil {
+			fmt.Printf("⚠️  Warning: Failed to parse company_id_data: %v\n", err)
+		} else if msg, ok := companyData["msg"].(map[string]interface{}); ok {
+			if masterDirectors, ok := msg["MasterDirector"].([]interface{}); ok {
+				for _, dirInterface := range masterDirectors {
+					if dir, ok := dirInterface.(map[string]interface{}); ok {
+						if name, ok := dir["name"].(string); ok && name != "" {
+							directorNames = append(directorNames, name)
+						}
+					}
+				}
+				fmt.Printf("📋 Found %d directors in business KYB data\n", len(directorNames))
+			}
+		}
+	}
+
+	// Prepare money rotation check request
+	moneyRotationReq := business_rules.MoneyRotationCheckRequest{
+		CustomerBusinessID: businessID,
+		PayeeAccountName:   payeeAccountHolderName,
+		PayeeGSTDirectors:  directorNames, // Business directors, not payee directors
+	}
+
+	// Call verification service
+	moneyRotationResp, err := s.crossVerificationSvc.CheckMoneyRotation(ctx, moneyRotationReq)
+	if err != nil {
+		return fmt.Errorf("money rotation check failed: %w", err)
+	}
+
+	// Check if money rotation detected
+	if moneyRotationResp.IsMoneyRotation {
+		return fmt.Errorf("money rotation detected: %s", moneyRotationResp.Details)
+	}
+
+	fmt.Println("✅ Money rotation check passed")
+	return nil
 }
 
 // populateVendorDetails populates vendor-specific details in the response

@@ -325,12 +325,8 @@ func (c *CastlerClient) CancelTransfer(ctx context.Context, providerTransferID s
 // setCommonHeaders injects standard Castler API headers into HTTP requests
 // This is the centralized place where all Castler API authentication headers are set
 func (c *CastlerClient) setCommonHeaders(req *http.Request, isEncrypted bool) {
-	// Set content type based on encryption status
-	if isEncrypted {
-		req.Header.Set("Content-Type", "text/plain") // Encrypted data is sent as plain text
-	} else {
-		req.Header.Set("Content-Type", "application/json")
-	}
+
+	req.Header.Set("Content-Type", "application/json")
 
 	// Set Castler authentication headers (required for all requests)
 	req.Header.Set("X-API-Key", c.apiKey)

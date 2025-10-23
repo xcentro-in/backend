@@ -12,15 +12,17 @@ import (
 
 // EncryptionOptions provides flexible encryption configuration for different providers
 type EncryptionOptions struct {
-	KeySize   int    // 16 for AES-128, 32 for AES-256
-	IncludeIV bool   // true = return "encrypted:iv", false = return "encrypted" only
-	IV        []byte // nil = random IV, or provide fixed IV bytes
+	KeySize    int    // 16 for AES-128, 32 for AES-256
+	IncludeIV  bool   // true = return "encrypted:iv", false = return "encrypted" only
+	IV         []byte // nil = random IV, or provide fixed IV bytes
+	DerivedKey bool
 }
 
 // DecryptionOptions provides flexible decryption configuration for different providers
 type DecryptionOptions struct {
-	KeySize int    // 16 for AES-128, 32 for AES-256
-	IV      []byte // Required for formats without IV (like Castler)
+	KeySize    int    // 16 for AES-128, 32 for AES-256
+	IV         []byte // Required for formats without IV (like Castler)
+	DerivedKey bool
 }
 
 // EncryptAES256CBC encrypts the input data using AES-256-CBC with PKCS7 padding.
@@ -155,6 +157,7 @@ func DeriveKeyFromPassword(password string) []byte {
 // Parameters:
 //   - password: Password string to derive key from
 //   - keySize: Size of key in bytes (16 for AES-128, 32 for AES-256)
+//
 // Returns:
 //   - Key bytes of specified length
 func deriveKey(password string, keySize int) []byte {
@@ -228,7 +231,13 @@ func EncryptAES_CBC(data string, password string, opts EncryptionOptions) (strin
 	}
 
 	// Derive key based on specified size
-	key := deriveKey(password, opts.KeySize)
+	fmt.Printf("Password === \n %s", password)
+	var key []byte
+	if opts.DerivedKey {
+		key = deriveKey(password, opts.KeySize)
+	} else {
+		key = []byte(password)
+	}
 
 	// Create AES cipher
 	block, err := aes.NewCipher(key)
@@ -317,7 +326,12 @@ func DecryptAES_CBC(encryptedData string, password string, opts DecryptionOption
 	}
 
 	// Derive key based on specified size
-	key := deriveKey(password, opts.KeySize)
+	var key []byte
+	if opts.DerivedKey {
+		key = deriveKey(password, opts.KeySize)
+	} else {
+		key = []byte(password)
+	}
 
 	// Create AES cipher
 	block, err := aes.NewCipher(key)
@@ -356,9 +370,10 @@ func DecryptAES_CBC(encryptedData string, password string, opts DecryptionOption
 //   - Error if encryption fails
 func EncryptForCastler(data string, encryptionKey string, fixedIV []byte) (string, error) {
 	return EncryptAES_CBC(data, encryptionKey, EncryptionOptions{
-		KeySize:   32,    // AES-256
-		IncludeIV: false, // Castler: don't include IV in output
-		IV:        fixedIV,
+		KeySize:    32,    // AES-256
+		IncludeIV:  false, // Castler: don't include IV in output
+		IV:         fixedIV,
+		DerivedKey: false,
 	})
 }
 
@@ -410,7 +425,7 @@ func EncryptForJioPay(data string, encryptionKey string) (string, error) {
 //   - Error if decryption fails
 func DecryptFromJioPay(encryptedData string, encryptionKey string) (string, error) {
 	return DecryptAES_CBC(encryptedData, encryptionKey, DecryptionOptions{
-		KeySize: 16, // AES-128
+		KeySize: 16,  // AES-128
 		IV:      nil, // IV is in the data
 	})
 }
@@ -446,7 +461,7 @@ func EncryptForEasebuzz(data string, encryptionKey string, fixedIV []byte) (stri
 //   - Error if decryption fails
 func DecryptFromEasebuzz(encryptedData string, encryptionKey string) (string, error) {
 	return DecryptAES_CBC(encryptedData, encryptionKey, DecryptionOptions{
-		KeySize: 16, // AES-128
+		KeySize: 16,  // AES-128
 		IV:      nil, // IV is in the data
 	})
 }

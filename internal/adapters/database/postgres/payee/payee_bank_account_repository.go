@@ -49,9 +49,9 @@ func (r *PgPayeeBankAccountRepository) CreateBankAccount(ctx context.Context, ac
 			payee_id, account_number_encrypted, account_number_hash,
 			ifsc_code, bank_name, branch_name, account_type, account_holder_name,
 			is_verified, verified_at, bank_verification_status, bank_verification_data,
-			cross_verification_status, name_match_score,
+			cross_verification_status,
 			is_active, is_primary, account_label, metadata
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 		RETURNING account_id, added_at
 	`
 
@@ -86,7 +86,6 @@ func (r *PgPayeeBankAccountRepository) CreateBankAccount(ctx context.Context, ac
 		account.BankVerificationStatus,
 		bankVerificationDataJSON,
 		account.CrossVerificationStatus,
-		account.NameMatchScore,
 		account.IsActive,
 		account.IsPrimary,
 		account.AccountLabel,
@@ -112,7 +111,7 @@ func (r *PgPayeeBankAccountRepository) FindByID(ctx context.Context, accountID s
 		SELECT account_id, payee_id, account_number_encrypted, account_number_hash,
 		       ifsc_code, bank_name, branch_name, account_type, account_holder_name,
 		       is_verified, verified_at, bank_verification_status, bank_verification_data,
-		       cross_verification_status, name_match_score,
+		       cross_verification_status,
 		       is_active, is_primary, account_label, metadata, added_at, updated_at
 		FROM xcentro.payee_bank_accounts
 		WHERE account_id = $1
@@ -121,7 +120,6 @@ func (r *PgPayeeBankAccountRepository) FindByID(ctx context.Context, accountID s
 	var account payee.PayeeBankAccount
 	var bankName, branchName, accountLabel sql.NullString
 	var verifiedAt sql.NullTime
-	var nameMatchScore sql.NullFloat64
 	var bankVerificationDataJSON, metadataJSON []byte
 	var updatedAt sql.NullTime
 
@@ -140,7 +138,6 @@ func (r *PgPayeeBankAccountRepository) FindByID(ctx context.Context, accountID s
 		&account.BankVerificationStatus,
 		&bankVerificationDataJSON,
 		&account.CrossVerificationStatus,
-		&nameMatchScore,
 		&account.IsActive,
 		&account.IsPrimary,
 		&accountLabel,
@@ -160,7 +157,6 @@ func (r *PgPayeeBankAccountRepository) FindByID(ctx context.Context, accountID s
 	account.BankName = bankName.String
 	account.BranchName = branchName.String
 	account.AccountLabel = accountLabel.String
-	account.NameMatchScore = nameMatchScore.Float64
 	if verifiedAt.Valid {
 		account.VerifiedAt = &verifiedAt.Time
 	}
@@ -191,7 +187,7 @@ func (r *PgPayeeBankAccountRepository) FindByPayeeID(ctx context.Context, payeeI
 		SELECT account_id, payee_id, account_number_encrypted, account_number_hash,
 		       ifsc_code, bank_name, branch_name, account_type, account_holder_name,
 		       is_verified, verified_at, bank_verification_status, bank_verification_data,
-		       cross_verification_status, name_match_score,
+		       cross_verification_status,
 		       is_active, is_primary, account_label, metadata, added_at, updated_at
 		FROM xcentro.payee_bank_accounts
 		WHERE payee_id = $1 AND is_active = TRUE
@@ -210,7 +206,6 @@ func (r *PgPayeeBankAccountRepository) FindByPayeeID(ctx context.Context, payeeI
 		var account payee.PayeeBankAccount
 		var bankName, branchName, accountLabel sql.NullString
 		var verifiedAt sql.NullTime
-		var nameMatchScore sql.NullFloat64
 		var bankVerificationDataJSON, metadataJSON []byte
 		var updatedAt sql.NullTime
 
@@ -229,7 +224,6 @@ func (r *PgPayeeBankAccountRepository) FindByPayeeID(ctx context.Context, payeeI
 			&account.BankVerificationStatus,
 			&bankVerificationDataJSON,
 			&account.CrossVerificationStatus,
-			&nameMatchScore,
 			&account.IsActive,
 			&account.IsPrimary,
 			&accountLabel,
@@ -246,7 +240,6 @@ func (r *PgPayeeBankAccountRepository) FindByPayeeID(ctx context.Context, payeeI
 		account.BankName = bankName.String
 		account.BranchName = branchName.String
 		account.AccountLabel = accountLabel.String
-		account.NameMatchScore = nameMatchScore.Float64
 		if verifiedAt.Valid {
 			account.VerifiedAt = &verifiedAt.Time
 		}
@@ -283,8 +276,8 @@ func (r *PgPayeeBankAccountRepository) UpdateBankAccount(ctx context.Context, ac
 	query := `
 		UPDATE xcentro.payee_bank_accounts
 		SET is_verified = $2, verified_at = $3, bank_verification_status = $4, bank_verification_data = $5,
-		    cross_verification_status = $6, name_match_score = $7,
-		    is_active = $8, is_primary = $9, account_label = $10, metadata = $11
+		    cross_verification_status = $6,
+		    is_active = $7, is_primary = $8, account_label = $9, metadata = $10
 		WHERE account_id = $1
 	`
 
@@ -312,7 +305,6 @@ func (r *PgPayeeBankAccountRepository) UpdateBankAccount(ctx context.Context, ac
 		account.BankVerificationStatus,
 		bankVerificationDataJSON,
 		account.CrossVerificationStatus,
-		account.NameMatchScore,
 		account.IsActive,
 		account.IsPrimary,
 		account.AccountLabel,
@@ -358,7 +350,7 @@ func (r *PgPayeeBankAccountRepository) GetPrimaryAccount(ctx context.Context, pa
 		SELECT account_id, payee_id, account_number_encrypted, account_number_hash,
 		       ifsc_code, bank_name, branch_name, account_type, account_holder_name,
 		       is_verified, verified_at, bank_verification_status, bank_verification_data,
-		       cross_verification_status, name_match_score,
+		       cross_verification_status,
 		       is_active, is_primary, account_label, metadata, added_at, updated_at
 		FROM xcentro.payee_bank_accounts
 		WHERE payee_id = $1 AND is_primary = TRUE AND is_active = TRUE
@@ -406,7 +398,6 @@ func (r *PgPayeeBankAccountRepository) GetPrimaryAccount(ctx context.Context, pa
 	account.BankName = bankName.String
 	account.BranchName = branchName.String
 	account.AccountLabel = accountLabel.String
-	account.NameMatchScore = nameMatchScore.Float64
 	if verifiedAt.Valid {
 		account.VerifiedAt = &verifiedAt.Time
 	}

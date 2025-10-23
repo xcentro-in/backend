@@ -2,32 +2,12 @@ package business_rules
 
 import "context"
 
-// CrossVerificationService defines the interface for cross-verification operations
-// Handles name matching between GST and bank data, and anti-money rotation checks
+// CrossVerificationService defines the interface for anti-fraud verification operations
+// Handles money rotation detection during payee onboarding
 type CrossVerificationService interface {
-	// VerifyGSTBankMatch checks if GST legal name matches bank account holder name
-	// Will call 3rd party API (AuthBridge or similar) for fuzzy name matching
-	VerifyGSTBankMatch(ctx context.Context, request CrossVerificationRequest) (*CrossVerificationResponse, error)
-
 	// CheckMoneyRotation verifies payee account holder is NOT a director of customer business
 	// Prevents money laundering: Business A → Director of Business A (circular flow)
 	CheckMoneyRotation(ctx context.Context, request MoneyRotationCheckRequest) (*MoneyRotationCheckResponse, error)
-}
-
-// CrossVerificationRequest represents a request to verify GST-Bank name match
-type CrossVerificationRequest struct {
-	GSTIN           string `json:"gstin"`
-	GSTLegalName    string `json:"gst_legal_name"`     // Name from GST verification
-	BankAccountName string `json:"bank_account_name"`  // Name from bank verification
-	BankIFSC        string `json:"bank_ifsc"`
-}
-
-// CrossVerificationResponse represents the response from GST-Bank name matching
-type CrossVerificationResponse struct {
-	IsMatch           bool           `json:"is_match"`            // Whether names match
-	MatchScore        float64        `json:"match_score"`         // Match confidence from API (0.0 to 1.0)
-	RecommendedAction string         `json:"recommended_action"`  // "approve", "manual_review", "reject"
-	Metadata          map[string]any `json:"metadata,omitempty"`  // Full API response
 }
 
 // MoneyRotationCheckRequest represents a request to check for money rotation
