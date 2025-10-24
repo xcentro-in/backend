@@ -9,6 +9,7 @@ import (
 	"xcentro.in/internal/core/business"
 	"xcentro.in/internal/core/business_rules"
 	"xcentro.in/internal/core/payment"
+	"xcentro.in/internal/shared/logger"
 )
 
 // PaymentService orchestrates payment operations with proper layering
@@ -22,6 +23,7 @@ type PaymentService struct {
 	txManager       client.TxManager
 	voucherService  interface{} // voucher.VoucherService, using interface{} to avoid circular import (Phase 6)
 	businessService business.BusinessService
+	logger          *logger.Logger
 }
 
 // NewPaymentService creates a new payment service with all dependencies
@@ -35,6 +37,7 @@ func NewPaymentService(
 	txManager client.TxManager,
 	voucherService interface{}, // Phase 6: Voucher service for payment integration
 	businessService business.BusinessService,
+	logger *logger.Logger,
 ) *PaymentService {
 	s := &PaymentService{
 		orchestrator:    orchestrator,
@@ -46,12 +49,13 @@ func NewPaymentService(
 		txManager:       txManager,
 		voucherService:  voucherService,
 		businessService: businessService,
+		logger:          logger,
 	}
 
 	// Inject voucher service into orchestrator (Phase 6)
 	if voucherService != nil {
 		orchestrator.SetVoucherService(voucherService)
-		fmt.Println("✅ Voucher service wired into payment orchestrator")
+		logger.Info("Voucher service wired into payment orchestrator")
 	}
 
 	return s
@@ -60,12 +64,15 @@ func NewPaymentService(
 // ProcessPayment orchestrates the complete payment flow
 // Creates payment record, calculates fees, calls orchestrator
 func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.PaymentRequest) (*payment.PaymentResponse, error) {
-	fmt.Println("=== PAYMENT SERVICE: ProcessPayment Called ===")
-	fmt.Printf("Business ID: %s, User ID: %s\n", req.BusinessID, req.UserID)
-	fmt.Printf("Amount: %d %s, Method: %s\n", req.Amount, req.Currency, req.PaymentMethod)
+	s.logger.InfoWith("Starting payment processing",
+		"business_id", req.BusinessID,
+		"user_id", req.UserID,
+		"amount", req.Amount,
+		"currency", req.Currency,
+		"payment_method", req.PaymentMethod)
 
 	// Step 1: Calculate fees before creating payment record
-	fmt.Println("💰 Calculating payment fees...")
+	s.logger.DebugWith("Calculating payment fees")
 	feeCalculation, err := s.feeCalculator.CalculateFee(
 		req.Amount,
 		req.PaymentMethod,
@@ -73,24 +80,28 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 		getCardCategoryFromRequest(&req),
 	)
 	if err != nil {
-		fmt.Printf("❌ Fee calculation failed: %v\n", err)
+		s.logger.ErrorWith("Fee calculation failed", "error", err)
 		return nil, fmt.Errorf("fee calculation failed: %w", err)
 	}
 
-	fmt.Printf("💰 Fee calculated: Base: %d, Fee: %d, Total: %d %s\n",
-		feeCalculation.BaseAmount, feeCalculation.FeeAmount,
-		feeCalculation.TotalAmount, feeCalculation.Currency)
+	s.logger.DebugWith("Fee calculation completed",
+		"base_amount", feeCalculation.BaseAmount,
+		"fee_amount", feeCalculation.FeeAmount,
+		"total_amount", feeCalculation.TotalAmount,
+		"currency", feeCalculation.Currency)
 
 	// Step 2: Generate UUID for payment at application level
 	paymentID := uuid.Must(uuid.NewV7()).String()
-	fmt.Printf("🆔 Generated Payment ID: %s\n", paymentID)
+	s.logger.DebugWith("Generated payment ID", "payment_id", paymentID)
 
 	// Step 3: Generate callback URL based on calling device
 	callbackURL := s.generateCallbackURL(req.CallingDevice, paymentID)
-	fmt.Printf("🔗 Generated Callback URL for %s: %s\n", req.CallingDevice, callbackURL)
+	s.logger.DebugWith("Generated callback URL",
+		"calling_device", req.CallingDevice,
+		"callback_url", callbackURL)
 
 	// Step 4: Create initial payment record with 'pending' status
-	fmt.Println("💾 Creating initial payment record...")
+	s.logger.DebugWith("Creating initial payment record")
 	p := &payment.Payment{
 		ID:            paymentID,
 		UserID:        req.UserID,
@@ -108,28 +119,29 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 	}
 
 	if err := s.paymentRepo.CreatePayment(ctx, p); err != nil {
-		fmt.Printf("❌ Failed to create payment record: %v\n", err)
+		s.logger.ErrorWith("Failed to create payment record", "error", err)
 		return nil, fmt.Errorf("failed to create payment record: %w", err)
 	}
 
-	fmt.Printf("✅ Payment record created with ID: %s\n", paymentID)
+	s.logger.InfoWith("Payment record created", "payment_id", paymentID)
 
 	// Step 5: Add payment_id to request for orchestrator
 	req.PaymentID = paymentID
 
 	// Step 6: Call orchestrator to process payment
-	fmt.Println("🔄 Calling Payment Orchestrator...")
+	s.logger.DebugWith("Calling payment orchestrator")
 	response, err := s.orchestrator.ProcessPayment(ctx, req)
 
 	if err != nil {
 		// Orchestrator already updated status to 'failed'
-		fmt.Printf("❌ Orchestrator failed: %v\n", err)
+		s.logger.ErrorWith("Payment orchestrator failed", "error", err)
 		return nil, fmt.Errorf("payment processing failed: %w", err)
 	}
 
-	fmt.Printf("✅ Payment processed successfully: %s\n", response.PaymentID)
-	fmt.Printf("🏦 Gateway Used: %s\n", response.GatewayUsed)
-	fmt.Printf("🌐 Redirect URL: %s\n", response.RedirectURL)
+	s.logger.InfoWith("Payment processed successfully",
+		"payment_id", response.PaymentID,
+		"gateway_used", response.GatewayUsed)
+	s.logger.DebugWith("Redirect URL generated", "redirect_url", response.RedirectURL)
 
 	// Update onboarding flag (non-blocking, first-time only)
 	if s.businessService != nil {
@@ -138,40 +150,43 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 			flags, err := s.businessService.GetBusinessOnboardingFlags(bgCtx, bizID)
 			if err == nil && !flags.HasCreatedFirstPayment {
 				_ = s.businessService.UpdateOnboardingStatus(bgCtx, bizID, "has_created_first_payment", true)
-				fmt.Printf("🎯 Onboarding flag updated: has_created_first_payment = true for business %s\n", bizID)
+				s.logger.DebugWith("Onboarding flag updated",
+					"business_id", bizID,
+					"flag", "has_created_first_payment")
 			}
 		}(req.BusinessID)
 	}
 
-	fmt.Println("=== PAYMENT SERVICE: ProcessPayment Complete ===")
+	s.logger.InfoWith("Payment processing completed", "payment_id", paymentID)
 
 	return response, nil
 }
 
 // GetBusinessWallet retrieves wallet for a business
 func (s *PaymentService) GetBusinessWallet(businessID string) (*payment.BusinessWallet, error) {
-	fmt.Printf("=== PAYMENT SERVICE: GetBusinessWallet Called - BusinessID: %s ===\n", businessID)
+	s.logger.DebugWith("Fetching business wallet", "business_id", businessID)
 	return s.walletService.GetBusinessWallet(businessID)
 }
 
 // AddPaymentSource adds a payment source to business wallet
 func (s *PaymentService) AddPaymentSource(businessID string, source payment.PaymentSource) error {
-	fmt.Printf("=== PAYMENT SERVICE: AddPaymentSource Called - BusinessID: %s, SourceType: %s ===\n",
-		businessID, source.GetSourceType())
+	s.logger.DebugWith("Adding payment source to wallet",
+		"business_id", businessID,
+		"source_type", source.GetSourceType())
 	return s.walletService.AddPaymentSource(businessID, source)
 }
 
 // TokenizeCard tokenizes a card and stores it in the wallet
 // Creates a ₹1 payment record for the tokenization transaction
 func (s *PaymentService) TokenizeCard(ctx context.Context, req payment.TokenizeRequest) (*payment.TokenizeResponse, error) {
-	fmt.Printf("=== PAYMENT SERVICE: TokenizeCard Called - BusinessID: %s ===\n", req.BusinessID)
+	s.logger.InfoWith("Starting card tokenization", "business_id", req.BusinessID)
 
 	// Step 1: Generate UUID for tokenization payment at application level
 	paymentID := uuid.Must(uuid.NewV7()).String()
-	fmt.Printf("🆔 Generated Payment ID for tokenization: %s\n", paymentID)
+	s.logger.DebugWith("Generated payment ID for tokenization", "payment_id", paymentID)
 
 	// Step 2: Create payment record for ₹1 tokenization transaction
-	fmt.Println("💾 Creating tokenization payment record...")
+	s.logger.DebugWith("Creating tokenization payment record")
 	p := &payment.Payment{
 		ID:            paymentID,
 		UserID:        req.UserID,
@@ -193,24 +208,24 @@ func (s *PaymentService) TokenizeCard(ctx context.Context, req payment.TokenizeR
 	}
 
 	if err := s.paymentRepo.CreatePayment(ctx, p); err != nil {
-		fmt.Printf("❌ Failed to create tokenization payment record: %v\n", err)
+		s.logger.ErrorWith("Failed to create tokenization payment record", "error", err)
 		return nil, fmt.Errorf("failed to create tokenization payment record: %w", err)
 	}
 
-	fmt.Printf("✅ Tokenization payment record created with ID: %s\n", p.ID)
+	s.logger.InfoWith("Tokenization payment record created", "payment_id", p.ID)
 
 	// Step 3: Pass payment ID to orchestrator as transaction ID
 	req.TransactionID = paymentID
 
 	// Step 4: Call orchestrator for tokenization
-	fmt.Println("🔄 Calling Payment Orchestrator for tokenization...")
+	s.logger.DebugWith("Calling payment orchestrator for tokenization")
 	response, err := s.orchestrator.TokenizeCard(ctx, req)
 	if err != nil {
 		// Update payment status to failed
 		failureMetadata := map[string]any{"error": err.Error()}
 		_ = s.paymentRepo.UpdatePaymentStatus(ctx, paymentID, payment.PaymentStatusFailed, failureMetadata)
 
-		fmt.Printf("❌ Tokenization failed: %v\n", err)
+		s.logger.ErrorWith("Card tokenization failed", "error", err)
 		return nil, fmt.Errorf("tokenization failed: %w", err)
 	}
 
@@ -222,20 +237,21 @@ func (s *PaymentService) TokenizeCard(ctx context.Context, req payment.TokenizeR
 	}
 	_ = s.paymentRepo.UpdatePaymentStatus(ctx, paymentID, payment.PaymentStatusSuccess, successMetadata)
 
-	fmt.Printf("✅ Card tokenized successfully: %s\n", response.CardID)
-	fmt.Printf("💳 Payment ID: %s (for webhook matching)\n", paymentID)
+	s.logger.InfoWith("Card tokenized successfully",
+		"card_id", response.CardID,
+		"payment_id", paymentID)
 	return response, nil
 }
 
 // GetFeeRules retrieves fee calculation rules
 func (s *PaymentService) GetFeeRules(paymentMethod payment.PaymentMethod) ([]*business_rules.FeeRule, error) {
-	fmt.Printf("=== PAYMENT SERVICE: GetFeeRules Called - Method: %s ===\n", paymentMethod)
+	s.logger.DebugWith("Fetching fee rules", "payment_method", paymentMethod)
 	return s.feeCalculator.GetFeeRules(paymentMethod)
 }
 
 // GetAllFeeRules retrieves all fee calculation rules
 func (s *PaymentService) GetAllFeeRules() ([]*business_rules.FeeRule, error) {
-	fmt.Println("=== PAYMENT SERVICE: GetAllFeeRules Called ===")
+	s.logger.DebugWith("Fetching all fee rules")
 	return s.feeCalculator.GetAllFeeRules()
 }
 

@@ -31,6 +31,7 @@ import (
 	"xcentro.in/internal/services/verification"
 	voucherSvc "xcentro.in/internal/services/voucher"
 	"xcentro.in/internal/shared/config"
+	"xcentro.in/internal/shared/logger"
 )
 
 func registerV1AuthRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
@@ -147,8 +148,9 @@ func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group
 		walletService,
 		feeCalculator,
 		clients.txManager,
-		voucherService, // PHASE 6: Inject voucher service
-		busSvc,         // Business service for onboarding flags
+		voucherService,       // PHASE 6: Inject voucher service
+		busSvc,               // Business service for onboarding flags
+		logger.GetDefault(),  // Logger instance
 	)
 
 	// Create auth service for JWT middleware

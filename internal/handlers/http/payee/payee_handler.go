@@ -8,28 +8,31 @@ import (
 	"github.com/labstack/echo/v4"
 	"xcentro.in/internal/core/payee"
 	payeeSvc "xcentro.in/internal/services/payee"
+	"xcentro.in/internal/shared/logger"
 )
 
 // PayeeHandler handles payee-related HTTP requests
 type PayeeHandler struct {
 	payeeService *payeeSvc.PayeeService
+	logger       *logger.Logger
 }
 
 // NewPayeeHandler creates a new payee handler
-func NewPayeeHandler(payeeService *payeeSvc.PayeeService) *PayeeHandler {
+func NewPayeeHandler(payeeService *payeeSvc.PayeeService, logger *logger.Logger) *PayeeHandler {
 	return &PayeeHandler{
 		payeeService: payeeService,
+		logger:       logger,
 	}
 }
 
 // OnboardPayee handles POST /payees - Onboard a new payee (polymorphic)
 func (h *PayeeHandler) OnboardPayee(c echo.Context) error {
-	fmt.Println("=== HANDLER: OnboardPayee API Called ===")
+	h.logger.InfoWith("OnboardPayee API called")
 
 	// Parse polymorphic request body
 	var req payee.OnboardPayeeRequest
 	if err := c.Bind(&req); err != nil {
-		fmt.Printf("❌ Error binding request: %v\n", err)
+		h.logger.ErrorWith("Error binding request", "error", err)
 		return c.JSON(http.StatusBadRequest, map[string]any{
 			"error":   "invalid_request",
 			"message": "Invalid request body",
@@ -39,18 +42,18 @@ func (h *PayeeHandler) OnboardPayee(c echo.Context) error {
 	// Extract userId from JWT context (set by JWTMiddleware)
 	userID, ok := c.Get("userId").(string)
 	if !ok || userID == "" {
-		fmt.Println("❌ Missing userId in context")
+		h.logger.WarnWith("Missing userId in context")
 		return c.JSON(http.StatusUnauthorized, map[string]any{
 			"error":   "MISSING_USER_ID",
 			"message": "User ID not found in token",
 		})
 	}
-	fmt.Printf("🔐 User ID (from JWT): %s\n", userID)
+	h.logger.DebugWith("User authenticated", "user_id", userID)
 
 	// Extract business_id from X-Business-ID header
 	businessID := c.Request().Header.Get("X-Business-ID")
 	if businessID == "" {
-		fmt.Println("❌ Missing X-Business-ID header")
+		h.logger.WarnWith("Missing X-Business-ID header")
 		return c.JSON(http.StatusBadRequest, map[string]any{
 			"error":   "MISSING_BUSINESS_ID",
 			"message": "X-Business-ID header is required",
@@ -58,7 +61,7 @@ func (h *PayeeHandler) OnboardPayee(c echo.Context) error {
 	}
 	req.BusinessID = businessID
 	req.AddedBy = userID // Set the user who is adding this payee
-	fmt.Printf("🔐 Business ID (from header): %s\n", businessID)
+	h.logger.DebugWith("Business context set", "business_id", businessID)
 
 	// Default to vendor if not specified (backward compatibility)
 	if req.PayeeType == "" {
@@ -74,7 +77,7 @@ func (h *PayeeHandler) OnboardPayee(c echo.Context) error {
 				"message": "vendor data is required for payee_type=vendor",
 			})
 		}
-		fmt.Printf("📥 Vendor: GSTIN=%s, DisplayName=%s\n", req.Vendor.GSTIN, req.DisplayName)
+		h.logger.DebugWith("Vendor onboard request", "gstin", req.Vendor.GSTIN, "display_name", req.DisplayName)
 	case payee.PayeeTypeEmployee:
 		if req.Employee == nil {
 			return c.JSON(http.StatusBadRequest, map[string]any{
@@ -82,7 +85,7 @@ func (h *PayeeHandler) OnboardPayee(c echo.Context) error {
 				"message": "employee data is required for payee_type=employee",
 			})
 		}
-		fmt.Printf("📥 Employee: PAN=%s, DisplayName=%s\n", req.Employee.PAN, req.DisplayName)
+		h.logger.DebugWith("Employee onboard request", "pan", req.Employee.PAN, "display_name", req.DisplayName)
 	case payee.PayeeTypeBiller:
 		if req.Biller == nil {
 			return c.JSON(http.StatusBadRequest, map[string]any{
@@ -90,7 +93,7 @@ func (h *PayeeHandler) OnboardPayee(c echo.Context) error {
 				"message": "biller data is required for payee_type=biller",
 			})
 		}
-		fmt.Printf("📥 Biller: BillerID=%s, DisplayName=%s\n", req.Biller.BillerID, req.DisplayName)
+		h.logger.DebugWith("Biller onboard request", "biller_id", req.Biller.BillerID, "display_name", req.DisplayName)
 	case payee.PayeeTypeGST:
 		if req.GST == nil {
 			return c.JSON(http.StatusBadRequest, map[string]any{
@@ -98,7 +101,7 @@ func (h *PayeeHandler) OnboardPayee(c echo.Context) error {
 				"message": "gst data is required for payee_type=gst_payment",
 			})
 		}
-		fmt.Printf("📥 GST: TaxPeriod=%s, DisplayName=%s\n", req.GST.TaxPeriod, req.DisplayName)
+		h.logger.DebugWith("GST payment onboard request", "tax_period", req.GST.TaxPeriod, "display_name", req.DisplayName)
 	default:
 		return c.JSON(http.StatusBadRequest, map[string]any{
 			"error":   "invalid_payee_type",
@@ -107,10 +110,10 @@ func (h *PayeeHandler) OnboardPayee(c echo.Context) error {
 	}
 
 	// Call payee service to onboard payee
-	fmt.Println("🔄 Calling Payee Service...")
+	h.logger.DebugWith("Calling payee service")
 	resp, err := h.payeeService.OnboardPayee(c.Request().Context(), req)
 	if err != nil {
-		fmt.Printf("❌ Onboarding error: %v\n", err)
+		h.logger.ErrorWith("Onboarding failed", "error", err)
 		return c.JSON(http.StatusInternalServerError, map[string]any{
 			"error":   "onboarding_failed",
 			"message": err.Error(),
@@ -129,8 +132,7 @@ func (h *PayeeHandler) OnboardPayee(c echo.Context) error {
 		"message":                   resp.Message,
 	}
 
-	fmt.Printf("✅ Payee onboarded successfully: PayeeID=%s, AccountID=%s\n", resp.PayeeID, resp.AccountID)
-	fmt.Println("=== HANDLER: OnboardPayee Complete ===")
+	h.logger.InfoWith("Payee onboarded successfully", "payee_id", resp.PayeeID, "account_id", resp.AccountID)
 
 	return c.JSON(http.StatusCreated, map[string]any{
 		"message": "Payee onboarded successfully",
@@ -141,7 +143,7 @@ func (h *PayeeHandler) OnboardPayee(c echo.Context) error {
 
 // GetPayees handles GET /payees - List all payees for a business
 func (h *PayeeHandler) GetPayees(c echo.Context) error {
-	fmt.Println("=== HANDLER: GetPayees API Called ===")
+	h.logger.InfoWith("GetPayees API called")
 
 	// Parse query parameters
 	displayName := c.QueryParam("display_name")
@@ -175,8 +177,12 @@ func (h *PayeeHandler) GetPayees(c echo.Context) error {
 		}
 	}
 
-	fmt.Printf("📥 Query: display_name=%s, is_active=%v, is_favorite=%v, page=%d, page_size=%d\n",
-		displayName, isActive, isFavorite, page, pageSize)
+	h.logger.DebugWith("Query parameters parsed",
+		"display_name", displayName,
+		"is_active", isActive,
+		"is_favorite", isFavorite,
+		"page", page,
+		"page_size", pageSize)
 
 	// Extract business_id from X-Business-ID header
 	businessID := c.Request().Header.Get("X-Business-ID")
@@ -186,7 +192,7 @@ func (h *PayeeHandler) GetPayees(c echo.Context) error {
 			"message": "X-Business-ID header is required",
 		})
 	}
-	fmt.Printf("🔐 Business ID (from header): %s\n", businessID)
+	h.logger.DebugWith("Business context", "business_id", businessID)
 
 	// Convert to service filters
 	filters := payee.RelationSearchFilters{
@@ -199,10 +205,10 @@ func (h *PayeeHandler) GetPayees(c echo.Context) error {
 	}
 
 	// Call payee service
-	fmt.Println("🔄 Calling Payee Service...")
+	h.logger.DebugWith("Calling payee service")
 	relations, err := h.payeeService.GetPayeesByBusiness(c.Request().Context(), businessID, filters)
 	if err != nil {
-		fmt.Printf("❌ Fetch error: %v\n", err)
+		h.logger.ErrorWith("Failed to fetch payees", "error", err)
 		return c.JSON(http.StatusInternalServerError, map[string]any{
 			"error":   "fetch_failed",
 			"message": err.Error(),
@@ -211,8 +217,7 @@ func (h *PayeeHandler) GetPayees(c echo.Context) error {
 
 	// Convert to response (simplified - returning relations directly)
 	// In production, you might want to enrich with payee and account details
-	fmt.Printf("✅ Fetched %d payees for business %s\n", len(relations), businessID)
-	fmt.Println("=== HANDLER: GetPayees Complete ===")
+	h.logger.InfoWith("Payees fetched successfully", "count", len(relations), "business_id", businessID)
 
 	return c.JSON(http.StatusOK, map[string]any{
 		"message":     "Payees retrieved successfully",
@@ -227,12 +232,12 @@ func (h *PayeeHandler) GetPayees(c echo.Context) error {
 // GetPayeeDetails handles GET /payees/details/:relation_id - Get detailed payee information by relation_id
 // Returns polymorphic response (vendor/employee/biller) with complete details including bank info
 func (h *PayeeHandler) GetPayeeDetails(c echo.Context) error {
-	fmt.Println("=== HANDLER: GetPayeeDetails API Called ===")
+	h.logger.InfoWith("GetPayeeDetails API called")
 
 	// Extract relation_id from path parameter
 	relationID := c.Param("relation_id")
 	if relationID == "" {
-		fmt.Println("❌ Missing relation_id path parameter")
+		h.logger.WarnWith("Missing relation_id path parameter")
 		return c.JSON(http.StatusBadRequest, map[string]any{
 			"error":   "invalid_request",
 			"message": "relation_id path parameter is required",
@@ -248,21 +253,20 @@ func (h *PayeeHandler) GetPayeeDetails(c echo.Context) error {
 		})
 	}
 
-	fmt.Printf("📥 Path param: relation_id=%s, Business ID (from header): %s\n", relationID, businessID)
+	h.logger.DebugWith("Request parameters", "relation_id", relationID, "business_id", businessID)
 
 	// Call payee service with business_id validation
-	fmt.Println("🔄 Calling Payee Service...")
+	h.logger.DebugWith("Calling payee service")
 	details, err := h.payeeService.GetPayeeDetailsByRelation(c.Request().Context(), businessID, relationID)
 	if err != nil {
-		fmt.Printf("❌ Fetch error: %v\n", err)
+		h.logger.ErrorWith("Failed to fetch payee details", "error", err)
 		return c.JSON(http.StatusNotFound, map[string]any{
 			"error":   "not_found",
 			"message": err.Error(),
 		})
 	}
 
-	fmt.Printf("✅ Payee details fetched: %s (Type: %s)\n", details.DisplayName, details.PayeeType)
-	fmt.Println("=== HANDLER: GetPayeeDetails Complete ===")
+	h.logger.InfoWith("Payee details fetched", "display_name", details.DisplayName, "payee_type", details.PayeeType)
 
 	return c.JSON(http.StatusOK, map[string]any{
 		"status": "success",
@@ -272,13 +276,13 @@ func (h *PayeeHandler) GetPayeeDetails(c echo.Context) error {
 
 // UpdatePayee handles PUT /payees/:payee_id/accounts/:account_id - Update payee relationship metadata
 func (h *PayeeHandler) UpdatePayee(c echo.Context) error {
-	fmt.Println("=== HANDLER: UpdatePayee API Called ===")
+	h.logger.InfoWith("UpdatePayee API called")
 
 	// Extract path parameters
 	payeeID := c.Param("payee_id")
 	accountID := c.Param("account_id")
 
-	fmt.Printf("📥 Path params: payee_id=%s, account_id=%s\n", payeeID, accountID)
+	h.logger.DebugWith("Path parameters", "payee_id", payeeID, "account_id", accountID)
 
 	// Parse request body
 	var req struct {
@@ -291,19 +295,19 @@ func (h *PayeeHandler) UpdatePayee(c echo.Context) error {
 	}
 
 	if err := c.Bind(&req); err != nil {
-		fmt.Printf("❌ Error binding request: %v\n", err)
+		h.logger.ErrorWith("Error binding request", "error", err)
 		return c.JSON(http.StatusBadRequest, map[string]any{
 			"error":   "invalid_request",
 			"message": "Invalid request body",
 		})
 	}
 
-	fmt.Printf("📥 Request: display_name=%s, is_favorite=%v\n", req.DisplayName, req.IsFavorite)
+	h.logger.DebugWith("Request body parsed", "display_name", req.DisplayName, "is_favorite", req.IsFavorite)
 
 	// Extract business_id from JWT
 	// TODO: Extract from JWT token claims
 	businessID := "bid12345"
-	fmt.Printf("🔐 Business ID (from JWT): %s\n", businessID)
+	h.logger.DebugWith("Business context", "business_id", businessID)
 
 	// Convert to service request
 	updateReq := payee.UpdateRelationRequest{
@@ -319,17 +323,16 @@ func (h *PayeeHandler) UpdatePayee(c echo.Context) error {
 	}
 
 	// Call payee service
-	fmt.Println("🔄 Calling Payee Service...")
+	h.logger.DebugWith("Calling payee service")
 	if err := h.payeeService.UpdatePayeeRelation(c.Request().Context(), updateReq); err != nil {
-		fmt.Printf("❌ Update error: %v\n", err)
+		h.logger.ErrorWith("Update failed", "error", err)
 		return c.JSON(http.StatusInternalServerError, map[string]any{
 			"error":   "update_failed",
 			"message": err.Error(),
 		})
 	}
 
-	fmt.Printf("✅ Payee updated successfully: %s\n", payeeID)
-	fmt.Println("=== HANDLER: UpdatePayee Complete ===")
+	h.logger.InfoWith("Payee updated successfully", "payee_id", payeeID)
 
 	return c.JSON(http.StatusOK, map[string]any{
 		"message": "Payee updated successfully",
@@ -339,31 +342,30 @@ func (h *PayeeHandler) UpdatePayee(c echo.Context) error {
 
 // DeactivatePayee handles DELETE /payees/:payee_id/accounts/:account_id - Deactivate a payee (soft delete)
 func (h *PayeeHandler) DeactivatePayee(c echo.Context) error {
-	fmt.Println("=== HANDLER: DeactivatePayee API Called ===")
+	h.logger.InfoWith("DeactivatePayee API called")
 
 	// Extract path parameters
 	payeeID := c.Param("payee_id")
 	accountID := c.Param("account_id")
 
-	fmt.Printf("📥 Path params: payee_id=%s, account_id=%s\n", payeeID, accountID)
+	h.logger.DebugWith("Path parameters", "payee_id", payeeID, "account_id", accountID)
 
 	// Extract business_id from JWT
 	// TODO: Extract from JWT token claims
 	businessID := "bid12345"
-	fmt.Printf("🔐 Business ID (from JWT): %s\n", businessID)
+	h.logger.DebugWith("Business context", "business_id", businessID)
 
 	// Call payee service
-	fmt.Println("🔄 Calling Payee Service...")
+	h.logger.DebugWith("Calling payee service")
 	if err := h.payeeService.DeactivatePayee(c.Request().Context(), businessID, payeeID, accountID); err != nil {
-		fmt.Printf("❌ Deactivation error: %v\n", err)
+		h.logger.ErrorWith("Deactivation failed", "error", err)
 		return c.JSON(http.StatusInternalServerError, map[string]any{
 			"error":   "deactivation_failed",
 			"message": err.Error(),
 		})
 	}
 
-	fmt.Printf("✅ Payee deactivated successfully: %s\n", payeeID)
-	fmt.Println("=== HANDLER: DeactivatePayee Complete ===")
+	h.logger.InfoWith("Payee deactivated successfully", "payee_id", payeeID)
 
 	return c.JSON(http.StatusOK, map[string]any{
 		"message": "Payee deactivated successfully",
@@ -374,33 +376,32 @@ func (h *PayeeHandler) DeactivatePayee(c echo.Context) error {
 // GetVendorsForDropdown handles GET /vendors?bid=xxx - Get lightweight vendor list for dropdown
 // Returns only active vendors with minimal fields for voucher creation UI
 func (h *PayeeHandler) GetVendorsForDropdown(c echo.Context) error {
-	fmt.Println("=== HANDLER: GetVendorsForDropdown API Called ===")
+	h.logger.InfoWith("GetVendorsForDropdown API called")
 
 	// Extract business_id from query parameter
 	businessID := c.QueryParam("bid")
 	if businessID == "" {
-		fmt.Println("❌ Missing business_id query parameter")
+		h.logger.WarnWith("Missing business_id query parameter")
 		return c.JSON(http.StatusBadRequest, map[string]any{
 			"error":   "invalid_request",
 			"message": "business_id (bid) query parameter is required",
 		})
 	}
 
-	fmt.Printf("📥 Query param: bid=%s\n", businessID)
+	h.logger.DebugWith("Query parameter", "business_id", businessID)
 
 	// Call payee service
-	fmt.Println("🔄 Calling Payee Service...")
+	h.logger.DebugWith("Calling payee service")
 	resp, err := h.payeeService.GetVendorsForDropdown(c.Request().Context(), businessID)
 	if err != nil {
-		fmt.Printf("❌ Error fetching vendors: %v\n", err)
+		h.logger.ErrorWith("Failed to fetch vendors", "error", err)
 		return c.JSON(http.StatusInternalServerError, map[string]any{
 			"error":   "fetch_failed",
 			"message": err.Error(),
 		})
 	}
 
-	fmt.Printf("✅ Found %d vendors for dropdown\n", resp.Count)
-	fmt.Println("=== HANDLER: GetVendorsForDropdown Complete ===")
+	h.logger.InfoWith("Vendors fetched for dropdown", "count", resp.Count)
 
 	return c.JSON(http.StatusOK, map[string]any{
 		"status": "success",

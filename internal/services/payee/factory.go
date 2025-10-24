@@ -8,6 +8,7 @@ import (
 	"xcentro.in/internal/core/business_rules"
 	"xcentro.in/internal/services/verification"
 	"xcentro.in/internal/shared/config"
+	"xcentro.in/internal/shared/logger"
 )
 
 // PayeeServiceFactory creates PayeeService with all dependencies
@@ -64,6 +65,9 @@ func (f *PayeeServiceFactory) NewPayeeService() *PayeeService {
 	bankVerificationSvc := castler.NewCastlerBankVerificationService(castlerClient) // Use Castler for penny-drop
 	crossVerificationSvc := business_rules.NewCrossVerificationService()
 
+	// Get logger instance
+	log := logger.GetDefault()
+
 	// Create and return PayeeService with all dependencies
 	return NewPayeeService(
 		payeeMasterRepo,
@@ -82,5 +86,6 @@ func (f *PayeeServiceFactory) NewPayeeService() *PayeeService {
 		crossVerificationSvc,
 		f.txManager,
 		f.businessService,
+		log,                 // logger instance
 	)
 }

@@ -10,28 +10,31 @@ import (
 	"github.com/labstack/echo/v4"
 	"xcentro.in/internal/core/voucher"
 	voucherSvc "xcentro.in/internal/services/voucher"
+	"xcentro.in/internal/shared/logger"
 )
 
 // VoucherHandler handles voucher-related HTTP requests
 type VoucherHandler struct {
 	voucherService voucherSvc.VoucherService
+	logger         *logger.Logger
 }
 
 // NewVoucherHandler creates a new voucher handler
-func NewVoucherHandler(voucherService voucherSvc.VoucherService) *VoucherHandler {
+func NewVoucherHandler(voucherService voucherSvc.VoucherService, logger *logger.Logger) *VoucherHandler {
 	return &VoucherHandler{
 		voucherService: voucherService,
+		logger:         logger,
 	}
 }
 
 // CreateDraftVoucher handles POST /vouchers/draft - Create draft voucher
 func (h *VoucherHandler) CreateDraftVoucher(c echo.Context) error {
-	fmt.Println("=== HANDLER: CreateDraftVoucher API Called ===")
+	h.logger.InfoWith("CreateDraftVoucher API called")
 
 	// Parse request body
 	var req voucherSvc.CreateDraftVoucherRequest
 	if err := c.Bind(&req); err != nil {
-		fmt.Printf("❌ Error binding request: %v\n", err)
+		h.logger.ErrorWith("Error binding request", "error", err)
 		return c.JSON(http.StatusBadRequest, map[string]any{
 			"error":   "invalid_request",
 			"message": "Invalid request body",
@@ -49,18 +52,20 @@ func (h *VoucherHandler) CreateDraftVoucher(c echo.Context) error {
 		req.UserID = uuid.MustParse("00000000-0000-0000-0000-000000000000") // Placeholder
 	}
 
-	fmt.Printf("📥 Request: RelationID: %s, Invoice: %s, Amount: ₹%.2f\n",
-		req.RelationID, req.InvoiceNumber, float64(req.NetAmount)/100)
+	h.logger.DebugWith("Draft voucher request",
+		"relation_id", req.RelationID,
+		"invoice_number", req.InvoiceNumber,
+		"net_amount", req.NetAmount)
 
 	// Call service
-	fmt.Println("🔄 Calling Voucher Service...")
+	h.logger.DebugWith("Calling voucher service")
 	resp, err := h.voucherService.CreateDraftVoucher(c.Request().Context(), &req)
 	if err != nil {
-		fmt.Printf("❌ Create draft error: %v\n", err)
+		h.logger.ErrorWith("Create draft failed", "error", err)
 		return h.handleError(c, err)
 	}
 
-	fmt.Printf("✅ Draft voucher created: %s\n", resp.VoucherNumber)
+	h.logger.InfoWith("Draft voucher created", "voucher_number", resp.VoucherNumber)
 
 	return c.JSON(http.StatusCreated, map[string]any{
 		"message": "Draft voucher created successfully",
@@ -71,7 +76,7 @@ func (h *VoucherHandler) CreateDraftVoucher(c echo.Context) error {
 
 // ListVouchers handles GET /vouchers - List vouchers with filters
 func (h *VoucherHandler) ListVouchers(c echo.Context) error {
-	fmt.Println("=== HANDLER: ListVouchers API Called ===")
+	h.logger.InfoWith("ListVouchers API called")
 
 	// TODO: Extract business_id from JWT
 	businessIDStr := c.QueryParam("business_id")
@@ -90,17 +95,19 @@ func (h *VoucherHandler) ListVouchers(c echo.Context) error {
 	// Parse filters from query params
 	filters := h.parseFilters(c)
 
-	fmt.Printf("📥 Business ID: %s, Filters: Status=%v, Page=%d\n",
-		businessID, filters.Status, filters.Page)
+	h.logger.DebugWith("List vouchers request",
+		"business_id", businessID,
+		"status", filters.Status,
+		"page", filters.Page)
 
 	// Call service
 	resp, err := h.voucherService.ListVouchersForBusiness(c.Request().Context(), businessID, filters)
 	if err != nil {
-		fmt.Printf("❌ List vouchers error: %v\n", err)
+		h.logger.ErrorWith("List vouchers failed", "error", err)
 		return h.handleError(c, err)
 	}
 
-	fmt.Printf("✅ Found %d vouchers\n", len(resp.Vouchers))
+	h.logger.InfoWith("Vouchers listed", "count", len(resp.Vouchers))
 
 	return c.JSON(http.StatusOK, map[string]any{
 		"message": "Vouchers retrieved successfully",
@@ -111,7 +118,7 @@ func (h *VoucherHandler) ListVouchers(c echo.Context) error {
 
 // GetVoucherDetails handles GET /vouchers/:id - Get voucher details
 func (h *VoucherHandler) GetVoucherDetails(c echo.Context) error {
-	fmt.Println("=== HANDLER: GetVoucherDetails API Called ===")
+	h.logger.InfoWith("GetVoucherDetails API called")
 
 	// Parse voucher_id from path
 	voucherIDStr := c.Param("id")
@@ -123,16 +130,16 @@ func (h *VoucherHandler) GetVoucherDetails(c echo.Context) error {
 		})
 	}
 
-	fmt.Printf("📥 Voucher ID: %s\n", voucherID)
+	h.logger.DebugWith("Get voucher details", "voucher_id", voucherID)
 
 	// Call service
 	resp, err := h.voucherService.GetVoucherDetails(c.Request().Context(), voucherID)
 	if err != nil {
-		fmt.Printf("❌ Get voucher error: %v\n", err)
+		h.logger.ErrorWith("Get voucher failed", "error", err)
 		return h.handleError(c, err)
 	}
 
-	fmt.Printf("✅ Voucher details retrieved: %s\n", resp.VoucherNumber)
+	h.logger.InfoWith("Voucher details retrieved", "voucher_number", resp.VoucherNumber)
 
 	return c.JSON(http.StatusOK, map[string]any{
 		"message": "Voucher details retrieved successfully",
@@ -143,7 +150,7 @@ func (h *VoucherHandler) GetVoucherDetails(c echo.Context) error {
 
 // UpdateVoucher handles PUT /vouchers/:id - Update draft voucher
 func (h *VoucherHandler) UpdateVoucher(c echo.Context) error {
-	fmt.Println("=== HANDLER: UpdateVoucher API Called ===")
+	h.logger.InfoWith("UpdateVoucher API called")
 
 	// Parse voucher_id from path
 	voucherIDStr := c.Param("id")
@@ -158,7 +165,7 @@ func (h *VoucherHandler) UpdateVoucher(c echo.Context) error {
 	// Parse request body
 	var req voucherSvc.UpdateVoucherRequest
 	if err := c.Bind(&req); err != nil {
-		fmt.Printf("❌ Error binding request: %v\n", err)
+		h.logger.ErrorWith("Error binding request", "error", err)
 		return c.JSON(http.StatusBadRequest, map[string]any{
 			"error":   "invalid_request",
 			"message": "Invalid request body",
@@ -168,17 +175,19 @@ func (h *VoucherHandler) UpdateVoucher(c echo.Context) error {
 	// Set voucher_id from URL path
 	req.VoucherID = voucherID
 
-	fmt.Printf("📥 Voucher ID: %s, Updating fields...\n", voucherID)
+	h.logger.DebugWith("Update voucher request", "voucher_id", voucherID)
 
 	// Call service
-	fmt.Println("🔄 Calling Voucher Service...")
+	h.logger.DebugWith("Calling voucher service")
 	resp, err := h.voucherService.UpdateVoucher(c.Request().Context(), &req)
 	if err != nil {
-		fmt.Printf("❌ Update voucher error: %v\n", err)
+		h.logger.ErrorWith("Update voucher failed", "error", err)
 		return h.handleError(c, err)
 	}
 
-	fmt.Printf("✅ Voucher updated: %s (%d fields changed)\n", resp.VoucherNumber, len(resp.UpdatedFields))
+	h.logger.InfoWith("Voucher updated",
+		"voucher_number", resp.VoucherNumber,
+		"fields_changed", len(resp.UpdatedFields))
 
 	return c.JSON(http.StatusOK, map[string]any{
 		"message": "Voucher updated successfully",
@@ -189,7 +198,7 @@ func (h *VoucherHandler) UpdateVoucher(c echo.Context) error {
 
 // FinalizeVoucher handles PUT /vouchers/:id/finalize - Finalize voucher manually
 func (h *VoucherHandler) FinalizeVoucher(c echo.Context) error {
-	fmt.Println("=== HANDLER: FinalizeVoucher API Called ===")
+	h.logger.InfoWith("FinalizeVoucher API called")
 
 	// Parse voucher_id from path
 	voucherIDStr := c.Param("id")
@@ -220,7 +229,9 @@ func (h *VoucherHandler) FinalizeVoucher(c echo.Context) error {
 		})
 	}
 
-	fmt.Printf("📥 Voucher ID: %s, Payment ID: %s\n", voucherID, paymentID)
+	h.logger.DebugWith("Finalize voucher request",
+		"voucher_id", voucherID,
+		"payment_id", paymentID)
 
 	// Call service
 	finalizeReq := &voucherSvc.FinalizeVoucherRequest{
@@ -229,11 +240,11 @@ func (h *VoucherHandler) FinalizeVoucher(c echo.Context) error {
 	}
 	resp, err := h.voucherService.FinalizeVoucher(c.Request().Context(), finalizeReq)
 	if err != nil {
-		fmt.Printf("❌ Finalize voucher error: %v\n", err)
+		h.logger.ErrorWith("Finalize voucher failed", "error", err)
 		return h.handleError(c, err)
 	}
 
-	fmt.Printf("✅ Voucher finalized: %s\n", resp.VoucherNumber)
+	h.logger.InfoWith("Voucher finalized", "voucher_number", resp.VoucherNumber)
 
 	return c.JSON(http.StatusOK, map[string]any{
 		"message": "Voucher finalized successfully",
@@ -244,12 +255,12 @@ func (h *VoucherHandler) FinalizeVoucher(c echo.Context) error {
 
 // CreateMultiVouchers handles POST /vouchers/multi - Create multiple vouchers for multi-bill payment
 func (h *VoucherHandler) CreateMultiVouchers(c echo.Context) error {
-	fmt.Println("=== HANDLER: CreateMultiVouchers API Called ===")
+	h.logger.InfoWith("CreateMultiVouchers API called")
 
 	// Parse request body
 	var req voucherSvc.CreateMultiVouchersRequest
 	if err := c.Bind(&req); err != nil {
-		fmt.Printf("❌ Error binding request: %v\n", err)
+		h.logger.ErrorWith("Error binding request", "error", err)
 		return c.JSON(http.StatusBadRequest, map[string]any{
 			"error":   "invalid_request",
 			"message": "Invalid request body",
@@ -264,16 +275,16 @@ func (h *VoucherHandler) CreateMultiVouchers(c echo.Context) error {
 		req.UserID = uuid.MustParse("00000000-0000-0000-0000-000000000000") // Placeholder
 	}
 
-	fmt.Printf("📥 Request: %d bills to process\n", len(req.Vouchers))
+	h.logger.DebugWith("Multi voucher request", "bill_count", len(req.Vouchers))
 
 	// Call service
 	resp, err := h.voucherService.CreateMultiVouchers(c.Request().Context(), &req)
 	if err != nil {
-		fmt.Printf("❌ Create multi vouchers error: %v\n", err)
+		h.logger.ErrorWith("Create multi vouchers failed", "error", err)
 		return h.handleError(c, err)
 	}
 
-	fmt.Printf("✅ Created %d vouchers\n", len(resp.Vouchers))
+	h.logger.InfoWith("Multi vouchers created", "voucher_count", len(resp.Vouchers))
 
 	return c.JSON(http.StatusCreated, map[string]any{
 		"message": "Multiple vouchers created successfully",
@@ -284,7 +295,7 @@ func (h *VoucherHandler) CreateMultiVouchers(c echo.Context) error {
 
 // GetDraftReminders handles GET /vouchers/reminders - Get abandoned draft vouchers
 func (h *VoucherHandler) GetDraftReminders(c echo.Context) error {
-	fmt.Println("=== HANDLER: GetDraftReminders API Called ===")
+	h.logger.InfoWith("GetDraftReminders API called")
 
 	// TODO: Extract business_id from JWT
 	businessIDStr := c.QueryParam("business_id")
@@ -310,16 +321,18 @@ func (h *VoucherHandler) GetDraftReminders(c echo.Context) error {
 		OlderThan:  time.Duration(olderThanHours) * time.Hour,
 	}
 
-	fmt.Printf("📥 Business ID: %s, Older than: %d hours\n", businessID, olderThanHours)
+	h.logger.DebugWith("Draft reminders request",
+		"business_id", businessID,
+		"older_than_hours", olderThanHours)
 
 	// Call service
 	resp, err := h.voucherService.GetDraftReminders(c.Request().Context(), req)
 	if err != nil {
-		fmt.Printf("❌ Get draft reminders error: %v\n", err)
+		h.logger.ErrorWith("Get draft reminders failed", "error", err)
 		return h.handleError(c, err)
 	}
 
-	fmt.Printf("✅ Found %d draft reminders\n", resp.Count)
+	h.logger.InfoWith("Draft reminders found", "count", resp.Count)
 
 	return c.JSON(http.StatusOK, map[string]any{
 		"message": "Draft reminders retrieved successfully",
@@ -330,7 +343,7 @@ func (h *VoucherHandler) GetDraftReminders(c echo.Context) error {
 
 // RequestCancellation handles POST /vouchers/:id/cancel - Request voucher cancellation
 func (h *VoucherHandler) RequestCancellation(c echo.Context) error {
-	fmt.Println("=== HANDLER: RequestCancellation API Called ===")
+	h.logger.InfoWith("RequestCancellation API called")
 
 	// Parse voucher_id from path
 	voucherIDStr := c.Param("id")
@@ -364,7 +377,10 @@ func (h *VoucherHandler) RequestCancellation(c echo.Context) error {
 	// TODO: Extract user_id from JWT
 	userID := uuid.MustParse("00000000-0000-0000-0000-000000000000") // Placeholder
 
-	fmt.Printf("📥 Voucher ID: %s, User ID: %s, Reason: %s\n", voucherID, userID, req.Reason)
+	h.logger.DebugWith("Cancellation request",
+		"voucher_id", voucherID,
+		"user_id", userID,
+		"reason", req.Reason)
 
 	// Call service
 	cancelReq := &voucherSvc.RequestCancellationRequest{
@@ -374,11 +390,11 @@ func (h *VoucherHandler) RequestCancellation(c echo.Context) error {
 	}
 	resp, err := h.voucherService.RequestCancellation(c.Request().Context(), cancelReq)
 	if err != nil {
-		fmt.Printf("❌ Request cancellation error: %v\n", err)
+		h.logger.ErrorWith("Request cancellation failed", "error", err)
 		return h.handleError(c, err)
 	}
 
-	fmt.Printf("✅ Cancellation requested for voucher: %s\n", resp.VoucherNumber)
+	h.logger.InfoWith("Cancellation requested", "voucher_number", resp.VoucherNumber)
 
 	return c.JSON(http.StatusOK, map[string]any{
 		"message": "Cancellation request submitted successfully",
@@ -389,7 +405,7 @@ func (h *VoucherHandler) RequestCancellation(c echo.Context) error {
 
 // ApproveCancellation handles PUT /vouchers/:id/cancel/approve - Approve or reject cancellation
 func (h *VoucherHandler) ApproveCancellation(c echo.Context) error {
-	fmt.Println("=== HANDLER: ApproveCancellation API Called ===")
+	h.logger.InfoWith("ApproveCancellation API called")
 
 	// Parse voucher_id from path
 	voucherIDStr := c.Param("id")
@@ -424,7 +440,10 @@ func (h *VoucherHandler) ApproveCancellation(c echo.Context) error {
 	// TODO: Extract user_id from JWT (operations/finance user)
 	userID := uuid.MustParse("00000000-0000-0000-0000-000000000000") // Placeholder
 
-	fmt.Printf("📥 Voucher ID: %s, User ID: %s, Action: %s\n", voucherID, userID, req.Action)
+	h.logger.DebugWith("Approve cancellation request",
+		"voucher_id", voucherID,
+		"user_id", userID,
+		"action", req.Action)
 
 	// Call service
 	approveReq := &voucherSvc.ApproveCancellationRequest{
@@ -435,11 +454,13 @@ func (h *VoucherHandler) ApproveCancellation(c echo.Context) error {
 	}
 	resp, err := h.voucherService.ApproveCancellation(c.Request().Context(), approveReq)
 	if err != nil {
-		fmt.Printf("❌ Approve cancellation error: %v\n", err)
+		h.logger.ErrorWith("Approve cancellation failed", "error", err)
 		return h.handleError(c, err)
 	}
 
-	fmt.Printf("✅ Cancellation %s for voucher: %s\n", req.Action, resp.VoucherNumber)
+	h.logger.InfoWith("Cancellation processed",
+		"action", req.Action,
+		"voucher_number", resp.VoucherNumber)
 
 	return c.JSON(http.StatusOK, map[string]any{
 		"message": fmt.Sprintf("Cancellation %s successfully", req.Action),
@@ -567,12 +588,12 @@ func (h *VoucherHandler) handleError(c echo.Context, err error) error {
 
 // GetVouchersByPayee handles GET /vouchers/payee/:relation_id - Get all vouchers for a specific payee
 func (h *VoucherHandler) GetVouchersByPayee(c echo.Context) error {
-	fmt.Println("=== HANDLER: GetVouchersByPayee API Called ===")
+	h.logger.InfoWith("GetVouchersByPayee API called")
 
 	// Extract relation_id from path parameter
 	relationIDStr := c.Param("relation_id")
 	if relationIDStr == "" {
-		fmt.Println("❌ Missing relation_id path parameter")
+		h.logger.WarnWith("Missing relation_id path parameter")
 		return c.JSON(http.StatusBadRequest, map[string]any{
 			"error":   "invalid_request",
 			"message": "relation_id path parameter is required",
@@ -581,7 +602,7 @@ func (h *VoucherHandler) GetVouchersByPayee(c echo.Context) error {
 
 	relationID, err := uuid.Parse(relationIDStr)
 	if err != nil {
-		fmt.Printf("❌ Invalid relation_id format: %v\n", err)
+		h.logger.ErrorWith("Invalid relation_id format", "error", err)
 		return c.JSON(http.StatusBadRequest, map[string]any{
 			"error":   "invalid_request",
 			"message": "Invalid relation_id format",
@@ -599,7 +620,7 @@ func (h *VoucherHandler) GetVouchersByPayee(c echo.Context) error {
 
 	businessID, err := uuid.Parse(businessIDStr)
 	if err != nil {
-		fmt.Printf("❌ Invalid business_id format: %v\n", err)
+		h.logger.ErrorWith("Invalid business_id format", "error", err)
 		return c.JSON(http.StatusBadRequest, map[string]any{
 			"error":   "invalid_request",
 			"message": "Invalid business_id format",
@@ -621,11 +642,14 @@ func (h *VoucherHandler) GetVouchersByPayee(c echo.Context) error {
 		}
 	}
 
-	fmt.Printf("📥 Path param: relation_id=%s, Business ID (from header): %s, page=%d, page_size=%d\n",
-		relationID, businessID, page, pageSize)
+	h.logger.DebugWith("Get vouchers by payee request",
+		"relation_id", relationID,
+		"business_id", businessID,
+		"page", page,
+		"page_size", pageSize)
 
 	// Call voucher service
-	fmt.Println("🔄 Calling Voucher Service...")
+	h.logger.DebugWith("Calling voucher service")
 	resp, err := h.voucherService.GetVouchersByPayee(c.Request().Context(), &voucherSvc.GetVouchersByPayeeRequest{
 		BusinessID: businessID,
 		RelationID: relationID,
@@ -633,15 +657,16 @@ func (h *VoucherHandler) GetVouchersByPayee(c echo.Context) error {
 		PageSize:   pageSize,
 	})
 	if err != nil {
-		fmt.Printf("❌ Fetch error: %v\n", err)
+		h.logger.ErrorWith("Get vouchers by payee failed", "error", err)
 		return c.JSON(http.StatusInternalServerError, map[string]any{
 			"error":   "fetch_failed",
 			"message": err.Error(),
 		})
 	}
 
-	fmt.Printf("✅ Fetched %d vouchers for relation %s\n", len(resp.Vouchers), relationID)
-	fmt.Println("=== HANDLER: GetVouchersByPayee Complete ===")
+	h.logger.InfoWith("Vouchers fetched for payee",
+		"count", len(resp.Vouchers),
+		"relation_id", relationID)
 
 	return c.JSON(http.StatusOK, map[string]any{
 		"status":     "success",

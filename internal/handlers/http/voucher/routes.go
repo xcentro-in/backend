@@ -3,11 +3,12 @@ package voucher
 import (
 	"github.com/labstack/echo/v4"
 	voucherSvc "xcentro.in/internal/services/voucher"
+	"xcentro.in/internal/shared/logger"
 )
 
 // RegisterVoucherRoutes registers all voucher-related routes
 func RegisterVoucherRoutes(group *echo.Group, voucherService voucherSvc.VoucherService) {
-	handler := NewVoucherHandler(voucherService)
+	handler := NewVoucherHandler(voucherService, logger.GetDefault())
 
 	// Voucher management endpoints
 	group.POST("/draft", handler.CreateDraftVoucher)               // POST /vouchers/draft - Create draft voucher

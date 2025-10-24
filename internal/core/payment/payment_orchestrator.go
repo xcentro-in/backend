@@ -726,7 +726,6 @@ func (o *MockPaymentOrchestrator) getGatewayInstance(gatewayType GatewayType) Pa
 // SetVoucherService injects the voucher service dependency (Phase 6)
 func (o *MockPaymentOrchestrator) SetVoucherService(voucherService interface{}) {
 	o.voucherService = voucherService
-	fmt.Println("✅ Voucher service injected into payment orchestrator")
 }
 
 // finalizeVouchers finalizes vouchers after payment success (Phase 6)

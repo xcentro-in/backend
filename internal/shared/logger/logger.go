@@ -286,6 +286,28 @@ func (l *Logger) Error(msg string, args ...interface{}) {
 	}
 }
 
+// Structured logging methods (key-value pairs)
+
+// InfoWith logs an info message with structured key-value pairs
+func (l *Logger) InfoWith(msg string, keysAndValues ...interface{}) {
+	l.logger.Info(msg, keysAndValues...)
+}
+
+// DebugWith logs a debug message with structured key-value pairs
+func (l *Logger) DebugWith(msg string, keysAndValues ...interface{}) {
+	l.logger.Debug(msg, keysAndValues...)
+}
+
+// WarnWith logs a warning message with structured key-value pairs
+func (l *Logger) WarnWith(msg string, keysAndValues ...interface{}) {
+	l.logger.Warn(msg, keysAndValues...)
+}
+
+// ErrorWith logs an error message with structured key-value pairs
+func (l *Logger) ErrorWith(msg string, keysAndValues ...interface{}) {
+	l.logger.Error(msg, keysAndValues...)
+}
+
 // WithFields returns a new logger with the specified fields
 func (l *Logger) WithFields(fields map[string]interface{}) *Logger {
 	args := make([]any, 0, len(fields)*2)

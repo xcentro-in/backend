@@ -5,11 +5,12 @@ import (
 	"xcentro.in/internal/core/auth"
 	"xcentro.in/internal/middleware"
 	payeeSvc "xcentro.in/internal/services/payee"
+	"xcentro.in/internal/shared/logger"
 )
 
 // RegisterPayeeRoutes registers all payee-related routes
 func RegisterPayeeRoutes(group *echo.Group, payeeService *payeeSvc.PayeeService, authService auth.AuthService) {
-	handler := NewPayeeHandler(payeeService)
+	handler := NewPayeeHandler(payeeService, logger.GetDefault())
 
 	// Apply JWT middleware to all payee routes
 	group.Use(middleware.JWTMiddleware(authService))
@@ -24,7 +25,7 @@ func RegisterPayeeRoutes(group *echo.Group, payeeService *payeeSvc.PayeeService,
 // RegisterVendorDropdownRoute registers the lightweight vendor dropdown endpoint
 // This is registered separately at /v1/vendors (not under /v1/payees)
 func RegisterVendorDropdownRoute(group *echo.Group, payeeService *payeeSvc.PayeeService) {
-	handler := NewPayeeHandler(payeeService)
+	handler := NewPayeeHandler(payeeService, logger.GetDefault())
 
 	// Vendor dropdown endpoint (optimized for voucher creation UI)
 	group.GET("/vendors", handler.GetVendorsForDropdown) // GET /v1/vendors?bid=xxx
