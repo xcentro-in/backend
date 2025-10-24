@@ -10,6 +10,7 @@ import (
 	"xcentro.in/internal/core/payee"
 	"xcentro.in/internal/core/payout"
 	"xcentro.in/internal/core/voucher"
+	"xcentro.in/internal/shared/logger"
 )
 
 // PayoutService orchestrates payout transfer creation and management
@@ -19,6 +20,7 @@ type PayoutService struct {
 	bankAccountRepo payee.PayeeBankAccountRepository
 	configRepo      payout.PayoutConfigurationRepository
 	providerFactory PayoutProviderFactory // Interface to get payout provider
+	logger          *logger.Logger
 }
 
 // PayoutProviderFactory is an interface to get payout providers
@@ -40,13 +42,14 @@ func NewPayoutService(
 		bankAccountRepo: bankAccountRepo,
 		configRepo:      configRepo,
 		providerFactory: providerFactory,
+		logger:          logger.GetDefault(),
 	}
 }
 
 // InitiatePayoutForVoucher creates a transfer request for a voucher
 // Determines if auto-approval is needed based on amount
 func (s *PayoutService) InitiatePayoutForVoucher(ctx context.Context, voucherID string) (*payout.PayoutTransferRequest, error) {
-	fmt.Printf("=== PAYOUT SERVICE: InitiatePayoutForVoucher (VoucherID: %s) ===\n", voucherID)
+	s.logger.InfoWith("InitiatePayoutForVoucher called", "voucher_id", voucherID)
 
 	// Step 1: Get voucher
 	voucherUUID, err := uuid.Parse(voucherID)
@@ -76,7 +79,7 @@ func (s *PayoutService) InitiatePayoutForVoucher(ctx context.Context, voucherID 
 	// Step 3: Check for existing transfer (idempotent)
 	existing, err := s.transferRepo.GetByVoucherID(ctx, voucherID)
 	if err == nil && existing != nil {
-		fmt.Println("✅ Transfer request already exists, returning existing")
+		s.logger.InfoWith("Transfer request already exists", "transfer_request_id", existing.TransferRequestID)
 		return existing, nil
 	}
 
@@ -110,12 +113,16 @@ func (s *PayoutService) InitiatePayoutForVoucher(ctx context.Context, voucherID 
 	if requiresApproval {
 		status = payout.TransferStatusPendingApproval
 		approvalMode = payout.ApprovalModeManual
-		fmt.Printf("⚠️  Amount %d > auto-approval limit %d, requires manual approval\n", vch.NetAmount, config.AutoApprovalLimit)
+		s.logger.WarnWith("Amount exceeds auto-approval limit, requires manual approval",
+			"amount", vch.NetAmount,
+			"auto_approval_limit", config.AutoApprovalLimit)
 	} else {
 		approvedBy = "SYSTEM"
 		now := time.Now()
 		approvedAt = &now
-		fmt.Printf("✅ Amount %d <= auto-approval limit %d, auto-approved\n", vch.NetAmount, config.AutoApprovalLimit)
+		s.logger.InfoWith("Amount within auto-approval limit, auto-approved",
+			"amount", vch.NetAmount,
+			"auto_approval_limit", config.AutoApprovalLimit)
 	}
 
 	// Step 7: Create transfer request
@@ -145,13 +152,18 @@ func (s *PayoutService) InitiatePayoutForVoucher(ctx context.Context, voucherID 
 		return nil, fmt.Errorf("failed to create transfer request: %w", err)
 	}
 
-	fmt.Printf("✅ Transfer request created: %s (status=%s)\n", transferReq.TransferRequestID, transferReq.Status)
+	s.logger.InfoWith("Transfer request created successfully",
+		"transfer_request_id", transferReq.TransferRequestID,
+		"status", transferReq.Status,
+		"amount", transferReq.Amount)
 	return transferReq, nil
 }
 
 // ApproveTransfer manually approves a pending transfer
 func (s *PayoutService) ApproveTransfer(ctx context.Context, transferRequestID string, approvedBy string, remarks string) error {
-	fmt.Printf("=== PAYOUT SERVICE: ApproveTransfer (TransferID: %s, ApprovedBy: %s) ===\n", transferRequestID, approvedBy)
+	s.logger.InfoWith("ApproveTransfer called",
+		"transfer_request_id", transferRequestID,
+		"approved_by", approvedBy)
 
 	// Get transfer
 	transfer, err := s.transferRepo.GetByID(ctx, transferRequestID)
@@ -170,13 +182,16 @@ func (s *PayoutService) ApproveTransfer(ctx context.Context, transferRequestID s
 		return fmt.Errorf("failed to approve transfer: %w", err)
 	}
 
-	fmt.Printf("✅ Transfer approved: %s\n", transferRequestID)
+	s.logger.InfoWith("Transfer approved successfully", "transfer_request_id", transferRequestID)
 	return nil
 }
 
 // CancelTransfer cancels a pending transfer
 func (s *PayoutService) CancelTransfer(ctx context.Context, transferRequestID string, cancelledBy string, reason string) error {
-	fmt.Printf("=== PAYOUT SERVICE: CancelTransfer (TransferID: %s, CancelledBy: %s) ===\n", transferRequestID, cancelledBy)
+	s.logger.InfoWith("CancelTransfer called",
+		"transfer_request_id", transferRequestID,
+		"cancelled_by", cancelledBy,
+		"reason", reason)
 
 	// Get transfer
 	transfer, err := s.transferRepo.GetByID(ctx, transferRequestID)
@@ -197,7 +212,9 @@ func (s *PayoutService) CancelTransfer(ctx context.Context, transferRequestID st
 		return fmt.Errorf("failed to cancel transfer: %w", err)
 	}
 
-	fmt.Printf("✅ Transfer cancelled: %s (reason: %s)\n", transferRequestID, reason)
+	s.logger.InfoWith("Transfer cancelled successfully",
+		"transfer_request_id", transferRequestID,
+		"reason", reason)
 	return nil
 }
 
@@ -221,8 +238,10 @@ func (s *PayoutService) GetWebhookHistory(ctx context.Context, transferRequestID
 
 // RetryTransfer retries a failed transfer (PLACEHOLDER for MVP)
 func (s *PayoutService) RetryTransfer(ctx context.Context, transferRequestID string, triggeredBy string) error {
-	fmt.Println("TODO: Implement retry strategy for transfer:", transferRequestID)
-	fmt.Println("TODO: Consider unified retry strategy across payments/payouts")
+	s.logger.WarnWith("Retry not implemented in MVP",
+		"transfer_request_id", transferRequestID,
+		"triggered_by", triggeredBy)
+	s.logger.DebugWith("TODO: Implement unified retry strategy across payments/payouts")
 	// For MVP, manual intervention via ops team
 	return errors.New("retry not implemented in MVP - manual intervention required")
 }
@@ -230,7 +249,10 @@ func (s *PayoutService) RetryTransfer(ctx context.Context, transferRequestID str
 // MarkCompletedManually manually marks a timeout transfer as completed
 // Used when ops team verifies completion externally
 func (s *PayoutService) MarkCompletedManually(ctx context.Context, transferRequestID string, utr string, completedBy string, remarks string) error {
-	fmt.Printf("=== PAYOUT SERVICE: MarkCompletedManually (TransferID: %s, UTR: %s) ===\n", transferRequestID, utr)
+	s.logger.InfoWith("MarkCompletedManually called",
+		"transfer_request_id", transferRequestID,
+		"utr", utr,
+		"completed_by", completedBy)
 
 	// Get transfer
 	transfer, err := s.transferRepo.GetByID(ctx, transferRequestID)
@@ -254,7 +276,10 @@ func (s *PayoutService) MarkCompletedManually(ctx context.Context, transferReque
 		return fmt.Errorf("failed to update voucher status: %w", err)
 	}
 
-	// TODO: Audit log
-	fmt.Printf("✅ Transfer manually completed: %s (UTR: %s, CompletedBy: %s)\n", transferRequestID, utr, completedBy)
+	s.logger.InfoWith("Transfer manually completed successfully",
+		"transfer_request_id", transferRequestID,
+		"utr", utr,
+		"completed_by", completedBy)
+	s.logger.DebugWith("TODO: Add audit logging for manual completions")
 	return nil
 }

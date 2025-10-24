@@ -27,6 +27,7 @@ import (
 	payeeSvc "xcentro.in/internal/services/payee"
 	"xcentro.in/internal/services/payments"
 	payoutSvc "xcentro.in/internal/services/payout"
+	settlementSvc "xcentro.in/internal/services/settlement"
 	"xcentro.in/internal/services/user"
 	"xcentro.in/internal/services/verification"
 	voucherSvc "xcentro.in/internal/services/voucher"
@@ -389,6 +390,9 @@ func registerV1PayoutRoutes(clients *externalClients, cfg *config.Config, group 
 		providerFactory,
 	)
 
+	// Create settlement verification service (MVP: always-pass)
+	settlementService := settlementSvc.NewSettlementVerificationService(logger.GetDefault())
+
 	// Create webhook handler
 	webhookHandler := payoutHandler.NewPayoutWebhookHandler(
 		transferRepository,
@@ -401,6 +405,9 @@ func registerV1PayoutRoutes(clients *externalClients, cfg *config.Config, group 
 		payoutService,
 		transferRepository,
 		configRepository,
+		voucherRepository,
+		settlementService,
+		logger.GetDefault(),
 	)
 
 	// Register payout routes
@@ -420,6 +427,9 @@ func registerV1PayoutRoutes(clients *externalClients, cfg *config.Config, group 
 	payoutGroup.GET("/config", dashboardHandler.GetConfig)
 	payoutGroup.PUT("/config", dashboardHandler.UpdateConfig)
 	payoutGroup.POST("/config", dashboardHandler.CreateConfig)
+
+	// Manual payout initiation (MVP: Ops button)
+	payoutGroup.POST("/initiate", dashboardHandler.InitiatePayoutManually)
 }
 
 func registerV1Routes(s *xcentroServer) {
