@@ -317,5 +317,4 @@ type PayeeBankDetails struct {
 	AccountType       string `json:"account_type"` // savings, current, cc, od
 	AccountHolderName string `json:"account_holder_name"`
 	IsVerified        bool   `json:"is_verified"`
-	IsPrimary         bool   `json:"is_primary"`
 }

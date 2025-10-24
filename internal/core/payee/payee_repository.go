@@ -150,10 +150,6 @@ type PayeeBankAccountRepository interface {
 
 	// Duplicate detection
 	CheckDuplicateAccount(ctx context.Context, payeeID, accountHash string) (bool, error)
-
-	// Primary account management
-	GetPrimaryAccount(ctx context.Context, payeeID string) (*PayeeBankAccount, error)
-	SetPrimaryAccount(ctx context.Context, accountID string) error
 }
 
 // ############################################################################

@@ -3,10 +3,10 @@ package payee
 import (
 	"xcentro.in/internal/adapters/database/postgres/client"
 	payeeRepo "xcentro.in/internal/adapters/database/postgres/payee"
-	payoutRepo "xcentro.in/internal/adapters/database/postgres/payout"
 	"xcentro.in/internal/adapters/external/payout/castler"
 	"xcentro.in/internal/core/business"
 	"xcentro.in/internal/core/business_rules"
+	"xcentro.in/internal/services/verification"
 	"xcentro.in/internal/shared/config"
 )
 
@@ -42,9 +42,6 @@ func (f *PayeeServiceFactory) NewPayeeService() *PayeeService {
 	payeeBankAccountRepo := payeeRepo.NewPgPayeeBankAccountRepository(f.db)
 	businessPayeeRelationRepo := payeeRepo.NewPgBusinessPayeeRelationRepository(f.db)
 
-	// Create payout provider repositories (Phase 8)
-	providerMappingRepo := payoutRepo.NewPostgresProviderMappingRepository(f.db)
-
 	// Create payout provider client (Castler with encryption support)
 	castlerClient, err := castler.NewCastlerClient(
 		f.config.Castler.BaseURL,
@@ -57,8 +54,13 @@ func (f *PayeeServiceFactory) NewPayeeService() *PayeeService {
 		panic("Failed to create Castler client: " + err.Error())
 	}
 
+	// Create document verification service (AuthBridge - for GST, PAN verification)
+	docVerificationSvc, err := verification.NewDocumentVerificationService()
+	if err != nil {
+		panic("Failed to create document verification service: " + err.Error())
+	}
+
 	// Create verification services
-	gstVerificationSvc := business_rules.NewMockGSTVerificationService()
 	bankVerificationSvc := castler.NewCastlerBankVerificationService(castlerClient) // Use Castler for penny-drop
 	crossVerificationSvc := business_rules.NewCrossVerificationService()
 
@@ -73,10 +75,9 @@ func (f *PayeeServiceFactory) NewPayeeService() *PayeeService {
 		payeeEmployeeRepo,
 		payeeBankAccountRepo,
 		businessPayeeRelationRepo,
-		providerMappingRepo,
-		castlerClient,      // payout provider (for transfers)
-		castlerClient,      // castler client (for payee onboarding)
-		gstVerificationSvc,
+		castlerClient,       // payout provider (for transfers)
+		castlerClient,       // castler client (for payee onboarding)
+		docVerificationSvc,  // document verification (AuthBridge for GST/PAN)
 		bankVerificationSvc,
 		crossVerificationSvc,
 		f.txManager,

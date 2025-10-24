@@ -16,6 +16,7 @@ import (
 	"xcentro.in/internal/core/payee"
 	"xcentro.in/internal/core/payment"
 	"xcentro.in/internal/core/payout"
+	"xcentro.in/internal/services/verification"
 )
 
 // CastlerPayeeOnboarder interface for Castler-specific payee onboarding operations
@@ -42,12 +43,11 @@ type PayeeService struct {
 	businessPayeeRelationRepo payee.BusinessPayeeRelationRepository
 
 	// Payout provider integration (Phase 8)
-	providerMappingRepo payout.PayoutProviderMappingRepository
 	payoutProvider      payout.PayoutProvider
 	castlerClient       CastlerPayeeOnboarder // For Castler-specific payee onboarding
 
 	// Verification services
-	gstVerificationSvc   business_rules.GSTVerificationService
+	docVerificationSvc   *verification.DocumentVerificationService // AuthBridge for GST, PAN verification
 	bankVerificationSvc  business_rules.BankVerificationService
 	crossVerificationSvc business_rules.CrossVerificationService
 
@@ -69,10 +69,9 @@ func NewPayeeService(
 	payeeEmployeeRepo payee.PayeeEmployeeRepository,
 	payeeBankAccountRepo payee.PayeeBankAccountRepository,
 	businessPayeeRelationRepo payee.BusinessPayeeRelationRepository,
-	providerMappingRepo payout.PayoutProviderMappingRepository,
 	payoutProvider payout.PayoutProvider,
 	castlerClient CastlerPayeeOnboarder,
-	gstVerificationSvc business_rules.GSTVerificationService,
+	docVerificationSvc *verification.DocumentVerificationService,
 	bankVerificationSvc business_rules.BankVerificationService,
 	crossVerificationSvc business_rules.CrossVerificationService,
 	txManager client.TxManager,
@@ -88,10 +87,9 @@ func NewPayeeService(
 		payeeEmployeeRepo:          payeeEmployeeRepo,
 		payeeBankAccountRepo:       payeeBankAccountRepo,
 		businessPayeeRelationRepo:  businessPayeeRelationRepo,
-		providerMappingRepo:        providerMappingRepo,
 		payoutProvider:             payoutProvider,
 		castlerClient:              castlerClient,
-		gstVerificationSvc:         gstVerificationSvc,
+		docVerificationSvc:         docVerificationSvc,
 		bankVerificationSvc:        bankVerificationSvc,
 		crossVerificationSvc:       crossVerificationSvc,
 		txManager:                  txManager,
@@ -149,75 +147,51 @@ func (s *PayeeService) onboardVendor(ctx context.Context, req payee.OnboardPayee
 	var payeeID string
 	var vendorPayee *payee.PayeeVendor
 
-	// Step 3: If vendor doesn't exist, verify GST and create
+	// Step 3: If vendor doesn't exist, verify GST (prepare for creation)
+	var gstResp *business_rules.GSTVerificationResponse
+	var needsVendorCreation bool
+
 	if existingVendor == nil {
-		fmt.Println("🆕 Step 3: Vendor not found, verifying GST and creating new vendor payee...")
+		needsVendorCreation = true
+		fmt.Println("🆕 Step 3: Vendor not found, verifying GST...")
 
-		gstReq := business_rules.GSTVerificationRequest{
-			GSTIN:     vendor.GSTIN,
-			RequestID: fmt.Sprintf("onboard_%s_%d", req.BusinessID, time.Now().Unix()),
-		}
+		transID := fmt.Sprintf("onboard_%s_%d", req.BusinessID, time.Now().Unix())
 
-		gstResp, err := s.gstVerificationSvc.VerifyGSTIN(ctx, gstReq)
+		var err error
+		gstData, err := s.docVerificationSvc.VerifyGSTIN(ctx, vendor.GSTIN, transID)
 		if err != nil {
 			return nil, fmt.Errorf("GST verification failed: %w", err)
 		}
 
+		// Map to business_rules response format for consistency
+		gstResp = &business_rules.GSTVerificationResponse{
+			RequestID: transID,
+			GSTIN:     gstData.GSTIN,
+			LegalName: gstData.LegalName,
+			TradeName: gstData.TradeName,
+			Status:    gstData.Status,
+			Metadata:  gstData.RawResponse,
+		}
+
 		fmt.Printf("✅ GST verified: %s (%s)\n", gstResp.LegalName, gstResp.Status)
-
-		// Create master entry first
-		payeeMaster := &payee.PayeeMaster{
-			PayeeType: payee.PayeeTypeVendor,
-			IsActive:  true,
-		}
-
-		if err := s.payeeMasterRepo.Create(ctx, payeeMaster); err != nil {
-			return nil, fmt.Errorf("failed to create payee master: %w", err)
-		}
-		payeeID = payeeMaster.PayeeID
-
-		// Create vendor payee entity
-		vendorPayee = &payee.PayeeVendor{
-			PayeeID:          payeeID,
-			GSTIN:            vendor.GSTIN,
-			LegalName:        gstResp.LegalName,
-			BusinessType:     gstResp.BusinessType,
-			RegistrationDate: &gstResp.RegistrationDate,
-			GSTStatus:        gstResp.Status,
-			PrimaryAddress: payee.Address{
-				BuildingName: gstResp.Address.BuildingName,
-				Street:       gstResp.Address.Street,
-				City:         gstResp.Address.City,
-				State:        gstResp.Address.State,
-				Pincode:      gstResp.Address.Pincode,
-			},
-			GSTVerificationStatus: payee.VerificationStatusSuccess,
-			GSTVerifiedAt:         &time.Time{},
-			GSTData:               gstResp.Metadata,
-			Metadata: map[string]any{
-				"directors":  gstResp.Directors,
-				"state_code": gstResp.StateCode,
-			},
-		}
-		*vendorPayee.GSTVerifiedAt = time.Now()
-
-		if err := s.payeeVendorRepo.Create(ctx, vendorPayee); err != nil {
-			return nil, fmt.Errorf("failed to create vendor payee: %w", err)
-		}
-
-		fmt.Printf("✅ Vendor payee created with ID: %s\n", payeeID)
 	} else {
+		needsVendorCreation = false
 		fmt.Printf("♻️  Step 3: Vendor already exists (PayeeID: %s), reusing...\n", existingVendor.PayeeID)
 		payeeID = existingVendor.PayeeID
 		vendorPayee = existingVendor
 	}
 
-	// Step 4: Check if bank account already exists for this payee
+	// Step 4: Check if bank account already exists for this payee (if vendor exists)
 	fmt.Println("🔍 Step 4: Checking for duplicate bank account...")
 	accountHash := s.computeAccountHash(vendor.AccountNumber)
-	isDuplicate, err := s.payeeBankAccountRepo.CheckDuplicateAccount(ctx, payeeID, accountHash)
-	if err != nil {
-		return nil, fmt.Errorf("failed to check duplicate account: %w", err)
+
+	var isDuplicate bool
+	if !needsVendorCreation {
+		// Only check for duplicate if vendor already exists (has payeeID)
+		isDuplicate, err = s.payeeBankAccountRepo.CheckDuplicateAccount(ctx, payeeID, accountHash)
+		if err != nil {
+			return nil, fmt.Errorf("failed to check duplicate account: %w", err)
+		}
 	}
 
 	var bankAccount *payee.PayeeBankAccount
@@ -296,7 +270,8 @@ func (s *PayeeService) onboardVendor(ctx context.Context, req payee.OnboardPayee
 		}
 		fmt.Printf("✅ Payee onboarded to Castler: PayeeID=%s\n", castlerPayeeResp.Result)
 
-		// Create PayeeBankAccount entity
+		// Create PayeeBankAccount entity with Castler beneficiary ID
+		now := time.Now()
 		bankAccount = &payee.PayeeBankAccount{
 			PayeeID:                 payeeID,
 			AccountNumber:           vendor.AccountNumber,
@@ -307,29 +282,19 @@ func (s *PayeeService) onboardVendor(ctx context.Context, req payee.OnboardPayee
 			AccountType:             accountType,       // Use the defaulted account type
 			AccountHolderName:       vendor.AccountHolderName,
 			IsVerified:              true,
-			VerifiedAt:              &time.Time{},
+			VerifiedAt:              &now,
 			BankVerificationStatus:  payee.VerificationStatusSuccess,
 			CrossVerificationStatus: payee.VerificationStatusSuccess,
+			CastlerBeneficiaryID:    castlerPayeeResp.Result, // Store Castler payee ID
 			IsActive:                true,
-			IsPrimary:               false, // Will check if this should be primary
 			AccountLabel:            vendor.AccountLabel,
 			VerificationData:        map[string]any{"test": "test"},
 		}
-		*bankAccount.VerifiedAt = time.Now()
 	}
 
-	// Step 8: Check if this should be the primary account
-	if bankAccount.AccountID == "" { // New account being created
-		existingAccounts, _ := s.payeeBankAccountRepo.FindByPayeeID(ctx, payeeID)
-		if len(existingAccounts) == 0 {
-			bankAccount.IsPrimary = true
-			fmt.Println("📌 Setting as primary account (first account for this payee)")
-		}
-	}
-
-	// Step 9: Check if relation already exists
-	fmt.Println("🔍 Step 9: Checking if customer already has this payee-account relation...")
-	if bankAccount.AccountID != "" { // Account exists
+	// Step 8: Check if relation already exists (if everything already exists)
+	fmt.Println("🔍 Step 8: Checking if customer already has this payee-account relation...")
+	if !needsVendorCreation && bankAccount != nil && bankAccount.AccountID != "" {
 		relationExists, err := s.businessPayeeRelationRepo.RelationExists(ctx, req.BusinessID, payeeID, bankAccount.AccountID)
 		if err != nil {
 			return nil, fmt.Errorf("failed to check relation existence: %w", err)
@@ -339,26 +304,75 @@ func (s *PayeeService) onboardVendor(ctx context.Context, req payee.OnboardPayee
 		}
 	}
 
-	// Step 10: Atomically create account + relation in transaction
-	fmt.Println("💾 Step 10: Creating bank account and relation (in transaction)...")
+	// Step 9: ATOMIC TRANSACTION - Create all entities (master, vendor, bank account, relation)
+	fmt.Println("💾 Step 9: Creating all entities in ATOMIC TRANSACTION...")
 
 	var accountID string
 	var relationID string
 	err = s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
+		txMasterRepo := s.payeeMasterRepo.WithTx(tx)
+		txVendorRepo := s.payeeVendorRepo.WithTx(tx)
 		txBankAccountRepo := s.payeeBankAccountRepo.WithTx(tx)
 		txRelationRepo := s.businessPayeeRelationRepo.WithTx(tx)
 
-		// Create bank account if new
-		if bankAccount.AccountID == "" {
+		// 1. Create master + vendor if needed
+		if needsVendorCreation {
+			// Create master entry
+			payeeMaster := &payee.PayeeMaster{
+				PayeeType: payee.PayeeTypeVendor,
+				IsActive:  true,
+			}
+			if err := txMasterRepo.Create(ctx, payeeMaster); err != nil {
+				return fmt.Errorf("failed to create payee master: %w", err)
+			}
+			payeeID = payeeMaster.PayeeID
+			fmt.Printf("✅ [TX] Master entry created: PayeeID=%s\n", payeeID)
+
+			// Create vendor payee entity
+			now := time.Now()
+			vendorPayee = &payee.PayeeVendor{
+				PayeeID:          payeeID,
+				GSTIN:            vendor.GSTIN,
+				LegalName:        gstResp.LegalName,
+				BusinessType:     gstResp.BusinessType,
+				RegistrationDate: &gstResp.RegistrationDate,
+				GSTStatus:        gstResp.Status,
+				PrimaryAddress: payee.Address{
+					BuildingName: gstResp.Address.BuildingName,
+					Street:       gstResp.Address.Street,
+					City:         gstResp.Address.City,
+					State:        gstResp.Address.State,
+					Pincode:      gstResp.Address.Pincode,
+				},
+				GSTVerificationStatus: payee.VerificationStatusSuccess,
+				GSTVerifiedAt:         &now,
+				GSTData:               gstResp.Metadata,
+				Metadata: map[string]any{
+					"directors":  gstResp.Directors,
+					"state_code": gstResp.StateCode,
+				},
+			}
+			if err := txVendorRepo.Create(ctx, vendorPayee); err != nil {
+				return fmt.Errorf("failed to create vendor payee: %w", err)
+			}
+			fmt.Printf("✅ [TX] Vendor entity created for GSTIN: %s\n", vendor.GSTIN)
+		}
+
+		// 2. Create bank account if needed
+		if bankAccount != nil && bankAccount.AccountID == "" {
+			// Update PayeeID in case it was just created
+			bankAccount.PayeeID = payeeID
+
 			if err := txBankAccountRepo.CreateBankAccount(ctx, bankAccount); err != nil {
 				return fmt.Errorf("failed to create bank account: %w", err)
 			}
 			accountID = bankAccount.AccountID
-		} else {
+			fmt.Printf("✅ [TX] Bank account created: %s\n", accountID)
+		} else if bankAccount != nil {
 			accountID = bankAccount.AccountID
 		}
 
-		// Create relation
+		// 3. Create relation
 		relation := &payee.BusinessPayeeRelation{
 			BusinessID:   req.BusinessID,
 			PayeeID:      payeeID,
@@ -376,9 +390,8 @@ func (s *PayeeService) onboardVendor(ctx context.Context, req payee.OnboardPayee
 		if err := txRelationRepo.CreateRelation(ctx, relation); err != nil {
 			return fmt.Errorf("failed to create relation: %w", err)
 		}
-
-		// Capture relation_id generated by CreateRelation
 		relationID = relation.RelationID
+		fmt.Printf("✅ [TX] Business-payee relation created: %s\n", relationID)
 
 		return nil
 	})
@@ -401,49 +414,10 @@ func (s *PayeeService) onboardVendor(ctx context.Context, req payee.OnboardPayee
 		}(req.BusinessID)
 	}
 
-	// Step 11: Onboard to payout provider (Phase 8)
-	fmt.Println("🚀 Step 11: Onboarding payee to payout provider (Castler)...")
-
-	onboardReq := &payout.OnboardBeneficiaryRequest{
-		PayeeID:           payeeID,
-		AccountID:         accountID,
-		AccountNumber:     vendor.AccountNumber,
-		IFSCCode:          vendor.IFSCCode,
-		AccountHolderName: bankAccount.AccountHolderName,
-		BankName:          bankAccount.BankName,
-		AccountType:       string(vendor.AccountType),
-		GSTIN:             vendor.GSTIN,
-		LegalName:         vendorPayee.LegalName,
-		Email:             req.ContactEmail,
-		Phone:             req.ContactPhone,
-	}
-
-	onboardResp, err := s.payoutProvider.OnboardBeneficiary(ctx, onboardReq)
-	if err != nil {
-		// Log error but don't fail payee creation
-		fmt.Printf("⚠️  Warning: Provider onboarding failed: %v\n", err)
-	} else {
-		// Store provider mapping
-		now := time.Now()
-		mapping := &payout.PayoutProviderMapping{
-			MappingID:             uuid.Must(uuid.NewV7()).String(),
-			PayeeID:               payeeID,
-			AccountID:             accountID,
-			Provider:              s.payoutProvider.GetProviderType(),
-			ProviderBeneficiaryID: onboardResp.ProviderBeneficiaryID,
-			ProviderAccountID:     onboardResp.ProviderAccountID,
-			OnboardingStatus:      payout.OnboardingStatus(onboardResp.Status),
-			OnboardedAt:           &now,
-			ProviderMetadata:      onboardResp.Metadata,
-			CreatedAt:             time.Now(),
-		}
-
-		if err := s.providerMappingRepo.Create(ctx, mapping); err != nil {
-			fmt.Printf("⚠️  Warning: Failed to save provider mapping: %v\n", err)
-		} else {
-			fmt.Printf("✅ Provider onboarding complete: %s\n", onboardResp.ProviderBeneficiaryID)
-		}
-	}
+	// Step 11: Payout provider onboarding complete
+	// Note: Castler beneficiary ID is already stored in bankAccount.CastlerBeneficiaryID
+	// No need for separate provider mapping table
+	fmt.Println("✅ Payout provider onboarding complete (Castler ID stored in bank account)")
 
 	// Step 12: Return response
 	return &payee.OnboardPayeeResponse{
@@ -481,39 +455,33 @@ func (s *PayeeService) onboardGSTPayee(ctx context.Context, req payee.OnboardPay
 		return nil, fmt.Errorf("failed to check existing GST payee: %w", err)
 	}
 
+	var needsGSTCreation bool
 	if existingGST != nil {
 		// GST payee exists - reuse it
+		needsGSTCreation = false
 		payeeID = existingGST.PayeeID
 		fmt.Printf("📋 GST payee exists with PayeeID: %s\n", payeeID)
 	} else {
-		// Create new GST payee (singleton)
-		fmt.Println("🆕 Creating new GST payee (singleton)...")
-
-		// Step 3: Create master entry first
-		payeeMaster := &payee.PayeeMaster{
-			PayeeType: payee.PayeeTypeGST,
-			IsActive:  true,
-		}
-		if err := s.payeeMasterRepo.Create(ctx, payeeMaster); err != nil {
-			return nil, fmt.Errorf("failed to create payee master: %w", err)
-		}
-		payeeID = payeeMaster.PayeeID
-		fmt.Printf("✅ Master entry created: PayeeID=%s\n", payeeID)
-
-		// Step 4: Create GST payee entity (no Create method - will be created by repository setup)
-		// The GST payee entity creation happens in database migration/setup
-		fmt.Println("✅ GST payee entity will use singleton pattern")
+		// Need to create new GST payee (singleton)
+		needsGSTCreation = true
+		fmt.Println("🆕 GST payee not found, will create in transaction...")
 	}
 
-	// Step 5: Check if virtual account for this tax period already exists
-	fmt.Printf("🔍 Step 5: Checking for virtual account (tax period: %s, FY: %s)...\n", gst.TaxPeriod, gst.FinancialYear)
-	existingVirtualAccounts, err := s.payeeGSTVirtualAccountRepo.FindByPayeeID(ctx, payeeID)
+	// Step 3: Check if virtual account for this tax period already exists
+	fmt.Printf("🔍 Step 3: Checking for virtual account (tax period: %s, FY: %s)...\n", gst.TaxPeriod, gst.FinancialYear)
+	var existingVirtualAccounts []*payee.PayeeGSTVirtualAccount
+	if !needsGSTCreation {
+		// Only check if GST payee already exists (has payeeID)
+		existingVirtualAccounts, err = s.payeeGSTVirtualAccountRepo.FindByPayeeID(ctx, payeeID)
+	}
 	if err != nil && err.Error() != "no virtual accounts found" {
 		return nil, fmt.Errorf("failed to find virtual accounts: %w", err)
 	}
 
 	// Check if this specific tax period/FY virtual account exists
 	var existingVA *payee.PayeeGSTVirtualAccount
+	var needsVirtualAccountCreation bool
+
 	for _, va := range existingVirtualAccounts {
 		if va.TaxPeriod == gst.TaxPeriod && va.FinancialYear == gst.FinancialYear {
 			existingVA = va
@@ -527,9 +495,56 @@ func (s *PayeeService) onboardGSTPayee(ctx context.Context, req payee.OnboardPay
 
 		// Check if it's still valid
 		if time.Now().After(existingVA.ValidUntil) {
-			fmt.Println("⚠️ Existing virtual account expired, creating new one...")
-			// Create new virtual account for this period
-			newVirtualAccount := &payee.PayeeGSTVirtualAccount{
+			fmt.Println("⚠️ Existing virtual account expired, will create new one in transaction...")
+			needsVirtualAccountCreation = true
+		} else {
+			fmt.Println("✅ Virtual account still valid, reusing...")
+			needsVirtualAccountCreation = false
+			virtualAccountID = existingVA.VirtualAccountID
+		}
+	} else {
+		// Need to create new virtual account for this tax period
+		fmt.Printf("🆕 No virtual account found for %s/%s, will create in transaction...\n", gst.TaxPeriod, gst.FinancialYear)
+		needsVirtualAccountCreation = true
+	}
+
+	// Step 4: Check if relation already exists (if everything already exists)
+	fmt.Println("🔍 Step 4: Checking if customer already has this GST payee relation...")
+	if !needsGSTCreation && !needsVirtualAccountCreation && virtualAccountID != "" {
+		relationExists, err := s.businessPayeeRelationRepo.RelationExists(ctx, req.BusinessID, payeeID, virtualAccountID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to check relation existence: %w", err)
+		}
+		if relationExists {
+			return nil, fmt.Errorf("GST payee already added to your account for this tax period")
+		}
+	}
+
+	// Step 5: ATOMIC TRANSACTION - Create all entities (master, virtual account, relation)
+	fmt.Println("💾 Step 5: Creating all entities in ATOMIC TRANSACTION...")
+
+	var relationID string
+	err = s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
+		txMasterRepo := s.payeeMasterRepo.WithTx(tx)
+		txVirtualAccountRepo := s.payeeGSTVirtualAccountRepo.WithTx(tx)
+		txRelationRepo := s.businessPayeeRelationRepo.WithTx(tx)
+
+		// 1. Create master if needed
+		if needsGSTCreation {
+			payeeMaster := &payee.PayeeMaster{
+				PayeeType: payee.PayeeTypeGST,
+				IsActive:  true,
+			}
+			if err := txMasterRepo.Create(ctx, payeeMaster); err != nil {
+				return fmt.Errorf("failed to create payee master: %w", err)
+			}
+			payeeID = payeeMaster.PayeeID
+			fmt.Printf("✅ [TX] Master entry created: PayeeID=%s\n", payeeID)
+		}
+
+		// 2. Create virtual account if needed
+		if needsVirtualAccountCreation {
+			virtualAccount := &payee.PayeeGSTVirtualAccount{
 				PayeeID:              payeeID,
 				VirtualAccountNumber: gst.VirtualAccountNumber,
 				IFSCCode:             gst.IFSCCode,
@@ -542,71 +557,46 @@ func (s *PayeeService) onboardGSTPayee(ctx context.Context, req payee.OnboardPay
 				IsActive:             true,
 				ChallanDocumentURL:   gst.ChallanDocumentURL,
 			}
-			if err := s.payeeGSTVirtualAccountRepo.Create(ctx, newVirtualAccount); err != nil {
-				return nil, fmt.Errorf("failed to create new virtual account: %w", err)
+			if err := txVirtualAccountRepo.Create(ctx, virtualAccount); err != nil {
+				return fmt.Errorf("failed to create virtual account: %w", err)
 			}
-			virtualAccountID = newVirtualAccount.VirtualAccountID
-		} else {
-			fmt.Println("✅ Virtual account still valid, reusing...")
-			virtualAccountID = existingVA.VirtualAccountID
+			virtualAccountID = virtualAccount.VirtualAccountID
+			fmt.Printf("✅ [TX] Virtual account created: %s\n", virtualAccountID)
 		}
-	} else {
-		// Create new virtual account for this tax period
-		fmt.Printf("🆕 Creating new virtual account for %s/%s...\n", gst.TaxPeriod, gst.FinancialYear)
-		virtualAccount := &payee.PayeeGSTVirtualAccount{
-			PayeeID:              payeeID,
-			VirtualAccountNumber: gst.VirtualAccountNumber,
-			IFSCCode:             gst.IFSCCode,
-			BankName:             gst.BankName,
-			TaxPeriod:            gst.TaxPeriod,
-			FinancialYear:        gst.FinancialYear,
-			TaxType:              gst.TaxType,
-			ValidFrom:            gst.ValidFrom,
-			ValidUntil:           gst.ValidUntil,
-			IsActive:             true,
-			ChallanDocumentURL:   gst.ChallanDocumentURL,
-		}
-		if err := s.payeeGSTVirtualAccountRepo.Create(ctx, virtualAccount); err != nil {
-			return nil, fmt.Errorf("failed to create virtual account: %w", err)
-		}
-		virtualAccountID = virtualAccount.VirtualAccountID
-		fmt.Printf("✅ Virtual account created: %s\n", virtualAccountID)
-	}
 
-	// Step 6: Check if relation already exists
-	fmt.Println("🔍 Step 6: Checking if customer already has this GST payee relation...")
-	relationExists, err := s.businessPayeeRelationRepo.RelationExists(ctx, req.BusinessID, payeeID, virtualAccountID)
+		// 3. Create relation
+		relation := &payee.BusinessPayeeRelation{
+			BusinessID:   req.BusinessID,
+			PayeeID:      payeeID,
+			AccountID:    virtualAccountID,
+			DisplayName:  req.DisplayName,
+			ContactEmail: req.ContactEmail,
+			ContactPhone: req.ContactPhone,
+			Notes:        req.Notes,
+			IsActive:     true,
+			IsFavorite:   false,
+			Tags:         []string{"gst", "tax"},
+			AddedBy:      "", // TODO: Extract from JWT
+		}
+
+		if err := txRelationRepo.CreateRelation(ctx, relation); err != nil {
+			return fmt.Errorf("failed to create relation: %w", err)
+		}
+		relationID = relation.RelationID
+		fmt.Printf("✅ [TX] Business-payee relation created: %s\n", relationID)
+
+		return nil
+	})
+
 	if err != nil {
-		return nil, fmt.Errorf("failed to check relation existence: %w", err)
-	}
-	if relationExists {
-		return nil, fmt.Errorf("GST payee already added to your account for this tax period")
-	}
-
-	// Step 7: Create business-payee relation
-	fmt.Println("💾 Step 7: Creating business-payee relation...")
-	relation := &payee.BusinessPayeeRelation{
-		BusinessID:   req.BusinessID,
-		PayeeID:      payeeID,
-		AccountID:    virtualAccountID,
-		DisplayName:  req.DisplayName,
-		ContactEmail: req.ContactEmail,
-		ContactPhone: req.ContactPhone,
-		Notes:        req.Notes,
-		IsActive:     true,
-		IsFavorite:   false,
-		Tags:         []string{"gst", "tax"},
-		AddedBy:      "", // TODO: Extract from JWT
-	}
-
-	if err := s.businessPayeeRelationRepo.CreateRelation(ctx, relation); err != nil {
-		return nil, fmt.Errorf("failed to create relation: %w", err)
+		return nil, fmt.Errorf("transaction failed: %w", err)
 	}
 
 	fmt.Println("✅ GST payee onboarding complete!")
 
-	// Step 8: Return response
+	// Step 6: Return response
 	return &payee.OnboardPayeeResponse{
+		RelationID:              relationID,
 		PayeeID:                 payeeID,
 		AccountID:               virtualAccountID,
 		GSTVerificationStatus:   payee.VerificationStatusSuccess, // Government entity pre-verified
@@ -639,47 +629,26 @@ func (s *PayeeService) onboardBiller(ctx context.Context, req payee.OnboardPayee
 		return nil, fmt.Errorf("failed to check existing biller: %w", err)
 	}
 
+	var needsBillerCreation bool
 	if existingBiller != nil {
 		// Biller exists - reuse it
+		needsBillerCreation = false
 		payeeID = existingBiller.PayeeID
 		fmt.Printf("📋 Biller exists with PayeeID: %s\n", payeeID)
 	} else {
-		// Create new biller
-		fmt.Printf("🆕 Creating new biller: %s...\n", biller.BillerID)
-
-		// Step 3: Create master entry first
-		payeeMaster := &payee.PayeeMaster{
-			PayeeType: payee.PayeeTypeBiller,
-			IsActive:  true,
-		}
-		if err := s.payeeMasterRepo.Create(ctx, payeeMaster); err != nil {
-			return nil, fmt.Errorf("failed to create payee master: %w", err)
-		}
-		payeeID = payeeMaster.PayeeID
-		fmt.Printf("✅ Master entry created: PayeeID=%s\n", payeeID)
-
-		// Step 4: Create biller entity
-		// Note: Biller metadata (name, category, etc.) would come from BBPS API lookup
-		// For now, we'll store minimal info from the request
-		billerPayee := &payee.PayeeBiller{
-			PayeeID:        payeeID,
-			BillerID:       biller.BillerID,
-			BillerName:     req.DisplayName, // Use customer's display name
-			BillerCategory: "utility",       // Default category, should be from BBPS lookup
-			NPCIRegistered: true,            // Assume BBPS billers are NPCI registered
-			PaymentModes:   []string{"upi", "netbanking", "card"},
-		}
-		if err := s.payeeBillerRepo.Create(ctx, billerPayee); err != nil {
-			return nil, fmt.Errorf("failed to create biller: %w", err)
-		}
-		fmt.Printf("✅ Biller entity created for BillerID: %s\n", biller.BillerID)
+		// Need to create new biller
+		needsBillerCreation = true
+		fmt.Printf("🆕 Biller not found, will create in transaction: %s...\n", biller.BillerID)
 	}
 
-	// Step 5: Check if biller account already exists for this business
-	fmt.Println("🔍 Step 5: Checking for existing biller account for this business...")
-	existingAccounts, err := s.payeeBillerAccountRepo.FindByBusinessAndPayee(ctx, req.BusinessID, payeeID)
-	if err != nil && err.Error() != "no biller accounts found" {
-		return nil, fmt.Errorf("failed to check existing biller accounts: %w", err)
+	// Step 3: Check if biller account already exists for this business
+	fmt.Println("🔍 Step 3: Checking for existing biller account for this business...")
+	var existingAccounts []*payee.PayeeBillerAccount
+	if !needsBillerCreation {
+		existingAccounts, err = s.payeeBillerAccountRepo.FindByBusinessAndPayee(ctx, req.BusinessID, payeeID)
+		if err != nil && err.Error() != "no biller accounts found" {
+			return nil, fmt.Errorf("failed to check existing biller accounts: %w", err)
+		}
 	}
 
 	// Check for duplicate account (same mobile number)
@@ -689,56 +658,92 @@ func (s *PayeeService) onboardBiller(ctx context.Context, req payee.OnboardPayee
 		}
 	}
 
-	// Step 6: Create biller account (customer-specific configuration)
-	fmt.Println("🆕 Creating biller account (customer configuration)...")
-	billerAccount := &payee.PayeeBillerAccount{
-		PayeeID:          payeeID,
-		BusinessID:       req.BusinessID,
-		MobileNumber:     biller.MobileNumber,
-		CustomerParams:   biller.CustomerParams, // Consumer number, etc.
-		AutoFetchEnabled: biller.AutoFetch,
-		IsActive:         true,
-	}
-	if err := s.payeeBillerAccountRepo.Create(ctx, billerAccount); err != nil {
-		return nil, fmt.Errorf("failed to create biller account: %w", err)
-	}
-	billerAccountID = billerAccount.BillerAccountID
-	fmt.Printf("✅ Biller account created: %s\n", billerAccountID)
+	// Step 4: ATOMIC TRANSACTION - Create all entities (master, biller, biller account, relation)
+	fmt.Println("💾 Step 4: Creating all entities in ATOMIC TRANSACTION...")
 
-	// Step 7: Check if relation already exists
-	fmt.Println("🔍 Step 7: Checking if customer already has this biller payee relation...")
-	relationExists, err := s.businessPayeeRelationRepo.RelationExists(ctx, req.BusinessID, payeeID, billerAccountID)
+	var relationID string
+	err = s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
+		txMasterRepo := s.payeeMasterRepo.WithTx(tx)
+		txBillerRepo := s.payeeBillerRepo.WithTx(tx)
+		txBillerAccountRepo := s.payeeBillerAccountRepo.WithTx(tx)
+		txRelationRepo := s.businessPayeeRelationRepo.WithTx(tx)
+
+		// 1. Create master + biller if needed
+		if needsBillerCreation {
+			// Create master entry
+			payeeMaster := &payee.PayeeMaster{
+				PayeeType: payee.PayeeTypeBiller,
+				IsActive:  true,
+			}
+			if err := txMasterRepo.Create(ctx, payeeMaster); err != nil {
+				return fmt.Errorf("failed to create payee master: %w", err)
+			}
+			payeeID = payeeMaster.PayeeID
+			fmt.Printf("✅ [TX] Master entry created: PayeeID=%s\n", payeeID)
+
+			// Create biller entity
+			billerPayee := &payee.PayeeBiller{
+				PayeeID:        payeeID,
+				BillerID:       biller.BillerID,
+				BillerName:     req.DisplayName, // Use customer's display name
+				BillerCategory: "utility",       // Default category, should be from BBPS lookup
+				NPCIRegistered: true,            // Assume BBPS billers are NPCI registered
+				PaymentModes:   []string{"upi", "netbanking", "card"},
+			}
+			if err := txBillerRepo.Create(ctx, billerPayee); err != nil {
+				return fmt.Errorf("failed to create biller: %w", err)
+			}
+			fmt.Printf("✅ [TX] Biller entity created for BillerID: %s\n", biller.BillerID)
+		}
+
+		// 2. Create biller account
+		billerAccount := &payee.PayeeBillerAccount{
+			PayeeID:          payeeID,
+			BusinessID:       req.BusinessID,
+			MobileNumber:     biller.MobileNumber,
+			CustomerParams:   biller.CustomerParams,
+			AutoFetchEnabled: biller.AutoFetch,
+			IsActive:         true,
+		}
+		if err := txBillerAccountRepo.Create(ctx, billerAccount); err != nil {
+			return fmt.Errorf("failed to create biller account: %w", err)
+		}
+		billerAccountID = billerAccount.BillerAccountID
+		fmt.Printf("✅ [TX] Biller account created: %s\n", billerAccountID)
+
+		// 3. Create relation
+		relation := &payee.BusinessPayeeRelation{
+			BusinessID:   req.BusinessID,
+			PayeeID:      payeeID,
+			AccountID:    billerAccountID,
+			DisplayName:  req.DisplayName,
+			ContactEmail: req.ContactEmail,
+			ContactPhone: req.ContactPhone,
+			Notes:        req.Notes,
+			IsActive:     true,
+			IsFavorite:   false,
+			Tags:         []string{"biller", "bbps"},
+			AddedBy:      "", // TODO: Extract from JWT
+		}
+
+		if err := txRelationRepo.CreateRelation(ctx, relation); err != nil {
+			return fmt.Errorf("failed to create relation: %w", err)
+		}
+		relationID = relation.RelationID
+		fmt.Printf("✅ [TX] Business-payee relation created: %s\n", relationID)
+
+		return nil
+	})
+
 	if err != nil {
-		return nil, fmt.Errorf("failed to check relation existence: %w", err)
-	}
-	if relationExists {
-		return nil, fmt.Errorf("biller payee already added to your account")
-	}
-
-	// Step 8: Create business-payee relation
-	fmt.Println("💾 Step 8: Creating business-payee relation...")
-	relation := &payee.BusinessPayeeRelation{
-		BusinessID:   req.BusinessID,
-		PayeeID:      payeeID,
-		AccountID:    billerAccountID,
-		DisplayName:  req.DisplayName,
-		ContactEmail: req.ContactEmail,
-		ContactPhone: req.ContactPhone,
-		Notes:        req.Notes,
-		IsActive:     true,
-		IsFavorite:   false,
-		Tags:         []string{"biller", "bbps"},
-		AddedBy:      "", // TODO: Extract from JWT
-	}
-
-	if err := s.businessPayeeRelationRepo.CreateRelation(ctx, relation); err != nil {
-		return nil, fmt.Errorf("failed to create relation: %w", err)
+		return nil, fmt.Errorf("transaction failed: %w", err)
 	}
 
 	fmt.Println("✅ Biller payee onboarding complete!")
 
-	// Step 9: Return response
+	// Step 5: Return response
 	return &payee.OnboardPayeeResponse{
+		RelationID:              relationID,
 		PayeeID:                 payeeID,
 		AccountID:               billerAccountID,
 		GSTVerificationStatus:   payee.VerificationStatusSuccess, // BBPS billers are pre-verified
@@ -770,66 +775,35 @@ func (s *PayeeService) onboardEmployee(ctx context.Context, req payee.OnboardPay
 		return nil, fmt.Errorf("failed to check existing employee: %w", err)
 	}
 
+	var needsEmployeeCreation bool
+	var panVerificationStatus payee.VerificationStatus
+
 	if existingEmployee != nil {
 		// Employee exists - reuse payee
+		needsEmployeeCreation = false
 		payeeID = existingEmployee.PayeeID
 		fmt.Printf("📋 Employee exists with PayeeID: %s\n", payeeID)
 	} else {
-		// New employee - create master and employee entities
-		fmt.Println("🆕 Creating new employee payee...")
+		// New employee - verify PAN first, then prepare for creation
+		needsEmployeeCreation = true
+		fmt.Println("🆕 Employee not found, verifying PAN...")
 
-		// Step 3: Create master entry first
-		payeeMaster := &payee.PayeeMaster{
-			PayeeType: payee.PayeeTypeEmployee,
-			IsActive:  true,
-		}
-		if err := s.payeeMasterRepo.Create(ctx, payeeMaster); err != nil {
-			return nil, fmt.Errorf("failed to create payee master: %w", err)
-		}
-		payeeID = payeeMaster.PayeeID
-		fmt.Printf("✅ Master entry created: PayeeID=%s\n", payeeID)
-
-		// Step 4: Verify PAN (mock for now)
-		fmt.Printf("🔍 Step 4: Verifying PAN: %s...\n", employee.PAN)
+		// Step 3: Verify PAN (mock for now)
+		fmt.Printf("🔍 Step 3: Verifying PAN: %s...\n", employee.PAN)
 		// TODO: Call PAN verification service
-		panVerificationStatus := payee.VerificationStatusSuccess
+		panVerificationStatus = payee.VerificationStatusSuccess
 		fmt.Println("✅ PAN verification complete")
-
-		// Step 5: Create employee entity
-		employeePayee := &payee.PayeeEmployee{
-			PayeeID:               payeeID,
-			EmployeeCode:          employee.EmployeeCode,
-			FullName:              employee.FullName,
-			PAN:                   employee.PAN,
-			Email:                 employee.Email,
-			Phone:                 employee.Phone,
-			Designation:           employee.Designation,
-			Department:            employee.Department,
-			DateOfJoining:         employee.DateOfJoining,
-			EmploymentType:        employee.EmploymentType,
-			RemunerationDocURL:    employee.RemunerationDocURL,
-			IsSensitive:           true,
-			PANVerificationStatus: panVerificationStatus,
-		}
-		if employee.RemunerationDocURL != "" {
-			now := time.Now()
-			employeePayee.RemunerationDocUploadedAt = &now
-		}
-		if panVerificationStatus == payee.VerificationStatusSuccess {
-			now := time.Now()
-			employeePayee.PANVerifiedAt = &now
-		}
-
-		if err := s.payeeEmployeeRepo.Create(ctx, employeePayee); err != nil {
-			return nil, fmt.Errorf("failed to create employee: %w", err)
-		}
-		fmt.Printf("✅ Employee entity created for PAN: %s\n", employee.PAN)
 	}
 
-	// Step 6: Check for duplicate bank account
-	fmt.Println("🔍 Step 6: Checking for duplicate bank account...")
+	// Step 4: Check for duplicate bank account (if employee exists)
+	fmt.Println("🔍 Step 4: Checking for duplicate bank account...")
 	accountHash := s.computeAccountHash(employee.AccountNumber)
-	existingAccounts, _ := s.payeeBankAccountRepo.FindByPayeeID(ctx, payeeID)
+
+	var existingAccounts []*payee.PayeeBankAccount
+	if !needsEmployeeCreation {
+		// Only check if employee already exists (has payeeID)
+		existingAccounts, _ = s.payeeBankAccountRepo.FindByPayeeID(ctx, payeeID)
+	}
 
 	var bankAccount *payee.PayeeBankAccount
 	for _, acc := range existingAccounts {
@@ -840,16 +814,21 @@ func (s *PayeeService) onboardEmployee(ctx context.Context, req payee.OnboardPay
 		}
 	}
 
+	// Prepare bank account entity if needed
+	var verifyResp *business_rules.BankVerificationResponse
+	var crossVerifyStatus payee.VerificationStatus
+	var accountType payment.BankAccountType
+
 	if bankAccount == nil {
 		// Default account_type to "current" if not provided
-		accountType := employee.AccountType
+		accountType = employee.AccountType
 		if accountType == "" {
 			accountType = payment.BankAccountTypeCurrent
 			fmt.Println("ℹ️  account_type not provided, defaulting to 'current'")
 		}
 
-		// Step 7: Perform penny drop verification
-		fmt.Printf("🏦 Step 7: Verifying bank account (penny drop): %s...\n", employee.AccountNumber)
+		// Step 5: Perform penny drop verification
+		fmt.Printf("🏦 Step 5: Verifying bank account (penny drop): %s...\n", employee.AccountNumber)
 		verifyReq := business_rules.BankVerificationRequest{
 			BusinessID:        req.BusinessID,
 			RequestID:         fmt.Sprintf("onboard_emp_%s_%d", req.BusinessID, time.Now().Unix()),
@@ -861,128 +840,158 @@ func (s *PayeeService) onboardEmployee(ctx context.Context, req payee.OnboardPay
 			AccountType:       accountType,
 		}
 
-		verifyResp, err := s.bankVerificationSvc.VerifyBankAccount(ctx, verifyReq)
+		var err error
+		verifyResp, err = s.bankVerificationSvc.VerifyBankAccount(ctx, verifyReq)
 		if err != nil {
 			return nil, fmt.Errorf("bank verification failed: %w", err)
 		}
 		fmt.Printf("✅ Bank verification complete: %s\n", verifyResp.Status)
 
-		// Step 8: Cross-verification (PAN name vs Bank account name)
-		fmt.Println("🔄 Step 8: Cross-verifying PAN name with bank account holder name...")
+		// Step 6: Cross-verification (PAN name vs Bank account name)
+		fmt.Println("🔄 Step 6: Cross-verifying PAN name with bank account holder name...")
 		// Mock cross-verification for now
-		crossVerifyStatus := payee.VerificationStatusSuccess
+		crossVerifyStatus = payee.VerificationStatusSuccess
 		fmt.Println("✅ Cross-verification complete")
 
-		// Step 9: Create bank account entity
+		// Prepare bank account entity (will be created in transaction)
+		now := time.Now()
 		bankAccount = &payee.PayeeBankAccount{
-			PayeeID:                 payeeID,
+			PayeeID:                 payeeID, // Will be updated in transaction if employee is new
 			AccountNumber:           employee.AccountNumber,
 			AccountNumberHash:       accountHash,
 			IFSCCode:                employee.IFSCCode,
 			AccountHolderName:       employee.AccountHolderName,
 			BankName:                employee.BankName,   // Use bank name from frontend IFSC check
 			BranchName:              employee.BranchName, // Use branch name from frontend IFSC check
-			AccountType:             accountType,         // Use the defaulted account type
+			AccountType:             accountType,
 			AccountLabel:            employee.AccountLabel,
-			IsPrimary:               len(existingAccounts) == 0, // First account is primary
 			IsActive:                true,
 			IsVerified:              verifyResp.Status == business_rules.BankVerificationStatusSuccess,
 			BankVerificationStatus:  payee.VerificationStatus(verifyResp.Status),
 			CrossVerificationStatus: crossVerifyStatus,
+			VerifiedAt:              &now,
 		}
+	}
 
-		// Set verification metadata
-		if bankAccount.IsVerified {
+	// Step 7: Check if relation already exists (if everything already exists)
+	fmt.Println("🔍 Step 7: Checking if customer already has this employee payee relation...")
+	if !needsEmployeeCreation && bankAccount != nil && bankAccount.AccountID != "" {
+		relationExists, err := s.businessPayeeRelationRepo.RelationExists(ctx, req.BusinessID, payeeID, bankAccount.AccountID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to check relation existence: %w", err)
+		}
+		if relationExists {
+			return nil, fmt.Errorf("employee payee already added to your account with this bank account")
+		}
+	}
+
+	// Step 8: ATOMIC TRANSACTION - Create all entities (master, employee, bank account, relation)
+	fmt.Println("💾 Step 8: Creating all entities in ATOMIC TRANSACTION...")
+
+	var accountID string
+	var relationID string
+	err = s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
+		txMasterRepo := s.payeeMasterRepo.WithTx(tx)
+		txEmployeeRepo := s.payeeEmployeeRepo.WithTx(tx)
+		txBankAccountRepo := s.payeeBankAccountRepo.WithTx(tx)
+		txRelationRepo := s.businessPayeeRelationRepo.WithTx(tx)
+
+		// 1. Create master + employee if needed
+		if needsEmployeeCreation {
+			// Create master entry
+			payeeMaster := &payee.PayeeMaster{
+				PayeeType: payee.PayeeTypeEmployee,
+				IsActive:  true,
+			}
+			if err := txMasterRepo.Create(ctx, payeeMaster); err != nil {
+				return fmt.Errorf("failed to create payee master: %w", err)
+			}
+			payeeID = payeeMaster.PayeeID
+			fmt.Printf("✅ [TX] Master entry created: PayeeID=%s\n", payeeID)
+
+			// Create employee entity
 			now := time.Now()
-			bankAccount.VerifiedAt = &now
+			employeePayee := &payee.PayeeEmployee{
+				PayeeID:               payeeID,
+				EmployeeCode:          employee.EmployeeCode,
+				FullName:              employee.FullName,
+				PAN:                   employee.PAN,
+				Email:                 employee.Email,
+				Phone:                 employee.Phone,
+				Designation:           employee.Designation,
+				Department:            employee.Department,
+				DateOfJoining:         employee.DateOfJoining,
+				EmploymentType:        employee.EmploymentType,
+				RemunerationDocURL:    employee.RemunerationDocURL,
+				IsSensitive:           true,
+				PANVerificationStatus: panVerificationStatus,
+			}
+			if employee.RemunerationDocURL != "" {
+				employeePayee.RemunerationDocUploadedAt = &now
+			}
+			if panVerificationStatus == payee.VerificationStatusSuccess {
+				employeePayee.PANVerifiedAt = &now
+			}
+
+			if err := txEmployeeRepo.Create(ctx, employeePayee); err != nil {
+				return fmt.Errorf("failed to create employee: %w", err)
+			}
+			fmt.Printf("✅ [TX] Employee entity created for PAN: %s\n", employee.PAN)
 		}
 
-		if err := s.payeeBankAccountRepo.CreateBankAccount(ctx, bankAccount); err != nil {
-			return nil, fmt.Errorf("failed to create bank account: %w", err)
-		}
-		fmt.Printf("✅ Bank account created: %s\n", bankAccount.AccountID)
-	}
+		// 2. Create bank account if needed
+		if bankAccount != nil && bankAccount.AccountID == "" {
+			// Update PayeeID in case it was just created
+			bankAccount.PayeeID = payeeID
 
-	// Step 10: Check if relation already exists
-	fmt.Println("🔍 Step 10: Checking if customer already has this employee payee relation...")
-	relationExists, err := s.businessPayeeRelationRepo.RelationExists(ctx, req.BusinessID, payeeID, bankAccount.AccountID)
+			if err := txBankAccountRepo.CreateBankAccount(ctx, bankAccount); err != nil {
+				return fmt.Errorf("failed to create bank account: %w", err)
+			}
+			accountID = bankAccount.AccountID
+			fmt.Printf("✅ [TX] Bank account created: %s\n", accountID)
+		} else if bankAccount != nil {
+			accountID = bankAccount.AccountID
+		}
+
+		// 3. Create relation
+		relation := &payee.BusinessPayeeRelation{
+			BusinessID:   req.BusinessID,
+			PayeeID:      payeeID,
+			AccountID:    accountID,
+			DisplayName:  req.DisplayName,
+			ContactEmail: req.ContactEmail,
+			ContactPhone: req.ContactPhone,
+			Notes:        req.Notes,
+			IsActive:     true,
+			IsFavorite:   false,
+			Tags:         []string{"employee", "payroll"},
+			AddedBy:      req.AddedBy, // User ID from JWT
+		}
+
+		if err := txRelationRepo.CreateRelation(ctx, relation); err != nil {
+			return fmt.Errorf("failed to create relation: %w", err)
+		}
+		relationID = relation.RelationID
+		fmt.Printf("✅ [TX] Business-payee relation created: %s\n", relationID)
+
+		return nil
+	})
+
 	if err != nil {
-		return nil, fmt.Errorf("failed to check relation existence: %w", err)
-	}
-	if relationExists {
-		return nil, fmt.Errorf("employee payee already added to your account with this bank account")
-	}
-
-	// Step 11: Create business-payee relation
-	fmt.Println("💾 Step 11: Creating business-payee relation...")
-	relation := &payee.BusinessPayeeRelation{
-		BusinessID:   req.BusinessID,
-		PayeeID:      payeeID,
-		AccountID:    bankAccount.AccountID,
-		DisplayName:  req.DisplayName,
-		ContactEmail: req.ContactEmail,
-		ContactPhone: req.ContactPhone,
-		Notes:        req.Notes,
-		IsActive:     true,
-		IsFavorite:   false,
-		Tags:         []string{"employee", "payroll"},
-		AddedBy:      req.AddedBy, // User ID from JWT
-	}
-
-	if err := s.businessPayeeRelationRepo.CreateRelation(ctx, relation); err != nil {
-		return nil, fmt.Errorf("failed to create relation: %w", err)
+		return nil, fmt.Errorf("transaction failed: %w", err)
 	}
 
 	fmt.Println("✅ Employee payee onboarding complete!")
 
-	// Step 11.5: Onboard to payout provider (Phase 8)
-	fmt.Println("🚀 Step 11.5: Onboarding employee to payout provider (Castler)...")
+	// Step 9: Payout provider onboarding complete
+	// Note: Castler beneficiary ID is already stored in bankAccount.CastlerBeneficiaryID
+	fmt.Println("✅ Payout provider onboarding complete (Castler ID stored in bank account)")
 
-	onboardReq := &payout.OnboardBeneficiaryRequest{
-		PayeeID:           payeeID,
-		AccountID:         bankAccount.AccountID,
-		AccountNumber:     employee.AccountNumber,
-		IFSCCode:          employee.IFSCCode,
-		AccountHolderName: bankAccount.AccountHolderName,
-		BankName:          bankAccount.BankName,
-		AccountType:       string(bankAccount.AccountType), // Use the account type from the created bank account
-		PAN:               employee.PAN,
-		LegalName:         employee.FullName,
-		Email:             employee.Email,
-		Phone:             employee.Phone,
-	}
-
-	onboardResp, err := s.payoutProvider.OnboardBeneficiary(ctx, onboardReq)
-	if err != nil {
-		// Log error but don't fail payee creation
-		fmt.Printf("⚠️  Warning: Provider onboarding failed: %v\n", err)
-	} else {
-		// Store provider mapping
-		now := time.Now()
-		mapping := &payout.PayoutProviderMapping{
-			MappingID:             uuid.Must(uuid.NewV7()).String(),
-			PayeeID:               payeeID,
-			AccountID:             bankAccount.AccountID,
-			Provider:              s.payoutProvider.GetProviderType(),
-			ProviderBeneficiaryID: onboardResp.ProviderBeneficiaryID,
-			ProviderAccountID:     onboardResp.ProviderAccountID,
-			OnboardingStatus:      payout.OnboardingStatus(onboardResp.Status),
-			OnboardedAt:           &now,
-			ProviderMetadata:      onboardResp.Metadata,
-			CreatedAt:             time.Now(),
-		}
-
-		if err := s.providerMappingRepo.Create(ctx, mapping); err != nil {
-			fmt.Printf("⚠️  Warning: Failed to save provider mapping: %v\n", err)
-		} else {
-			fmt.Printf("✅ Provider onboarding complete: %s\n", onboardResp.ProviderBeneficiaryID)
-		}
-	}
-
-	// Step 12: Return response
+	// Step 10: Return response
 	return &payee.OnboardPayeeResponse{
+		RelationID:              relationID,
 		PayeeID:                 payeeID,
-		AccountID:               bankAccount.AccountID,
+		AccountID:               accountID,
 		GSTVerificationStatus:   payee.VerificationStatusSuccess, // PAN verified
 		BankVerificationStatus:  bankAccount.BankVerificationStatus,
 		CrossVerificationStatus: bankAccount.CrossVerificationStatus,

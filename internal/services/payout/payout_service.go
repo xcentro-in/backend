@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"xcentro.in/internal/core/payee"
 	"xcentro.in/internal/core/payout"
 	"xcentro.in/internal/core/voucher"
 )
@@ -15,7 +16,7 @@ import (
 type PayoutService struct {
 	voucherRepo     voucher.VoucherRepository
 	transferRepo    payout.PayoutTransferRepository
-	mappingRepo     payout.PayoutProviderMappingRepository
+	bankAccountRepo payee.PayeeBankAccountRepository
 	configRepo      payout.PayoutConfigurationRepository
 	providerFactory PayoutProviderFactory // Interface to get payout provider
 }
@@ -29,14 +30,14 @@ type PayoutProviderFactory interface {
 func NewPayoutService(
 	voucherRepo voucher.VoucherRepository,
 	transferRepo payout.PayoutTransferRepository,
-	mappingRepo payout.PayoutProviderMappingRepository,
+	bankAccountRepo payee.PayeeBankAccountRepository,
 	configRepo payout.PayoutConfigurationRepository,
 	providerFactory PayoutProviderFactory,
 ) *PayoutService {
 	return &PayoutService{
 		voucherRepo:     voucherRepo,
 		transferRepo:    transferRepo,
-		mappingRepo:     mappingRepo,
+		bankAccountRepo: bankAccountRepo,
 		configRepo:      configRepo,
 		providerFactory: providerFactory,
 	}
@@ -79,14 +80,18 @@ func (s *PayoutService) InitiatePayoutForVoucher(ctx context.Context, voucherID 
 		return existing, nil
 	}
 
-	// Step 4: Get provider mapping (payee + account → Castler)
-	mapping, err := s.mappingRepo.GetActiveMapping(ctx, vch.PayeeID.String(), vch.AccountID.String())
+	// Step 4: Get bank account with Castler beneficiary ID
+	bankAccount, err := s.bankAccountRepo.FindByID(ctx, vch.AccountID.String())
 	if err != nil {
-		return nil, fmt.Errorf("failed to get provider mapping for payee: %w", err)
+		return nil, fmt.Errorf("failed to get bank account for payee: %w", err)
 	}
 
-	if mapping.OnboardingStatus != payout.OnboardingStatusActive {
-		return nil, fmt.Errorf("payee not onboarded with provider: status=%s", mapping.OnboardingStatus)
+	if bankAccount == nil {
+		return nil, fmt.Errorf("bank account not found: %s", vch.AccountID.String())
+	}
+
+	if bankAccount.CastlerBeneficiaryID == "" {
+		return nil, fmt.Errorf("payee not onboarded to Castler: missing beneficiary ID")
 	}
 
 	// Step 5: Get configuration for auto-approval logic
@@ -117,8 +122,8 @@ func (s *PayoutService) InitiatePayoutForVoucher(ctx context.Context, voucherID 
 	transferReq := &payout.PayoutTransferRequest{
 		TransferRequestID:     uuid.Must(uuid.NewV7()).String(),
 		VoucherID:             voucherID,
-		Provider:              mapping.Provider,
-		ProviderBeneficiaryID: mapping.ProviderBeneficiaryID,
+		Provider:              payout.ProviderCastler, // Always Castler for now
+		ProviderBeneficiaryID: bankAccount.CastlerBeneficiaryID,
 		Amount:                vch.NetAmount,
 		Currency:              vch.Currency,
 		Purpose:               "vendor_payment", // TODO: Make configurable

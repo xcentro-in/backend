@@ -369,8 +369,8 @@ func registerV1PayoutRoutes(clients *externalClients, cfg *config.Config, group 
 	// Create payout repository instances
 	transferRepository := payoutRepo.NewPostgresPayoutTransferRepository(clients.db)
 	configRepository := payoutRepo.NewPostgresPayoutConfigurationRepository(clients.db)
-	mappingRepository := payoutRepo.NewPostgresPayoutProviderMappingRepository(clients.db)
 	voucherRepository := voucherRepo.NewPostgresVoucherRepository(clients.db)
+	bankAccountRepository := payeeRepo.NewPgPayeeBankAccountRepository(clients.db)
 
 	// Get webhook secret from configuration
 	webhookSecret := cfg.Castler.WebhookSecret
@@ -382,7 +382,7 @@ func registerV1PayoutRoutes(clients *externalClients, cfg *config.Config, group 
 	payoutService := payoutSvc.NewPayoutService(
 		voucherRepository,
 		transferRepository,
-		mappingRepository,
+		bankAccountRepository,
 		configRepository,
 		providerFactory,
 	)

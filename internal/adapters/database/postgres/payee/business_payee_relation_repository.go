@@ -665,8 +665,7 @@ func (r *PgBusinessPayeeRelationRepository) fetchVendorDetails(ctx context.Conte
 			COALESCE(branch_name, '') as branch_name,
 			account_type,
 			account_holder_name,
-			is_verified,
-			is_primary
+			is_verified
 		FROM xcentro.payee_bank_accounts
 		WHERE account_id = $1
 	`
@@ -680,7 +679,6 @@ func (r *PgBusinessPayeeRelationRepository) fetchVendorDetails(ctx context.Conte
 		&bankDetails.AccountType,
 		&bankDetails.AccountHolderName,
 		&bankDetails.IsVerified,
-		&bankDetails.IsPrimary,
 	)
 
 	if err != nil {
@@ -728,8 +726,7 @@ func (r *PgBusinessPayeeRelationRepository) fetchEmployeeDetails(ctx context.Con
 			COALESCE(branch_name, '') as branch_name,
 			account_type,
 			account_holder_name,
-			is_verified,
-			is_primary
+			is_verified
 		FROM xcentro.payee_bank_accounts
 		WHERE account_id = $1
 	`
@@ -743,7 +740,6 @@ func (r *PgBusinessPayeeRelationRepository) fetchEmployeeDetails(ctx context.Con
 		&bankDetails.AccountType,
 		&bankDetails.AccountHolderName,
 		&bankDetails.IsVerified,
-		&bankDetails.IsPrimary,
 	)
 
 	if err != nil {
