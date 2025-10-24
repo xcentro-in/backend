@@ -43,7 +43,6 @@ func (cm *CookieManager) SetAccessTokenCookie(c echo.Context, token string) {
 		HttpOnly: true,
 		Secure:   cm.config.Cookie.Secure,
 		SameSite: cm.getSameSiteMode(),
-		MaxAge:   int(cm.config.JWT.AccessTokenExpiry.Seconds()),
 	}
 	if cm.config.Cookie.Domain != "" {
 		cookie.Domain = cm.config.Cookie.Domain
@@ -60,7 +59,6 @@ func (cm *CookieManager) SetRefreshTokenCookie(c echo.Context, token string) {
 		HttpOnly: true,
 		Secure:   cm.config.Cookie.Secure,
 		SameSite: cm.getSameSiteMode(),
-		MaxAge:   int(cm.config.JWT.RefreshTokenExpiry.Seconds()),
 	}
 	if cm.config.Cookie.Domain != "" {
 		cookie.Domain = cm.config.Cookie.Domain
