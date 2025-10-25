@@ -18,10 +18,9 @@
 -- Temporary, append-only log of work to be done.
 -- Business logic writes here FAST, then async processor moves to audit_trail.
 CREATE TABLE xcentro.audit_events (
-    id UUID PRIMARY KEY DEFAULT uuidv7(),
+    id BIGSERIAL PRIMARY KEY,
     processed_at TIMESTAMPTZ DEFAULT NULL,
     event_type TEXT NOT NULL,
-    routing_key UUID NOT NULL,  -- The primary entity UUID (e.g., payment_id)
     payload JSONB NOT NULL,     -- Full event details (actor, entities, change_log)
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -31,19 +30,14 @@ CREATE INDEX idx_audit_events_pending
 ON xcentro.audit_events (created_at)
 WHERE processed_at IS NULL;
 
--- Index for routing key lookups
-CREATE INDEX idx_audit_events_routing_key
-ON xcentro.audit_events (routing_key);
-
 COMMENT ON TABLE xcentro.audit_events IS 'Temporary queue of audit events to be processed';
-COMMENT ON COLUMN xcentro.audit_events.routing_key IS 'Primary entity UUID (payment_id, payee_id, etc.)';
 COMMENT ON COLUMN xcentro.audit_events.payload IS 'JSON schema: {timestamp (RFC3339), event_type, actor, entities, note, change_log}';
 
 
 -- TABLE 2: audit_trail (The Destination)
 -- Permanent, queryable, append-only table optimized for SELECT by UI.
 CREATE TABLE xcentro.audit_trail (
-    id UUID PRIMARY KEY DEFAULT uuidv7(),
+    id BIGSERIAL PRIMARY KEY,
     business_id UUID NOT NULL REFERENCES xcentro.business(bid) ON DELETE CASCADE,
     payment_id UUID DEFAULT NULL REFERENCES xcentro.payments(payment_id) ON DELETE SET NULL,
     event_timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -53,7 +47,7 @@ CREATE TABLE xcentro.audit_trail (
     actor_name TEXT NOT NULL,        -- "Michael Chen (Financial Controller)"
     note TEXT DEFAULT NULL,          -- Optional note (e.g., "Funds transferred")
     details JSONB DEFAULT NULL,      -- Extra data (IP, change_log, etc.)
-    source_event_id UUID NOT NULL UNIQUE REFERENCES xcentro.audit_events(id) ON DELETE CASCADE
+    source_event_id BIGINT NOT NULL UNIQUE REFERENCES xcentro.audit_events(id) ON DELETE CASCADE
 );
 
 -- Indexes for fast lookups
@@ -85,7 +79,7 @@ COMMENT ON COLUMN xcentro.audit_trail.source_event_id IS 'FK to audit_events.id 
 -- TABLE 3: notification_events (The Queue)
 -- Temporary queue of business events to be "fanned out" to users.
 CREATE TABLE xcentro.notification_events (
-    id UUID PRIMARY KEY DEFAULT uuidv7(),
+    id BIGSERIAL PRIMARY KEY,
     processed_at TIMESTAMPTZ DEFAULT NULL,
     event_type TEXT NOT NULL,      -- e.g., 'payment.failed', 'report.ready'
     payload JSONB NOT NULL,        -- Full message data (target, entities, message, actions)
@@ -108,10 +102,10 @@ COMMENT ON COLUMN xcentro.notification_events.payload IS 'JSON schema: {timestam
 -- TABLE 4: user_notifications (The Destination)
 -- Persistent "bell icon" inbox for each user.
 CREATE TABLE xcentro.user_notifications (
-    id UUID PRIMARY KEY DEFAULT uuidv7(),
+    id BIGSERIAL PRIMARY KEY,
     user_id UUID NOT NULL REFERENCES xcentro.user_table(id) ON DELETE CASCADE,
     business_id UUID DEFAULT NULL REFERENCES xcentro.business(bid) ON DELETE CASCADE,
-    event_id UUID NOT NULL REFERENCES xcentro.notification_events(id) ON DELETE CASCADE,
+    event_id BIGINT NOT NULL REFERENCES xcentro.notification_events(id) ON DELETE CASCADE,
     channel TEXT NOT NULL,             -- 'email', 'push', 'web'
     status TEXT NOT NULL DEFAULT 'pending', -- 'pending', 'sent', 'failed', 'read'
     content JSONB NOT NULL,            -- {title, body, actions, entities}
