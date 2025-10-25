@@ -10,17 +10,20 @@ import (
 	"github.com/jackc/pgx/v5"
 	"xcentro.in/internal/adapters/database/postgres/client"
 	"xcentro.in/internal/core/payment"
+	"xcentro.in/internal/shared/logger"
 )
 
 // PgPaymentRepository implements payment.PaymentRepository using PostgreSQL
 type PgPaymentRepository struct {
 	querier client.Querier
+	logger  *logger.Logger
 }
 
 // NewPgPaymentRepository creates a new PostgreSQL payment repository
 func NewPgPaymentRepository(db client.DB) *PgPaymentRepository {
 	return &PgPaymentRepository{
 		querier: db,
+		logger:  logger.GetDefault(),
 	}
 }
 
@@ -28,6 +31,7 @@ func NewPgPaymentRepository(db client.DB) *PgPaymentRepository {
 func (r *PgPaymentRepository) WithTx(tx interface{}) payment.PaymentRepository {
 	return &PgPaymentRepository{
 		querier: tx.(client.Tx),
+		logger:  r.logger, // Preserve logger in transaction
 	}
 }
 
@@ -526,4 +530,286 @@ func (r *PgPaymentRepository) GetPendingSettlements(ctx context.Context, busines
 	}
 
 	return payments, nil
+}
+
+// ============================================================================
+// Payment List Methods (for display/dashboard)
+// ============================================================================
+
+// GetPaymentListForBusiness retrieves payments with aggregated voucher and payee information
+// Optimized for payment history display with bill breakdown
+func (r *PgPaymentRepository) GetPaymentListForBusiness(ctx context.Context, businessID string, limit, offset int) ([]payment.PaymentListItem, int, error) {
+	// First, get total count
+	countQuery := `
+		SELECT COUNT(DISTINCT p.payment_id)
+		FROM xcentro.payments p
+		WHERE p.business_id = $1
+		  AND p.status IN ('success', 'pending', 'failed')
+		  AND p.payment_type = 'payment'
+	`
+
+	var totalCount int
+	err := r.querier.QueryRow(ctx, countQuery, businessID).Scan(&totalCount)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to get payment count: %w", err)
+	}
+
+	// Main query to fetch payments with aggregated data
+	query := `
+		WITH payment_vouchers AS (
+			SELECT
+				v.payment_id,
+				v.voucher_id,
+				v.voucher_number,
+				v.net_amount,
+				bpr.display_name as payee_name
+			FROM xcentro.payment_vouchers v
+			INNER JOIN xcentro.business_payee_relation bpr
+				ON v.payee_id = bpr.payee_id
+				AND v.account_id = bpr.account_id
+			WHERE v.payment_id IS NOT NULL
+		),
+		payment_aggregates AS (
+			SELECT
+				pv.payment_id,
+				ARRAY_AGG(DISTINCT pv.payee_name) as payees,
+				COUNT(pv.voucher_id) as bill_count,
+				JSONB_AGG(
+					JSONB_BUILD_OBJECT(
+						'voucherId', pv.voucher_id,
+						'billId', pv.voucher_number,
+						'amount', pv.net_amount
+					)
+				) as bills
+			FROM payment_vouchers pv
+			GROUP BY pv.payment_id
+		)
+		SELECT
+			p.payment_id,
+			p.created_at,
+			p.payment_method,
+			p.total_amount,
+			p.amount,
+			p.fee_amount,
+			p.status,
+			p.payment_source_id,
+			p.payment_source_type,
+			COALESCE(pa.payees, ARRAY[]::TEXT[]) as payees,
+			COALESCE(pa.bill_count, 0) as bill_count,
+			COALESCE(pa.bills, '[]'::JSONB) as bills
+		FROM xcentro.payments p
+		LEFT JOIN payment_aggregates pa ON p.payment_id = pa.payment_id
+		WHERE p.business_id = $1
+		  AND p.status IN ('success', 'pending', 'failed')
+		  AND p.payment_type = 'payment'
+		ORDER BY p.created_at DESC
+		LIMIT $2 OFFSET $3
+	`
+
+	rows, err := r.querier.Query(ctx, query, businessID, limit, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to query payment list: %w", err)
+	}
+	defer rows.Close()
+
+	var items []payment.PaymentListItem
+	for rows.Next() {
+		var item payment.PaymentListItem
+		var paymentMethod string
+		var totalAmount, baseAmount, feeAmount int64
+		var status string
+		var paymentSourceID, paymentSourceType *string
+		var payees []string
+		var billsJSON []byte
+
+		err := rows.Scan(
+			&item.PaymentID,
+			&item.Date,
+			&paymentMethod,
+			&totalAmount,
+			&baseAmount,
+			&feeAmount,
+			&status,
+			&paymentSourceID,
+			&paymentSourceType,
+			&payees,
+			&item.BillCount,
+			&billsJSON,
+		)
+		if err != nil {
+			return nil, 0, fmt.Errorf("failed to scan payment list item: %w", err)
+		}
+
+		// Convert amounts from paise to rupees
+		item.TotalAmount = float64(totalAmount) / 100.0
+		convenienceFee := float64(feeAmount) / 100.0
+
+		// Calculate GST on fee (18% of convenience fee)
+		gstOnFee := convenienceFee * 0.18
+
+		// Map status
+		item.Status = status
+
+		// Set payees
+		item.Payees = payees
+
+		// Parse payment method details
+		item.PaymentMethod = extractPaymentMethodDetails(paymentMethod, paymentSourceID, paymentSourceType, ctx, r)
+
+		// Parse bills
+		var bills []payment.BillItem
+		if len(billsJSON) > 0 {
+			if err := json.Unmarshal(billsJSON, &bills); err != nil {
+				return nil, 0, fmt.Errorf("failed to unmarshal bills: %w", err)
+			}
+			// Convert bill amounts from paise to rupees
+			for i := range bills {
+				bills[i].Amount = bills[i].Amount / 100.0
+			}
+		}
+
+		item.Breakdown = payment.PaymentBreakdown{
+			Bills:          bills,
+			ConvenienceFee: convenienceFee,
+			GSTOnFee:       gstOnFee,
+		}
+
+		items = append(items, item)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("error iterating payment list rows: %w", err)
+	}
+
+	return items, totalCount, nil
+}
+
+// mapPaymentStatus maps internal payment status to frontend-friendly status
+func mapPaymentStatus(status string) string {
+	switch status {
+	case "success":
+		return "Completed"
+	case "pending":
+		return "In Progress"
+	case "failed":
+		return "Failed"
+	case "cancelled":
+		return "Cancelled"
+	default:
+		return "Unknown"
+	}
+}
+
+// extractPaymentMethodDetails extracts payment method details from payment
+func extractPaymentMethodDetails(method string, sourceID, sourceType *string, ctx context.Context, r *PgPaymentRepository) payment.PaymentMethodDetails {
+	details := payment.PaymentMethodDetails{}
+
+	// Log the inputs for debugging
+	sourceIDStr := "nil"
+	sourceTypeStr := "nil"
+	if sourceID != nil {
+		sourceIDStr = *sourceID
+	}
+	if sourceType != nil {
+		sourceTypeStr = *sourceType
+	}
+	r.logger.DebugWith("Extracting payment method details",
+		"method", method,
+		"source_id", sourceIDStr,
+		"source_type", sourceTypeStr)
+
+	switch method {
+	case "card", "token_card":
+		details.Type = "credit"
+		if sourceID != nil && sourceType != nil && *sourceType == "card" {
+			// Fetch card details from stored_card_repository
+			cardDetails := fetchCardDetails(ctx, r, *sourceID)
+			if cardDetails != nil {
+				details.CardProvider = cardDetails.Provider
+				details.Last4 = cardDetails.Last4
+				r.logger.DebugWith("Fetched card details",
+					"provider", cardDetails.Provider,
+					"last4", cardDetails.Last4)
+			} else {
+				r.logger.DebugWith("Card details fetch returned nil")
+			}
+		} else {
+			r.logger.DebugWith("Skipping card details fetch - missing source info or wrong type")
+		}
+	case "net_banking":
+		details.Type = "bank"
+		if sourceID != nil && sourceType != nil && *sourceType == "bank_account" {
+			// Fetch bank account details
+			bankDetails := fetchBankAccountDetails(ctx, r, *sourceID)
+			if bankDetails != nil {
+				details.Bank = bankDetails.BankName
+				details.Last4 = bankDetails.Last4
+			}
+		}
+	case "upi":
+		details.Type = "upi"
+		details.Last4 = "UPI"
+	default:
+		r.logger.InfoWith("Unknown payment method, defaulting to 'other'", "method", method)
+		details.Type = "other"
+	}
+
+	return details
+}
+
+// Helper structs for card and bank details
+type cardDetailsResult struct {
+	Provider string
+	Last4    string
+}
+
+type bankDetailsResult struct {
+	BankName string
+	Last4    string
+}
+
+// fetchCardDetails fetches card information from stored cards
+func fetchCardDetails(ctx context.Context, r *PgPaymentRepository, cardID string) *cardDetailsResult {
+	query := `
+		SELECT
+			CASE
+				WHEN card_type = 'visa' THEN 'Visa'
+				WHEN card_type = 'mastercard' THEN 'Mastercard'
+				WHEN card_type = 'amex' THEN 'Amex'
+				WHEN card_type = 'rupay' THEN 'RuPay'
+				WHEN card_type = 'diners' THEN 'Diners'
+				ELSE 'Card'
+			END as provider,
+			last_four_digits
+		FROM xcentro.stored_cards
+		WHERE card_id = $1
+	`
+
+	var result cardDetailsResult
+	err := r.querier.QueryRow(ctx, query, cardID).Scan(&result.Provider, &result.Last4)
+	if err != nil {
+		r.logger.ErrorWith("Failed to fetch card details",
+			"error", err,
+			"card_id", cardID)
+		return &cardDetailsResult{Provider: "Card", Last4: "****"}
+	}
+	return &result
+}
+
+// fetchBankAccountDetails fetches bank account information
+func fetchBankAccountDetails(ctx context.Context, r *PgPaymentRepository, accountID string) *bankDetailsResult {
+	query := `
+		SELECT
+			bank_name,
+			SUBSTRING(account_number_encrypted FROM LENGTH(account_number_encrypted) - 3) as last4
+		FROM xcentro.bank_accounts
+		WHERE account_id = $1
+	`
+
+	var result bankDetailsResult
+	err := r.querier.QueryRow(ctx, query, accountID).Scan(&result.BankName, &result.Last4)
+	if err != nil {
+		return &bankDetailsResult{BankName: "Bank", Last4: "****"}
+	}
+	return &result
 }

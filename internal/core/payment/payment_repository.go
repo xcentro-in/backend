@@ -18,6 +18,7 @@ type PaymentRepository interface {
 
 	// Querying for business operations
 	GetPaymentsByBusinessID(ctx context.Context, businessID string, limit, offset int) ([]*Payment, error)
+	GetPaymentListForBusiness(ctx context.Context, businessID string, limit, offset int) ([]PaymentListItem, int, error)
 
 	// Settlement tracking (Phase 7)
 	UpdateSettlementStatus(ctx context.Context, paymentID string, status SettlementStatus, metadata map[string]any) error

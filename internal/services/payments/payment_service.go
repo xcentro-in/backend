@@ -307,3 +307,48 @@ func (s *PaymentService) generateCallbackURL(device payment.CallingDevice, payme
 		return fmt.Sprintf("%s/v1/process_payment/callback?payment_id=%s&source=web", baseURL, paymentID)
 	}
 }
+
+// GetPaymentList retrieves paginated payment list for a business
+func (s *PaymentService) GetPaymentList(ctx context.Context, businessID string, limit, offset int) (*payment.PaymentListResponse, error) {
+	s.logger.InfoWith("Fetching payment list",
+		"business_id", businessID,
+		"limit", limit,
+		"offset", offset)
+
+	// Validate business ID
+	if businessID == "" {
+		return nil, fmt.Errorf("business_id is required")
+	}
+
+	// Set default pagination if not provided
+	if limit <= 0 {
+		limit = 10
+	}
+	if limit > 100 {
+		limit = 100 // Max 100 items per page
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	// Fetch payment list from repository
+	items, totalCount, err := s.paymentRepo.GetPaymentListForBusiness(ctx, businessID, limit, offset)
+	if err != nil {
+		s.logger.ErrorWith("failed to get payment list",
+			"error", err,
+			"business_id", businessID)
+		return nil, fmt.Errorf("failed to get payment list: %w", err)
+	}
+
+	s.logger.InfoWith("Successfully retrieved payment list",
+		"business_id", businessID,
+		"count", len(items),
+		"total_count", totalCount)
+
+	return &payment.PaymentListResponse{
+		Payments:   items,
+		TotalCount: totalCount,
+		Limit:      limit,
+		Offset:     offset,
+	}, nil
+}

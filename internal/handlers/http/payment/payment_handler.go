@@ -1079,6 +1079,9 @@ func RegisterPaymentRoutes(group *echo.Group, paymentService *payments.PaymentSe
 
 	// Phase 10: Payment source selection with context-aware fees
 	group.POST("/get_payment_sources_with_fees", handler.GetPaymentSourcesWithFees)
+
+	// Payment list for dashboard/history
+	group.GET("/list", handler.GetPaymentList)
 }
 
 // RegisterWalletRoutes registers all wallet management routes
@@ -1091,4 +1094,49 @@ func RegisterWalletRoutes(group *echo.Group, paymentService *payments.PaymentSer
 	// Wallet operations
 	group.POST("/fetch", handler.FetchWallet)
 	group.POST("/add_source", handler.AddPaymentSource)
+}
+
+// GetPaymentList handles GET /payments
+// Retrieves paginated list of payments for a business with voucher/bill aggregation
+func (h *PaymentHandler) GetPaymentList(c echo.Context) error {
+	// Extract business_id from X-Business-ID header
+	businessID := c.Request().Header.Get("X-Business-ID")
+	if businessID == "" {
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "MISSING_BUSINESS_ID",
+			"message": "X-Business-ID header is required",
+		})
+	}
+
+	// Extract userId from JWT context for authorization
+	userID, ok := c.Get("userId").(string)
+	if !ok || userID == "" {
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "MISSING_USER_ID",
+			"message": "User ID not found in token",
+		})
+	}
+
+	// Parse pagination parameters
+	var req struct {
+		Limit  int `query:"limit"`
+		Offset int `query:"offset"`
+	}
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "INVALID_REQUEST",
+			"message": "Invalid query parameters",
+		})
+	}
+
+	// Call payment service (validation happens in service layer)
+	response, err := h.paymentService.GetPaymentList(c.Request().Context(), businessID, req.Limit, req.Offset)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]any{
+			"error":   "SERVICE_ERROR",
+			"message": "Failed to retrieve payment list",
+		})
+	}
+
+	return c.JSON(http.StatusOK, response)
 }
