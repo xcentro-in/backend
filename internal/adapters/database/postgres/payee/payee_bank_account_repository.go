@@ -11,17 +11,20 @@ import (
 	"github.com/jackc/pgx/v5"
 	"xcentro.in/internal/adapters/database/postgres/client"
 	"xcentro.in/internal/core/payee"
+	"xcentro.in/internal/shared/logger"
 )
 
 // PgPayeeBankAccountRepository implements payee.PayeeBankAccountRepository using PostgreSQL
 type PgPayeeBankAccountRepository struct {
 	querier client.Querier
+	logger  *logger.Logger
 }
 
 // NewPgPayeeBankAccountRepository creates a new PostgreSQL payee bank account repository
 func NewPgPayeeBankAccountRepository(db client.DB) payee.PayeeBankAccountRepository {
 	return &PgPayeeBankAccountRepository{
 		querier: db,
+		logger:  logger.GetDefault(),
 	}
 }
 
@@ -29,14 +32,12 @@ func NewPgPayeeBankAccountRepository(db client.DB) payee.PayeeBankAccountReposit
 func (r *PgPayeeBankAccountRepository) WithTx(tx client.Tx) payee.PayeeBankAccountRepository {
 	return &PgPayeeBankAccountRepository{
 		querier: tx,
+		logger:  r.logger,
 	}
 }
 
 // CreateBankAccount creates a new payee bank account record
 func (r *PgPayeeBankAccountRepository) CreateBankAccount(ctx context.Context, account *payee.PayeeBankAccount) error {
-	fmt.Printf("[PgPayeeBankAccountRepository] CreateBankAccount called - PayeeID: %s, IFSC: %s, HolderName: %s\n",
-		account.PayeeID, account.IFSCCode, account.AccountHolderName)
-
 	// Compute SHA-256 hash for duplicate detection
 	hash := sha256.Sum256([]byte(account.AccountNumber))
 	accountNumberHash := hex.EncodeToString(hash[:])
@@ -62,6 +63,9 @@ func (r *PgPayeeBankAccountRepository) CreateBankAccount(ctx context.Context, ac
 	if account.VerificationData != nil {
 		bankVerificationDataJSON, err = json.Marshal(account.VerificationData)
 		if err != nil {
+			r.logger.ErrorWith("failed to marshal bank_verification_data",
+				"error", err,
+				"payee_id", account.PayeeID)
 			return fmt.Errorf("failed to marshal bank_verification_data: %w", err)
 		}
 	}
@@ -69,6 +73,9 @@ func (r *PgPayeeBankAccountRepository) CreateBankAccount(ctx context.Context, ac
 	if account.Metadata != nil {
 		metadataJSON, err = json.Marshal(account.Metadata)
 		if err != nil {
+			r.logger.ErrorWith("failed to marshal metadata",
+				"error", err,
+				"payee_id", account.PayeeID)
 			return fmt.Errorf("failed to marshal metadata: %w", err)
 		}
 	}
@@ -94,20 +101,25 @@ func (r *PgPayeeBankAccountRepository) CreateBankAccount(ctx context.Context, ac
 	).Scan(&account.AccountID, &account.AddedAt)
 
 	if err != nil {
+		r.logger.ErrorWith("failed to create payee bank account",
+			"error", err,
+			"payee_id", account.PayeeID,
+			"ifsc_code", account.IFSCCode)
 		return fmt.Errorf("failed to create payee bank account: %w", err)
 	}
 
 	// Store the hash in the entity for future reference
 	account.AccountNumberHash = accountNumberHash
 
-	fmt.Printf("[PgPayeeBankAccountRepository] Bank account created with ID: %s\n", account.AccountID)
+	r.logger.InfoWith("payee bank account created",
+		"account_id", account.AccountID,
+		"payee_id", account.PayeeID,
+		"ifsc_code", account.IFSCCode)
 	return nil
 }
 
 // FindByID retrieves a payee bank account by ID
 func (r *PgPayeeBankAccountRepository) FindByID(ctx context.Context, accountID string) (*payee.PayeeBankAccount, error) {
-	fmt.Printf("[PgPayeeBankAccountRepository] FindByID called - AccountID: %s\n", accountID)
-
 	query := `
 		SELECT account_id, payee_id, account_number_encrypted, account_number_hash,
 		       ifsc_code, bank_name, branch_name, account_type, account_holder_name,
@@ -151,8 +163,13 @@ func (r *PgPayeeBankAccountRepository) FindByID(ctx context.Context, accountID s
 
 	if err != nil {
 		if err == pgx.ErrNoRows {
+			r.logger.DebugWith("payee bank account not found",
+				"account_id", accountID)
 			return nil, fmt.Errorf("payee bank account not found")
 		}
+		r.logger.ErrorWith("failed to find payee bank account",
+			"error", err,
+			"account_id", accountID)
 		return nil, fmt.Errorf("failed to find payee bank account: %w", err)
 	}
 
@@ -171,11 +188,17 @@ func (r *PgPayeeBankAccountRepository) FindByID(ctx context.Context, accountID s
 	// Deserialize JSONB fields
 	if len(bankVerificationDataJSON) > 0 {
 		if err := json.Unmarshal(bankVerificationDataJSON, &account.VerificationData); err != nil {
+			r.logger.ErrorWith("failed to unmarshal bank_verification_data",
+				"error", err,
+				"account_id", accountID)
 			return nil, fmt.Errorf("failed to unmarshal bank_verification_data: %w", err)
 		}
 	}
 	if len(metadataJSON) > 0 {
 		if err := json.Unmarshal(metadataJSON, &account.Metadata); err != nil {
+			r.logger.ErrorWith("failed to unmarshal metadata",
+				"error", err,
+				"account_id", accountID)
 			return nil, fmt.Errorf("failed to unmarshal metadata: %w", err)
 		}
 	}
@@ -185,8 +208,6 @@ func (r *PgPayeeBankAccountRepository) FindByID(ctx context.Context, accountID s
 
 // FindByPayeeID retrieves all bank accounts for a payee
 func (r *PgPayeeBankAccountRepository) FindByPayeeID(ctx context.Context, payeeID string) ([]*payee.PayeeBankAccount, error) {
-	fmt.Printf("[PgPayeeBankAccountRepository] FindByPayeeID called - PayeeID: %s\n", payeeID)
-
 	query := `
 		SELECT account_id, payee_id, account_number_encrypted, account_number_hash,
 		       ifsc_code, bank_name, branch_name, account_type, account_holder_name,
@@ -201,6 +222,9 @@ func (r *PgPayeeBankAccountRepository) FindByPayeeID(ctx context.Context, payeeI
 
 	rows, err := r.querier.Query(ctx, query, payeeID)
 	if err != nil {
+		r.logger.ErrorWith("failed to find payee bank accounts",
+			"error", err,
+			"payee_id", payeeID)
 		return nil, fmt.Errorf("failed to find payee bank accounts: %w", err)
 	}
 	defer rows.Close()
@@ -239,6 +263,9 @@ func (r *PgPayeeBankAccountRepository) FindByPayeeID(ctx context.Context, payeeI
 		)
 
 		if err != nil {
+			r.logger.ErrorWith("failed to scan payee bank account",
+				"error", err,
+				"payee_id", payeeID)
 			return nil, fmt.Errorf("failed to scan payee bank account: %w", err)
 		}
 
@@ -256,11 +283,17 @@ func (r *PgPayeeBankAccountRepository) FindByPayeeID(ctx context.Context, payeeI
 		// Deserialize JSONB fields
 		if len(bankVerificationDataJSON) > 0 {
 			if err := json.Unmarshal(bankVerificationDataJSON, &account.VerificationData); err != nil {
+				r.logger.ErrorWith("failed to unmarshal bank_verification_data",
+					"error", err,
+					"payee_id", payeeID)
 				return nil, fmt.Errorf("failed to unmarshal bank_verification_data: %w", err)
 			}
 		}
 		if len(metadataJSON) > 0 {
 			if err := json.Unmarshal(metadataJSON, &account.Metadata); err != nil {
+				r.logger.ErrorWith("failed to unmarshal metadata",
+					"error", err,
+					"payee_id", payeeID)
 				return nil, fmt.Errorf("failed to unmarshal metadata: %w", err)
 			}
 		}
@@ -269,6 +302,9 @@ func (r *PgPayeeBankAccountRepository) FindByPayeeID(ctx context.Context, payeeI
 	}
 
 	if err := rows.Err(); err != nil {
+		r.logger.ErrorWith("error iterating payee bank accounts",
+			"error", err,
+			"payee_id", payeeID)
 		return nil, fmt.Errorf("error iterating payee bank accounts: %w", err)
 	}
 
@@ -277,8 +313,6 @@ func (r *PgPayeeBankAccountRepository) FindByPayeeID(ctx context.Context, payeeI
 
 // UpdateBankAccount updates a payee bank account record
 func (r *PgPayeeBankAccountRepository) UpdateBankAccount(ctx context.Context, account *payee.PayeeBankAccount) error {
-	fmt.Printf("[PgPayeeBankAccountRepository] UpdateBankAccount called - AccountID: %s\n", account.AccountID)
-
 	query := `
 		UPDATE xcentro.payee_bank_accounts
 		SET is_verified = $2, verified_at = $3, bank_verification_status = $4, bank_verification_data = $5,
@@ -294,6 +328,9 @@ func (r *PgPayeeBankAccountRepository) UpdateBankAccount(ctx context.Context, ac
 	if account.VerificationData != nil {
 		bankVerificationDataJSON, err = json.Marshal(account.VerificationData)
 		if err != nil {
+			r.logger.ErrorWith("failed to marshal bank_verification_data",
+				"error", err,
+				"account_id", account.AccountID)
 			return fmt.Errorf("failed to marshal bank_verification_data: %w", err)
 		}
 	}
@@ -301,6 +338,9 @@ func (r *PgPayeeBankAccountRepository) UpdateBankAccount(ctx context.Context, ac
 	if account.Metadata != nil {
 		metadataJSON, err = json.Marshal(account.Metadata)
 		if err != nil {
+			r.logger.ErrorWith("failed to marshal metadata",
+				"error", err,
+				"account_id", account.AccountID)
 			return fmt.Errorf("failed to marshal metadata: %w", err)
 		}
 	}
@@ -319,20 +359,26 @@ func (r *PgPayeeBankAccountRepository) UpdateBankAccount(ctx context.Context, ac
 	)
 
 	if err != nil {
+		r.logger.ErrorWith("failed to update payee bank account",
+			"error", err,
+			"account_id", account.AccountID)
 		return fmt.Errorf("failed to update payee bank account: %w", err)
 	}
 
 	if result.RowsAffected() == 0 {
+		r.logger.DebugWith("payee bank account not found for update",
+			"account_id", account.AccountID)
 		return fmt.Errorf("payee bank account not found")
 	}
 
+	r.logger.InfoWith("payee bank account updated",
+		"account_id", account.AccountID,
+		"is_verified", account.IsVerified)
 	return nil
 }
 
 // CheckDuplicateAccount checks if account with same hash already exists for this payee
 func (r *PgPayeeBankAccountRepository) CheckDuplicateAccount(ctx context.Context, payeeID, accountHash string) (bool, error) {
-	fmt.Printf("[PgPayeeBankAccountRepository] CheckDuplicateAccount called - PayeeID: %s\n", payeeID)
-
 	query := `
 		SELECT EXISTS(
 			SELECT 1 FROM xcentro.payee_bank_accounts
@@ -343,6 +389,9 @@ func (r *PgPayeeBankAccountRepository) CheckDuplicateAccount(ctx context.Context
 	var exists bool
 	err := r.querier.QueryRow(ctx, query, payeeID, accountHash).Scan(&exists)
 	if err != nil {
+		r.logger.ErrorWith("failed to check duplicate payee bank account",
+			"error", err,
+			"payee_id", payeeID)
 		return false, fmt.Errorf("failed to check duplicate payee bank account: %w", err)
 	}
 
