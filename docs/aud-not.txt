@@ -1,0 +1,147 @@
+========================================
+SYSTEM DESIGN: AUDIT & NOTIFICATION TABLES
+========================================
+
+This document tracks the final schema for the PostgreSQL-only (Phase 1) implementation.
+
+--------------------
+1. AUDIT SYSTEM
+--------------------
+
+TABLE 1: audit_events (The Queue)
+This table is a temporary, append-only log of *work to be done*. Business logic writes to this table FAST.
+
+Columns:
+  - id (bigserial): Primary Key
+  - processed_at (timestamptz): NULL if pending
+  - event_type (text): e.g., 'payment.initiated', 'payment.approved'
+  - routing_key (text): Indexed. The payment_id (e.g., "pay_123").
+  - payload (jsonb): The full event details (see schema below).
+  - created_at (timestamptz): default NOW()
+
+Key Index:
+  CREATE INDEX idx_audit_events_pending
+  ON audit_events (created_at)
+  WHERE processed_at IS NULL;
+
+---
+
+JSON SCHEMA for audit_events.payload
+Purpose: A minimal, factual record of what happened.
+Used in: audit_events.payload
+
+{
+  "event_type": "payment.approved",
+  "actor": {
+    "type": "user",
+    "id": "user_michael_c",
+    "name": "Michael Chen (Financial Controller)",
+    "ip_address": "192.168.1.1"
+  },
+  "entities": {
+    "business_id": "bus_987",
+    "payment_id": "pay_12345",
+    "payee_id": "payee_6789"
+  },
+  "note": null,
+  "change_log": [
+    {
+      "field": "status",
+      "old_value": "pending_approval",
+      "new_value": "approved"
+    }
+  ]
+}
+
+---
+
+TABLE 2: audit_trail (The Destination)
+This is the permanent, queryable, append-only table. It is optimized for SELECT queries by the UI.
+
+Columns:
+  - id (bigserial): Primary Key
+  - business_id (bigint): Indexed
+  - payment_id (bigint): Indexed (Main lookup key)
+  - event_timestamp (timestamptz): default NOW()
+  - event_type (text): The "title" (e.g., "Transaction Approved")
+  - actor_type (text): 'user' or 'system'
+  - actor_id (text): user_id or 'system'
+  - actor_name (text): "Michael Chen (Financial Controller)"
+  - note (text): Optional note (e.g., "Funds transferred")
+  - details (jsonb): Extra data (IP, change_log, etc.)
+  - source_event_id (bigint): UNIQUE FK to audit_events.id
+
+Key Indexes & Constraints:
+  CREATE INDEX idx_audit_trail_payment_id ON audit_trail (payment_id);
+  CREATE INDEX idx_audit_trail_business_id ON audit_trail (business_id);
+  ALTER TABLE audit_trail ADD CONSTRAINT uq_audit_trail_source_event_id UNIQUE (source_event_id);
+
+--------------------
+2. NOTIFICATION SYSTEM
+--------------------
+
+TABLE 3: notification_events (The Queue)
+This table is a temporary queue of *business events* to be "fanned out" to users.
+
+Columns:
+  - id (bigserial): Primary Key
+  - processed_at (timestamptz): NULL if pending
+  - event_type (text): e.g., 'payment.failed', 'report.ready'
+  - payload (jsonb): The full message data (see schema below).
+  - created_at (timestamptz): default NOW()
+
+Key Index:
+  CREATE INDEX idx_notification_events_pending
+  ON notification_events (created_at)
+  WHERE processed_at IS NULL;
+
+---
+
+JSON SCHEMA for notification_events.payload
+Purpose: Everything needed to build and send a notification.
+Used in: notification_events.payload
+
+{
+  "event_type": "payment.approval.required",
+  "target": {
+    "business_id": "bus_987",
+    "type": "multicast",
+    "minimum_role": "admin",
+    "ids": ["user_michael_c"]
+  },
+  "entities": {
+    "business_id": "bus_987", //opt
+    "payment_id": "pay_12345", //opt
+    "payee_id": "payee_6789" //opt
+  },
+  "message": {
+    "title": "Payment Approval Required",
+    "body": "A payment to 'Acme Corp' requires your approval."
+  },
+  "actions": [
+    {
+      "type": "button-positive",
+      "text": "View Approval",
+      "href": "/approvals/pay_12345"
+    }
+  ]
+}
+
+---
+
+TABLE 4: user_notifications (The Destination)
+This is the persistent "bell icon" inbox for each user.
+
+Columns:
+  - id (bigserial): Primary Key
+  - user_id (bigint): Indexed (Main lookup key)
+  - business_id (bigint): Indexed (for filtering)
+  - event_id (bigint): FK to notification_events.id
+  - channel (text): 'email', 'push', 'web'
+  - status (text): 'pending', 'sent', 'failed', 'read'
+  - content (jsonb): {"title": "...", "body": "..."}
+  - created_at (timestamptz): default NOW()
+
+Key Indexes & Constraints:
+  CREATE INDEX idx_user_notifications_user_id ON user_notifications (user_id);
+  ALTER TABLE user_notifications ADD CONSTRAINT uq_user_notifications_event UNIQUE (event_id, user_id, channel);
