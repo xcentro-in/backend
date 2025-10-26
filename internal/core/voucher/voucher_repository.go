@@ -63,6 +63,10 @@ type VoucherRepository interface {
 	// Validates that the relation belongs to the business (security check via business_payee_relation join)
 	// Returns vouchers with payment source information (card/bank last digits)
 	GetVouchersByRelation(ctx context.Context, businessID, relationID string, limit, offset int) ([]*VoucherWithPaymentInfo, int64, error)
+
+	// GetVoucherListForBusiness retrieves paginated voucher/bill list for a business
+	// Includes payment status calculation (paid, open, overdue) and optional status filtering
+	GetVoucherListForBusiness(ctx context.Context, businessID string, status *BillPaymentStatus, limit, offset int) ([]VoucherListItem, int, error)
 }
 
 // VoucherFilters defines filter criteria for listing vouchers

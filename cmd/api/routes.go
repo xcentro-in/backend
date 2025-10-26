@@ -342,7 +342,40 @@ func registerV1PayeeRoutes(clients *externalClients, cfg *config.Config, group *
 	payee.RegisterVendorDropdownRoute(group, payeeService)
 }
 
-func registerV1VoucherRoutes(clients *externalClients, group *echo.Group) {
+func registerV1VoucherRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
+	// Create auth service for JWT middleware
+	userRepository := userRepo.NewPgUserRepository(clients.db)
+	sessionRepo := authRepo.NewPgSessionRepository(clients.db)
+
+	// Create business service
+	busSvc := businessSvc.NewBusinessService(
+		business.NewPgBusinessRepository(clients.db),
+		business.NewPgBusinessUserRelationRepository(clients.db),
+		userRepository,
+		clients,
+		cfg,
+	)
+
+	// Create user service
+	userService := user.NewUserService(
+		userRepository,
+		business.NewPgBusinessRepository(clients.db),
+		business.NewPgBusinessUserRelationRepository(clients.db),
+		nil, // verificationService not needed for JWT
+		clients,
+		cfg,
+	)
+
+	// Create auth service
+	authService := authservice.NewAuthService(
+		sessionRepo,
+		userRepository,
+		userService,
+		busSvc,
+		clients,
+		cfg,
+	)
+
 	// Create voucher repository instances
 	voucherRepository := voucherRepo.NewPostgresVoucherRepository(clients.db)
 	approvalRepository := voucherRepo.NewPostgresApprovalRepository(clients.db)
@@ -363,9 +396,9 @@ func registerV1VoucherRoutes(clients *externalClients, group *echo.Group) {
 		businessPayeeRelationRepo, // Pass repository to resolve relation_id
 	)
 
-	// Register voucher routes
+	// Register voucher routes with auth middleware
 	voucherGroup := group.Group("/vouchers")
-	voucherHandler.RegisterVoucherRoutes(voucherGroup, voucherService)
+	voucherHandler.RegisterVoucherRoutes(voucherGroup, voucherService, authService)
 }
 
 func registerV1PayoutRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
@@ -476,7 +509,7 @@ func registerV1Routes(s *xcentroServer) {
 	registerV1PayeeRoutes(clients, cfg, v1)
 
 	// Voucher Routes
-	registerV1VoucherRoutes(clients, v1)
+	registerV1VoucherRoutes(clients, cfg, v1)
 
 	// Payout Routes (Phase 9: Webhooks + Operations Dashboard)
 	registerV1PayoutRoutes(clients, cfg, v1)

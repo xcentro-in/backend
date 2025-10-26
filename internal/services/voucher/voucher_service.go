@@ -46,6 +46,9 @@ type VoucherService interface {
 
 	// GetVouchersByPayee retrieves all vouchers for a specific payee (by relation_id) with business validation
 	GetVouchersByPayee(ctx context.Context, req *GetVouchersByPayeeRequest) (*GetVouchersByPayeeResponse, error)
+
+	// GetVoucherList retrieves paginated voucher/bill list with payment status (paid, open, overdue)
+	GetVoucherList(ctx context.Context, businessID string, status *voucher.BillPaymentStatus, limit, offset int) (*voucher.VoucherListResponse, error)
 }
 
 // VoucherServiceImpl implements the VoucherService interface
@@ -886,5 +889,37 @@ func (s *VoucherServiceImpl) GetVouchersByPayee(ctx context.Context, req *GetVou
 		Vouchers:   voucherItems,
 		Pagination: pagination,
 		Summary:    summary,
+	}, nil
+}
+
+// GetVoucherList retrieves paginated voucher/bill list for a business
+func (s *VoucherServiceImpl) GetVoucherList(ctx context.Context, businessID string, status *voucher.BillPaymentStatus, limit, offset int) (*voucher.VoucherListResponse, error) {
+	// Validate business ID
+	if businessID == "" {
+		return nil, fmt.Errorf("business_id is required")
+	}
+
+	// Set default pagination if not provided
+	if limit <= 0 {
+		limit = 10
+	}
+	if limit > 100 {
+		limit = 100 // Max 100 items per page
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	// Fetch voucher list from repository
+	items, totalCount, err := s.voucherRepo.GetVoucherListForBusiness(ctx, businessID, status, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get voucher list: %w", err)
+	}
+
+	return &voucher.VoucherListResponse{
+		Vouchers:   items,
+		TotalCount: totalCount,
+		Limit:      limit,
+		Offset:     offset,
 	}, nil
 }

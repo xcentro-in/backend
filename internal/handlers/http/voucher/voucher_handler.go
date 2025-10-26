@@ -680,3 +680,68 @@ func (h *VoucherHandler) GetVouchersByPayee(c echo.Context) error {
 func parseIntParam(s string) (int, error) {
 	return strconv.Atoi(s)
 }
+
+// GetVoucherList handles GET /vouchers/list - Get all bills/vouchers for a business
+// Includes payment status (paid, open, overdue) with optional status filtering
+func (h *VoucherHandler) GetVoucherList(c echo.Context) error {
+	h.logger.InfoWith("GetVoucherList API called")
+
+	// Extract business_id from X-Business-ID header
+	businessID := c.Request().Header.Get("X-Business-ID")
+	if businessID == "" {
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "MISSING_BUSINESS_ID",
+			"message": "X-Business-ID header is required",
+		})
+	}
+
+	// Extract userId from JWT context for authorization
+	userID, ok := c.Get("userId").(string)
+	if !ok || userID == "" {
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "MISSING_USER_ID",
+			"message": "User ID not found in token",
+		})
+	}
+
+	// Parse pagination parameters
+	limit, _ := parseIntParam(c.QueryParam("limit"))
+	offset, _ := parseIntParam(c.QueryParam("offset"))
+
+	// Parse optional status filter
+	var statusFilter *voucher.BillPaymentStatus
+	statusParam := c.QueryParam("status")
+	if statusParam != "" {
+		status := voucher.BillPaymentStatus(statusParam)
+		// Validate status
+		if status != voucher.BillStatusPaid && status != voucher.BillStatusOpen && status != voucher.BillStatusOverdue {
+			return c.JSON(http.StatusBadRequest, map[string]any{
+				"error":   "INVALID_STATUS",
+				"message": "Status must be one of: paid, open, overdue",
+			})
+		}
+		statusFilter = &status
+	}
+
+	h.logger.DebugWith("Fetching voucher list",
+		"business_id", businessID,
+		"status_filter", statusFilter,
+		"limit", limit,
+		"offset", offset)
+
+	// Call voucher service (validation happens in service layer)
+	response, err := h.voucherService.GetVoucherList(c.Request().Context(), businessID, statusFilter, limit, offset)
+	if err != nil {
+		h.logger.ErrorWith("Failed to get voucher list", "error", err)
+		return c.JSON(http.StatusInternalServerError, map[string]any{
+			"error":   "SERVICE_ERROR",
+			"message": "Failed to retrieve voucher list",
+		})
+	}
+
+	h.logger.InfoWith("Voucher list fetched",
+		"count", len(response.Vouchers),
+		"total_count", response.TotalCount)
+
+	return c.JSON(http.StatusOK, response)
+}

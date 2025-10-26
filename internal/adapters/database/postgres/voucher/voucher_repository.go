@@ -1010,3 +1010,143 @@ func (r *PostgresVoucherRepository) GetVouchersReadyForPayout(ctx context.Contex
 
 	return vouchers, nil
 }
+
+// GetVoucherListForBusiness retrieves paginated voucher/bill list for a business
+// Calculates payment status (paid, open, overdue) and supports optional status filtering
+func (r *PostgresVoucherRepository) GetVoucherListForBusiness(ctx context.Context, businessID string, status *voucher.BillPaymentStatus, limit, offset int) ([]voucher.VoucherListItem, int, error) {
+	// First, get total count for pagination
+	countQuery := `
+		SELECT COUNT(v.voucher_id)
+		FROM xcentro.payment_vouchers v
+		LEFT JOIN xcentro.payments p ON v.payment_id = p.payment_id
+		WHERE v.business_id = $1
+	`
+
+	countArgs := []interface{}{businessID}
+
+	// Add status filter to count query if specified
+	if status != nil {
+		statusCondition := buildStatusCondition(*status)
+		countQuery += " AND " + statusCondition
+	}
+
+	var totalCount int
+	err := r.querier.QueryRow(ctx, countQuery, countArgs...).Scan(&totalCount)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to get voucher count: %w", err)
+	}
+
+	// Main query to fetch voucher list with payment status calculation
+	query := `
+		SELECT
+			v.voucher_id,
+			v.voucher_number,
+			COALESCE(v.invoice_number, '') as invoice_number,
+			v.invoice_due_date,
+			bpr.display_name as payee_name,
+			v.net_amount,
+			v.status as voucher_status,
+			p.payment_id,
+			p.status as payment_status,
+			p.created_at as payment_date,
+			-- Calculate bill payment status
+			CASE
+				WHEN p.payment_id IS NOT NULL AND p.status = 'success' THEN 'paid'
+				WHEN p.payment_id IS NULL AND v.invoice_due_date IS NOT NULL AND v.invoice_due_date <= CURRENT_DATE THEN 'overdue'
+				WHEN p.payment_id IS NULL AND (v.invoice_due_date IS NULL OR v.invoice_due_date > CURRENT_DATE) THEN 'open'
+				ELSE 'open'
+			END as bill_status
+		FROM xcentro.payment_vouchers v
+		INNER JOIN xcentro.business_payee_relation bpr
+			ON v.business_id = bpr.business_id
+			AND v.payee_id = bpr.payee_id
+			AND v.account_id = bpr.account_id
+		LEFT JOIN xcentro.payments p ON v.payment_id = p.payment_id
+		WHERE v.business_id = $1
+	`
+
+	args := []interface{}{businessID}
+
+	// Add status filter if specified
+	if status != nil {
+		statusCondition := buildStatusCondition(*status)
+		query += " AND " + statusCondition
+	}
+
+	// Add ordering and pagination (newest vouchers first)
+	query += `
+		ORDER BY v.created_at DESC
+		LIMIT $2 OFFSET $3
+	`
+
+	args = append(args, limit, offset)
+
+	rows, err := r.querier.Query(ctx, query, args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to query voucher list: %w", err)
+	}
+	defer rows.Close()
+
+	// Initialize as empty slice to return [] instead of null when no items
+	items := []voucher.VoucherListItem{}
+	for rows.Next() {
+		var item voucher.VoucherListItem
+		var netAmount int64
+		var paymentID *string
+		var paymentStatus *string
+		var paymentDate *time.Time
+		var invoiceDueDateDB *time.Time
+		var billStatus string
+
+		err := rows.Scan(
+			&item.VoucherID,
+			&item.VoucherNumber,
+			&item.InvoiceNumber,
+			&invoiceDueDateDB,
+			&item.PayeeName,
+			&netAmount,
+			&item.VoucherStatus,
+			&paymentID,
+			&paymentStatus,
+			&paymentDate,
+			&billStatus,
+		)
+		if err != nil {
+			return nil, 0, fmt.Errorf("failed to scan voucher list item: %w", err)
+		}
+
+		// Convert amount from paise to rupees
+		item.TotalAmount = float64(netAmount) / 100.0
+
+		// Set invoice due date
+		item.InvoiceDueDate = invoiceDueDateDB
+
+		// Set payment date if paid
+		item.PaymentDate = paymentDate
+
+		// Map bill status
+		item.Status = voucher.BillPaymentStatus(billStatus)
+
+		items = append(items, item)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("error iterating voucher list rows: %w", err)
+	}
+
+	return items, totalCount, nil
+}
+
+// buildStatusCondition builds the SQL condition for status filtering
+func buildStatusCondition(status voucher.BillPaymentStatus) string {
+	switch status {
+	case voucher.BillStatusPaid:
+		return "p.payment_id IS NOT NULL AND p.status = 'success'"
+	case voucher.BillStatusOverdue:
+		return "p.payment_id IS NULL AND v.invoice_due_date IS NOT NULL AND v.invoice_due_date <= CURRENT_DATE"
+	case voucher.BillStatusOpen:
+		return "p.payment_id IS NULL AND (v.invoice_due_date IS NULL OR v.invoice_due_date > CURRENT_DATE)"
+	default:
+		return "TRUE" // No filtering
+	}
+}
