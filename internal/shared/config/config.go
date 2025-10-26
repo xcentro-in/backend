@@ -25,6 +25,7 @@ type Config struct {
 	JioPay            JioPayConfig            `json:"jiopay"`
 	Easebuzz          EasebuzzConfig          `json:"easebuzz"`
 	CloudWatch        CloudWatchConfig        `json:"cloudwatch"`
+	Workers           WorkersConfig           `json:"workers"`
 }
 
 // JWTSecretConfig holds JWT secret configuration.
@@ -156,6 +157,25 @@ type MigrationDatabaseConfig struct {
 type ServerConfig struct {
 	Host string `json:"host" env:"SERVER_HOST" env-default:"0.0.0.0"`
 	Port int    `json:"port" env:"SERVER_PORT" env-default:"8080"`
+}
+
+// WorkersConfig holds worker configuration.
+type WorkersConfig struct {
+	Audit        AuditWorkerConfig        `json:"audit"`
+	Notification NotificationWorkerConfig `json:"notification"`
+}
+
+// AuditWorkerConfig holds audit worker configuration.
+type AuditWorkerConfig struct {
+	BatchSize    int `json:"batch_size" env:"AUDIT_WORKER_BATCH_SIZE" env-default:"100"`
+	PollInterval int `json:"poll_interval_seconds" env:"AUDIT_WORKER_POLL_INTERVAL_SECONDS" env-default:"2"`
+}
+
+// NotificationWorkerConfig holds notification worker configuration.
+type NotificationWorkerConfig struct {
+	BatchSize    int `json:"batch_size" env:"NOTIFICATION_WORKER_BATCH_SIZE" env-default:"50"`
+	PollInterval int `json:"poll_interval_seconds" env:"NOTIFICATION_WORKER_POLL_INTERVAL_SECONDS" env-default:"2"`
+	MaxRetries   int `json:"max_retries" env:"NOTIFICATION_WORKER_MAX_RETRIES" env-default:"3"`
 }
 
 var (

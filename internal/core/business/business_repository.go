@@ -9,6 +9,7 @@ import (
 
 // BusinessRepository defines the interface for interacting with business data.
 type BusinessRepository interface {
+	WithTx(tx client.Tx) BusinessRepository
 	FindByID(ctx context.Context, id string) (*Business, error)
 	FindByGSTIN(ctx context.Context, gstin string) (*Business, error)
 	CreateBusinessByNameAndGSTIN(ctx context.Context, name string, gstin string) (*Business, error)

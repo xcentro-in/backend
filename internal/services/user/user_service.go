@@ -505,7 +505,11 @@ func (s *UserServiceImpl) InitiateOnboarding(
 ) (*user.InitiateOnboardingResponseDTO, error) {
 	s.logger.Info("Initiating onboarding for user %s", userID)
 
-	// Input validation
+	// ============================================================================
+	// PHASE 1: Validation and External API Calls (OUTSIDE TRANSACTION)
+	// ============================================================================
+
+	// Step 1: Input validation
 	if userID == "" {
 		return nil, types.NewInvalidKYCInputError("userID", "required")
 	}
@@ -513,64 +517,104 @@ func (s *UserServiceImpl) InitiateOnboarding(
 		return nil, types.NewInvalidKYCInputError("user details", "name, dob, taxID, and nationalID are required")
 	}
 
-	// Get current user
+	// Step 2: Get current user (non-critical read - outside transaction)
 	currentUser, err := s.userRepo.GetUserByID(ctx, userID)
 	if err != nil {
 		return nil, types.ErrUserNotFound
 	}
 
-	// Check if KYC already completed or verified
+	// Step 3: Check if KYC already completed or verified
 	if currentUser.KycStatus == shared.KYCCompleted || currentUser.KycStatus == shared.KYCVerified {
 		return nil, types.ErrKYCAlreadyCompleted
 	}
 
+	// Step 4: Verify PAN via PAN_COM (EXTERNAL API - do BEFORE transaction)
+	s.logger.Info("Verifying PAN (tax ID) for user %s", userID)
+	panComTxnID := fmt.Sprintf("pancom_%s_%d", userID, time.Now().Unix())
+	panComResult, err := s.verificationService.VerifyPANCOM(ctx, taxID, panComTxnID)
+	if err != nil {
+		return nil, types.NewVerificationFailedError("Tax ID", err.Error())
+	}
+
+	// Step 5: Verify PAN-Aadhaar link (EXTERNAL API - do BEFORE transaction)
+	s.logger.Info("Verifying Tax ID-National ID link for user %s", userID)
+	panAadhaarTxnID := fmt.Sprintf("panaadhaar_%s_%d", userID, time.Now().Unix())
+	panAadhaarResult, err := s.verificationService.VerifyPANAadhaar(ctx, taxID, nationalID, panAadhaarTxnID)
+	if err != nil {
+		return nil, types.NewVerificationFailedError("Tax ID-National ID link", err.Error())
+	}
+
+	// Step 6: Combine verification data
+	taxIDVerificationData := &user.UserTaxIDVerificationData{
+		PANCOMData:     panComResult.PANCOMResponse,
+		PANAadhaarLink: panAadhaarResult,
+	}
+
+	taxIDDataJSON, err := json.Marshal(taxIDVerificationData)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal tax ID verification data: %w", err)
+	}
+
+	// Step 7: Generate Aadhaar DigiLocker link (EXTERNAL API - do BEFORE transaction)
+	s.logger.Info("Generating Aadhaar verification link for user %s", userID)
+
+	authClient, err := authbridge.NewClient()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create authentication client: %w", err)
+	}
+
+	aadhaarTxnID := fmt.Sprintf("aadhaar_%s_%d", userID, time.Now().Unix())
+	linkRequest := authbridge.NewAadhaarLinkRequest(aadhaarTxnID, "", "http://localhost:8888/v1/callback")
+
+	aadhaarResponse, err := authClient.SearchDocument(linkRequest)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate Aadhaar link: %w", err)
+	}
+
+	// Step 8: Extract URL and transaction ID from response
+	status, ok := aadhaarResponse["status"].(float64)
+	if !ok || status != 1 {
+		return nil, fmt.Errorf("aadhaar link generation failed: invalid response status")
+	}
+
+	data, ok := aadhaarResponse["data"].(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("invalid aadhaar response format: missing data")
+	}
+
+	aadhaarURL, ok := data["url"].(string)
+	if !ok || aadhaarURL == "" {
+		return nil, fmt.Errorf("invalid aadhaar response format: missing or empty URL")
+	}
+
+	tsTransID, ok := aadhaarResponse["ts_trans_id"].(string)
+	if !ok || tsTransID == "" {
+		return nil, fmt.Errorf("invalid aadhaar response format: missing transaction ID")
+	}
+
+	// ============================================================================
+	// PHASE 2: Database Operations (INSIDE TRANSACTION)
+	// ============================================================================
+
 	var response *user.InitiateOnboardingResponseDTO
 
-	// Execute all operations in a transaction
 	err = s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
 		txUserRepo := s.userRepo.WithTx(tx)
 
-		// Step 1: Verify PAN via PAN_COM
-		s.logger.Info("Verifying PAN (tax ID) for user %s", userID)
-		panComTxnID := fmt.Sprintf("pancom_%s_%d", userID, time.Now().Unix())
-		panComResult, err := s.verificationService.VerifyPANCOM(ctx, taxID, panComTxnID)
-		if err != nil {
-			return types.NewVerificationFailedError("Tax ID", err.Error())
-		}
-
-		// Step 2: Verify PAN-Aadhaar link
-		s.logger.Info("Verifying Tax ID-National ID link for user %s", userID)
-		panAadhaarTxnID := fmt.Sprintf("panaadhaar_%s_%d", userID, time.Now().Unix())
-		panAadhaarResult, err := s.verificationService.VerifyPANAadhaar(ctx, taxID, nationalID, panAadhaarTxnID)
-		if err != nil {
-			return types.NewVerificationFailedError("Tax ID-National ID link", err.Error())
-		}
-
-		// Step 3: Combine verification data
-		taxIDVerificationData := &user.UserTaxIDVerificationData{
-			PANCOMData:     panComResult.PANCOMResponse,
-			PANAadhaarLink: panAadhaarResult,
-		}
-
-		taxIDDataJSON, err := json.Marshal(taxIDVerificationData)
-		if err != nil {
-			return fmt.Errorf("failed to marshal tax ID verification data: %w", err)
-		}
-
-		// Step 4: Create or update user identity
+		// Step 9: Create or update user identity
 		identity := &user.UserIdentity{
 			TaxID:          taxID,
 			TaxIDData:      string(taxIDDataJSON),
 			NationalID:     nationalID,
 			NationalIDData: "{}", // Will be populated after Aadhaar verification
-			NTxnID:         "",   // Will be set when generating Aadhaar link
+			NTxnID:         "",   // Will be set below
 		}
 
 		if err := txUserRepo.UpsertUserIdentity(ctx, identity); err != nil {
 			return fmt.Errorf("failed to create user identity: %w", err)
 		}
 
-		// Step 5: Update user name, dob, and tax_id reference
+		// Step 10: Update user name, dob, and tax_id reference
 		if err := txUserRepo.UpdateUserNameAndDOB(ctx, userID, name, dob); err != nil {
 			return fmt.Errorf("failed to update user name and DOB: %w", err)
 		}
@@ -579,52 +623,12 @@ func (s *UserServiceImpl) InitiateOnboarding(
 			return fmt.Errorf("failed to link user to identity: %w", err)
 		}
 
-		// Step 6: Set KYC status to in_progress
+		// Step 11: Set KYC status to in_progress
 		if err := txUserRepo.UpdateUserKYCStatus(ctx, userID, shared.KYCInProgress); err != nil {
 			return fmt.Errorf("failed to update KYC status: %w", err)
 		}
 
-		// Step 7: Generate Aadhaar DigiLocker link
-		s.logger.Info("Generating Aadhaar verification link for user %s", userID)
-
-		// Create authbridge client for Aadhaar link generation
-		authClient, err := authbridge.NewClient()
-		if err != nil {
-			return fmt.Errorf("failed to create authentication client: %w", err)
-		}
-
-		// Generate unique transaction ID for Aadhaar
-		aadhaarTxnID := fmt.Sprintf("aadhaar_%s_%d", userID, time.Now().Unix())
-		linkRequest := authbridge.NewAadhaarLinkRequest(aadhaarTxnID, "", "http://localhost:8888/v1/callback")
-
-		// Call authbridge API
-		aadhaarResponse, err := authClient.SearchDocument(linkRequest)
-		if err != nil {
-			return fmt.Errorf("failed to generate Aadhaar link: %w", err)
-		}
-
-		// Extract URL and transaction ID from response
-		status, ok := aadhaarResponse["status"].(float64)
-		if !ok || status != 1 {
-			return fmt.Errorf("aadhaar link generation failed: invalid response status")
-		}
-
-		data, ok := aadhaarResponse["data"].(map[string]interface{})
-		if !ok {
-			return fmt.Errorf("invalid aadhaar response format: missing data")
-		}
-
-		aadhaarURL, ok := data["url"].(string)
-		if !ok || aadhaarURL == "" {
-			return fmt.Errorf("invalid aadhaar response format: missing or empty URL")
-		}
-
-		tsTransID, ok := aadhaarResponse["ts_trans_id"].(string)
-		if !ok || tsTransID == "" {
-			return fmt.Errorf("invalid aadhaar response format: missing transaction ID")
-		}
-
-		// Step 8: Store Aadhaar transaction ID
+		// Step 12: Store Aadhaar transaction ID
 		if err := txUserRepo.UpdateAadhaarTransactionID(ctx, taxID, tsTransID); err != nil {
 			return fmt.Errorf("failed to store Aadhaar transaction ID: %w", err)
 		}

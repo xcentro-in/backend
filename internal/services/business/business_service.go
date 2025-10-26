@@ -98,30 +98,25 @@ func (s *BusinessServiceImpl) UpdateBusinessDeedDocumentKey(ctx context.Context,
 func (s *BusinessServiceImpl) InitiateOnboarding(ctx context.Context, uid string, name string, gstin string) (*business.OnboardingInitResponse, error) {
 	s.logger.Infof("Initiating onboarding for user %s with GSTIN %s", uid, gstin)
 
-	// Step 2: Validate inputs
+	// ============================================================================
+	// PHASE 1: Validation and External API Calls (OUTSIDE TRANSACTION)
+	// ============================================================================
+
+	// Step 1: Validate inputs
 	if name == "" || gstin == "" {
 		return nil, types.NewInvalidInputError("name or gstin", "both name and GSTIN are required")
 	}
 
-	// Step 2.1: Validate GSTIN format (must be exactly 15 characters)
+	// Step 2: Validate GSTIN format (must be exactly 15 characters)
 	if len(gstin) != 15 {
 		return nil, types.NewInvalidInputError("gstin", "GSTIN must be exactly 15 characters")
 	}
 
-	// Step 2.2: Extract PAN from GSTIN (characters 3-12, positions 2-11 in 0-indexed)
+	// Step 3: Extract PAN from GSTIN (characters 3-12, positions 2-11 in 0-indexed)
 	pan := gstin[2:12]
 	s.logger.Infof("Extracted PAN %s from GSTIN %s", pan, gstin)
 
-	// Step 3: Check if business already exists
-	existingBusiness, err := s.businessRepo.FindByGSTIN(ctx, gstin)
-	if err != nil {
-		return nil, fmt.Errorf("error checking existing business: %w", err)
-	}
-	if existingBusiness != nil {
-		return nil, types.NewBusinessAlreadyExistsError(gstin)
-	}
-
-	// Step 4: Verify GSTIN via AuthBridge
+	// Step 4: Verify GSTIN via AuthBridge (EXTERNAL API - do BEFORE transaction)
 	var gstDataJSON string
 	if s.verificationService != nil {
 		transID := uuid.Must(uuid.NewV7()).String()
@@ -137,7 +132,7 @@ func (s *BusinessServiceImpl) InitiateOnboarding(ctx context.Context, uid string
 		}
 	}
 
-	// Step 4.1: Verify PAN via AuthBridge PAN_COM
+	// Step 5: Verify PAN via AuthBridge PAN_COM (EXTERNAL API - do BEFORE transaction)
 	var itidDataJSON string
 	if s.verificationService != nil {
 		transID := uuid.Must(uuid.NewV7()).String()
@@ -153,54 +148,82 @@ func (s *BusinessServiceImpl) InitiateOnboarding(ctx context.Context, uid string
 		}
 	}
 
-	// Step 5: Create business with KYB in progress
-	newBusiness, err := s.businessRepo.CreateBusinessByNameAndGSTIN(ctx, name, gstin)
-	if err != nil {
-		return nil, fmt.Errorf("error creating business: %w", err)
-	}
+	// ============================================================================
+	// PHASE 2: Database Operations (INSIDE TRANSACTION)
+	// ============================================================================
 
-	// Step 6: Update GST data if verification succeeded
-	if gstDataJSON != "" {
-		if err := s.businessRepo.UpdateGSTData(ctx, newBusiness.BID, gstDataJSON); err != nil {
-			s.logger.Errorf("Failed to update GST data: %v", err)
+	var newBusiness *business.Business
+
+	err := s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
+		txBusinessRepo := s.businessRepo.WithTx(tx)
+		txBusinessUserRelRepo := s.businessUserRelRepo.WithTx(tx)
+
+		// Step 6: Check if business already exists (CRITICAL READ - must be in transaction to prevent race condition)
+		existingBusiness, err := txBusinessRepo.FindByGSTIN(ctx, gstin)
+		if err != nil {
+			return fmt.Errorf("error checking existing business: %w", err)
 		}
-	}
+		if existingBusiness != nil {
+			return types.NewBusinessAlreadyExistsError(gstin)
+		}
 
-	// Step 6.1: Create/Update KYB data with PAN (income_tax_id)
-	if pan != "" {
-		_, err = s.businessRepo.UpdateKYBData(ctx, newBusiness.BID, &business.BusinessKYBData{
-			ITID:     pan,
-			ITIDData: itidDataJSON, // Repository handles empty string → NULL conversion
-			CID:      "",
-			CIDData:  "",
-			DocUrl:   "",
+		// Step 7: Create business with KYB in progress
+		newBusiness, err = txBusinessRepo.CreateBusinessByNameAndGSTIN(ctx, name, gstin)
+		if err != nil {
+			return fmt.Errorf("error creating business: %w", err)
+		}
+
+		// Step 8: Update GST data if verification succeeded
+		if gstDataJSON != "" {
+			if err := txBusinessRepo.UpdateGSTData(ctx, newBusiness.BID, gstDataJSON); err != nil {
+				s.logger.Errorf("Failed to update GST data: %v", err)
+				// Don't fail transaction for this
+			}
+		}
+
+		// Step 9: Create/Update KYB data with PAN (income_tax_id)
+		if pan != "" {
+			_, err = txBusinessRepo.UpdateKYBData(ctx, newBusiness.BID, &business.BusinessKYBData{
+				ITID:     pan,
+				ITIDData: itidDataJSON, // Repository handles empty string → NULL conversion
+				CID:      "",
+				CIDData:  "",
+				DocUrl:   "",
+			})
+			if err != nil {
+				s.logger.Errorf("Failed to update KYB data with PAN: %v", err)
+				return fmt.Errorf("error updating KYB data: %w", err)
+			}
+
+			// Link the PAN to business
+			err = txBusinessRepo.AddKYBSuccessData(ctx, &business.Business{
+				BID:  newBusiness.BID,
+				ITID: pan,
+			})
+			if err != nil {
+				s.logger.Errorf("Failed to link PAN to business: %v", err)
+				return fmt.Errorf("error linking PAN to business: %w", err)
+			}
+		}
+
+		// Step 10: Create business-user relation with role and roleClaim as NULL
+		err = txBusinessUserRelRepo.AddUserToBusiness(ctx, &business.BusinessUserRelation{
+			UserID:       uid,
+			BID:          newBusiness.BID,
+			KybInitiated: true,
+			KycNeeded:    true, // User creating business needs KYC
+			Role:         "",   // NULL - will be set after ops verification
+			RoleClaim:    "",   // NULL - will be set when user completes KYC
 		})
 		if err != nil {
-			s.logger.Errorf("Failed to update KYB data with PAN: %v", err)
-			return nil, fmt.Errorf("error updating KYB data: %w", err)
+			return fmt.Errorf("error creating business-user relation: %w", err)
 		}
 
-		// Link the PAN to business
-		err = s.businessRepo.AddKYBSuccessData(ctx, &business.Business{
-			BID:  newBusiness.BID,
-			ITID: pan,
-		})
-		if err != nil {
-			s.logger.Errorf("Failed to link PAN to business: %v", err)
-		}
-	}
-
-	// Step 7: Create business-user relation with role and roleClaim as NULL
-	err = s.businessUserRelRepo.AddUserToBusiness(ctx, &business.BusinessUserRelation{
-		UserID:       uid,
-		BID:          newBusiness.BID,
-		KybInitiated: true,
-		KycNeeded:    true, // User creating business needs KYC
-		Role:         "",   // NULL - will be set after ops verification
-		RoleClaim:    "",   // NULL - will be set when user completes KYC
+		return nil // Commit transaction
 	})
+
 	if err != nil {
-		return nil, fmt.Errorf("error creating business-user relation: %w", err)
+		return nil, err
 	}
 
 	s.logger.Infof("Business onboarding initiated successfully for BID: %s with PAN: %s", newBusiness.BID, pan)
@@ -218,6 +241,10 @@ func (s *BusinessServiceImpl) InitiateOnboarding(ctx context.Context, uid string
 // PAN (ITID) is already set during InitiateOnboarding
 func (s *BusinessServiceImpl) CompleteKYB(ctx context.Context, uid string, userRoles []*business.BusinessUserRelation, req *business.CompleteKYBRequest) (*business.CompleteKYBResponse, error) {
 	s.logger.Infof("Completing KYB for user %s, BID %s", uid, req.BID)
+
+	// ============================================================================
+	// PHASE 1: Validation and External API Calls (OUTSIDE TRANSACTION)
+	// ============================================================================
 
 	// Step 1: Validate inputs (ITID is optional now, already set in init)
 	if req.BID == "" || req.BusinessType == "" {
@@ -253,23 +280,7 @@ func (s *BusinessServiceImpl) CompleteKYB(ctx context.Context, uid string, userR
 		return nil, types.ErrKYBNotInitiated
 	}
 
-	// Step 5: Check if KYB already completed
-	existingBusiness, existingKYBData, err := s.businessRepo.GetBusinessWithKYBData(ctx, req.BID)
-	if err != nil {
-		return nil, fmt.Errorf("error fetching business: %w", err)
-	}
-
-	if existingBusiness.KybStatus == shared.KYBCompleted || existingBusiness.KybStatus == shared.KYBVerified {
-		return nil, types.ErrKYBAlreadyCompleted
-	}
-
-	// Step 5.1: Get existing PAN from business (set during init)
-	existingPAN := existingBusiness.ITID
-	if existingPAN == "" {
-		return nil, types.NewInvalidInputError("itid", "PAN not found. Please reinitiate business onboarding.")
-	}
-
-	// Step 6: Verify CIN if required
+	// Step 5: Verify CIN if required (EXTERNAL API - do BEFORE transaction)
 	var cidDataJSON string
 	if shared.RequiresCIN(req.BusinessType) && s.verificationService != nil {
 		transID := uuid.Must(uuid.NewV7()).String()
@@ -285,41 +296,73 @@ func (s *BusinessServiceImpl) CompleteKYB(ctx context.Context, uid string, userR
 		}
 	}
 
-	// Step 7: Update KYB data (keep existing PAN data, add CIN)
-	kybUpdate := &business.BusinessKYBData{
-		ITID:    existingPAN, // Keep existing PAN
-		CID:     req.CID,     // Update CIN
-		CIDData: cidDataJSON, // Update CIN data
-	}
+	// ============================================================================
+	// PHASE 2: Database Operations (INSIDE TRANSACTION)
+	// ============================================================================
 
-	// Preserve existing data if available
-	if existingKYBData != nil {
-		kybUpdate.ITIDData = existingKYBData.ITIDData
-		kybUpdate.DocUrl = existingKYBData.DocUrl
-	}
+	var requiresDeed bool
 
-	_, err = s.businessRepo.UpdateKYBData(ctx, req.BID, kybUpdate)
-	if err != nil {
-		return nil, fmt.Errorf("error updating KYB data: %w", err)
-	}
+	err := s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
+		txBusinessRepo := s.businessRepo.WithTx(tx)
 
-	// Step 8: Update business with type and status
-	err = s.businessRepo.AddKYBSuccessData(ctx, &business.Business{
-		BID:          req.BID,
-		KybStatus:    shared.KYBCompleted,
-		BusinessType: req.BusinessType,
-		ITID:         existingPAN, // Keep existing PAN
+		// Step 6: Check if KYB already completed (CRITICAL READ - must be in transaction)
+		existingBusiness, existingKYBData, err := txBusinessRepo.GetBusinessWithKYBData(ctx, req.BID)
+		if err != nil {
+			return fmt.Errorf("error fetching business: %w", err)
+		}
+
+		if existingBusiness.KybStatus == shared.KYBCompleted || existingBusiness.KybStatus == shared.KYBVerified {
+			return types.ErrKYBAlreadyCompleted
+		}
+
+		// Step 7: Get existing PAN from business (set during init)
+		existingPAN := existingBusiness.ITID
+		if existingPAN == "" {
+			return types.NewInvalidInputError("itid", "PAN not found. Please reinitiate business onboarding.")
+		}
+
+		// Step 8: Update KYB data (keep existing PAN data, add CIN)
+		kybUpdate := &business.BusinessKYBData{
+			ITID:    existingPAN, // Keep existing PAN
+			CID:     req.CID,     // Update CIN
+			CIDData: cidDataJSON, // Update CIN data
+		}
+
+		// Preserve existing data if available
+		if existingKYBData != nil {
+			kybUpdate.ITIDData = existingKYBData.ITIDData
+			kybUpdate.DocUrl = existingKYBData.DocUrl
+		}
+
+		_, err = txBusinessRepo.UpdateKYBData(ctx, req.BID, kybUpdate)
+		if err != nil {
+			return fmt.Errorf("error updating KYB data: %w", err)
+		}
+
+		// Step 9: Update business with type and status
+		err = txBusinessRepo.AddKYBSuccessData(ctx, &business.Business{
+			BID:          req.BID,
+			KybStatus:    shared.KYBCompleted,
+			BusinessType: req.BusinessType,
+			ITID:         existingPAN, // Keep existing PAN
+		})
+		if err != nil {
+			return fmt.Errorf("error updating business KYB status: %w", err)
+		}
+
+		// Determine if deed upload is required
+		requiresDeed = shared.RequiresDeed(req.BusinessType)
+
+		return nil // Commit transaction
 	})
+
 	if err != nil {
-		return nil, fmt.Errorf("error updating business KYB status: %w", err)
+		return nil, err
 	}
 
 	s.logger.Infof("KYB completed successfully for BID: %s with business type: %s", req.BID, req.BusinessType)
 
 	// Business details cache will expire via TTL (10 minutes)
-
-	// Determine if deed upload is required
-	requiresDeed := shared.RequiresDeed(req.BusinessType)
 
 	return &business.CompleteKYBResponse{
 		BID:                req.BID,
