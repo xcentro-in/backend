@@ -49,6 +49,9 @@ type VoucherService interface {
 
 	// GetVoucherList retrieves paginated voucher/bill list with payment status (paid, open, overdue)
 	GetVoucherList(ctx context.Context, businessID string, status *voucher.BillPaymentStatus, limit, offset int) (*voucher.VoucherListResponse, error)
+
+	// RequestApproval creates or updates an approval request for a voucher
+	RequestApproval(ctx context.Context, req *voucher.VoucherApprovalRequest) (*voucher.VoucherApprovalResponse, error)
 }
 
 // VoucherServiceImpl implements the VoucherService interface
@@ -922,4 +925,31 @@ func (s *VoucherServiceImpl) GetVoucherList(ctx context.Context, businessID stri
 		Limit:      limit,
 		Offset:     offset,
 	}, nil
+}
+
+// RequestApproval creates or updates an approval request for a voucher
+func (s *VoucherServiceImpl) RequestApproval(ctx context.Context, req *voucher.VoucherApprovalRequest) (*voucher.VoucherApprovalResponse, error) {
+	// Validate voucher exists
+	voucherUUID, err := uuid.Parse(req.VoucherID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid voucher_id: %w", err)
+	}
+
+	v, err := s.voucherRepo.GetByID(ctx, voucherUUID)
+	if err != nil {
+		return nil, fmt.Errorf("voucher not found: %w", err)
+	}
+
+	// Only draft or finalized vouchers can have approval requests
+	if v.Status != voucher.StatusDraft && v.Status != voucher.StatusFinalized {
+		return nil, fmt.Errorf("cannot request approval for voucher in status: %s", v.Status)
+	}
+
+	// Call repository to create/update approval
+	response, err := s.voucherRepo.CreateOrUpdateApproval(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to process approval request: %w", err)
+	}
+
+	return response, nil
 }

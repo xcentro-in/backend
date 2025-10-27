@@ -23,6 +23,7 @@ type VoucherListItem struct {
 	Status         BillPaymentStatus `json:"status"`         // paid, open, overdue
 	VoucherStatus  string            `json:"voucherStatus"`  // draft, finalized, posted, synced
 	PaymentDate    *time.Time        `json:"paymentDate"`    // When payment was made (if paid)
+	ApprovalStatus string            `json:"approvalStatus"` // pending, approved, rejected, request_changes (empty if no approval)
 }
 
 // VoucherListRequest represents pagination and filter parameters

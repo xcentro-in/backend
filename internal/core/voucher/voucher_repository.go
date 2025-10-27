@@ -67,6 +67,9 @@ type VoucherRepository interface {
 	// GetVoucherListForBusiness retrieves paginated voucher/bill list for a business
 	// Includes payment status calculation (paid, open, overdue) and optional status filtering
 	GetVoucherListForBusiness(ctx context.Context, businessID string, status *BillPaymentStatus, limit, offset int) ([]VoucherListItem, int, error)
+
+	// CreateOrUpdateApproval creates or updates an approval record for a voucher
+	CreateOrUpdateApproval(ctx context.Context, req *VoucherApprovalRequest) (*VoucherApprovalResponse, error)
 }
 
 // VoucherFilters defines filter criteria for listing vouchers

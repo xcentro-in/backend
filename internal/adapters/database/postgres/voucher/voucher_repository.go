@@ -1055,13 +1055,22 @@ func (r *PostgresVoucherRepository) GetVoucherListForBusiness(ctx context.Contex
 				WHEN p.payment_id IS NULL AND v.invoice_due_date IS NOT NULL AND v.invoice_due_date <= CURRENT_DATE THEN 'overdue'
 				WHEN p.payment_id IS NULL AND (v.invoice_due_date IS NULL OR v.invoice_due_date > CURRENT_DATE) THEN 'open'
 				ELSE 'open'
-			END as bill_status
+			END as bill_status,
+			-- Get latest approval status (if any)
+			COALESCE(va.action::text, '') as approval_status
 		FROM xcentro.payment_vouchers v
 		INNER JOIN xcentro.business_payee_relation bpr
 			ON v.business_id = bpr.business_id
 			AND v.payee_id = bpr.payee_id
 			AND v.account_id = bpr.account_id
 		LEFT JOIN xcentro.payments p ON v.payment_id = p.payment_id
+		LEFT JOIN LATERAL (
+			SELECT action
+			FROM xcentro.voucher_approvals
+			WHERE voucher_id = v.voucher_id
+			ORDER BY created_at DESC
+			LIMIT 1
+		) va ON true
 		WHERE v.business_id = $1
 	`
 
@@ -1097,6 +1106,7 @@ func (r *PostgresVoucherRepository) GetVoucherListForBusiness(ctx context.Contex
 		var paymentDate *time.Time
 		var invoiceDueDateDB *time.Time
 		var billStatus string
+		var approvalStatus string
 
 		err := rows.Scan(
 			&item.VoucherID,
@@ -1110,6 +1120,7 @@ func (r *PostgresVoucherRepository) GetVoucherListForBusiness(ctx context.Contex
 			&paymentStatus,
 			&paymentDate,
 			&billStatus,
+			&approvalStatus,
 		)
 		if err != nil {
 			return nil, 0, fmt.Errorf("failed to scan voucher list item: %w", err)
@@ -1126,6 +1137,9 @@ func (r *PostgresVoucherRepository) GetVoucherListForBusiness(ctx context.Contex
 
 		// Map bill status
 		item.Status = voucher.BillPaymentStatus(billStatus)
+
+		// Set approval status (empty string if no approval)
+		item.ApprovalStatus = approvalStatus
 
 		items = append(items, item)
 	}
@@ -1149,4 +1163,73 @@ func buildStatusCondition(status voucher.BillPaymentStatus) string {
 	default:
 		return "TRUE" // No filtering
 	}
+}
+
+// CreateOrUpdateApproval creates a new approval record for a voucher
+// Each action creates a new row (audit trail)
+func (r *PostgresVoucherRepository) CreateOrUpdateApproval(ctx context.Context, req *voucher.VoucherApprovalRequest) (*voucher.VoucherApprovalResponse, error) {
+	// Parse UUIDs
+	voucherID, err := uuid.Parse(req.VoucherID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid voucher_id: %w", err)
+	}
+
+	requesterUserID, err := uuid.Parse(req.RequesterUserID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid requester_user_id: %w", err)
+	}
+
+	approverUserID, err := uuid.Parse(req.ApproverUserID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid approver_user_id: %w", err)
+	}
+
+	// Always INSERT a new row for each approval action (audit trail)
+	approvalID := uuid.Must(uuid.NewV7())
+	now := time.Now()
+
+	query := `
+		INSERT INTO xcentro.voucher_approvals (
+			approval_id, voucher_id, requester_user_id, approver_user_id,
+			action, remarks, created_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7)
+		RETURNING approval_id, created_at
+	`
+
+	var createdAt time.Time
+	err = r.querier.QueryRow(ctx, query,
+		approvalID,
+		voucherID,
+		requesterUserID,
+		approverUserID,
+		req.Action,
+		req.Remarks,
+		now,
+	).Scan(&approvalID, &createdAt)
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to create approval record: %w", err)
+	}
+
+	// Set message based on action
+	var message string
+	switch req.Action {
+	case voucher.ApprovalActionPending:
+		message = "Approval request has been submitted"
+	case voucher.ApprovalActionApproved:
+		message = "Payment has been approved"
+	case voucher.ApprovalActionRejected:
+		message = "Payment has been rejected"
+	case voucher.ApprovalActionRequestChanges:
+		message = "Changes have been requested"
+	}
+
+	return &voucher.VoucherApprovalResponse{
+		Success:    true,
+		Message:    message,
+		ApprovalID: approvalID.String(),
+		VoucherID:  req.VoucherID,
+		Action:     req.Action,
+		CreatedAt:  createdAt,
+	}, nil
 }

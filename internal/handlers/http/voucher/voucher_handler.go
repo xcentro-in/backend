@@ -745,3 +745,93 @@ func (h *VoucherHandler) GetVoucherList(c echo.Context) error {
 
 	return c.JSON(http.StatusOK, response)
 }
+
+// RequestApproval handles POST /vouchers/:voucher_id/request-approval - Create or update approval
+func (h *VoucherHandler) RequestApproval(c echo.Context) error {
+	h.logger.InfoWith("RequestApproval API called")
+
+	// Extract voucher_id from URL parameter
+	voucherID := c.Param("voucher_id")
+	if voucherID == "" {
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "MISSING_VOUCHER_ID",
+			"message": "Voucher ID is required",
+		})
+	}
+
+	// Extract userId from JWT context
+	userID, ok := c.Get("userId").(string)
+	if !ok || userID == "" {
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "MISSING_USER_ID",
+			"message": "User ID not found in token",
+		})
+	}
+
+	// Extract business_id from header (for validation)
+	businessID := c.Request().Header.Get("X-Business-ID")
+	if businessID == "" {
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "MISSING_BUSINESS_ID",
+			"message": "X-Business-ID header is required",
+		})
+	}
+
+	// Parse request body
+	var reqBody struct {
+		ApproverUserID string `json:"approver_user_id" validate:"required,uuid"`
+		Action         string `json:"action" validate:"required,oneof=pending approved rejected request_changes"`
+		Remarks        string `json:"remarks"`
+	}
+
+	if err := c.Bind(&reqBody); err != nil {
+		h.logger.ErrorWith("Error binding request", "error", err)
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "INVALID_REQUEST",
+			"message": "Invalid request body",
+		})
+	}
+
+	// Validate action
+	action := voucher.ApprovalAction(reqBody.Action)
+	if action != voucher.ApprovalActionPending &&
+		action != voucher.ApprovalActionApproved &&
+		action != voucher.ApprovalActionRejected &&
+		action != voucher.ApprovalActionRequestChanges {
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "INVALID_ACTION",
+			"message": "Action must be one of: pending, approved, rejected, request_changes",
+		})
+	}
+
+	h.logger.DebugWith("Processing approval request",
+		"voucher_id", voucherID,
+		"action", action,
+		"requester", userID,
+		"approver", reqBody.ApproverUserID)
+
+	// Create service request
+	serviceReq := &voucher.VoucherApprovalRequest{
+		VoucherID:       voucherID,
+		RequesterUserID: userID,
+		ApproverUserID:  reqBody.ApproverUserID,
+		Action:          action,
+		Remarks:         reqBody.Remarks,
+	}
+
+	// Call service
+	response, err := h.voucherService.RequestApproval(c.Request().Context(), serviceReq)
+	if err != nil {
+		h.logger.ErrorWith("Failed to process approval request", "error", err)
+		return c.JSON(http.StatusInternalServerError, map[string]any{
+			"error":   "SERVICE_ERROR",
+			"message": err.Error(),
+		})
+	}
+
+	h.logger.InfoWith("Approval request processed successfully",
+		"approval_id", response.ApprovalID,
+		"action", response.Action)
+
+	return c.JSON(http.StatusOK, response)
+}
