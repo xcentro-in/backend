@@ -11,6 +11,7 @@ DROP TABLE IF EXISTS xcentro.notification_preferences;
 DROP TABLE IF EXISTS xcentro.user_notifications;
 DROP TABLE IF EXISTS xcentro.notification_events;
 
--- Drop audit system tables
-DROP TABLE IF EXISTS xcentro.audit_trail;
+-- Drop audit system tables (child tables first due to foreign keys)
+DROP TABLE IF EXISTS xcentro.audit_trail_entities;  -- Child table (references audit_trail)
+DROP TABLE IF EXISTS xcentro.audit_trail;           -- Parent table (referenced by audit_trail_entities)
 DROP TABLE IF EXISTS xcentro.audit_events;

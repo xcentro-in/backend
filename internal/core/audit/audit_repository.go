@@ -32,9 +32,21 @@ type AuditTrailRepository interface {
 	// GetTrailByBusinessID retrieves audit trail for a business (sorted by timestamp DESC)
 	GetTrailByBusinessID(ctx context.Context, businessID string, limit, offset int) ([]*AuditTrailEntry, error)
 
-	// GetTrailByPaymentID retrieves audit trail for a specific payment (sorted by timestamp DESC)
-	GetTrailByPaymentID(ctx context.Context, businessID, paymentID string) ([]*AuditTrailEntry, error)
+	// GetTrailByEntityID retrieves audit trail for a specific entity (payment, voucher, payee, etc.)
+	GetTrailByEntityID(ctx context.Context, entityType, entityID string, limit, offset int) ([]*AuditTrailEntry, error)
 
 	// WithTx creates a new repository instance that uses a transaction
 	WithTx(tx client.Tx) AuditTrailRepository
+}
+
+// AuditTrailEntityRepository handles audit trail entity link operations
+type AuditTrailEntityRepository interface {
+	// CreateEntityLinks creates links between an audit trail entry and entities
+	CreateEntityLinks(ctx context.Context, entities []*AuditTrailEntity) error
+
+	// GetEntitiesByAuditTrailID retrieves all entity links for an audit trail entry
+	GetEntitiesByAuditTrailID(ctx context.Context, auditTrailID int64) ([]*AuditTrailEntity, error)
+
+	// WithTx creates a new repository instance that uses a transaction
+	WithTx(tx client.Tx) AuditTrailEntityRepository
 }

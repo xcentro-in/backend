@@ -34,12 +34,14 @@ COMMENT ON TABLE xcentro.audit_events IS 'Temporary queue of audit events to be 
 COMMENT ON COLUMN xcentro.audit_events.payload IS 'JSON schema: {timestamp (RFC3339), event_type, actor, entities, note, change_log}';
 
 
--- TABLE 2: audit_trail (The Destination)
+-- TABLE 2: audit_trail (The Destination - Normalized Event Storage)
 -- Permanent, queryable, append-only table optimized for SELECT by UI.
+-- Stores the event ONCE, links to entities via audit_trail_entities table.
 CREATE TABLE xcentro.audit_trail (
     id BIGSERIAL PRIMARY KEY,
     business_id UUID NOT NULL REFERENCES xcentro.business(bid) ON DELETE CASCADE,
-    payment_id UUID DEFAULT NULL REFERENCES xcentro.payments(payment_id) ON DELETE SET NULL,
+
+    -- The Event Data
     event_timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     event_type TEXT NOT NULL,        -- Human-readable title (e.g., "Transaction Approved")
     actor_type TEXT NOT NULL,        -- 'user' or 'system'
@@ -47,29 +49,54 @@ CREATE TABLE xcentro.audit_trail (
     actor_name TEXT NOT NULL,        -- "Michael Chen (Financial Controller)"
     note TEXT DEFAULT NULL,          -- Optional note (e.g., "Funds transferred")
     details JSONB DEFAULT NULL,      -- Extra data (IP, change_log, etc.)
+
+    -- Link back to queue for idempotency
     source_event_id BIGINT NOT NULL UNIQUE REFERENCES xcentro.audit_events(id) ON DELETE CASCADE
 );
 
 -- Indexes for fast lookups
-CREATE INDEX idx_audit_trail_payment_id
-ON xcentro.audit_trail (payment_id)
-WHERE payment_id IS NOT NULL;
-
 CREATE INDEX idx_audit_trail_business_id
-ON xcentro.audit_trail (business_id);
+ON xcentro.audit_trail (business_id, event_timestamp DESC);
 
 CREATE INDEX idx_audit_trail_event_timestamp
 ON xcentro.audit_trail (event_timestamp DESC);
 
--- Composite index for common query pattern: business + payment
-CREATE INDEX idx_audit_trail_business_payment
-ON xcentro.audit_trail (business_id, payment_id)
-WHERE payment_id IS NOT NULL;
-
-COMMENT ON TABLE xcentro.audit_trail IS 'Permanent audit log optimized for UI queries';
+COMMENT ON TABLE xcentro.audit_trail IS 'Permanent normalized audit log - stores event once, links via audit_trail_entities';
 COMMENT ON COLUMN xcentro.audit_trail.event_type IS 'Human-readable event title for display';
 COMMENT ON COLUMN xcentro.audit_trail.details IS 'Extra data: {ip_address, change_log, etc.}';
 COMMENT ON COLUMN xcentro.audit_trail.source_event_id IS 'FK to audit_events.id (ensures no duplicate processing)';
+
+
+-- TABLE 2B: audit_trail_entities (The Links)
+-- Links a single audit trail event to multiple entities (normalized many-to-many).
+-- This solves the bulk payment/voucher problem efficiently.
+CREATE TABLE xcentro.audit_trail_entities (
+    id BIGSERIAL PRIMARY KEY,
+    business_id UUID NOT NULL REFERENCES xcentro.business(bid) ON DELETE CASCADE,
+
+    -- Link to the event
+    audit_trail_id BIGINT NOT NULL REFERENCES xcentro.audit_trail(id) ON DELETE CASCADE,
+
+    -- Link to the entity
+    entity_type TEXT NOT NULL,  -- 'payment', 'voucher', 'payee', 'user', 'wallet', 'payout'
+    entity_id UUID NOT NULL     -- The ID of the payment, voucher, payee, etc.
+);
+
+-- Most important index for reading data (entity activity feeds)
+CREATE INDEX idx_audit_trail_entities_lookup
+ON xcentro.audit_trail_entities (entity_type, entity_id);
+
+-- Index for reverse lookup (all entities for an event)
+CREATE INDEX idx_audit_trail_entities_audit_id
+ON xcentro.audit_trail_entities (audit_trail_id);
+
+-- Composite index for business-scoped entity lookups
+CREATE INDEX idx_audit_trail_entities_business_entity
+ON xcentro.audit_trail_entities (business_id, entity_type, entity_id);
+
+COMMENT ON TABLE xcentro.audit_trail_entities IS 'Many-to-many links between audit events and entities (normalized design)';
+COMMENT ON COLUMN xcentro.audit_trail_entities.entity_type IS 'Type of entity: payment, voucher, payee, user, wallet, payout';
+COMMENT ON COLUMN xcentro.audit_trail_entities.entity_id IS 'UUID of the entity (payment_id, voucher_id, etc.)';
 
 
 -- #############################################################################

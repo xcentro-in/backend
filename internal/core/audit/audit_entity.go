@@ -66,12 +66,12 @@ type ChangeLogEntry struct {
 
 // EntityReferences contains IDs of all relevant entities for this event
 type EntityReferences struct {
-	BusinessID *string `json:"business_id,omitempty"` // e.g., "bus_987"
-	PaymentID  *string `json:"payment_id,omitempty"`  // e.g., "pay_12345"
-	PayeeID    *string `json:"payee_id,omitempty"`    // e.g., "payee_6789"
-	VoucherID  *string `json:"voucher_id,omitempty"`  // e.g., "voucher_456"
-	UserID     *string `json:"user_id,omitempty"`     // e.g., "user_123"
-	WalletID   *string `json:"wallet_id,omitempty"`   // e.g., "wallet_789"
+	BusinessID string  `json:"business_id" validate:"required"` // Required: every event belongs to a business
+	PaymentID  *string `json:"payment_id,omitempty"`            // Optional: e.g., "pay_12345"
+	PayeeID    *string `json:"payee_id,omitempty"`              // Optional: e.g., "payee_6789"
+	VoucherID  *string `json:"voucher_id,omitempty"`            // Optional: e.g., "voucher_456"
+	UserID     *string `json:"user_id,omitempty"`               // Optional: e.g., "user_123"
+	WalletID   *string `json:"wallet_id,omitempty"`             // Optional: e.g., "wallet_789"
 }
 
 // ActorInfo represents who performed the action
@@ -111,10 +111,10 @@ type AuditEvent struct {
 }
 
 // AuditTrailEntry represents a row in the audit_trail table (permanent log)
+// This is the normalized design - the event is stored once, links via audit_trail_entities
 type AuditTrailEntry struct {
 	ID             int64          `db:"id" json:"id"`
 	BusinessID     string         `db:"business_id" json:"business_id"`
-	PaymentID      *string        `db:"payment_id" json:"payment_id,omitempty"`
 	EventTimestamp time.Time      `db:"event_timestamp" json:"event_timestamp"`
 	EventType      string         `db:"event_type" json:"event_type"` // Human-readable title
 	ActorType      string         `db:"actor_type" json:"actor_type"` // "user" or "system"
@@ -124,3 +124,23 @@ type AuditTrailEntry struct {
 	Details        map[string]any `db:"details" json:"details,omitempty"`       // JSONB: {ip_address, change_log, etc.}
 	SourceEventID  int64          `db:"source_event_id" json:"source_event_id"` // FK to audit_events.id
 }
+
+// AuditTrailEntity represents a row in the audit_trail_entities table (entity links)
+// This table creates the many-to-many relationship between events and entities
+type AuditTrailEntity struct {
+	ID            int64  `db:"id" json:"id"`
+	BusinessID    string `db:"business_id" json:"business_id"`
+	AuditTrailID  int64  `db:"audit_trail_id" json:"audit_trail_id"`
+	EntityType    string `db:"entity_type" json:"entity_type"` // 'payment', 'voucher', 'payee', 'user', 'wallet', 'payout'
+	EntityID      string `db:"entity_id" json:"entity_id"`     // UUID of the entity
+}
+
+// Entity type constants for audit_trail_entities
+const (
+	EntityTypePayment = "payment"
+	EntityTypeVoucher = "voucher"
+	EntityTypePayee   = "payee"
+	EntityTypeUser    = "user"
+	EntityTypeWallet  = "wallet"
+	EntityTypePayout  = "payout"
+)

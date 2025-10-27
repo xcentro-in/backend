@@ -29,9 +29,9 @@ func NewPgAuditTrailRepository(db client.DB) *PgAuditTrailRepository {
 func (r *PgAuditTrailRepository) CreateTrailEntry(ctx context.Context, entry *audit.AuditTrailEntry) error {
 	query := `
 		INSERT INTO xcentro.audit_trail (
-			business_id, payment_id, event_timestamp, event_type,
+			business_id, event_timestamp, event_type,
 			actor_type, actor_id, actor_name, note, details, source_event_id
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		ON CONFLICT (source_event_id) DO NOTHING
 		RETURNING id
 	`
@@ -47,7 +47,6 @@ func (r *PgAuditTrailRepository) CreateTrailEntry(ctx context.Context, entry *au
 
 	err := r.querier.QueryRow(ctx, query,
 		entry.BusinessID,
-		entry.PaymentID,
 		entry.EventTimestamp,
 		entry.EventType,
 		entry.ActorType,
@@ -77,9 +76,9 @@ func (r *PgAuditTrailRepository) CreateTrailEntries(ctx context.Context, entries
 
 	query := `
 		INSERT INTO xcentro.audit_trail (
-			business_id, payment_id, event_timestamp, event_type,
+			business_id, event_timestamp, event_type,
 			actor_type, actor_id, actor_name, note, details, source_event_id
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		ON CONFLICT (source_event_id) DO NOTHING
 	`
 
@@ -96,7 +95,6 @@ func (r *PgAuditTrailRepository) CreateTrailEntries(ctx context.Context, entries
 
 		_, err := r.querier.Exec(ctx, query,
 			entry.BusinessID,
-			entry.PaymentID,
 			entry.EventTimestamp,
 			entry.EventType,
 			entry.ActorType,
@@ -117,7 +115,7 @@ func (r *PgAuditTrailRepository) CreateTrailEntries(ctx context.Context, entries
 // GetTrailByBusinessID retrieves audit trail for a business (sorted by timestamp DESC)
 func (r *PgAuditTrailRepository) GetTrailByBusinessID(ctx context.Context, businessID string, limit, offset int) ([]*audit.AuditTrailEntry, error) {
 	query := `
-		SELECT id, business_id, payment_id, event_timestamp, event_type,
+		SELECT id, business_id, event_timestamp, event_type,
 		       actor_type, actor_id, actor_name, note, details, source_event_id
 		FROM xcentro.audit_trail
 		WHERE business_id = $1
@@ -134,19 +132,22 @@ func (r *PgAuditTrailRepository) GetTrailByBusinessID(ctx context.Context, busin
 	return r.scanTrailEntries(rows)
 }
 
-// GetTrailByPaymentID retrieves audit trail for a specific payment (sorted by timestamp DESC)
-func (r *PgAuditTrailRepository) GetTrailByPaymentID(ctx context.Context, businessID, paymentID string) ([]*audit.AuditTrailEntry, error) {
+// GetTrailByEntityID retrieves audit trail for a specific entity (payment, voucher, payee, etc.)
+// Uses the normalized design with JOIN to audit_trail_entities
+func (r *PgAuditTrailRepository) GetTrailByEntityID(ctx context.Context, entityType, entityID string, limit, offset int) ([]*audit.AuditTrailEntry, error) {
 	query := `
-		SELECT id, business_id, payment_id, event_timestamp, event_type,
-		       actor_type, actor_id, actor_name, note, details, source_event_id
-		FROM xcentro.audit_trail
-		WHERE business_id = $1 AND payment_id = $2
-		ORDER BY event_timestamp DESC
+		SELECT t.id, t.business_id, t.event_timestamp, t.event_type,
+		       t.actor_type, t.actor_id, t.actor_name, t.note, t.details, t.source_event_id
+		FROM xcentro.audit_trail AS t
+		INNER JOIN xcentro.audit_trail_entities AS e ON t.id = e.audit_trail_id
+		WHERE e.entity_type = $1 AND e.entity_id = $2
+		ORDER BY t.event_timestamp DESC
+		LIMIT $3 OFFSET $4
 	`
 
-	rows, err := r.querier.Query(ctx, query, businessID, paymentID)
+	rows, err := r.querier.Query(ctx, query, entityType, entityID, limit, offset)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch audit trail: %w", err)
+		return nil, fmt.Errorf("failed to fetch audit trail for entity: %w", err)
 	}
 	defer rows.Close()
 
@@ -159,14 +160,12 @@ func (r *PgAuditTrailRepository) scanTrailEntries(rows pgx.Rows) ([]*audit.Audit
 
 	for rows.Next() {
 		var entry audit.AuditTrailEntry
-		var paymentID *string
 		var note *string
 		var detailsJSON []byte
 
 		err := rows.Scan(
 			&entry.ID,
 			&entry.BusinessID,
-			&paymentID,
 			&entry.EventTimestamp,
 			&entry.EventType,
 			&entry.ActorType,
@@ -180,7 +179,6 @@ func (r *PgAuditTrailRepository) scanTrailEntries(rows pgx.Rows) ([]*audit.Audit
 			return nil, fmt.Errorf("failed to scan audit trail entry: %w", err)
 		}
 
-		entry.PaymentID = paymentID
 		entry.Note = note
 
 		if detailsJSON != nil {

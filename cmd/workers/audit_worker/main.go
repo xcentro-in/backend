@@ -46,6 +46,7 @@ func main() {
 	// Create repositories
 	eventRepo := audit.NewPgAuditEventRepository(db)
 	trailRepo := audit.NewPgAuditTrailRepository(db)
+	entityRepo := audit.NewPgAuditTrailEntityRepository(db)
 
 	fmt.Println("✅ Repositories initialized")
 
@@ -53,7 +54,7 @@ func main() {
 	txManager := client.NewTxManager(db)
 
 	// Create audit service (orchestrates business logic and transactions)
-	svc := auditService.NewAuditService(eventRepo, trailRepo, txManager, logger.GetDefault())
+	svc := auditService.NewAuditService(eventRepo, trailRepo, entityRepo, txManager, logger.GetDefault())
 
 	fmt.Println("✅ Audit service initialized")
 

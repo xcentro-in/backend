@@ -12,24 +12,27 @@ import (
 
 // AuditService handles audit trail operations
 type AuditService struct {
-	auditEventRepo audit.AuditEventRepository
-	auditTrailRepo audit.AuditTrailRepository
-	txManager      client.TxManager
-	logger         *logger.Logger
+	auditEventRepo       audit.AuditEventRepository
+	auditTrailRepo       audit.AuditTrailRepository
+	auditTrailEntityRepo audit.AuditTrailEntityRepository
+	txManager            client.TxManager
+	logger               *logger.Logger
 }
 
 // NewAuditService creates a new audit service
 func NewAuditService(
 	auditEventRepo audit.AuditEventRepository,
 	auditTrailRepo audit.AuditTrailRepository,
+	auditTrailEntityRepo audit.AuditTrailEntityRepository,
 	txManager client.TxManager,
 	logger *logger.Logger,
 ) *AuditService {
 	return &AuditService{
-		auditEventRepo: auditEventRepo,
-		auditTrailRepo: auditTrailRepo,
-		txManager:      txManager,
-		logger:         logger,
+		auditEventRepo:       auditEventRepo,
+		auditTrailRepo:       auditTrailRepo,
+		auditTrailEntityRepo: auditTrailEntityRepo,
+		txManager:            txManager,
+		logger:               logger,
 	}
 }
 
@@ -42,6 +45,7 @@ func (s *AuditService) ProcessPendingAuditEvents(ctx context.Context, batchSize 
 		// Create transactional repository instances
 		txEventRepo := s.auditEventRepo.WithTx(tx)
 		txTrailRepo := s.auditTrailRepo.WithTx(tx)
+		txEntityRepo := s.auditTrailEntityRepo.WithTx(tx)
 
 		// Fetch pending events with FOR UPDATE SKIP LOCKED (within transaction)
 		events, err := txEventRepo.FetchPendingEvents(ctx, batchSize)
@@ -53,23 +57,32 @@ func (s *AuditService) ProcessPendingAuditEvents(ctx context.Context, batchSize 
 			return nil // No events to process
 		}
 
-		// Transform events to audit trail entries
-		var entries []*audit.AuditTrailEntry
+		// Process each event: insert trail entry + entity links
 		var eventIDs []int64
 
 		for _, event := range events {
+			// Transform event to audit trail entry
 			entry := transformEventToTrailEntry(event)
-			if entry != nil {
-				entries = append(entries, entry)
-				eventIDs = append(eventIDs, event.ID)
+			if entry == nil {
+				continue // Skip invalid events
 			}
-		}
 
-		// Batch insert into audit_trail
-		if len(entries) > 0 {
-			if err := txTrailRepo.CreateTrailEntries(ctx, entries); err != nil {
-				return fmt.Errorf("failed to create trail entries: %w", err)
+			// Insert the audit trail entry and get its ID
+			if err := txTrailRepo.CreateTrailEntry(ctx, entry); err != nil {
+				return fmt.Errorf("failed to create trail entry for event %d: %w", event.ID, err)
 			}
+
+			// Build entity links from the event payload
+			entityLinks := buildEntityLinks(event, entry.ID, entry.BusinessID)
+
+			// Insert entity links
+			if len(entityLinks) > 0 {
+				if err := txEntityRepo.CreateEntityLinks(ctx, entityLinks); err != nil {
+					return fmt.Errorf("failed to create entity links for event %d: %w", event.ID, err)
+				}
+			}
+
+			eventIDs = append(eventIDs, event.ID)
 		}
 
 		// Mark events as processed
@@ -95,17 +108,18 @@ func (s *AuditService) GetTrailByBusinessID(ctx context.Context, businessID stri
 	return s.auditTrailRepo.GetTrailByBusinessID(ctx, businessID, limit, offset)
 }
 
-// GetTrailByPaymentID retrieves audit trail for a specific payment
-func (s *AuditService) GetTrailByPaymentID(ctx context.Context, businessID, paymentID string) ([]*audit.AuditTrailEntry, error) {
-	return s.auditTrailRepo.GetTrailByPaymentID(ctx, businessID, paymentID)
+// GetTrailByEntityID retrieves audit trail for a specific entity (payment, voucher, payee, etc.)
+func (s *AuditService) GetTrailByEntityID(ctx context.Context, entityType, entityID string, limit, offset int) ([]*audit.AuditTrailEntry, error) {
+	return s.auditTrailRepo.GetTrailByEntityID(ctx, entityType, entityID, limit, offset)
 }
 
 // transformEventToTrailEntry transforms an audit event to a trail entry
+// Note: payment_id removed from audit_trail (normalized design)
 func transformEventToTrailEntry(event *audit.AuditEvent) *audit.AuditTrailEntry {
 	payload := event.Payload
 
-	// Extract business_id from entities
-	if payload.Entities.BusinessID == nil {
+	// Validate required business_id
+	if payload.Entities.BusinessID == "" {
 		return nil
 	}
 
@@ -125,8 +139,7 @@ func transformEventToTrailEntry(event *audit.AuditEvent) *audit.AuditTrailEntry 
 	}
 
 	return &audit.AuditTrailEntry{
-		BusinessID:     *payload.Entities.BusinessID,
-		PaymentID:      payload.Entities.PaymentID,
+		BusinessID:     payload.Entities.BusinessID,
 		EventTimestamp: eventTime,
 		EventType:      payload.EventType,
 		ActorType:      payload.Actor.Type,
@@ -136,4 +149,63 @@ func transformEventToTrailEntry(event *audit.AuditEvent) *audit.AuditTrailEntry 
 		Details:        details,
 		SourceEventID:  event.ID,
 	}
+}
+
+// buildEntityLinks builds entity links from the event payload
+// This extracts all entity references and creates audit_trail_entities rows
+func buildEntityLinks(event *audit.AuditEvent, auditTrailID int64, businessID string) []*audit.AuditTrailEntity {
+	var links []*audit.AuditTrailEntity
+	entities := event.Payload.Entities
+
+	// Link to payment
+	if entities.PaymentID != nil {
+		links = append(links, &audit.AuditTrailEntity{
+			BusinessID:   businessID,
+			AuditTrailID: auditTrailID,
+			EntityType:   audit.EntityTypePayment,
+			EntityID:     *entities.PaymentID,
+		})
+	}
+
+	// Link to voucher
+	if entities.VoucherID != nil {
+		links = append(links, &audit.AuditTrailEntity{
+			BusinessID:   businessID,
+			AuditTrailID: auditTrailID,
+			EntityType:   audit.EntityTypeVoucher,
+			EntityID:     *entities.VoucherID,
+		})
+	}
+
+	// Link to payee
+	if entities.PayeeID != nil {
+		links = append(links, &audit.AuditTrailEntity{
+			BusinessID:   businessID,
+			AuditTrailID: auditTrailID,
+			EntityType:   audit.EntityTypePayee,
+			EntityID:     *entities.PayeeID,
+		})
+	}
+
+	// Link to user
+	if entities.UserID != nil {
+		links = append(links, &audit.AuditTrailEntity{
+			BusinessID:   businessID,
+			AuditTrailID: auditTrailID,
+			EntityType:   audit.EntityTypeUser,
+			EntityID:     *entities.UserID,
+		})
+	}
+
+	// Link to wallet
+	if entities.WalletID != nil {
+		links = append(links, &audit.AuditTrailEntity{
+			BusinessID:   businessID,
+			AuditTrailID: auditTrailID,
+			EntityType:   audit.EntityTypeWallet,
+			EntityID:     *entities.WalletID,
+		})
+	}
+
+	return links
 }
