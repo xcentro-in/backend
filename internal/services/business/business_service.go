@@ -182,6 +182,7 @@ func (s *BusinessServiceImpl) InitiateOnboarding(ctx context.Context, uid string
 		}
 
 		// Step 9: Create/Update KYB data with PAN (income_tax_id)
+		// UpdateKYBData already links the PAN to the business table's income_tax_id column
 		if pan != "" {
 			_, err = txBusinessRepo.UpdateKYBData(ctx, newBusiness.BID, &business.BusinessKYBData{
 				ITID:     pan,
@@ -193,16 +194,6 @@ func (s *BusinessServiceImpl) InitiateOnboarding(ctx context.Context, uid string
 			if err != nil {
 				s.logger.Errorf("Failed to update KYB data with PAN: %v", err)
 				return fmt.Errorf("error updating KYB data: %w", err)
-			}
-
-			// Link the PAN to business
-			err = txBusinessRepo.AddKYBSuccessData(ctx, &business.Business{
-				BID:  newBusiness.BID,
-				ITID: pan,
-			})
-			if err != nil {
-				s.logger.Errorf("Failed to link PAN to business: %v", err)
-				return fmt.Errorf("error linking PAN to business: %w", err)
 			}
 		}
 

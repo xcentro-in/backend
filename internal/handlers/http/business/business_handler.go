@@ -447,7 +447,7 @@ func (h *BusinessHandler) InviteUser(c echo.Context) error {
 		Role:         req.Role,
 		RoleClaim:    req.Role,
 		KybInitiated: false,
-		KycNeeded:    true, // Always require KYC for invited users in business relation
+		KycNeeded:    false, // Always require KYC for invited users in business relation
 	}
 
 	err = h.businessService.AddUserToBusiness(c.Request().Context(), relation)
