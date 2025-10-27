@@ -560,7 +560,7 @@ func (r *PgPaymentRepository) GetPaymentListForBusiness(ctx context.Context, bus
 			SELECT
 				v.payment_id,
 				v.voucher_id,
-				v.voucher_number,
+				v.invoice_number,
 				v.net_amount,
 				bpr.display_name as payee_name
 			FROM xcentro.payment_vouchers v
@@ -577,7 +577,7 @@ func (r *PgPaymentRepository) GetPaymentListForBusiness(ctx context.Context, bus
 				JSONB_AGG(
 					JSONB_BUILD_OBJECT(
 						'voucherId', pv.voucher_id,
-						'billId', pv.voucher_number,
+						'billId', pv.invoice_number,
 						'amount', pv.net_amount
 					)
 				) as bills
