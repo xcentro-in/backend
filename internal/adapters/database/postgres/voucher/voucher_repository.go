@@ -18,12 +18,14 @@ import (
 // PostgresVoucherRepository implements the VoucherRepository interface using PostgreSQL
 type PostgresVoucherRepository struct {
 	querier client.Querier
+	db      client.DB // Needed for transaction support
 }
 
 // NewPostgresVoucherRepository creates a new PostgreSQL voucher repository
 func NewPostgresVoucherRepository(db client.DB) voucher.VoucherRepository {
 	return &PostgresVoucherRepository{
 		querier: db,
+		db:      db,
 	}
 }
 
@@ -139,6 +141,26 @@ func (r *PostgresVoucherRepository) FinalizeVoucher(ctx context.Context, voucher
 	}
 
 	return nil
+}
+
+// ValidateVoucherForApproval checks if voucher exists, belongs to business, and is in valid status for approval
+func (r *PostgresVoucherRepository) ValidateVoucherForApproval(ctx context.Context, voucherID uuid.UUID, businessID string) (voucher.VoucherStatus, error) {
+	query := `
+		SELECT status
+		FROM xcentro.payment_vouchers
+		WHERE voucher_id = $1 AND business_id = $2
+	`
+
+	var status voucher.VoucherStatus
+	err := r.querier.QueryRow(ctx, query, voucherID, businessID).Scan(&status)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return "", voucher.ErrVoucherNotFound
+		}
+		return "", fmt.Errorf("failed to validate voucher: %w", err)
+	}
+
+	return status, nil
 }
 
 // GetByID retrieves a voucher by its ID
@@ -638,13 +660,16 @@ func (r *PostgresVoucherRepository) scanVoucher(row pgx.Row) (*voucher.Voucher, 
 	var erpReferenceID, payoutReferenceID, payoutUTR, cancellationReason, refundReferenceID sql.NullString
 	var glExpenseAccount, glBankAccount, costCenter sql.NullString
 
+	// Nullable numeric fields
+	var gstRate, tdsRate sql.NullFloat64
+
 	err := row.Scan(
 		&v.VoucherID, &v.VoucherNumber, &v.VoucherDate, &v.FiscalYear, &v.AccountingPeriod, &v.VoucherType,
 		&v.BusinessID, &v.PayeeID, &v.AccountID,
 		&v.InvoiceNumber, &v.InvoiceDate, &v.InvoiceDueDate,
 		&v.GrossAmount, &v.NetAmount, &v.Currency,
-		&v.GSTAmount, &v.GSTRate, &v.CGSTAmount, &v.SGSTAmount, &v.IGSTAmount,
-		&v.TDSAmount, &v.TDSRate, &v.TDSSection,
+		&v.GSTAmount, &gstRate, &v.CGSTAmount, &v.SGSTAmount, &v.IGSTAmount,
+		&v.TDSAmount, &tdsRate, &v.TDSSection,
 		&v.FeeAmount, &v.DiscountAmount,
 		&financialDetailsJSON, &attachmentsJSON,
 		&v.ExpenseCategory, &v.Description,
@@ -684,6 +709,14 @@ func (r *PostgresVoucherRepository) scanVoucher(row pgx.Row) (*voucher.Voucher, 
 	}
 	if costCenter.Valid {
 		v.CostCenter = costCenter.String
+	}
+
+	// Handle nullable floats
+	if gstRate.Valid {
+		v.GSTRate = gstRate.Float64
+	}
+	if tdsRate.Valid {
+		v.TDSRate = tdsRate.Float64
 	}
 
 	// Unmarshal JSONB fields
@@ -735,13 +768,16 @@ func (r *PostgresVoucherRepository) scanVoucherRow(rows pgx.Rows) (*voucher.Vouc
 	var erpReferenceID, payoutReferenceID, payoutUTR, cancellationReason, refundReferenceID sql.NullString
 	var glExpenseAccount, glBankAccount, costCenter sql.NullString
 
+	// Nullable numeric fields
+	var gstRate, tdsRate sql.NullFloat64
+
 	err := rows.Scan(
 		&v.VoucherID, &v.VoucherNumber, &v.VoucherDate, &v.FiscalYear, &v.AccountingPeriod, &v.VoucherType,
 		&v.BusinessID, &v.PayeeID, &v.AccountID,
 		&v.InvoiceNumber, &v.InvoiceDate, &v.InvoiceDueDate,
 		&v.GrossAmount, &v.NetAmount, &v.Currency,
-		&v.GSTAmount, &v.GSTRate, &v.CGSTAmount, &v.SGSTAmount, &v.IGSTAmount,
-		&v.TDSAmount, &v.TDSRate, &v.TDSSection,
+		&v.GSTAmount, &gstRate, &v.CGSTAmount, &v.SGSTAmount, &v.IGSTAmount,
+		&v.TDSAmount, &tdsRate, &v.TDSSection,
 		&v.FeeAmount, &v.DiscountAmount,
 		&financialDetailsJSON, &attachmentsJSON,
 		&v.ExpenseCategory, &v.Description,
@@ -781,6 +817,14 @@ func (r *PostgresVoucherRepository) scanVoucherRow(rows pgx.Rows) (*voucher.Vouc
 	}
 	if costCenter.Valid {
 		v.CostCenter = costCenter.String
+	}
+
+	// Handle nullable floats
+	if gstRate.Valid {
+		v.GSTRate = gstRate.Float64
+	}
+	if tdsRate.Valid {
+		v.TDSRate = tdsRate.Float64
 	}
 
 	// Unmarshal JSONB fields
@@ -1416,4 +1460,140 @@ func (r *PostgresVoucherRepository) GetApprovalInboxCounts(ctx context.Context, 
 	}
 
 	return &counts, nil
+}
+
+// BatchApproveVouchers approves multiple vouchers in a single transaction
+func (r *PostgresVoucherRepository) BatchApproveVouchers(ctx context.Context, req *voucher.BatchApprovalRequest) (*voucher.BatchApprovalResponse, error) {
+	// Start a transaction for atomicity
+	tx, err := r.db.BeginTx(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	response := &voucher.BatchApprovalResponse{
+		TotalRequested: len(req.VoucherIDs),
+		Results:        make([]voucher.BatchApprovalResultItem, 0, len(req.VoucherIDs)),
+	}
+
+	// Parse approver user ID
+	approverUserID, err := uuid.Parse(req.ApprovedByID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid approved_by_id: %w", err)
+	}
+
+	// Parse requester user ID
+	requesterUserID, err := uuid.Parse(req.RequesterID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid requester_id: %w", err)
+	}
+
+	now := time.Now()
+
+	// Process each voucher
+	for _, voucherIDStr := range req.VoucherIDs {
+		result := voucher.BatchApprovalResultItem{
+			VoucherID: voucherIDStr,
+		}
+
+		// Parse voucher ID
+		voucherID, err := uuid.Parse(voucherIDStr)
+		if err != nil {
+			result.Success = false
+			result.Message = fmt.Sprintf("Invalid voucher ID: %v", err)
+			response.Results = append(response.Results, result)
+			response.TotalFailed++
+			continue
+		}
+
+		// Get voucher details (number and verify it exists + belongs to business)
+		var voucherNumber string
+		var voucherBusinessID string
+		var voucherStatus string
+		checkQuery := `
+			SELECT voucher_number, business_id, status
+			FROM xcentro.payment_vouchers
+			WHERE voucher_id = $1
+		`
+		err = tx.QueryRow(ctx, checkQuery, voucherID).Scan(&voucherNumber, &voucherBusinessID, &voucherStatus)
+		if err != nil {
+			result.Success = false
+			result.Message = fmt.Sprintf("Voucher not found: %v", err)
+			response.Results = append(response.Results, result)
+			response.TotalFailed++
+			continue
+		}
+
+		result.VoucherNumber = voucherNumber
+
+		// Verify voucher belongs to the business
+		if voucherBusinessID != req.BusinessID {
+			result.Success = false
+			result.Message = "Voucher does not belong to this business"
+			response.Results = append(response.Results, result)
+			response.TotalFailed++
+			continue
+		}
+
+		// Verify voucher is in appropriate status (draft or finalized)
+		if voucherStatus != "draft" && voucherStatus != "finalized" {
+			result.Success = false
+			result.Message = fmt.Sprintf("Cannot approve voucher in status: %s", voucherStatus)
+			response.Results = append(response.Results, result)
+			response.TotalFailed++
+			continue
+		}
+
+		// Create approval record (INSERT new row for audit trail)
+		approvalID := uuid.Must(uuid.NewV7())
+		insertQuery := `
+			INSERT INTO xcentro.voucher_approvals (
+				approval_id, voucher_id, requester_user_id, approver_user_id,
+				action, remarks, created_at
+			) VALUES ($1, $2, $3, $4, $5, $6, $7)
+			RETURNING approval_id
+		`
+
+		err = tx.QueryRow(ctx, insertQuery,
+			approvalID,
+			voucherID,
+			requesterUserID,
+			approverUserID,
+			voucher.ApprovalActionApproved,
+			req.Remarks,
+			now,
+		).Scan(&approvalID)
+
+		if err != nil {
+			result.Success = false
+			result.Message = fmt.Sprintf("Failed to create approval: %v", err)
+			response.Results = append(response.Results, result)
+			response.TotalFailed++
+			continue
+		}
+
+		// Success
+		result.Success = true
+		result.Message = "Approved successfully"
+		result.ApprovalID = approvalID.String()
+		response.Results = append(response.Results, result)
+		response.TotalApproved++
+	}
+
+	// Commit transaction
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	// Set overall success flag and message
+	response.Success = response.TotalApproved > 0
+	if response.TotalFailed == 0 {
+		response.Message = fmt.Sprintf("Successfully approved all %d vouchers", response.TotalApproved)
+	} else if response.TotalApproved == 0 {
+		response.Message = fmt.Sprintf("Failed to approve all %d vouchers", response.TotalFailed)
+	} else {
+		response.Message = fmt.Sprintf("Approved %d out of %d vouchers, %d failed", response.TotalApproved, response.TotalRequested, response.TotalFailed)
+	}
+
+	return response, nil
 }

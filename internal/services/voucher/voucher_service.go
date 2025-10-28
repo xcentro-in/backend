@@ -58,6 +58,9 @@ type VoucherService interface {
 
 	// GetApprovalInboxCounts retrieves counts for each approval status
 	GetApprovalInboxCounts(ctx context.Context, businessID string) (*voucher.VoucherApprovalInboxCounts, error)
+
+	// BatchApproveVouchers approves multiple vouchers in a single operation
+	BatchApproveVouchers(ctx context.Context, req *voucher.BatchApprovalRequest) (*voucher.BatchApprovalResponse, error)
 }
 
 // VoucherServiceImpl implements the VoucherService interface
@@ -941,14 +944,15 @@ func (s *VoucherServiceImpl) RequestApproval(ctx context.Context, req *voucher.V
 		return nil, fmt.Errorf("invalid voucher_id: %w", err)
 	}
 
-	v, err := s.voucherRepo.GetByID(ctx, voucherUUID)
+	// Use optimized validation instead of fetching full voucher
+	status, err := s.voucherRepo.ValidateVoucherForApproval(ctx, voucherUUID, req.BusinessID)
 	if err != nil {
 		return nil, fmt.Errorf("voucher not found: %w", err)
 	}
 
 	// Only draft or finalized vouchers can have approval requests
-	if v.Status != voucher.StatusDraft && v.Status != voucher.StatusFinalized {
-		return nil, fmt.Errorf("cannot request approval for voucher in status: %s", v.Status)
+	if status != voucher.StatusDraft && status != voucher.StatusFinalized {
+		return nil, fmt.Errorf("cannot request approval for voucher in status: %s", status)
 	}
 
 	// Call repository to create/update approval
@@ -1009,4 +1013,30 @@ func (s *VoucherServiceImpl) GetApprovalInboxCounts(ctx context.Context, busines
 	}
 
 	return counts, nil
+}
+
+// BatchApproveVouchers approves multiple vouchers in a single operation
+func (s *VoucherServiceImpl) BatchApproveVouchers(ctx context.Context, req *voucher.BatchApprovalRequest) (*voucher.BatchApprovalResponse, error) {
+	// Validate business ID
+	if req.BusinessID == "" {
+		return nil, fmt.Errorf("business_id is required")
+	}
+
+	// Validate approved_by_id
+	if req.ApprovedByID == "" {
+		return nil, fmt.Errorf("approved_by_id is required")
+	}
+
+	// Validate voucher IDs
+	if len(req.VoucherIDs) == 0 {
+		return nil, fmt.Errorf("at least one voucher_id is required")
+	}
+
+	// Call repository to perform batch approval
+	response, err := s.voucherRepo.BatchApproveVouchers(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("failed to batch approve vouchers: %w", err)
+	}
+
+	return response, nil
 }

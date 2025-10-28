@@ -15,6 +15,7 @@ const (
 // VoucherApprovalRequest represents the request to create/update an approval
 type VoucherApprovalRequest struct {
 	VoucherID       string         `json:"voucher_id" validate:"required,uuid"`
+	BusinessID      string         `json:"-"` // Set from header, not from request body
 	RequesterUserID string         `json:"-"` // Set from JWT context, not from request body
 	ApproverUserID  string         `json:"approver_user_id" validate:"required,uuid"` // Who should approve
 	Action          ApprovalAction `json:"action" validate:"required,oneof=pending approved rejected request_changes"`
@@ -79,4 +80,32 @@ type VoucherApprovalInboxCounts struct {
 	Approved       int `json:"approved"`
 	Rejected       int `json:"rejected"`
 	RequestChanges int `json:"request_changes"`
+}
+
+// BatchApprovalRequest represents a batch approval request for multiple vouchers
+type BatchApprovalRequest struct {
+	VoucherIDs     []string `json:"voucher_ids" validate:"required,min=1,dive,uuid"`
+	ApprovedByID   string   `json:"approved_by_id" validate:"required,uuid"`
+	RequesterID    string   `json:"-"` // Set from JWT context
+	BusinessID     string   `json:"-"` // Set from header
+	Remarks        string   `json:"remarks"` // Optional remarks for all approvals
+}
+
+// BatchApprovalResponse represents the result of batch approval operation
+type BatchApprovalResponse struct {
+	Success        bool                       `json:"success"`
+	Message        string                     `json:"message"`
+	TotalRequested int                        `json:"total_requested"`
+	TotalApproved  int                        `json:"total_approved"`
+	TotalFailed    int                        `json:"total_failed"`
+	Results        []BatchApprovalResultItem  `json:"results"`
+}
+
+// BatchApprovalResultItem represents the result for a single voucher in batch operation
+type BatchApprovalResultItem struct {
+	VoucherID     string `json:"voucher_id"`
+	VoucherNumber string `json:"voucher_number"`
+	Success       bool   `json:"success"`
+	Message       string `json:"message"`
+	ApprovalID    string `json:"approval_id,omitempty"` // Only present if successful
 }

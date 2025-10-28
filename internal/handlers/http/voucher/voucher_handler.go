@@ -813,6 +813,7 @@ func (h *VoucherHandler) RequestApproval(c echo.Context) error {
 	// Create service request
 	serviceReq := &voucher.VoucherApprovalRequest{
 		VoucherID:       voucherID,
+		BusinessID:      businessID,
 		RequesterUserID: userID,
 		ApproverUserID:  reqBody.ApproverUserID,
 		Action:          action,
@@ -929,4 +930,81 @@ func (h *VoucherHandler) GetApprovalInboxCounts(c echo.Context) error {
 		"request_changes", counts.RequestChanges)
 
 	return c.JSON(http.StatusOK, counts)
+}
+
+// BatchApproveVouchers approves multiple vouchers in a single operation
+func (h *VoucherHandler) BatchApproveVouchers(c echo.Context) error {
+	h.logger.InfoWith("BatchApproveVouchers API called")
+
+	// Extract user_id from JWT context
+	userID, ok := c.Get("userId").(string)
+	if !ok || userID == "" {
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "MISSING_USER_ID",
+			"message": "User ID not found in token",
+		})
+	}
+
+	// Extract business_id from header
+	businessID := c.Request().Header.Get("X-Business-ID")
+	if businessID == "" {
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "MISSING_BUSINESS_ID",
+			"message": "X-Business-ID header is required",
+		})
+	}
+
+	// Parse request body
+	var reqBody struct {
+		VoucherIDs   []string `json:"voucher_ids" validate:"required,min=1"`
+		ApprovedByID string   `json:"approved_by_id" validate:"required,uuid"`
+		Remarks      string   `json:"remarks"`
+	}
+
+	if err := c.Bind(&reqBody); err != nil {
+		h.logger.ErrorWith("Error binding request", "error", err)
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "INVALID_REQUEST",
+			"message": "Invalid request body",
+		})
+	}
+
+	// Validate voucher IDs
+	if len(reqBody.VoucherIDs) == 0 {
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "MISSING_VOUCHER_IDS",
+			"message": "At least one voucher_id is required",
+		})
+	}
+
+	h.logger.DebugWith("Processing batch approval",
+		"total_vouchers", len(reqBody.VoucherIDs),
+		"approved_by", reqBody.ApprovedByID,
+		"requester", userID)
+
+	// Create service request
+	serviceReq := &voucher.BatchApprovalRequest{
+		VoucherIDs:   reqBody.VoucherIDs,
+		ApprovedByID: reqBody.ApprovedByID,
+		RequesterID:  userID,
+		BusinessID:   businessID,
+		Remarks:      reqBody.Remarks,
+	}
+
+	// Call service
+	response, err := h.voucherService.BatchApproveVouchers(c.Request().Context(), serviceReq)
+	if err != nil {
+		h.logger.ErrorWith("Failed to batch approve vouchers", "error", err)
+		return c.JSON(http.StatusInternalServerError, map[string]any{
+			"error":   "SERVICE_ERROR",
+			"message": err.Error(),
+		})
+	}
+
+	h.logger.InfoWith("Batch approval completed",
+		"total_requested", response.TotalRequested,
+		"total_approved", response.TotalApproved,
+		"total_failed", response.TotalFailed)
+
+	return c.JSON(http.StatusOK, response)
 }

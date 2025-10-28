@@ -18,6 +18,10 @@ type VoucherRepository interface {
 	// GetByID retrieves a voucher by its ID
 	GetByID(ctx context.Context, voucherID uuid.UUID) (*Voucher, error)
 
+	// ValidateVoucherForApproval checks if voucher exists, belongs to business, and is in valid status for approval
+	// Returns voucher status if valid, error if not found or invalid
+	ValidateVoucherForApproval(ctx context.Context, voucherID uuid.UUID, businessID string) (VoucherStatus, error)
+
 	// GetByVoucherNumber retrieves a voucher by its voucher number
 	GetByVoucherNumber(ctx context.Context, voucherNumber string) (*Voucher, error)
 
@@ -79,6 +83,10 @@ type VoucherRepository interface {
 	// GetApprovalInboxCounts retrieves counts for each approval status
 	// Returns counts for pending, approved (7-day), rejected, and request_changes
 	GetApprovalInboxCounts(ctx context.Context, businessID string) (*VoucherApprovalInboxCounts, error)
+
+	// BatchApproveVouchers approves multiple vouchers in a single transaction
+	// Returns detailed results for each voucher (success/failure with reasons)
+	BatchApproveVouchers(ctx context.Context, req *BatchApprovalRequest) (*BatchApprovalResponse, error)
 }
 
 // VoucherFilters defines filter criteria for listing vouchers

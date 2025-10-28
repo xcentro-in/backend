@@ -16,6 +16,7 @@ func RegisterVoucherRoutes(group *echo.Group, voucherService voucherSvc.VoucherS
 	// Voucher management endpoints
 	group.POST("/draft", handler.CreateDraftVoucher)                         // POST /vouchers/draft - Create draft voucher
 	group.POST("/multi", handler.CreateMultiVouchers)                        // POST /vouchers/multi - Multi-bill payment
+	group.POST("/batch-approve", handler.BatchApproveVouchers)               // POST /vouchers/batch-approve - Batch approve multiple vouchers
 	group.GET("", handler.ListVouchers)                                      // GET /vouchers - List vouchers with filters
 	group.GET("/list", handler.GetVoucherList)                               // GET /vouchers/list - Get bills with payment status (paid, open, overdue)
 	group.GET("/approval-inbox/counts", handler.GetApprovalInboxCounts)      // GET /vouchers/approval-inbox/counts - Get approval status counts
