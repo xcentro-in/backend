@@ -109,6 +109,31 @@ See `.env.example` for full list. Key variables:
 2. Always create `.up.sql` and `.down.sql`
 3. Test with `./bin/migrate -action=up` and `-action=down`
 
+### Database Seed Data (Testing)
+**Location**: `internal/adapters/database/postgres/migrations/seeds/`
+
+Seed files provide test data for development and testing. Follow this workflow:
+
+1. **Create Seed File**: `NNN_seed_description.sql` (e.g., `005_seed_approval_workflow.sql`)
+2. **Create Rollback**: `NNN_seed_description_rollback.sql`
+3. **Apply Seeds**: Use the helper script
+   ```bash
+   cd internal/adapters/database/postgres/migrations/seeds/
+   ./apply-seeds.sh apply 005        # Apply specific seed
+   ./apply-seeds.sh apply-all         # Apply all seeds
+   ./apply-seeds.sh rollback 005      # Rollback specific seed
+   ./apply-seeds.sh list              # List available seeds
+   ```
+
+**Available Seeds**:
+- `001` - Wallet test data (stored cards, bank accounts)
+- `002` - Vendor payees (3 vendors with bank accounts)
+- `003` - Employee/biller payees
+- `004` - Voucher with card payment
+- `005` - Approval workflow (14 vouchers with various approval states)
+
+**Naming Convention**: Sequential numbering with descriptive names. Always provide rollback files for cleanup.
+
 ### Adding New Payment Gateway
 1. Create client in `internal/adapters/external/payment/newgateway/`
 2. Implement `PaymentGateway` interface

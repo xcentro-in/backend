@@ -1233,3 +1233,187 @@ func (r *PostgresVoucherRepository) CreateOrUpdateApproval(ctx context.Context, 
 		CreatedAt:  createdAt,
 	}, nil
 }
+
+// GetApprovalInboxVouchers retrieves vouchers for approval inbox filtered by approval status
+func (r *PostgresVoucherRepository) GetApprovalInboxVouchers(ctx context.Context, businessID string, status voucher.ApprovalAction) ([]voucher.VoucherApprovalInboxItem, error) {
+	// Query strategy:
+	// 1. CTE to get latest approval per voucher and filter by status
+	// 2. For approved status, apply 7-day date filter
+	// 3. Join with vouchers and fetch all approval history with user details
+	// 4. Group results by voucher_id in Go code
+
+	query := `
+		WITH latest_approvals AS (
+			SELECT DISTINCT ON (voucher_id)
+				voucher_id,
+				action,
+				created_at as latest_approval_date
+			FROM xcentro.voucher_approvals
+			ORDER BY voucher_id, created_at DESC
+		),
+		filtered_vouchers AS (
+			SELECT voucher_id
+			FROM latest_approvals
+			WHERE action = $2
+				AND (
+					$2 != 'approved'
+					OR latest_approval_date >= CURRENT_DATE - INTERVAL '6 days'
+				)
+		)
+		SELECT
+			v.voucher_id,
+			v.voucher_number,
+			COALESCE(v.invoice_number, '') as invoice_number,
+			v.invoice_due_date,
+			v.net_amount,
+			v.status as voucher_status,
+			bpr.display_name as payee_name,
+			va.approval_id,
+			va.requester_user_id,
+			COALESCE(req_user.name, '') as requester_name,
+			va.approver_user_id,
+			COALESCE(app_user.name, '') as approver_name,
+			va.action,
+			COALESCE(va.remarks, '') as remarks,
+			va.created_at
+		FROM filtered_vouchers fv
+		INNER JOIN xcentro.payment_vouchers v ON fv.voucher_id = v.voucher_id
+		INNER JOIN xcentro.business_payee_relation bpr
+			ON v.business_id = bpr.business_id
+			AND v.payee_id = bpr.payee_id
+			AND v.account_id = bpr.account_id
+		INNER JOIN xcentro.voucher_approvals va ON v.voucher_id = va.voucher_id
+		LEFT JOIN xcentro.user_table req_user ON va.requester_user_id = req_user.id
+		LEFT JOIN xcentro.user_table app_user ON va.approver_user_id = app_user.id
+		WHERE v.business_id = $1
+		ORDER BY v.created_at DESC, va.created_at ASC
+	`
+
+	rows, err := r.querier.Query(ctx, query, businessID, status)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query approval inbox vouchers: %w", err)
+	}
+	defer rows.Close()
+
+	// Map to group approval history by voucher_id
+	voucherMap := make(map[string]*voucher.VoucherApprovalInboxItem)
+	voucherOrder := []string{} // To maintain order
+
+	for rows.Next() {
+		var voucherID, voucherNumber, invoiceNumber, voucherStatus, payeeName string
+		var netAmount int64
+		var invoiceDueDateDB *time.Time
+
+		var approvalID, requesterUserID, requesterName, approverUserID, approverName string
+		var action voucher.ApprovalAction
+		var remarks string
+		var createdAt time.Time
+
+		err := rows.Scan(
+			&voucherID,
+			&voucherNumber,
+			&invoiceNumber,
+			&invoiceDueDateDB,
+			&netAmount,
+			&voucherStatus,
+			&payeeName,
+			&approvalID,
+			&requesterUserID,
+			&requesterName,
+			&approverUserID,
+			&approverName,
+			&action,
+			&remarks,
+			&createdAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan approval inbox row: %w", err)
+		}
+
+		// Check if voucher already exists in map
+		if _, exists := voucherMap[voucherID]; !exists {
+			// First time seeing this voucher, create entry
+			voucherMap[voucherID] = &voucher.VoucherApprovalInboxItem{
+				VoucherID:             voucherID,
+				VoucherNumber:         voucherNumber,
+				InvoiceNumber:         invoiceNumber,
+				InvoiceDueDate:        invoiceDueDateDB,
+				PayeeName:             payeeName,
+				TotalAmount:           float64(netAmount) / 100.0, // Convert paise to rupees
+				VoucherStatus:         voucherStatus,
+				CurrentApprovalStatus: status, // Latest status from filter
+				ApprovalHistory:       []voucher.ApprovalHistoryItem{},
+			}
+			voucherOrder = append(voucherOrder, voucherID)
+		}
+
+		// Append approval history item
+		historyItem := voucher.ApprovalHistoryItem{
+			ApprovalID:      approvalID,
+			RequesterUserID: requesterUserID,
+			RequesterName:   requesterName,
+			ApproverUserID:  approverUserID,
+			ApproverName:    approverName,
+			Action:          action,
+			Remarks:         remarks,
+			CreatedAt:       createdAt,
+		}
+		voucherMap[voucherID].ApprovalHistory = append(voucherMap[voucherID].ApprovalHistory, historyItem)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating approval inbox rows: %w", err)
+	}
+
+	// Convert map to ordered slice
+	result := make([]voucher.VoucherApprovalInboxItem, 0, len(voucherOrder))
+	for _, voucherID := range voucherOrder {
+		result = append(result, *voucherMap[voucherID])
+	}
+
+	return result, nil
+}
+
+// GetApprovalInboxCounts retrieves counts for each approval status
+func (r *PostgresVoucherRepository) GetApprovalInboxCounts(ctx context.Context, businessID string) (*voucher.VoucherApprovalInboxCounts, error) {
+	// Optimized query to get all counts in a single database round-trip
+	// Uses CTEs and aggregation for efficiency
+	query := `
+		WITH latest_approvals AS (
+			SELECT DISTINCT ON (voucher_id)
+				voucher_id,
+				action,
+				created_at as latest_approval_date
+			FROM xcentro.voucher_approvals
+			ORDER BY voucher_id, created_at DESC
+		),
+		voucher_approvals_with_status AS (
+			SELECT
+				v.voucher_id,
+				la.action,
+				la.latest_approval_date
+			FROM xcentro.payment_vouchers v
+			INNER JOIN latest_approvals la ON v.voucher_id = la.voucher_id
+			WHERE v.business_id = $1
+		)
+		SELECT
+			COUNT(*) FILTER (WHERE action = 'pending') as pending_count,
+			COUNT(*) FILTER (WHERE action = 'approved' AND latest_approval_date >= CURRENT_DATE - INTERVAL '6 days') as approved_count,
+			COUNT(*) FILTER (WHERE action = 'rejected') as rejected_count,
+			COUNT(*) FILTER (WHERE action = 'request_changes') as request_changes_count
+		FROM voucher_approvals_with_status
+	`
+
+	var counts voucher.VoucherApprovalInboxCounts
+	err := r.querier.QueryRow(ctx, query, businessID).Scan(
+		&counts.Pending,
+		&counts.Approved,
+		&counts.Rejected,
+		&counts.RequestChanges,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get approval inbox counts: %w", err)
+	}
+
+	return &counts, nil
+}

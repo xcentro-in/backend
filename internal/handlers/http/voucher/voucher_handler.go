@@ -835,3 +835,98 @@ func (h *VoucherHandler) RequestApproval(c echo.Context) error {
 
 	return c.JSON(http.StatusOK, response)
 }
+
+// GetApprovalInbox retrieves vouchers for approval inbox filtered by status
+func (h *VoucherHandler) GetApprovalInbox(c echo.Context) error {
+	h.logger.InfoWith("GetApprovalInbox API called")
+
+	// Extract business_id from header
+	businessID := c.Request().Header.Get("X-Business-ID")
+	if businessID == "" {
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "MISSING_BUSINESS_ID",
+			"message": "X-Business-ID header is required",
+		})
+	}
+
+	// Extract status query parameter (REQUIRED)
+	statusParam := c.QueryParam("status")
+	if statusParam == "" {
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "MISSING_STATUS",
+			"message": "status query parameter is required",
+		})
+	}
+
+	// Validate status
+	status := voucher.ApprovalAction(statusParam)
+	if status != voucher.ApprovalActionPending &&
+		status != voucher.ApprovalActionApproved &&
+		status != voucher.ApprovalActionRejected &&
+		status != voucher.ApprovalActionRequestChanges {
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "INVALID_STATUS",
+			"message": "status must be one of: pending, approved, rejected, request_changes",
+		})
+	}
+
+	h.logger.DebugWith("Fetching approval inbox",
+		"business_id", businessID,
+		"status", status)
+
+	// Create service request
+	serviceReq := &voucher.VoucherApprovalInboxRequest{
+		BusinessID: businessID,
+		Status:     status,
+	}
+
+	// Call service
+	response, err := h.voucherService.GetApprovalInbox(c.Request().Context(), serviceReq)
+	if err != nil {
+		h.logger.ErrorWith("Failed to get approval inbox", "error", err)
+		return c.JSON(http.StatusInternalServerError, map[string]any{
+			"error":   "SERVICE_ERROR",
+			"message": err.Error(),
+		})
+	}
+
+	h.logger.InfoWith("Approval inbox retrieved successfully",
+		"total_count", response.TotalCount,
+		"status", status)
+
+	return c.JSON(http.StatusOK, response)
+}
+
+// GetApprovalInboxCounts retrieves counts for each approval status
+func (h *VoucherHandler) GetApprovalInboxCounts(c echo.Context) error {
+	h.logger.InfoWith("GetApprovalInboxCounts API called")
+
+	// Extract business_id from header
+	businessID := c.Request().Header.Get("X-Business-ID")
+	if businessID == "" {
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "MISSING_BUSINESS_ID",
+			"message": "X-Business-ID header is required",
+		})
+	}
+
+	h.logger.DebugWith("Fetching approval inbox counts", "business_id", businessID)
+
+	// Call service
+	counts, err := h.voucherService.GetApprovalInboxCounts(c.Request().Context(), businessID)
+	if err != nil {
+		h.logger.ErrorWith("Failed to get approval inbox counts", "error", err)
+		return c.JSON(http.StatusInternalServerError, map[string]any{
+			"error":   "SERVICE_ERROR",
+			"message": err.Error(),
+		})
+	}
+
+	h.logger.InfoWith("Approval inbox counts retrieved successfully",
+		"pending", counts.Pending,
+		"approved", counts.Approved,
+		"rejected", counts.Rejected,
+		"request_changes", counts.RequestChanges)
+
+	return c.JSON(http.StatusOK, counts)
+}

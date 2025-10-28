@@ -18,6 +18,8 @@ func RegisterVoucherRoutes(group *echo.Group, voucherService voucherSvc.VoucherS
 	group.POST("/multi", handler.CreateMultiVouchers)                        // POST /vouchers/multi - Multi-bill payment
 	group.GET("", handler.ListVouchers)                                      // GET /vouchers - List vouchers with filters
 	group.GET("/list", handler.GetVoucherList)                               // GET /vouchers/list - Get bills with payment status (paid, open, overdue)
+	group.GET("/approval-inbox/counts", handler.GetApprovalInboxCounts)      // GET /vouchers/approval-inbox/counts - Get approval status counts
+	group.GET("/approval-inbox", handler.GetApprovalInbox)                   // GET /vouchers/approval-inbox?status={status} - Get approval inbox
 	group.GET("/reminders", handler.GetDraftReminders)                       // GET /vouchers/reminders - Get abandoned drafts
 	group.GET("/payee/:relation_id", handler.GetVouchersByPayee)             // GET /vouchers/payee/:relation_id - Get vouchers by payee
 	group.GET("/:id", handler.GetVoucherDetails)                             // GET /vouchers/:id - Get voucher details

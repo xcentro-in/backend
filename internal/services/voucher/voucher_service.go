@@ -52,6 +52,12 @@ type VoucherService interface {
 
 	// RequestApproval creates or updates an approval request for a voucher
 	RequestApproval(ctx context.Context, req *voucher.VoucherApprovalRequest) (*voucher.VoucherApprovalResponse, error)
+
+	// GetApprovalInbox retrieves vouchers for approval inbox filtered by approval status
+	GetApprovalInbox(ctx context.Context, req *voucher.VoucherApprovalInboxRequest) (*voucher.VoucherApprovalInboxResponse, error)
+
+	// GetApprovalInboxCounts retrieves counts for each approval status
+	GetApprovalInboxCounts(ctx context.Context, businessID string) (*voucher.VoucherApprovalInboxCounts, error)
 }
 
 // VoucherServiceImpl implements the VoucherService interface
@@ -952,4 +958,55 @@ func (s *VoucherServiceImpl) RequestApproval(ctx context.Context, req *voucher.V
 	}
 
 	return response, nil
+}
+
+// GetApprovalInbox retrieves vouchers for approval inbox filtered by approval status
+func (s *VoucherServiceImpl) GetApprovalInbox(ctx context.Context, req *voucher.VoucherApprovalInboxRequest) (*voucher.VoucherApprovalInboxResponse, error) {
+	// Validate business ID
+	if req.BusinessID == "" {
+		return nil, fmt.Errorf("business_id is required")
+	}
+
+	// Validate status
+	if req.Status == "" {
+		return nil, fmt.Errorf("status query parameter is required")
+	}
+
+	// Validate status is a valid approval action
+	validStatuses := map[voucher.ApprovalAction]bool{
+		voucher.ApprovalActionPending:        true,
+		voucher.ApprovalActionApproved:       true,
+		voucher.ApprovalActionRejected:       true,
+		voucher.ApprovalActionRequestChanges: true,
+	}
+	if !validStatuses[req.Status] {
+		return nil, fmt.Errorf("invalid status: must be one of pending, approved, rejected, request_changes")
+	}
+
+	// Call repository to get filtered vouchers with complete approval history
+	vouchers, err := s.voucherRepo.GetApprovalInboxVouchers(ctx, req.BusinessID, req.Status)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get approval inbox: %w", err)
+	}
+
+	return &voucher.VoucherApprovalInboxResponse{
+		Vouchers:   vouchers,
+		TotalCount: len(vouchers),
+	}, nil
+}
+
+// GetApprovalInboxCounts retrieves counts for each approval status
+func (s *VoucherServiceImpl) GetApprovalInboxCounts(ctx context.Context, businessID string) (*voucher.VoucherApprovalInboxCounts, error) {
+	// Validate business ID
+	if businessID == "" {
+		return nil, fmt.Errorf("business_id is required")
+	}
+
+	// Call repository to get counts
+	counts, err := s.voucherRepo.GetApprovalInboxCounts(ctx, businessID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get approval inbox counts: %w", err)
+	}
+
+	return counts, nil
 }

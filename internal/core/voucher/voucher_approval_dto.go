@@ -47,3 +47,36 @@ type ApprovalHistoryItem struct {
 	Remarks         string         `json:"remarks"`
 	CreatedAt       time.Time      `json:"created_at"` // When this action was taken
 }
+
+// VoucherApprovalInboxRequest represents request for approval inbox listing
+type VoucherApprovalInboxRequest struct {
+	BusinessID string         `json:"business_id"` // From header
+	Status     ApprovalAction `json:"status" validate:"required,oneof=pending approved rejected request_changes"`
+}
+
+// VoucherApprovalInboxItem represents a single voucher in the approval inbox
+type VoucherApprovalInboxItem struct {
+	VoucherID              string                `json:"voucher_id"`
+	VoucherNumber          string                `json:"voucher_number"`
+	InvoiceNumber          string                `json:"invoice_number"`
+	InvoiceDueDate         *time.Time            `json:"invoice_due_date"`
+	PayeeName              string                `json:"payee_name"`
+	TotalAmount            float64               `json:"total_amount"` // In rupees
+	VoucherStatus          string                `json:"voucher_status"`
+	CurrentApprovalStatus  ApprovalAction        `json:"current_approval_status"` // Latest approval action
+	ApprovalHistory        []ApprovalHistoryItem `json:"approval_history"`        // Complete chronological history
+}
+
+// VoucherApprovalInboxResponse represents the approval inbox response
+type VoucherApprovalInboxResponse struct {
+	Vouchers   []VoucherApprovalInboxItem `json:"vouchers"`
+	TotalCount int                        `json:"total_count"`
+}
+
+// VoucherApprovalInboxCounts represents counts for each approval status
+type VoucherApprovalInboxCounts struct {
+	Pending        int `json:"pending"`
+	Approved       int `json:"approved"`
+	Rejected       int `json:"rejected"`
+	RequestChanges int `json:"request_changes"`
+}

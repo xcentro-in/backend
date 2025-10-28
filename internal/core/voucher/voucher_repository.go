@@ -70,6 +70,15 @@ type VoucherRepository interface {
 
 	// CreateOrUpdateApproval creates or updates an approval record for a voucher
 	CreateOrUpdateApproval(ctx context.Context, req *VoucherApprovalRequest) (*VoucherApprovalResponse, error)
+
+	// GetApprovalInboxVouchers retrieves vouchers for approval inbox filtered by approval status
+	// Returns vouchers with complete approval history (all actions chronologically)
+	// For approved status, applies 7-day filter (only approved within last 7 days)
+	GetApprovalInboxVouchers(ctx context.Context, businessID string, status ApprovalAction) ([]VoucherApprovalInboxItem, error)
+
+	// GetApprovalInboxCounts retrieves counts for each approval status
+	// Returns counts for pending, approved (7-day), rejected, and request_changes
+	GetApprovalInboxCounts(ctx context.Context, businessID string) (*VoucherApprovalInboxCounts, error)
 }
 
 // VoucherFilters defines filter criteria for listing vouchers
