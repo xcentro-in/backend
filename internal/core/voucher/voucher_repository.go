@@ -87,6 +87,15 @@ type VoucherRepository interface {
 	// BatchApproveVouchers approves multiple vouchers in a single transaction
 	// Returns detailed results for each voucher (success/failure with reasons)
 	BatchApproveVouchers(ctx context.Context, req *BatchApprovalRequest) (*BatchApprovalResponse, error)
+
+	// GetUnpaidBills retrieves unpaid bills with role-based filtering
+	// Owner role: Returns all unpaid bills
+	// Other roles: Returns only approved unpaid bills
+	GetUnpaidBills(ctx context.Context, req *UnpaidBillsRequest, isOwner bool) ([]UnpaidBillItem, int, error)
+
+	// GetVoucherCounts retrieves counts of vouchers by payment status
+	// Returns counts for: all, paid, open, overdue
+	GetVoucherCounts(ctx context.Context, businessID string) (*VoucherCountsResponse, error)
 }
 
 // VoucherFilters defines filter criteria for listing vouchers

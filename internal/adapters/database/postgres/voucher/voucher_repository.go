@@ -1597,3 +1597,125 @@ func (r *PostgresVoucherRepository) BatchApproveVouchers(ctx context.Context, re
 
 	return response, nil
 }
+
+// GetUnpaidBills retrieves unpaid bills with role-based filtering
+func (r *PostgresVoucherRepository) GetUnpaidBills(ctx context.Context, req *voucher.UnpaidBillsRequest, isOwner bool) ([]voucher.UnpaidBillItem, int, error) {
+	// Build query with role-based approval filtering
+	query := `
+		WITH latest_approvals AS (
+			SELECT DISTINCT ON (voucher_id)
+				voucher_id,
+				action
+			FROM xcentro.voucher_approvals
+			ORDER BY voucher_id, created_at DESC
+		)
+		SELECT
+			v.voucher_id,
+			v.invoice_number,
+			v.net_amount / 100.0 AS total_amount,
+			v.invoice_due_date,
+			CASE
+				WHEN v.invoice_due_date < CURRENT_DATE THEN 'overdue'
+				ELSE 'open'
+			END AS status,
+			pb.legal_name AS vendor_name,
+			pb.gstin AS vendor_gstin,
+			COUNT(*) OVER() AS total_count
+		FROM xcentro.payment_vouchers v
+		INNER JOIN xcentro.business_payee_relation bpr ON v.payee_id = bpr.payee_id
+		INNER JOIN xcentro.payee_vendor pb ON bpr.payee_id = pb.payee_id
+		LEFT JOIN latest_approvals la ON v.voucher_id = la.voucher_id
+		WHERE v.business_id = $1
+		  AND v.payment_id IS NULL
+		  AND v.status IN ('draft', 'finalized')
+	`
+
+	// Add approval filter for non-owner roles
+	if !isOwner {
+		query += ` AND la.action = 'approved'`
+	}
+
+	query += `
+		ORDER BY v.invoice_due_date ASC NULLS LAST
+		LIMIT $2 OFFSET $3
+	`
+
+	// Set default pagination if not provided
+	limit := req.Limit
+	if limit <= 0 {
+		limit = 50 // Default page size
+	}
+	offset := req.Offset
+	if offset < 0 {
+		offset = 0
+	}
+
+	rows, err := r.querier.Query(ctx, query, req.BusinessID, limit, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to query unpaid bills: %w", err)
+	}
+	defer rows.Close()
+
+	bills := make([]voucher.UnpaidBillItem, 0)
+	var totalCount int
+
+	for rows.Next() {
+		var bill voucher.UnpaidBillItem
+		var dueDate sql.NullTime
+		var status string
+
+		err := rows.Scan(
+			&bill.VoucherID,
+			&bill.InvoiceNumber,
+			&bill.TotalAmount,
+			&dueDate,
+			&status,
+			&bill.VendorName,
+			&bill.VendorGSTIN,
+			&totalCount,
+		)
+		if err != nil {
+			return nil, 0, fmt.Errorf("failed to scan unpaid bill: %w", err)
+		}
+
+		if dueDate.Valid {
+			bill.DueDate = &dueDate.Time
+		}
+		bill.Status = voucher.BillPaymentStatus(status)
+
+		bills = append(bills, bill)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("error iterating unpaid bills: %w", err)
+	}
+
+	return bills, totalCount, nil
+}
+
+// GetVoucherCounts retrieves counts of vouchers by payment status
+func (r *PostgresVoucherRepository) GetVoucherCounts(ctx context.Context, businessID string) (*voucher.VoucherCountsResponse, error) {
+	query := `
+		SELECT
+			COUNT(*) as all_count,
+			COUNT(*) FILTER (WHERE payment_id IS NOT NULL) as paid_count,
+			COUNT(*) FILTER (WHERE payment_id IS NULL AND (invoice_due_date IS NULL OR invoice_due_date >= CURRENT_DATE)) as open_count,
+			COUNT(*) FILTER (WHERE payment_id IS NULL AND invoice_due_date < CURRENT_DATE) as overdue_count
+		FROM xcentro.payment_vouchers
+		WHERE business_id = $1
+		  AND status IN ('draft', 'finalized', 'posted', 'synced')
+	`
+
+	var counts voucher.VoucherCountsResponse
+	err := r.querier.QueryRow(ctx, query, businessID).Scan(
+		&counts.All,
+		&counts.Paid,
+		&counts.Open,
+		&counts.Overdue,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get voucher counts: %w", err)
+	}
+
+	return &counts, nil
+}

@@ -41,3 +41,37 @@ type VoucherListResponse struct {
 	Limit      int               `json:"limit"`
 	Offset     int               `json:"offset"`
 }
+
+// UnpaidBillsRequest represents the request to fetch unpaid bills
+type UnpaidBillsRequest struct {
+	BusinessID string `json:"business_id"` // From header
+	Limit      int    `json:"limit"`       // Optional pagination
+	Offset     int    `json:"offset"`      // Optional pagination
+}
+
+// UnpaidBillItem represents a single unpaid bill
+type UnpaidBillItem struct {
+	VoucherID     string            `json:"voucher_id"`
+	InvoiceNumber string            `json:"invoice_number"`
+	TotalAmount   float64           `json:"total_amount"` // Net amount in rupees
+	DueDate       *time.Time        `json:"due_date"`
+	Status        BillPaymentStatus `json:"status"`       // open or overdue
+	VendorName    string            `json:"vendor_name"`
+	VendorGSTIN   string            `json:"vendor_gstin"`
+}
+
+// UnpaidBillsResponse represents the response with unpaid bills
+type UnpaidBillsResponse struct {
+	Bills      []UnpaidBillItem `json:"bills"`
+	TotalCount int              `json:"total_count"`
+	Limit      int              `json:"limit"`
+	Offset     int              `json:"offset"`
+}
+
+// VoucherCountsResponse represents the counts of vouchers by payment status
+type VoucherCountsResponse struct {
+	All     int `json:"all"`      // Total vouchers (all statuses)
+	Paid    int `json:"paid"`     // Payment completed
+	Open    int `json:"open"`     // Not paid, due date in future
+	Overdue int `json:"overdue"`  // Not paid, due date passed
+}

@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
+	"xcentro.in/internal/core/business"
 	"xcentro.in/internal/core/voucher"
 	voucherSvc "xcentro.in/internal/services/voucher"
 	"xcentro.in/internal/shared/logger"
@@ -1007,4 +1008,113 @@ func (h *VoucherHandler) BatchApproveVouchers(c echo.Context) error {
 		"total_failed", response.TotalFailed)
 
 	return c.JSON(http.StatusOK, response)
+}
+
+// GetUnpaidBills retrieves unpaid bills with role-based filtering
+func (h *VoucherHandler) GetUnpaidBills(c echo.Context) error {
+	h.logger.InfoWith("GetUnpaidBills API called")
+
+	// Extract business_id from header
+	businessID := c.Request().Header.Get("X-Business-ID")
+	if businessID == "" {
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "MISSING_BUSINESS_ID",
+			"message": "X-Business-ID header is required",
+		})
+	}
+
+	// Get user roles from middleware context
+	ur := c.Get("userRoles")
+	if ur == nil {
+		return c.JSON(http.StatusForbidden, map[string]any{
+			"error":   "FORBIDDEN",
+			"message": "No business association found",
+		})
+	}
+	roles := ur.([]*business.BusinessUserRelation)
+
+	// Find the role for the requested business
+	var isOwner bool
+	for _, rel := range roles {
+		if rel.BID == businessID {
+			isOwner = (string(rel.Role) == "owner")
+			break
+		}
+	}
+
+	// Parse optional query parameters for pagination
+	limit := 50 // Default limit
+	if limitStr := c.QueryParam("limit"); limitStr != "" {
+		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 {
+			limit = l
+		}
+	}
+
+	offset := 0
+	if offsetStr := c.QueryParam("offset"); offsetStr != "" {
+		if o, err := strconv.Atoi(offsetStr); err == nil && o >= 0 {
+			offset = o
+		}
+	}
+
+	h.logger.DebugWith("Fetching unpaid bills",
+		"business_id", businessID,
+		"is_owner", isOwner,
+		"limit", limit,
+		"offset", offset)
+
+	// Create service request
+	serviceReq := &voucher.UnpaidBillsRequest{
+		BusinessID: businessID,
+		Limit:      limit,
+		Offset:     offset,
+	}
+
+	// Call service
+	response, err := h.voucherService.GetUnpaidBills(c.Request().Context(), serviceReq, isOwner)
+	if err != nil {
+		h.logger.ErrorWith("Failed to fetch unpaid bills", "error", err)
+		return c.JSON(http.StatusInternalServerError, map[string]any{
+			"error":   "SERVICE_ERROR",
+			"message": err.Error(),
+		})
+	}
+
+	h.logger.InfoWith("Unpaid bills fetched successfully",
+		"total_count", response.TotalCount,
+		"returned_count", len(response.Bills))
+
+	return c.JSON(http.StatusOK, response)
+}
+
+// GetVoucherCounts retrieves counts of vouchers by payment status
+func (h *VoucherHandler) GetVoucherCounts(c echo.Context) error {
+	h.logger.InfoWith("GetVoucherCounts API called")
+
+	// Extract business_id from header
+	businessID := c.Request().Header.Get("X-Business-ID")
+	if businessID == "" {
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "MISSING_BUSINESS_ID",
+			"message": "X-Business-ID header is required",
+		})
+	}
+
+	// Call service
+	counts, err := h.voucherService.GetVoucherCounts(c.Request().Context(), businessID)
+	if err != nil {
+		h.logger.ErrorWith("Failed to get voucher counts", "error", err)
+		return c.JSON(http.StatusInternalServerError, map[string]any{
+			"error":   "SERVICE_ERROR",
+			"message": err.Error(),
+		})
+	}
+
+	h.logger.InfoWith("Voucher counts fetched successfully",
+		"all", counts.All,
+		"paid", counts.Paid,
+		"open", counts.Open,
+		"overdue", counts.Overdue)
+
+	return c.JSON(http.StatusOK, counts)
 }

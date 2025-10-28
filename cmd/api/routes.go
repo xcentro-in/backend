@@ -396,9 +396,12 @@ func registerV1VoucherRoutes(clients *externalClients, cfg *config.Config, group
 		businessPayeeRelationRepo, // Pass repository to resolve relation_id
 	)
 
-	// Register voucher routes with auth middleware
+	// Create business user relation repository for role middleware
+	businessUserRelRepo := business.NewPgBusinessUserRelationRepository(clients.db)
+
+	// Register voucher routes with auth and role middleware
 	voucherGroup := group.Group("/vouchers")
-	voucherHandler.RegisterVoucherRoutes(voucherGroup, voucherService, authService)
+	voucherHandler.RegisterVoucherRoutes(voucherGroup, voucherService, authService, businessUserRelRepo, clients.rcache)
 }
 
 func registerV1PayoutRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {

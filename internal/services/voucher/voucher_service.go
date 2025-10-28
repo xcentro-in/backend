@@ -61,6 +61,13 @@ type VoucherService interface {
 
 	// BatchApproveVouchers approves multiple vouchers in a single operation
 	BatchApproveVouchers(ctx context.Context, req *voucher.BatchApprovalRequest) (*voucher.BatchApprovalResponse, error)
+
+	// GetUnpaidBills retrieves unpaid bills with role-based filtering
+	// Owner: sees all unpaid bills, Other roles: sees only approved unpaid bills
+	GetUnpaidBills(ctx context.Context, req *voucher.UnpaidBillsRequest, isOwner bool) (*voucher.UnpaidBillsResponse, error)
+
+	// GetVoucherCounts retrieves counts of vouchers by payment status
+	GetVoucherCounts(ctx context.Context, businessID string) (*voucher.VoucherCountsResponse, error)
 }
 
 // VoucherServiceImpl implements the VoucherService interface
@@ -1039,4 +1046,41 @@ func (s *VoucherServiceImpl) BatchApproveVouchers(ctx context.Context, req *vouc
 	}
 
 	return response, nil
+}
+
+// GetUnpaidBills retrieves unpaid bills with role-based filtering
+func (s *VoucherServiceImpl) GetUnpaidBills(ctx context.Context, req *voucher.UnpaidBillsRequest, isOwner bool) (*voucher.UnpaidBillsResponse, error) {
+	// Validate inputs
+	if req.BusinessID == "" {
+		return nil, fmt.Errorf("business_id is required")
+	}
+
+	// Get unpaid bills with role-based filtering
+	bills, totalCount, err := s.voucherRepo.GetUnpaidBills(ctx, req, isOwner)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get unpaid bills: %w", err)
+	}
+
+	return &voucher.UnpaidBillsResponse{
+		Bills:      bills,
+		TotalCount: totalCount,
+		Limit:      req.Limit,
+		Offset:     req.Offset,
+	}, nil
+}
+
+// GetVoucherCounts retrieves counts of vouchers by payment status
+func (s *VoucherServiceImpl) GetVoucherCounts(ctx context.Context, businessID string) (*voucher.VoucherCountsResponse, error) {
+	// Validate business ID
+	if businessID == "" {
+		return nil, fmt.Errorf("business_id is required")
+	}
+
+	// Get counts from repository
+	counts, err := s.voucherRepo.GetVoucherCounts(ctx, businessID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get voucher counts: %w", err)
+	}
+
+	return counts, nil
 }
