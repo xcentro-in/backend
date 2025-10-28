@@ -74,3 +74,17 @@ func InvalidateUserRoles(userID string) []string {
 		Business.UserRoles(userID),
 	}
 }
+
+// Notification provides notification-related cache key builders
+var Notification = notificationKeys{}
+
+type notificationKeys struct{}
+
+// Preferences returns cache key for user notification preferences
+// Pattern: xcentro:notification:prefs:{userId}
+func (notificationKeys) Preferences(userID string) string {
+	return fmt.Sprintf("%s:notification:prefs:%s", keyPrefix, userID)
+}
+
+// TTL for notification preferences (1 hour, with explicit invalidation on updates)
+const TTLNotificationPreferences = 1 * time.Hour

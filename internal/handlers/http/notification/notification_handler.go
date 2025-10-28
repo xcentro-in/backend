@@ -6,16 +6,17 @@ import (
 
 	"github.com/labstack/echo/v4"
 	"xcentro.in/internal/core/notification"
-	notificationService "xcentro.in/internal/services/notification"
 )
 
 // NotificationHandler handles notification HTTP requests
+// Handler is kept minimal - only input validation
+// All business logic is in the service layer
 type NotificationHandler struct {
-	notificationService *notificationService.NotificationService
+	notificationService notification.NotificationService
 }
 
 // NewNotificationHandler creates a new notification handler
-func NewNotificationHandler(notificationService *notificationService.NotificationService) *NotificationHandler {
+func NewNotificationHandler(notificationService notification.NotificationService) *NotificationHandler {
 	return &NotificationHandler{
 		notificationService: notificationService,
 	}
@@ -237,15 +238,15 @@ func (h *NotificationHandler) UpdatePreferences(c echo.Context) error {
 
 // TriggerManualNotification handles POST /v1/ops/notifications/trigger (ops only)
 func (h *NotificationHandler) TriggerManualNotification(c echo.Context) error {
-	var req notificationService.ManualTriggerRequest
-	if err := c.Bind(&req); err != nil {
+	var payload notification.NotificationEventPayload
+	if err := c.Bind(&payload); err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]any{
 			"error":   "INVALID_REQUEST",
 			"message": "Invalid request body",
 		})
 	}
 
-	if err := h.notificationService.TriggerManualNotification(c.Request().Context(), req); err != nil {
+	if err := h.notificationService.TriggerManualNotification(c.Request().Context(), payload); err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]any{
 			"error":   "TRIGGER_FAILED",
 			"message": "Failed to trigger notification",

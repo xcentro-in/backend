@@ -49,10 +49,11 @@ const (
 
 // Notification statuses
 const (
-	StatusPending = "pending"
-	StatusSent    = "sent"
-	StatusFailed  = "failed"
-	StatusRead    = "read"
+	StatusPending    = "pending"
+	StatusProcessing = "processing" // Intermediate status to prevent duplicate processing
+	StatusSent       = "sent"
+	StatusFailed     = "failed"
+	StatusRead       = "read"
 )
 
 // Target types
@@ -170,9 +171,10 @@ type UserNotification struct {
 	UserID     string                 `db:"user_id" json:"user_id"`
 	BusinessID *string                `db:"business_id" json:"business_id,omitempty"`
 	EventID    int64                  `db:"event_id" json:"event_id"`
-	Channel    string                 `db:"channel" json:"channel"` // "email", "push", "web"
-	Status     string                 `db:"status" json:"status"`   // "pending", "sent", "failed", "read"
-	Content    map[string]interface{} `db:"content" json:"content"` // JSONB: rendered message
+	Channel    string                 `db:"channel" json:"channel"`     // "email", "push", "web"
+	Status     string                 `db:"status" json:"status"`       // "pending", "processing", "sent", "failed", "read"
+	Content    map[string]interface{} `db:"content" json:"content"`     // JSONB: rendered message
+	RetryCount int                    `db:"retry_count" json:"retry_count"` // Number of retry attempts
 	CreatedAt  time.Time              `db:"created_at" json:"created_at"`
 	SentAt     *time.Time             `db:"sent_at" json:"sent_at,omitempty"`
 	ReadAt     *time.Time             `db:"read_at" json:"read_at,omitempty"`

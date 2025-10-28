@@ -1,109 +1,23 @@
 -- #############################################################################
--- # AUDIT & NOTIFICATION SYSTEM TABLES
+-- # NOTIFICATION SYSTEM TABLES
 -- #############################################################################
 -- This migration creates the PostgreSQL-only (Phase 1) implementation
--- of the audit and notification queuing system.
+-- of the notification queuing system.
 --
 -- Architecture:
--- - audit_events (queue) -> audit_trail (permanent log)
 -- - notification_events (queue) -> user_notifications (user inbox)
 --
 -- All tables are in the xcentro schema to match existing project structure.
+--
+-- NOTE: Audit system tables were previously in this migration but have been
+-- removed. See docs/AUDIT_SYSTEM_ARCHITECTURE.md for the complete audit
+-- system implementation archive.
 
 -- #############################################################################
--- # 1. AUDIT SYSTEM
+-- # 1. NOTIFICATION SYSTEM
 -- #############################################################################
 
--- TABLE 1: audit_events (The Queue)
--- Temporary, append-only log of work to be done.
--- Business logic writes here FAST, then async processor moves to audit_trail.
-CREATE TABLE xcentro.audit_events (
-    id BIGSERIAL PRIMARY KEY,
-    processed_at TIMESTAMPTZ DEFAULT NULL,
-    event_type TEXT NOT NULL,
-    payload JSONB NOT NULL,     -- Full event details (actor, entities, change_log)
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
--- Index for fast lookup of pending events
-CREATE INDEX idx_audit_events_pending
-ON xcentro.audit_events (created_at)
-WHERE processed_at IS NULL;
-
-COMMENT ON TABLE xcentro.audit_events IS 'Temporary queue of audit events to be processed';
-COMMENT ON COLUMN xcentro.audit_events.payload IS 'JSON schema: {timestamp (RFC3339), event_type, actor, entities, note, change_log}';
-
-
--- TABLE 2: audit_trail (The Destination - Normalized Event Storage)
--- Permanent, queryable, append-only table optimized for SELECT by UI.
--- Stores the event ONCE, links to entities via audit_trail_entities table.
-CREATE TABLE xcentro.audit_trail (
-    id BIGSERIAL PRIMARY KEY,
-    business_id UUID NOT NULL REFERENCES xcentro.business(bid) ON DELETE CASCADE,
-
-    -- The Event Data
-    event_timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    event_type TEXT NOT NULL,        -- Human-readable title (e.g., "Transaction Approved")
-    actor_type TEXT NOT NULL,        -- 'user' or 'system'
-    actor_id TEXT NOT NULL,          -- user_id UUID as text or 'system'
-    actor_name TEXT NOT NULL,        -- "Michael Chen (Financial Controller)"
-    note TEXT DEFAULT NULL,          -- Optional note (e.g., "Funds transferred")
-    details JSONB DEFAULT NULL,      -- Extra data (IP, change_log, etc.)
-
-    -- Link back to queue for idempotency
-    source_event_id BIGINT NOT NULL UNIQUE REFERENCES xcentro.audit_events(id) ON DELETE CASCADE
-);
-
--- Indexes for fast lookups
-CREATE INDEX idx_audit_trail_business_id
-ON xcentro.audit_trail (business_id, event_timestamp DESC);
-
-CREATE INDEX idx_audit_trail_event_timestamp
-ON xcentro.audit_trail (event_timestamp DESC);
-
-COMMENT ON TABLE xcentro.audit_trail IS 'Permanent normalized audit log - stores event once, links via audit_trail_entities';
-COMMENT ON COLUMN xcentro.audit_trail.event_type IS 'Human-readable event title for display';
-COMMENT ON COLUMN xcentro.audit_trail.details IS 'Extra data: {ip_address, change_log, etc.}';
-COMMENT ON COLUMN xcentro.audit_trail.source_event_id IS 'FK to audit_events.id (ensures no duplicate processing)';
-
-
--- TABLE 2B: audit_trail_entities (The Links)
--- Links a single audit trail event to multiple entities (normalized many-to-many).
--- This solves the bulk payment/voucher problem efficiently.
-CREATE TABLE xcentro.audit_trail_entities (
-    id BIGSERIAL PRIMARY KEY,
-    business_id UUID NOT NULL REFERENCES xcentro.business(bid) ON DELETE CASCADE,
-
-    -- Link to the event
-    audit_trail_id BIGINT NOT NULL REFERENCES xcentro.audit_trail(id) ON DELETE CASCADE,
-
-    -- Link to the entity
-    entity_type TEXT NOT NULL,  -- 'payment', 'voucher', 'payee', 'user', 'wallet', 'payout'
-    entity_id UUID NOT NULL     -- The ID of the payment, voucher, payee, etc.
-);
-
--- Most important index for reading data (entity activity feeds)
-CREATE INDEX idx_audit_trail_entities_lookup
-ON xcentro.audit_trail_entities (entity_type, entity_id);
-
--- Index for reverse lookup (all entities for an event)
-CREATE INDEX idx_audit_trail_entities_audit_id
-ON xcentro.audit_trail_entities (audit_trail_id);
-
--- Composite index for business-scoped entity lookups
-CREATE INDEX idx_audit_trail_entities_business_entity
-ON xcentro.audit_trail_entities (business_id, entity_type, entity_id);
-
-COMMENT ON TABLE xcentro.audit_trail_entities IS 'Many-to-many links between audit events and entities (normalized design)';
-COMMENT ON COLUMN xcentro.audit_trail_entities.entity_type IS 'Type of entity: payment, voucher, payee, user, wallet, payout';
-COMMENT ON COLUMN xcentro.audit_trail_entities.entity_id IS 'UUID of the entity (payment_id, voucher_id, etc.)';
-
-
--- #############################################################################
--- # 2. NOTIFICATION SYSTEM
--- #############################################################################
-
--- TABLE 3: notification_events (The Queue)
+-- TABLE 1: notification_events (The Queue)
 -- Temporary queue of business events to be "fanned out" to users.
 CREATE TABLE xcentro.notification_events (
     id BIGSERIAL PRIMARY KEY,
@@ -126,7 +40,7 @@ COMMENT ON TABLE xcentro.notification_events IS 'Temporary queue of notification
 COMMENT ON COLUMN xcentro.notification_events.payload IS 'JSON schema: {timestamp (RFC3339), event_type, target, entities, message, actions}';
 
 
--- TABLE 4: user_notifications (The Destination)
+-- TABLE 2: user_notifications (The Destination)
 -- Persistent "bell icon" inbox for each user.
 CREATE TABLE xcentro.user_notifications (
     id BIGSERIAL PRIMARY KEY,
@@ -134,8 +48,9 @@ CREATE TABLE xcentro.user_notifications (
     business_id UUID DEFAULT NULL REFERENCES xcentro.business(bid) ON DELETE CASCADE,
     event_id BIGINT NOT NULL REFERENCES xcentro.notification_events(id) ON DELETE CASCADE,
     channel TEXT NOT NULL,             -- 'email', 'push', 'web'
-    status TEXT NOT NULL DEFAULT 'pending', -- 'pending', 'sent', 'failed', 'read'
+    status TEXT NOT NULL DEFAULT 'pending', -- 'pending', 'processing', 'sent', 'failed', 'read'
     content JSONB NOT NULL,            -- {title, body, actions, entities}
+    retry_count INTEGER NOT NULL DEFAULT 0, -- Number of retry attempts for failed jobs
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     sent_at TIMESTAMPTZ DEFAULT NULL,
     read_at TIMESTAMPTZ DEFAULT NULL,
@@ -145,33 +60,49 @@ CREATE TABLE xcentro.user_notifications (
 );
 
 -- Indexes for fast lookups
+
+-- Index 1: User inbox queries (GetUserNotifications)
+-- Covers: WHERE user_id = X ORDER BY created_at DESC
 CREATE INDEX idx_user_notifications_user_id
 ON xcentro.user_notifications (user_id, created_at DESC);
 
-CREATE INDEX idx_user_notifications_business_id
-ON xcentro.user_notifications (business_id)
-WHERE business_id IS NOT NULL;
-
-CREATE INDEX idx_user_notifications_status
-ON xcentro.user_notifications (status, created_at DESC)
-WHERE status IN ('pending', 'sent');
-
--- Composite index for common query pattern: user + unread
+-- Index 2: Unread count queries (GetUnreadCount)
+-- Covers: WHERE user_id = X AND read_at IS NULL
 CREATE INDEX idx_user_notifications_user_unread
 ON xcentro.user_notifications (user_id, created_at DESC)
-WHERE read_at IS NULL;
+WHERE read_at IS NULL AND channel = 'web';
+
+-- Index 3: Worker job fetching (FetchAndMarkJobsAsProcessing)
+-- Covers: WHERE channel = X AND status IN ('pending', 'failed') AND retry_count < max ORDER BY created_at
+CREATE INDEX idx_user_notifications_worker_jobs
+ON xcentro.user_notifications (channel, status, retry_count, created_at)
+WHERE status IN ('pending', 'failed');
+
+-- Index 4: Recovery worker - stuck processing jobs (RecoverStuckProcessingJobs)
+-- Covers: WHERE status = 'processing' AND created_at < timeout
+CREATE INDEX idx_user_notifications_stuck_processing
+ON xcentro.user_notifications (created_at)
+WHERE status = 'processing';
+
+-- Index 5 (Optional): Business-scoped queries (if needed for analytics)
+-- Covers: WHERE business_id = X
+-- Note: Only create if you have queries filtering by business_id
+-- CREATE INDEX idx_user_notifications_business_id
+-- ON xcentro.user_notifications (business_id, created_at DESC)
+-- WHERE business_id IS NOT NULL;
 
 COMMENT ON TABLE xcentro.user_notifications IS 'Persistent notification inbox for each user';
 COMMENT ON COLUMN xcentro.user_notifications.channel IS 'Delivery channel: email, push, web';
-COMMENT ON COLUMN xcentro.user_notifications.status IS 'Lifecycle: pending -> sent -> read (or failed)';
+COMMENT ON COLUMN xcentro.user_notifications.status IS 'Lifecycle: pending -> processing -> sent/failed (with retries) -> read (web only)';
 COMMENT ON COLUMN xcentro.user_notifications.content IS 'Rendered message: {title, body, actions, entities}';
+COMMENT ON COLUMN xcentro.user_notifications.retry_count IS 'Number of retry attempts for failed jobs (auto-incremented on retry)';
 
 
 -- #############################################################################
--- # 3. NOTIFICATION PREFERENCES
+-- # 2. NOTIFICATION PREFERENCES
 -- #############################################################################
 
--- TABLE 5: notification_preferences (User Preferences)
+-- TABLE 3: notification_preferences (User Preferences)
 -- Stores per-user notification preferences globally across all businesses.
 -- Channel switches (email, push, messages) as boolean columns for easy querying.
 -- Category preferences (announcements, rewards, payments, etc.) in JSONB for flexibility.

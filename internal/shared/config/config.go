@@ -161,21 +161,27 @@ type ServerConfig struct {
 
 // WorkersConfig holds worker configuration.
 type WorkersConfig struct {
-	Audit        AuditWorkerConfig        `json:"audit"`
 	Notification NotificationWorkerConfig `json:"notification"`
-}
-
-// AuditWorkerConfig holds audit worker configuration.
-type AuditWorkerConfig struct {
-	BatchSize    int `json:"batch_size" env:"AUDIT_WORKER_BATCH_SIZE" env-default:"100"`
-	PollInterval int `json:"poll_interval_seconds" env:"AUDIT_WORKER_POLL_INTERVAL_SECONDS" env-default:"2"`
 }
 
 // NotificationWorkerConfig holds notification worker configuration.
 type NotificationWorkerConfig struct {
+	// Job processing configuration
 	BatchSize    int `json:"batch_size" env:"NOTIFICATION_WORKER_BATCH_SIZE" env-default:"50"`
 	PollInterval int `json:"poll_interval_seconds" env:"NOTIFICATION_WORKER_POLL_INTERVAL_SECONDS" env-default:"2"`
-	MaxRetries   int `json:"max_retries" env:"NOTIFICATION_WORKER_MAX_RETRIES" env-default:"3"`
+
+	// Retry configuration
+	MaxRetryAttempts int `json:"max_retry_attempts" env:"NOTIFICATION_MAX_RETRY_ATTEMPTS" env-default:"3"`
+
+	// Goroutine pool sizes
+	FanoutWorkers        int `json:"fanout_workers" env:"NOTIFICATION_FANOUT_WORKERS" env-default:"1"`
+	EmailDispatchWorkers int `json:"email_dispatch_workers" env:"NOTIFICATION_EMAIL_DISPATCH_WORKERS" env-default:"2"`
+	PushDispatchWorkers  int `json:"push_dispatch_workers" env:"NOTIFICATION_PUSH_DISPATCH_WORKERS" env-default:"0"` // 0 = disabled (MVP)
+
+	// Stuck job recovery configuration
+	ProcessingTimeoutMinutes int `json:"processing_timeout_minutes" env:"NOTIFICATION_PROCESSING_TIMEOUT_MINUTES" env-default:"10"`
+	RecoveryWorkers          int `json:"recovery_workers" env:"NOTIFICATION_RECOVERY_WORKERS" env-default:"1"`
+	RecoveryIntervalSeconds  int `json:"recovery_interval_seconds" env:"NOTIFICATION_RECOVERY_INTERVAL_SECONDS" env-default:"60"`
 }
 
 var (
