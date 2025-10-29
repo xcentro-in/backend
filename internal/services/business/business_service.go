@@ -9,8 +9,10 @@ import (
 	"xcentro.in/internal/adapters/cache/redis/keys"
 	"xcentro.in/internal/adapters/database/postgres/client"
 	"xcentro.in/internal/core/business"
+	coreNotification "xcentro.in/internal/core/notification"
 	"xcentro.in/internal/core/shared"
 	"xcentro.in/internal/core/user"
+	"xcentro.in/internal/services/notification"
 	"xcentro.in/internal/services/verification"
 	sharedClients "xcentro.in/internal/shared/clients"
 	"xcentro.in/internal/shared/config"
@@ -446,6 +448,12 @@ func (s *BusinessServiceImpl) AddUserToBusiness(ctx context.Context, relation *b
 	if err != nil {
 		return fmt.Errorf("error adding user to business: %w", err)
 	}
+
+	// Notify admins and above about new user addition
+	adminRole := "admin"
+	notification.TriggerMulticast(ctx, relation.BID, coreNotification.EventUserInvited, "New User Added",
+		fmt.Sprintf("A new user has been added to the business with role: %s", relation.Role),
+		&adminRole, nil, coreNotification.EntityReferences{}, []coreNotification.ActionButton{})
 
 	// Invalidate user roles cache after successful addition
 	go func() {

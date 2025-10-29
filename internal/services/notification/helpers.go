@@ -137,6 +137,7 @@ func SendEmailNotification(ctx context.Context, emailClient *mailers.SESClient, 
 	htmlBody := buildEmailHTML(subject, body, actions)
 
 	msg := &mailers.EmailMessage{
+		From:     "noreply@transactions.xcentro.in",
 		To:       []string{to},
 		Subject:  subject,
 		HTMLBody: htmlBody,
@@ -174,8 +175,9 @@ func stripHTML(html string) string {
 // buildNotificationContent builds the notification content JSONB
 func buildNotificationContent(payload notification.NotificationEventPayload) map[string]interface{} {
 	content := map[string]interface{}{
-		"title": payload.Message.Title,
-		"body":  payload.Message.Body,
+		"title":      payload.Message.Title,
+		"body":       payload.Message.Body,
+		"event_type": payload.EventType,
 	}
 
 	if len(payload.Actions) > 0 {

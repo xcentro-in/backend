@@ -71,6 +71,14 @@ const (
 	RoleSupport = "support"
 )
 
+// Action button types (for standardized UI rendering)
+const (
+	ButtonTypePositive = "button-positive" // Green/primary button (Approve, Accept, Confirm)
+	ButtonTypeNegative = "button-negative" // Red/destructive button (Reject, Deny, Cancel)
+	ButtonTypeNeutral  = "button-neutral"  // Gray/secondary button (View, Details, Maybe Later)
+	ButtonTypeLink     = "link"            // Text link style (Learn More, View Report)
+)
+
 // #############################################################################
 // # BASIC TYPES (Level 1 - Depends only on constants)
 // #############################################################################
