@@ -81,6 +81,30 @@ func TriggerUnicast(ctx context.Context, businessID, userID, eventType, title, b
 	return Trigger(ctx, payload)
 }
 
+// TriggerMulticast sends notification to users based on role or specific user IDs
+// If minimumRole is provided, sends to all users with role >= minimumRole
+// Otherwise, sends to specific users in userIDs list (fallback)
+func TriggerMulticast(ctx context.Context, businessID, eventType, title, body string, minimumRole *string, userIDs []string, entities notification.EntityReferences, actions []notification.ActionButton) error {
+	payload := notification.NotificationEventPayload{
+		Timestamp: time.Now().Format(time.RFC3339),
+		EventType: eventType,
+		Target: notification.TargetInfo{
+			BusinessID:  businessID,
+			Type:        notification.TargetMulticast,
+			MinimumRole: minimumRole,
+			IDs:         userIDs,
+		},
+		Entities: entities,
+		Message: notification.MessageContent{
+			Title: title,
+			Body:  body,
+		},
+		Actions: actions,
+	}
+
+	return Trigger(ctx, payload)
+}
+
 // TriggerBroadcast sends notification to all users in a business with minimum role
 func TriggerBroadcast(ctx context.Context, businessID, minimumRole, eventType, title, body string, entities notification.EntityReferences, actions []notification.ActionButton) error {
 	payload := notification.NotificationEventPayload{

@@ -244,21 +244,21 @@ func (s *FanoutService) getUsersByTarget(ctx context.Context, target notificatio
 	}
 }
 
-// getUsersByIDs fetches user info by user IDs using the user repository
+// getUsersByIDs fetches user info by user IDs using the user repository (optimized: only selects id, email, name)
 func (s *FanoutService) getUsersByIDs(ctx context.Context, userIDs []string) ([]UserInfo, error) {
 	var users []UserInfo
 
 	for _, userID := range userIDs {
-		u, err := s.userRepo.GetUserByID(ctx, userID)
+		id, email, name, err := s.userRepo.GetUserBasicInfo(ctx, userID)
 		if err != nil {
 			s.logger.Warnf("Failed to get user %s: %v", userID, err)
 			continue
 		}
 
 		users = append(users, UserInfo{
-			UserID: u.Id,
-			Email:  u.Email,
-			Name:   u.Name,
+			UserID: id,
+			Email:  email,
+			Name:   name,
 		})
 	}
 

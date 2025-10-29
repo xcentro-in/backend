@@ -14,11 +14,15 @@ import (
 	"xcentro.in/internal/adapters/external/payment/easebuzz"
 	"xcentro.in/internal/adapters/external/payment/jiopay"
 	"xcentro.in/internal/adapters/external/payout/factory"
+	coreAuth "xcentro.in/internal/core/auth"
+	coreBusiness "xcentro.in/internal/core/business"
 	"xcentro.in/internal/core/business_rules"
 	corePayment "xcentro.in/internal/core/payment"
+	coreUser "xcentro.in/internal/core/user"
 	coreVoucher "xcentro.in/internal/core/voucher"
 	"xcentro.in/internal/handlers/http/auth"
 	businessHandler "xcentro.in/internal/handlers/http/business"
+	notificationHandler "xcentro.in/internal/handlers/http/notification"
 	"xcentro.in/internal/handlers/http/payee"
 	"xcentro.in/internal/handlers/http/payment"
 	payoutHandler "xcentro.in/internal/handlers/http/payout"
@@ -31,431 +35,161 @@ import (
 	"xcentro.in/internal/services/payments"
 	payoutSvc "xcentro.in/internal/services/payout"
 	settlementSvc "xcentro.in/internal/services/settlement"
-	"xcentro.in/internal/services/user"
+	userSvc "xcentro.in/internal/services/user"
 	"xcentro.in/internal/services/verification"
 	voucherSvc "xcentro.in/internal/services/voucher"
 	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/logger"
 )
 
+// Shared service factory to avoid duplication
+type serviceFactory struct {
+	clients *externalClients
+	cfg     *config.Config
+}
+
+// createCoreServices creates commonly used repositories and services together
+func (f *serviceFactory) createCoreServices(verificationSvc *verification.DocumentVerificationService) (
+	userRepository *userRepo.PgUserRepository,
+	sessionRepo *authRepo.PgSessionRepository,
+	businessRepo *business.PgBusinessRepository,
+	businessUserRelRepo *business.PgBusinessUserRelationRepository,
+	userService coreUser.UserService,
+	busSvc coreBusiness.BusinessService,
+	authSvc coreAuth.AuthService,
+) {
+	// Create repositories
+	userRepository = userRepo.NewPgUserRepository(f.clients.db)
+	sessionRepo = authRepo.NewPgSessionRepository(f.clients.db)
+	businessRepo = business.NewPgBusinessRepository(f.clients.db).(*business.PgBusinessRepository)
+	businessUserRelRepo = business.NewPgBusinessUserRelationRepository(f.clients.db).(*business.PgBusinessUserRelationRepository)
+
+	// Create services
+	busSvc = businessSvc.NewBusinessService(businessRepo, businessUserRelRepo, userRepository, f.clients, f.cfg)
+	userService = userSvc.NewUserService(userRepository, businessRepo, businessUserRelRepo, verificationSvc, f.clients, f.cfg)
+	authSvc = authservice.NewAuthService(sessionRepo, userRepository, userService, busSvc, f.clients, f.cfg)
+	return
+}
+
 func registerV1AuthRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
-	// Create verification service
-	verificationService, err := verification.NewDocumentVerificationService()
+	factory := &serviceFactory{clients, cfg}
+	verificationSvc, err := verification.NewDocumentVerificationService()
 	if err != nil {
 		panic("Failed to create verification service: " + err.Error())
 	}
 
-	// Create repositories
-	userRepository := userRepo.NewPgUserRepository(clients.db)
-	sessionRepo := authRepo.NewPgSessionRepository(clients.db)
-
-	// Create business service - pass clients and config
-	busSvc := businessSvc.NewBusinessService(
-		business.NewPgBusinessRepository(clients.db),
-		business.NewPgBusinessUserRelationRepository(clients.db),
-		userRepository,
-		clients,
-		cfg,
-	)
-
-	// Create user service - pass clients and config
-	userService := user.NewUserService(
-		userRepository,
-		business.NewPgBusinessRepository(clients.db),
-		business.NewPgBusinessUserRelationRepository(clients.db),
-		verificationService,
-		clients,
-		cfg,
-	)
-
-	// Create auth service - pass clients and config
-	authService := authservice.NewAuthService(
-		sessionRepo,
-		userRepository,
-		userService,
-		busSvc,
-		clients,
-		cfg,
-	)
-
-	// Register auth routes
-	auth.RegisterAuthRoutes(group, authService, busSvc, cfg)
+	_, _, _, _, _, busSvc, authSvc := factory.createCoreServices(verificationSvc)
+	auth.RegisterAuthRoutes(group, authSvc, busSvc, cfg)
 }
 
 func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
-	// Create payment repository instances (Phase 4.2)
+	factory := &serviceFactory{clients, cfg}
+
 	paymentRepository := paymentRepo.NewPgPaymentRepository(clients.db)
 	storedCardRepository := paymentRepo.NewPgStoredCardRepository(clients.db)
 	bankAccountRepository := paymentRepo.NewPgBankAccountRepository(clients.db)
 
-	// Create business service for onboarding flags
-	busSvc := businessSvc.NewBusinessService(
-		business.NewPgBusinessRepository(clients.db),
-		business.NewPgBusinessUserRelationRepository(clients.db),
-		userRepo.NewPgUserRepository(clients.db),
-		clients,
-		cfg,
-	)
+	_, _, _, _, _, busSvc, authSvc := factory.createCoreServices(nil)
 
-	// Create real payment gateway clients
-	easebuzzClient := easebuzz.NewEasebuzzClient(
-		cfg.Easebuzz.BaseURL,
-		cfg.Easebuzz.MerchantKey,
-		cfg.Easebuzz.Salt,
-		cfg.Easebuzz.APIKey,
-	)
+	easebuzzClient := easebuzz.NewEasebuzzClient(cfg.Easebuzz.BaseURL, cfg.Easebuzz.MerchantKey, cfg.Easebuzz.Salt, cfg.Easebuzz.APIKey)
+	jioPayClient := jiopay.NewJioPayClient(cfg.JioPay.BaseURL, cfg.JioPay.TokenizationBaseURL, cfg.JioPay.MerchantID, cfg.JioPay.APIKey, cfg.JioPay.AppID, cfg.JioPay.EncryptionKey)
 
-	jioPayClient := jiopay.NewJioPayClient(
-		cfg.JioPay.BaseURL,
-		cfg.JioPay.TokenizationBaseURL,
-		cfg.JioPay.MerchantID,
-		cfg.JioPay.APIKey,
-		cfg.JioPay.AppID,
-		cfg.JioPay.EncryptionKey,
-	)
-
-	// Create business rules services
 	orchestrator := corePayment.NewMockPaymentOrchestrator(paymentRepository, storedCardRepository, jioPayClient, easebuzzClient)
 	feeCalculator := business_rules.NewMockFeeCalculator()
 	walletService := business_rules.NewMockWalletService(storedCardRepository, bankAccountRepository, clients.txManager, busSvc)
 
-	// Phase 10: Create database-backed fee calculator
 	feeRulesRepository := paymentRepo.NewPostgresFeeRulesRepository(clients.db)
 	databaseFeeCalculator := business_rules.NewDatabaseFeeCalculator(feeRulesRepository)
-
-	// Phase 10: Create payment source service
 	paymentSourceService := payments.NewPaymentSourceService(walletService, databaseFeeCalculator)
 
-	// PHASE 6: Create voucher service for payment integration
 	voucherRepository := voucherRepo.NewPostgresVoucherRepository(clients.db)
 	approvalRepository := voucherRepo.NewPostgresApprovalRepository(clients.db)
 	queueRepository := voucherRepo.NewPostgresERPSyncQueueRepository(clients.db)
 	voucherCoreService := coreVoucher.NewVoucherService(voucherRepository)
-
-	// Create business-payee relation repository for voucher relation_id resolution
 	businessPayeeRelationRepo := payeeRepo.NewPgBusinessPayeeRelationRepository(clients.db)
+	voucherService := voucherSvc.NewVoucherService(voucherRepository, approvalRepository, queueRepository, voucherCoreService, businessPayeeRelationRepo)
 
-	voucherService := voucherSvc.NewVoucherService(
-		voucherRepository,
-		approvalRepository,
-		queueRepository,
-		voucherCoreService,
-		businessPayeeRelationRepo, // Pass repository to resolve relation_id
-	)
+	paymentService := payments.NewPaymentService(orchestrator, paymentRepository, storedCardRepository, bankAccountRepository, walletService, feeCalculator, clients.txManager, voucherService, busSvc, logger.GetDefault())
 
-	// Create payment service layer (Phase 4.4+ / Phase 6)
-	paymentService := payments.NewPaymentService(
-		orchestrator,
-		paymentRepository,
-		storedCardRepository,
-		bankAccountRepository,
-		walletService,
-		feeCalculator,
-		clients.txManager,
-		voucherService,       // PHASE 6: Inject voucher service
-		busSvc,               // Business service for onboarding flags
-		logger.GetDefault(),  // Logger instance
-	)
-
-	// Create auth service for JWT middleware
-	sessionRepo := authRepo.NewPgSessionRepository(clients.db)
-	userService := user.NewUserService(
-		userRepo.NewPgUserRepository(clients.db),
-		business.NewPgBusinessRepository(clients.db),
-		business.NewPgBusinessUserRelationRepository(clients.db),
-		nil, // verificationService not needed for JWT
-		clients,
-		cfg,
-	)
-	authService := authservice.NewAuthService(
-		sessionRepo,
-		userRepo.NewPgUserRepository(clients.db),
-		userService,
-		busSvc,
-		clients,
-		cfg,
-	)
-
-	// Register payment routes with payment service (Phase 10: Added paymentSourceService)
 	processPaymentGroup := group.Group("/process_payment")
-	payment.RegisterPaymentRoutes(processPaymentGroup, paymentService, paymentSourceService, authService)
+	payment.RegisterPaymentRoutes(processPaymentGroup, paymentService, paymentSourceService, authSvc)
 
-	// Register wallet routes (wallet management separated from payment processing)
 	walletGroup := group.Group("/wallet")
-	payment.RegisterWalletRoutes(walletGroup, paymentService, paymentSourceService, authService)
+	payment.RegisterWalletRoutes(walletGroup, paymentService, paymentSourceService, authSvc)
 
-	// Register callback handler for payment gateway responses (SURL/FURL)
-	// These are user-facing endpoints where gateways POST payment results
-	callbackHandler := payment.NewCallbackHandler(
-		paymentRepository,
-		jioPayClient,
-		easebuzzClient,
-	)
+	callbackHandler := payment.NewCallbackHandler(paymentRepository, jioPayClient, easebuzzClient)
 	processPaymentGroup.POST("/callback", callbackHandler.HandleCallback)
 
-	// Register webhook handlers for async payment status notifications
-	// These are backend-to-backend notifications for payment status updates
-	webhookHandler := payment.NewWebhookHandler(
-		paymentRepository,
-		jioPayClient,
-		easebuzzClient,
-	)
+	webhookHandler := payment.NewWebhookHandler(paymentRepository, jioPayClient, easebuzzClient)
 	webhookGroup := processPaymentGroup.Group("/webhooks")
-
-	// Payment status webhooks (real-time payment updates)
-	// Endpoint: /api/v1/process_payment/webhooks/payment_status?type=<gateway>
 	webhookGroup.POST("/payment_status", webhookHandler.HandlePaymentStatusWebhook)
-
-	// Settlement webhooks (batch settlement notifications T+1 to T+3)
-	// Endpoint: /api/v1/process_payment/webhooks/settlement_status?type=<gateway>
 	webhookGroup.POST("/settlement_status", webhookHandler.HandleSettlementStatusWebhook)
 }
 
 func registerV1BusinessRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
-	// Create verification service
-	verificationService, err := verification.NewDocumentVerificationService()
+	factory := &serviceFactory{clients, cfg}
+	verificationSvc, err := verification.NewDocumentVerificationService()
 	if err != nil {
 		panic("Failed to create verification service: " + err.Error())
 	}
 
-	// Create repositories
-	userRepository := userRepo.NewPgUserRepository(clients.db)
-	sessionRepo := authRepo.NewPgSessionRepository(clients.db)
-
-	// Create user service - pass clients and config
-	userService := user.NewUserService(
-		userRepository,
-		business.NewPgBusinessRepository(clients.db),
-		business.NewPgBusinessUserRelationRepository(clients.db),
-		verificationService,
-		clients,
-		cfg,
-	)
-
-	// Create business service - pass clients and config
-	busSvc := businessSvc.NewBusinessService(
-		business.NewPgBusinessRepository(clients.db),
-		business.NewPgBusinessUserRelationRepository(clients.db),
-		userRepository,
-		clients,
-		cfg,
-	)
-
-	// Create auth service - pass clients and config
-	authService := authservice.NewAuthService(
-		sessionRepo,
-		userRepository,
-		userService,
-		busSvc,
-		clients,
-		cfg,
-	)
-
-	businessUserRelRepo := business.NewPgBusinessUserRelationRepository(clients.db)
-	businessHandler.RegisterBusinessRoutes(group, busSvc, authService, userService, &cfg.S3, businessUserRelRepo, clients.rcache)
+	_, _, _, businessUserRelRepo, userService, busSvc, authSvc := factory.createCoreServices(verificationSvc)
+	businessHandler.RegisterBusinessRoutes(group, busSvc, authSvc, userService, &cfg.S3, businessUserRelRepo, clients.rcache)
 }
 
 func registerV1UserRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
-	// Create verification service
-	verificationService, err := verification.NewDocumentVerificationService()
+	factory := &serviceFactory{clients, cfg}
+	verificationSvc, err := verification.NewDocumentVerificationService()
 	if err != nil {
 		panic("Failed to create verification service: " + err.Error())
 	}
 
-	// Create repositories
-	userRepository := userRepo.NewPgUserRepository(clients.db)
-	sessionRepo := authRepo.NewPgSessionRepository(clients.db)
-
-	// Create user service - pass clients and config
-	userService := user.NewUserService(
-		userRepository,
-		business.NewPgBusinessRepository(clients.db),
-		business.NewPgBusinessUserRelationRepository(clients.db),
-		verificationService,
-		clients,
-		cfg,
-	)
-
-	// Create business service - pass clients and config
-	busSvc := businessSvc.NewBusinessService(
-		business.NewPgBusinessRepository(clients.db),
-		business.NewPgBusinessUserRelationRepository(clients.db),
-		userRepository,
-		clients,
-		cfg,
-	)
-
-	// Create auth service - pass clients and config
-	authService := authservice.NewAuthService(
-		sessionRepo,
-		userRepository,
-		userService,
-		busSvc,
-		clients,
-		cfg,
-	)
-
-	businessUserRelRepo := business.NewPgBusinessUserRelationRepository(clients.db)
-	userHandler.RegisterUserRoutes(group, userService, authService, businessUserRelRepo, clients.rcache)
+	_, _, _, businessUserRelRepo, userService, _, authSvc := factory.createCoreServices(verificationSvc)
+	userHandler.RegisterUserRoutes(group, userService, authSvc, businessUserRelRepo, clients.rcache)
 }
 
 func registerV1PayeeRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
-	// Create auth service for JWT middleware
-	userRepository := userRepo.NewPgUserRepository(clients.db)
-	sessionRepo := authRepo.NewPgSessionRepository(clients.db)
+	factory := &serviceFactory{clients, cfg}
+	_, _, _, _, _, busSvc, authSvc := factory.createCoreServices(nil)
 
-	// Create business service
-	busSvc := businessSvc.NewBusinessService(
-		business.NewPgBusinessRepository(clients.db),
-		business.NewPgBusinessUserRelationRepository(clients.db),
-		userRepository,
-		clients,
-		cfg,
-	)
+	payeeFactory := payeeSvc.NewPayeeServiceFactory(clients.db, clients.txManager, busSvc, cfg)
+	payeeService := payeeFactory.NewPayeeService()
 
-	// Create user service
-	userService := user.NewUserService(
-		userRepository,
-		business.NewPgBusinessRepository(clients.db),
-		business.NewPgBusinessUserRelationRepository(clients.db),
-		nil, // verificationService not needed for JWT
-		clients,
-		cfg,
-	)
-
-	// Create auth service
-	authService := authservice.NewAuthService(
-		sessionRepo,
-		userRepository,
-		userService,
-		busSvc,
-		clients,
-		cfg,
-	)
-
-	// Use factory pattern to create PayeeService with all dependencies
-	factory := payeeSvc.NewPayeeServiceFactory(clients.db, clients.txManager, busSvc, cfg)
-	payeeService := factory.NewPayeeService()
-
-	// Register payee routes with auth middleware
 	payeeGroup := group.Group("/payees")
-	payee.RegisterPayeeRoutes(payeeGroup, payeeService, authService)
-
-	// Register vendor dropdown route (lightweight API for voucher creation)
+	payee.RegisterPayeeRoutes(payeeGroup, payeeService, authSvc)
 	payee.RegisterVendorDropdownRoute(group, payeeService)
 }
 
 func registerV1VoucherRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
-	// Create auth service for JWT middleware
-	userRepository := userRepo.NewPgUserRepository(clients.db)
-	sessionRepo := authRepo.NewPgSessionRepository(clients.db)
+	factory := &serviceFactory{clients, cfg}
+	_, _, _, businessUserRelRepo, _, _, authSvc := factory.createCoreServices(nil)
 
-	// Create business service
-	busSvc := businessSvc.NewBusinessService(
-		business.NewPgBusinessRepository(clients.db),
-		business.NewPgBusinessUserRelationRepository(clients.db),
-		userRepository,
-		clients,
-		cfg,
-	)
-
-	// Create user service
-	userService := user.NewUserService(
-		userRepository,
-		business.NewPgBusinessRepository(clients.db),
-		business.NewPgBusinessUserRelationRepository(clients.db),
-		nil, // verificationService not needed for JWT
-		clients,
-		cfg,
-	)
-
-	// Create auth service
-	authService := authservice.NewAuthService(
-		sessionRepo,
-		userRepository,
-		userService,
-		busSvc,
-		clients,
-		cfg,
-	)
-
-	// Create voucher repository instances
 	voucherRepository := voucherRepo.NewPostgresVoucherRepository(clients.db)
 	approvalRepository := voucherRepo.NewPostgresApprovalRepository(clients.db)
 	queueRepository := voucherRepo.NewPostgresERPSyncQueueRepository(clients.db)
-
-	// Create voucher core service (domain logic)
 	voucherCoreService := coreVoucher.NewVoucherService(voucherRepository)
-
-	// Create business-payee relation repository for voucher relation_id resolution
 	businessPayeeRelationRepo := payeeRepo.NewPgBusinessPayeeRelationRepository(clients.db)
+	voucherService := voucherSvc.NewVoucherService(voucherRepository, approvalRepository, queueRepository, voucherCoreService, businessPayeeRelationRepo)
 
-	// Create voucher service layer (orchestration)
-	voucherService := voucherSvc.NewVoucherService(
-		voucherRepository,
-		approvalRepository,
-		queueRepository,
-		voucherCoreService,
-		businessPayeeRelationRepo, // Pass repository to resolve relation_id
-	)
-
-	// Create business user relation repository for role middleware
-	businessUserRelRepo := business.NewPgBusinessUserRelationRepository(clients.db)
-
-	// Register voucher routes with auth and role middleware
 	voucherGroup := group.Group("/vouchers")
-	voucherHandler.RegisterVoucherRoutes(voucherGroup, voucherService, authService, businessUserRelRepo, clients.rcache)
+	voucherHandler.RegisterVoucherRoutes(voucherGroup, voucherService, authSvc, businessUserRelRepo, clients.rcache)
 }
 
 func registerV1PayoutRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
-	// Create payout repository instances
 	transferRepository := payoutRepo.NewPostgresPayoutTransferRepository(clients.db)
 	configRepository := payoutRepo.NewPostgresPayoutConfigurationRepository(clients.db)
 	voucherRepository := voucherRepo.NewPostgresVoucherRepository(clients.db)
 	bankAccountRepository := payeeRepo.NewPgPayeeBankAccountRepository(clients.db)
 
-	// Get webhook secret from configuration
-	webhookSecret := cfg.Castler.WebhookSecret
-
-	// Create provider factory
 	providerFactory := factory.NewPayoutProviderFactory(cfg)
-
-	// Create payout service
-	payoutService := payoutSvc.NewPayoutService(
-		voucherRepository,
-		transferRepository,
-		bankAccountRepository,
-		configRepository,
-		providerFactory,
-	)
-
-	// Create settlement verification service (MVP: always-pass)
+	payoutService := payoutSvc.NewPayoutService(voucherRepository, transferRepository, bankAccountRepository, configRepository, providerFactory)
 	settlementService := settlementSvc.NewSettlementVerificationService(logger.GetDefault())
 
-	// Create webhook handler
-	webhookHandler := payoutHandler.NewPayoutWebhookHandler(
-		transferRepository,
-		voucherRepository,
-		webhookSecret,
-	)
+	webhookHandler := payoutHandler.NewPayoutWebhookHandler(transferRepository, voucherRepository, cfg.Castler.WebhookSecret)
+	dashboardHandler := payoutHandler.NewPayoutHandler(payoutService, transferRepository, configRepository, voucherRepository, settlementService, logger.GetDefault())
 
-	// Create operations dashboard handler
-	dashboardHandler := payoutHandler.NewPayoutHandler(
-		payoutService,
-		transferRepository,
-		configRepository,
-		voucherRepository,
-		settlementService,
-		logger.GetDefault(),
-	)
-
-	// Register payout routes
 	payoutGroup := group.Group("/payout")
-
-	// Webhook endpoint (no auth required - verified via HMAC signature)
 	payoutGroup.POST("/webhooks/castler", webhookHandler.HandleCastlerWebhook)
-
-	// Operations dashboard endpoints
 	payoutGroup.GET("/pending-approvals", dashboardHandler.GetPendingApprovals)
 	payoutGroup.POST("/:transfer_id/approve", dashboardHandler.ApproveTransfer)
 	payoutGroup.POST("/:transfer_id/cancel", dashboardHandler.CancelTransfer)
@@ -466,70 +200,57 @@ func registerV1PayoutRoutes(clients *externalClients, cfg *config.Config, group 
 	payoutGroup.GET("/config", dashboardHandler.GetConfig)
 	payoutGroup.PUT("/config", dashboardHandler.UpdateConfig)
 	payoutGroup.POST("/config", dashboardHandler.CreateConfig)
-
-	// Manual payout initiation (MVP: Ops button)
 	payoutGroup.POST("/initiate", dashboardHandler.InitiatePayoutManually)
+}
+
+func registerV1NotificationRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
+	factory := &serviceFactory{clients, cfg}
+
+	userNotifRepo := notificationRepo.NewPgUserNotificationRepository(clients.db)
+	prefsRepo := notificationRepo.NewPgNotificationPreferencesRepository(clients.db)
+	eventRepo := notificationRepo.NewPgNotificationEventRepository(clients.db)
+	notifService := notificationService.NewUserFacingNotificationService(eventRepo, userNotifRepo, prefsRepo, clients.rcache.Client, logger.GetDefault())
+
+	_, _, _, _, _, _, authSvc := factory.createCoreServices(nil)
+	notificationHandler.RegisterNotificationRoutes(group, notifService, authSvc)
 }
 
 func registerV1Routes(s *xcentroServer) {
 	v1 := s.echo.Group("/v1")
 
-	// Health Check Endpoint
 	v1.GET("/health", func(c echo.Context) error {
-		return c.JSON(200, map[string]string{
-			"status": "ok",
-		})
+		return c.JSON(200, map[string]string{"status": "ok"})
 	})
 
-	// implement callback endpoint and print headers, and body
 	v1.POST("/callback", func(c echo.Context) error {
 		headers := c.Request().Header
 		body := make([]byte, c.Request().ContentLength)
 		c.Request().Body.Read(body)
-
 		s.log.Infof("Headers: %v", headers)
 		s.log.Infof("Body: %s", string(body))
-
-		return c.JSON(200, map[string]string{
-			"status": "received",
-		})
+		return c.JSON(200, map[string]string{"status": "received"})
 	})
 
-	// Get references to clients and config
 	clients := &s.meta.clients
 	cfg := &s.meta.config
 
-	// Authentication Routes
 	registerV1AuthRoutes(clients, cfg, v1)
-
-	// Payment Routes
 	registerV1PaymentRoutes(clients, cfg, v1)
-
-	// User Routes
 	registerV1UserRoutes(clients, cfg, v1)
-
-	// Business Routes
 	registerV1BusinessRoutes(clients, cfg, v1)
-
-	// Payee Routes
 	registerV1PayeeRoutes(clients, cfg, v1)
-
-	// Voucher Routes
 	registerV1VoucherRoutes(clients, cfg, v1)
-
-	// Payout Routes (Phase 9: Webhooks + Operations Dashboard)
 	registerV1PayoutRoutes(clients, cfg, v1)
-}
-
-func registerRouters(s *xcentroServer) {
-	// Initialize global notification trigger for easy access from any service
-	initializeNotificationTrigger(s.meta.clients.db)
-
-	registerV1Routes(s)
+	registerV1NotificationRoutes(clients, cfg, v1)
 }
 
 func initializeNotificationTrigger(db client.DB) {
 	eventRepo := notificationRepo.NewPgNotificationEventRepository(db)
 	notificationService.InitializeNotificationTrigger(eventRepo)
 	logger.GetDefault().Info("Notification trigger initialized")
+}
+
+func registerRouters(s *xcentroServer) {
+	initializeNotificationTrigger(s.meta.clients.db)
+	registerV1Routes(s)
 }

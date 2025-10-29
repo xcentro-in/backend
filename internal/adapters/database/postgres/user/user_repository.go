@@ -688,3 +688,19 @@ func (r *PgUserRepository) CountBusinessRelations(ctx context.Context, userID st
 
 	return count, nil
 }
+
+// GetUserBasicInfo retrieves only id, email, and name (optimized for notifications)
+func (r *PgUserRepository) GetUserBasicInfo(ctx context.Context, userID string) (id, email, name string, err error) {
+	query := `
+		SELECT id, email, COALESCE(name, '') as name
+		FROM xcentro.user_table
+		WHERE id = $1
+	`
+
+	err = r.querier.QueryRow(ctx, query, userID).Scan(&id, &email, &name)
+	if err != nil {
+		return "", "", "", fmt.Errorf("failed to get user basic info: %w", err)
+	}
+
+	return id, email, name, nil
+}

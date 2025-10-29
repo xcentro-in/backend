@@ -104,10 +104,25 @@ func (s *DispatchService) ProcessEmailDispatches(ctx context.Context, batchSize 
 			continue
 		}
 
+		// Extract action buttons from content if present
+		var actions []notification.ActionButton
+		if actionsData, ok := job.Content["actions"].([]interface{}); ok {
+			for _, actionData := range actionsData {
+				if actionMap, ok := actionData.(map[string]interface{}); ok {
+					action := notification.ActionButton{
+						Type: getString(actionMap, "type"),
+						Text: getString(actionMap, "text"),
+						Href: getString(actionMap, "href"),
+					}
+					actions = append(actions, action)
+				}
+			}
+		}
+
 		// Send email via SES with idempotency protection
 		// The notification ID is passed as an idempotency key via SES tags
 		// This prevents duplicate emails if worker crashes between send and status update
-		if err := SendEmailNotification(ctx, s.emailClient, job.ID, u.Email, title, body); err != nil {
+		if err := SendEmailNotification(ctx, s.emailClient, job.ID, u.Email, title, body, actions); err != nil {
 			s.logger.Errorf("Failed to send email for job %d to %s: %v", job.ID, u.Email, err)
 			failedIDs = append(failedIDs, job.ID)
 		} else {
@@ -144,4 +159,12 @@ func (s *DispatchService) ProcessEmailDispatches(ctx context.Context, batchSize 
 	}
 
 	return len(succeededIDs), nil
+}
+
+// getString safely extracts a string value from a map[string]interface{}
+func getString(m map[string]interface{}, key string) string {
+	if val, ok := m[key].(string); ok {
+		return val
+	}
+	return ""
 }

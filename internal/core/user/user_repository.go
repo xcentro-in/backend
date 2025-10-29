@@ -48,4 +48,7 @@ type UserRepository interface {
 	// Invited user methods
 	CreateInvitedUser(ctx context.Context, email, passwordHash, name string, kycNeeded bool) (*User, error)
 	CountBusinessRelations(ctx context.Context, userID string) (int, error)
+
+	// Optimized queries for specific use cases
+	GetUserBasicInfo(ctx context.Context, userID string) (id, email, name string, err error)
 }
