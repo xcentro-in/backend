@@ -19,6 +19,7 @@ type Config struct {
 	Rcache            RedisConfig             `json:"rcache"`
 	JWT               JWTSecretConfig         `json:"jwt"`
 	Cookie            CookieConfig            `json:"cookie"`
+	CORS              CORSConfig              `json:"cors"`
 	S3                S3Config                `json:"s3"`
 	SES               SESConfig               `json:"ses"`
 	Castler           CastlerConfig           `json:"castler"`
@@ -40,6 +41,13 @@ type CookieConfig struct {
 	Secure   bool   `json:"secure" env:"COOKIE_SECURE" env-default:"false"`    // Set to true in production (HTTPS only)
 	SameSite string `json:"same_site" env:"COOKIE_SAMESITE" env-default:"Lax"` // Strict, Lax, or None
 	Domain   string `json:"domain" env:"COOKIE_DOMAIN" env-default:""`         // Empty for current domain
+}
+
+// CORSConfig holds CORS (Cross-Origin Resource Sharing) configuration.
+type CORSConfig struct {
+	AllowOrigins     []string `json:"allow_origins" env:"CORS_ALLOW_ORIGINS" env-default:"http://localhost:8080"`
+	AllowCredentials bool     `json:"allow_credentials" env:"CORS_ALLOW_CREDENTIALS" env-default:"true"`
+	MaxAge           int      `json:"max_age" env:"CORS_MAX_AGE" env-default:"86400"` // 24 hours
 }
 
 // S3Config holds AWS S3 related configuration.

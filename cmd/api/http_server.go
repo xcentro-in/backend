@@ -78,8 +78,8 @@ func (s *xcentroServer) registerGlobalMiddleware() {
 	s.echo.Use(middleware.Logger())
 	s.echo.Use(middleware.Recover())
 	s.echo.Use(middleware.CORSWithConfig(middleware.CORSConfig{
-		AllowOrigins:     []string{"http://localhost:8080"}, // In prod: []string{"https://yourdomain.com"}
-		AllowCredentials: true,
+		AllowOrigins:     s.meta.config.CORS.AllowOrigins,
+		AllowCredentials: s.meta.config.CORS.AllowCredentials,
 		AllowHeaders: []string{
 			"Content-Type",
 			"Authorization",
@@ -90,17 +90,17 @@ func (s *xcentroServer) registerGlobalMiddleware() {
 			"X-Requested-With",
 			"Origin",
 			"Cache-Control",
-			"X-CSRF-Token", // If you implement CSRF protection (recommended with cookies)
+			"X-CSRF-Token",
 		},
 		AllowMethods: []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"},
 		ExposeHeaders: []string{
 			"Content-Length",
 			"Content-Type",
-			"X-Request-Id", // If you use request tracing
+			"X-Request-Id",
 			"X-RateLimit-Limit",
-			"X-RateLimit-Remaining", // If you implement rate limiting
+			"X-RateLimit-Remaining",
 		},
-		MaxAge: 86400, // 24 hours - browser caches preflight response
+		MaxAge: s.meta.config.CORS.MaxAge,
 	}))
 	s.echo.Use(middleware.Secure())
 }
