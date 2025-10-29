@@ -18,8 +18,11 @@ type NotificationWorker struct {
 	dispatchService notification.DispatchService
 	recoveryService notification.RecoveryService
 
-	batchSize                int
+	fanoutBatchSize          int
+	fanoutPollInterval       int
 	fanoutWorkerCount        int
+	dispatchBatchSize        int
+	dispatchPollInterval     int
 	emailDispatchWorkerCount int
 	recoveryWorkerCount      int
 	recoveryIntervalSeconds  int
@@ -27,8 +30,11 @@ type NotificationWorker struct {
 
 // NotificationWorkerConfig holds worker configuration
 type NotificationWorkerConfig struct {
-	BatchSize                int
+	FanoutBatchSize          int
+	FanoutPollInterval       int
 	FanoutWorkerCount        int
+	DispatchBatchSize        int
+	DispatchPollInterval     int
 	EmailDispatchWorkerCount int
 	RecoveryWorkerCount      int
 	RecoveryIntervalSeconds  int
@@ -45,63 +51,73 @@ func NewNotificationWorker(
 		fanoutService:            fanoutService,
 		dispatchService:          dispatchService,
 		recoveryService:          recoveryService,
-		batchSize:                config.BatchSize,
+		fanoutBatchSize:          config.FanoutBatchSize,
+		fanoutPollInterval:       config.FanoutPollInterval,
 		fanoutWorkerCount:        config.FanoutWorkerCount,
+		dispatchBatchSize:        config.DispatchBatchSize,
+		dispatchPollInterval:     config.DispatchPollInterval,
 		emailDispatchWorkerCount: config.EmailDispatchWorkerCount,
 		recoveryWorkerCount:      config.RecoveryWorkerCount,
 		recoveryIntervalSeconds:  config.RecoveryIntervalSeconds,
 	}
 }
 
-// Run executes all worker goroutine pools concurrently
-// Worker is kept minimal - all business logic is in the services
-func (w *NotificationWorker) Run(ctx context.Context) error {
-	var wg sync.WaitGroup
-	errChan := make(chan error, w.fanoutWorkerCount+w.emailDispatchWorkerCount)
+// RunFanout executes fanout worker pool with its own poll interval
+func (w *NotificationWorker) RunFanout(ctx context.Context) error {
+	ticker := time.NewTicker(time.Duration(w.fanoutPollInterval) * time.Second)
+	defer ticker.Stop()
 
-	// Goroutine Pool 1: Fanout workers (notification_events -> user_notifications)
-	for i := 0; i < w.fanoutWorkerCount; i++ {
-		wg.Add(1)
-		go func(workerID int) {
-			defer wg.Done()
-			processedCount, err := w.fanoutService.ProcessPendingEvents(ctx, w.batchSize)
-			if err != nil {
-				errChan <- fmt.Errorf("fanout worker %d error: %w", workerID, err)
-			} else if processedCount > 0 {
-				fmt.Printf("✅ Fanout worker %d: processed %d events\n", workerID, processedCount)
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+
+		case <-ticker.C:
+			var wg sync.WaitGroup
+			for i := 0; i < w.fanoutWorkerCount; i++ {
+				wg.Add(1)
+				go func(workerID int) {
+					defer wg.Done()
+					processedCount, err := w.fanoutService.ProcessPendingEvents(ctx, w.fanoutBatchSize)
+					if err != nil {
+						fmt.Printf("Fanout worker %d error: %v\n", workerID, err)
+					} else if processedCount > 0 {
+						fmt.Printf("Fanout worker %d: processed %d events\n", workerID, processedCount)
+					}
+				}(i + 1)
 			}
-		}(i + 1)
+			wg.Wait()
+		}
 	}
+}
 
-	// Goroutine Pool 2: Email dispatch workers (user_notifications [email] -> SES)
-	for i := 0; i < w.emailDispatchWorkerCount; i++ {
-		wg.Add(1)
-		go func(workerID int) {
-			defer wg.Done()
-			sentCount, err := w.dispatchService.ProcessEmailDispatches(ctx, w.batchSize)
-			if err != nil {
-				errChan <- fmt.Errorf("email dispatch worker %d error: %w", workerID, err)
-			} else if sentCount > 0 {
-				fmt.Printf("✅ Email dispatch worker %d: sent %d emails\n", workerID, sentCount)
+// RunDispatch executes dispatch worker pool with its own poll interval
+func (w *NotificationWorker) RunDispatch(ctx context.Context) error {
+	ticker := time.NewTicker(time.Duration(w.dispatchPollInterval) * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+
+		case <-ticker.C:
+			var wg sync.WaitGroup
+			for i := 0; i < w.emailDispatchWorkerCount; i++ {
+				wg.Add(1)
+				go func(workerID int) {
+					defer wg.Done()
+					sentCount, err := w.dispatchService.ProcessEmailDispatches(ctx, w.dispatchBatchSize)
+					if err != nil {
+						fmt.Printf("Dispatch worker %d error: %v\n", workerID, err)
+					} else if sentCount > 0 {
+						fmt.Printf("Dispatch worker %d: sent %d emails\n", workerID, sentCount)
+					}
+				}(i + 1)
 			}
-		}(i + 1)
+			wg.Wait()
+		}
 	}
-
-	// Wait for all workers to complete
-	wg.Wait()
-	close(errChan)
-
-	// Collect and report errors
-	var errs []error
-	for err := range errChan {
-		errs = append(errs, err)
-	}
-
-	if len(errs) > 0 {
-		return fmt.Errorf("worker errors: %v", errs)
-	}
-
-	return nil
 }
 
 // RunRecovery executes recovery goroutine pool in a separate ticker loop
@@ -110,16 +126,12 @@ func (w *NotificationWorker) RunRecovery(ctx context.Context) error {
 	ticker := time.NewTicker(time.Duration(w.recoveryIntervalSeconds) * time.Second)
 	defer ticker.Stop()
 
-	fmt.Printf("🔄 Recovery worker started (interval: %ds, workers: %d)\n", w.recoveryIntervalSeconds, w.recoveryWorkerCount)
-
 	for {
 		select {
 		case <-ctx.Done():
-			fmt.Println("🛑 Recovery worker stopped")
 			return nil
 
 		case <-ticker.C:
-			// Run recovery workers concurrently
 			var wg sync.WaitGroup
 			for i := 0; i < w.recoveryWorkerCount; i++ {
 				wg.Add(1)
@@ -127,9 +139,9 @@ func (w *NotificationWorker) RunRecovery(ctx context.Context) error {
 					defer wg.Done()
 					recovered, deleted, err := w.recoveryService.ProcessRecoveryAndCleanup(ctx)
 					if err != nil {
-						fmt.Printf("❌ Recovery worker %d error: %v\n", workerID, err)
+						fmt.Printf("Recovery worker %d error: %v\n", workerID, err)
 					} else if recovered > 0 || deleted > 0 {
-						fmt.Printf("🔄 Recovery worker %d: recovered %d, deleted %d\n", workerID, recovered, deleted)
+						fmt.Printf("Recovery worker %d: recovered %d, deleted %d\n", workerID, recovered, deleted)
 					}
 				}(i + 1)
 			}

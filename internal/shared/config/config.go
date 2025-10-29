@@ -166,17 +166,19 @@ type WorkersConfig struct {
 
 // NotificationWorkerConfig holds notification worker configuration.
 type NotificationWorkerConfig struct {
-	// Job processing configuration
-	BatchSize    int `json:"batch_size" env:"NOTIFICATION_WORKER_BATCH_SIZE" env-default:"50"`
-	PollInterval int `json:"poll_interval_seconds" env:"NOTIFICATION_WORKER_POLL_INTERVAL_SECONDS" env-default:"2"`
+	// Fanout configuration
+	FanoutBatchSize       int `json:"fanout_batch_size" env:"NOTIFICATION_FANOUT_BATCH_SIZE" env-default:"50"`
+	FanoutPollInterval    int `json:"fanout_poll_interval_seconds" env:"NOTIFICATION_FANOUT_POLL_INTERVAL_SECONDS" env-default:"2"`
+	FanoutWorkers         int `json:"fanout_workers" env:"NOTIFICATION_FANOUT_WORKERS" env-default:"1"`
+
+	// Dispatch configuration
+	DispatchBatchSize       int `json:"dispatch_batch_size" env:"NOTIFICATION_DISPATCH_BATCH_SIZE" env-default:"50"`
+	DispatchPollInterval    int `json:"dispatch_poll_interval_seconds" env:"NOTIFICATION_DISPATCH_POLL_INTERVAL_SECONDS" env-default:"2"`
+	EmailDispatchWorkers    int `json:"email_dispatch_workers" env:"NOTIFICATION_EMAIL_DISPATCH_WORKERS" env-default:"2"`
+	PushDispatchWorkers     int `json:"push_dispatch_workers" env:"NOTIFICATION_PUSH_DISPATCH_WORKERS" env-default:"0"` // 0 = disabled (MVP)
 
 	// Retry configuration
 	MaxRetryAttempts int `json:"max_retry_attempts" env:"NOTIFICATION_MAX_RETRY_ATTEMPTS" env-default:"3"`
-
-	// Goroutine pool sizes
-	FanoutWorkers        int `json:"fanout_workers" env:"NOTIFICATION_FANOUT_WORKERS" env-default:"1"`
-	EmailDispatchWorkers int `json:"email_dispatch_workers" env:"NOTIFICATION_EMAIL_DISPATCH_WORKERS" env-default:"2"`
-	PushDispatchWorkers  int `json:"push_dispatch_workers" env:"NOTIFICATION_PUSH_DISPATCH_WORKERS" env-default:"0"` // 0 = disabled (MVP)
 
 	// Stuck job recovery configuration
 	ProcessingTimeoutMinutes int `json:"processing_timeout_minutes" env:"NOTIFICATION_PROCESSING_TIMEOUT_MINUTES" env-default:"10"`

@@ -4,6 +4,8 @@ import (
 	"github.com/labstack/echo/v4"
 	authRepo "xcentro.in/internal/adapters/database/postgres/auth"
 	"xcentro.in/internal/adapters/database/postgres/business"
+	"xcentro.in/internal/adapters/database/postgres/client"
+	notificationRepo "xcentro.in/internal/adapters/database/postgres/notification"
 	payeeRepo "xcentro.in/internal/adapters/database/postgres/payee"
 	paymentRepo "xcentro.in/internal/adapters/database/postgres/payment"
 	payoutRepo "xcentro.in/internal/adapters/database/postgres/payout"
@@ -24,6 +26,7 @@ import (
 	voucherHandler "xcentro.in/internal/handlers/http/voucher"
 	authservice "xcentro.in/internal/services/auth"
 	businessSvc "xcentro.in/internal/services/business"
+	notificationService "xcentro.in/internal/services/notification"
 	payeeSvc "xcentro.in/internal/services/payee"
 	"xcentro.in/internal/services/payments"
 	payoutSvc "xcentro.in/internal/services/payout"
@@ -519,5 +522,14 @@ func registerV1Routes(s *xcentroServer) {
 }
 
 func registerRouters(s *xcentroServer) {
+	// Initialize global notification trigger for easy access from any service
+	initializeNotificationTrigger(s.meta.clients.db)
+
 	registerV1Routes(s)
+}
+
+func initializeNotificationTrigger(db client.DB) {
+	eventRepo := notificationRepo.NewPgNotificationEventRepository(db)
+	notificationService.InitializeNotificationTrigger(eventRepo)
+	logger.GetDefault().Info("Notification trigger initialized")
 }
