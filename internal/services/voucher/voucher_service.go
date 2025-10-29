@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	"xcentro.in/internal/core/voucher"
+	"xcentro.in/internal/shared/types"
 )
 
 // VoucherService defines the interface for voucher orchestration operations
@@ -128,12 +129,12 @@ func (s *VoucherServiceImpl) CreateDraftVoucher(ctx context.Context, req *Create
 		FiscalYear:       fiscalYear,
 		AccountingPeriod: accountingPeriod,
 		VoucherType:      voucher.VoucherTypePayment,
-		BusinessID:       req.BusinessID,
-		PayeeID:          payeeID,
-		AccountID:        accountID,
-		InvoiceNumber:    req.InvoiceNumber,
-		InvoiceDate:      req.InvoiceDate,
-		InvoiceDueDate:   req.InvoiceDueDate,
+		BusinessID:     req.BusinessID,
+		PayeeID:        payeeID,
+		AccountID:      accountID,
+		InvoiceNumber:  req.InvoiceNumber,
+		InvoiceDate:    convertDateToTimePtr(req.InvoiceDate),
+		InvoiceDueDate: convertDateToTimePtr(req.InvoiceDueDate),
 		GrossAmount:      req.GrossAmount,
 		NetAmount:        req.NetAmount,
 		Currency:         currency,
@@ -155,12 +156,14 @@ func (s *VoucherServiceImpl) CreateDraftVoucher(ctx context.Context, req *Create
 		PaymentID:        nil, // NULL when draft
 		ERPSyncStatus:    voucher.ERPNotSynced,
 		ERPSyncAttempts:  0,
-		GLExpenseAccount: req.GLExpenseAccount,
-		GLBankAccount:    req.GLBankAccount,
-		CostCenter:       req.CostCenter,
-		CreatedAt:        now,
-		CreatedByID:      &req.UserID,
-		Metadata:         req.Metadata,
+		GLExpenseAccount:      req.GLExpenseAccount,
+		GLBankAccount:         req.GLBankAccount,
+		CostCenter:            req.CostCenter,
+		PaymentTerms:          req.PaymentTerms,
+		VendorReferenceNumber: req.VendorReferenceNumber,
+		CreatedAt:             now,
+		CreatedByID:           &req.UserID,
+		Metadata:              req.Metadata,
 	}
 
 	// 5. Validate voucher data
@@ -761,6 +764,14 @@ func (s *VoucherServiceImpl) ApproveCancellation(ctx context.Context, req *Appro
 }
 
 // Helper functions
+
+// convertDateToTimePtr converts custom Date type to *time.Time
+func convertDateToTimePtr(d *types.Date) *time.Time {
+	if d == nil {
+		return nil
+	}
+	return d.ToTimePtr()
+}
 
 // resolveRelationID validates relation_id belongs to business and returns payee/account IDs
 func (s *VoucherServiceImpl) resolveRelationID(ctx context.Context, businessID uuid.UUID, relationID uuid.UUID) (payeeID, accountID uuid.UUID, err error) {

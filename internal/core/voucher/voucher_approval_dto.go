@@ -62,7 +62,7 @@ type VoucherApprovalInboxItem struct {
 	InvoiceNumber          string                `json:"invoice_number"`
 	InvoiceDueDate         *time.Time            `json:"invoice_due_date"`
 	PayeeName              string                `json:"payee_name"`
-	TotalAmount            float64               `json:"total_amount"` // In rupees
+	TotalAmount            int64                 `json:"total_amount"` // In paise
 	VoucherStatus          string                `json:"voucher_status"`
 	CurrentApprovalStatus  ApprovalAction        `json:"current_approval_status"` // Latest approval action
 	ApprovalHistory        []ApprovalHistoryItem `json:"approval_history"`        // Complete chronological history

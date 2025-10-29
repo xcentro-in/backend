@@ -19,7 +19,7 @@ type VoucherListItem struct {
 	InvoiceNumber  string            `json:"invoiceNumber"`  // Vendor's invoice number
 	InvoiceDueDate *time.Time        `json:"invoiceDueDate"` // When payment is due
 	PayeeName      string            `json:"payeeName"`      // Payee display name
-	TotalAmount    float64           `json:"totalAmount"`    // Net amount in rupees
+	TotalAmount    int64             `json:"totalAmount"`    // Net amount in paise
 	Status         BillPaymentStatus `json:"status"`         // paid, open, overdue
 	VoucherStatus  string            `json:"voucherStatus"`  // draft, finalized, posted, synced
 	PaymentDate    *time.Time        `json:"paymentDate"`    // When payment was made (if paid)
@@ -53,7 +53,7 @@ type UnpaidBillsRequest struct {
 type UnpaidBillItem struct {
 	VoucherID     string            `json:"voucher_id"`
 	InvoiceNumber string            `json:"invoice_number"`
-	TotalAmount   float64           `json:"total_amount"` // Net amount in rupees
+	TotalAmount   int64             `json:"total_amount"` // Net amount in paise
 	DueDate       *time.Time        `json:"due_date"`
 	Status        BillPaymentStatus `json:"status"`       // open or overdue
 	VendorName    string            `json:"vendor_name"`

@@ -59,11 +59,11 @@ const (
 type PayoutStatus string
 
 const (
-	PayoutStatusPending      PayoutStatus = "pending"       // Awaiting payout
-	PayoutStatusInitiated    PayoutStatus = "initiated"     // Payout initiated with provider
-	PayoutStatusProcessing   PayoutStatus = "processing"    // Provider is processing
-	PayoutStatusCompleted    PayoutStatus = "completed"     // Payout completed
-	PayoutStatusFailed       PayoutStatus = "failed"        // Payout failed
+	PayoutStatusPending        PayoutStatus = "pending"         // Awaiting payout
+	PayoutStatusInitiated      PayoutStatus = "initiated"       // Payout initiated with provider
+	PayoutStatusProcessing     PayoutStatus = "processing"      // Provider is processing
+	PayoutStatusCompleted      PayoutStatus = "completed"       // Payout completed
+	PayoutStatusFailed         PayoutStatus = "failed"          // Payout failed
 	PayoutStatusNeedsAttention PayoutStatus = "needs_attention" // Manual intervention needed
 )
 
@@ -124,6 +124,10 @@ type Voucher struct {
 	ExpenseCategory string `json:"expense_category,omitempty"`
 	Description     string `json:"description,omitempty"`
 
+	// Vendor/payment details
+	PaymentTerms          string `json:"payment_terms,omitempty"`           // e.g., "net30", "eom", "cod"
+	VendorReferenceNumber string `json:"vendor_reference_number,omitempty"` // Vendor's internal reference
+
 	// Payment link (NULL when voucher is in draft)
 	PaymentID *uuid.UUID `json:"payment_id,omitempty"`
 
@@ -136,7 +140,7 @@ type Voucher struct {
 	ERPMetadata     map[string]interface{} `json:"erp_metadata,omitempty"`
 
 	// Payout tracking (Phase 6)
-	PayoutStatus      string                 `json:"payout_status"`              // pending, initiated, completed, failed
+	PayoutStatus      string                 `json:"payout_status"` // pending, initiated, completed, failed
 	PayoutInitiatedAt *time.Time             `json:"payout_initiated_at,omitempty"`
 	PayoutInitiatedBy *uuid.UUID             `json:"payout_initiated_by,omitempty"` // Operations user who initiated payout
 	PayoutCompletedAt *time.Time             `json:"payout_completed_at,omitempty"`
@@ -162,10 +166,10 @@ type Voucher struct {
 	CostCenter       string `json:"cost_center,omitempty"`        // Departmental accounting
 
 	// Timestamps
-	CreatedAt     time.Time  `json:"created_at"`
-	CreatedByID   *uuid.UUID `json:"created_by_id,omitempty"`
-	UpdatedAt     *time.Time `json:"updated_at,omitempty"`
-	Metadata      map[string]interface{} `json:"metadata,omitempty"`
+	CreatedAt   time.Time              `json:"created_at"`
+	CreatedByID *uuid.UUID             `json:"created_by_id,omitempty"`
+	UpdatedAt   *time.Time             `json:"updated_at,omitempty"`
+	Metadata    map[string]interface{} `json:"metadata,omitempty"`
 }
 
 // VoucherApproval represents an approval record for a voucher
@@ -286,14 +290,14 @@ func (v *Voucher) ValidateAmountCalculation() bool {
 type VoucherWithPaymentInfo struct {
 	VoucherID     uuid.UUID     `json:"voucher_id"`
 	InvoiceNumber string        `json:"invoice_number"`
-	NetAmount     int64         `json:"net_amount"`      // Amount actually paid (in paise)
-	CreatedAt     time.Time     `json:"created_at"`      // Voucher creation date
-	Status        VoucherStatus `json:"status"`          // Voucher status (draft, finalized, etc.)
-	Description   string        `json:"description"`     // Voucher description
+	NetAmount     int64         `json:"net_amount"`  // Amount actually paid (in paise)
+	CreatedAt     time.Time     `json:"created_at"`  // Voucher creation date
+	Status        VoucherStatus `json:"status"`      // Voucher status (draft, finalized, etc.)
+	Description   string        `json:"description"` // Voucher description
 
 	// Payment information (NULL for draft vouchers)
-	PaymentID          *uuid.UUID `json:"payment_id,omitempty"`
-	PaymentStatus      string     `json:"payment_status,omitempty"`       // Payment status (success, pending, failed)
-	PaymentSourceType  string     `json:"payment_source_type,omitempty"`  // card, bank_account, upi, wallet
-	PaymentSourceDigits string    `json:"payment_source_digits,omitempty"` // Last 4/5 digits
+	PaymentID           *uuid.UUID `json:"payment_id,omitempty"`
+	PaymentStatus       string     `json:"payment_status,omitempty"`        // Payment status (success, pending, failed)
+	PaymentSourceType   string     `json:"payment_source_type,omitempty"`   // card, bank_account, upi, wallet
+	PaymentSourceDigits string     `json:"payment_source_digits,omitempty"` // Last 4/5 digits
 }

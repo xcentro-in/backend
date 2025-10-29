@@ -5,21 +5,22 @@ import (
 
 	"github.com/google/uuid"
 	"xcentro.in/internal/core/voucher"
+	"xcentro.in/internal/shared/types"
 )
 
 // CreateDraftVoucherRequest represents the request to create a draft voucher
 type CreateDraftVoucherRequest struct {
-	// Business context
-	BusinessID uuid.UUID `json:"business_id"`
-	UserID     uuid.UUID `json:"user_id"` // created_by
+	// Business context (populated from X-Business-ID header and JWT)
+	BusinessID uuid.UUID `json:"-"` // Populated from X-Business-ID header
+	UserID     uuid.UUID `json:"-"` // Populated from JWT token (created_by)
 
 	// Payee reference (simplified with surrogate key)
 	RelationID uuid.UUID `json:"relation_id"` // Single identifier for business-payee-account relationship
 
 	// Invoice details
-	InvoiceNumber  string     `json:"invoice_number"`
-	InvoiceDate    *time.Time `json:"invoice_date,omitempty"`
-	InvoiceDueDate *time.Time `json:"invoice_due_date,omitempty"`
+	InvoiceNumber  string      `json:"invoice_number"`
+	InvoiceDate    *types.Date `json:"invoice_date,omitempty"`
+	InvoiceDueDate *types.Date `json:"invoice_due_date,omitempty"`
 
 	// Amounts (all in paise)
 	GrossAmount    int64   `json:"gross_amount"`
@@ -46,6 +47,10 @@ type CreateDraftVoucherRequest struct {
 	GLExpenseAccount string `json:"gl_expense_account,omitempty"`
 	GLBankAccount    string `json:"gl_bank_account,omitempty"`
 	CostCenter       string `json:"cost_center,omitempty"`
+
+	// Payment terms and vendor reference
+	PaymentTerms          string `json:"payment_terms,omitempty"`
+	VendorReferenceNumber string `json:"vendor_reference_number,omitempty"`
 
 	// Metadata
 	Metadata map[string]interface{} `json:"metadata,omitempty"`
@@ -231,16 +236,16 @@ type VoucherListSummary struct {
 
 // CreateMultiVouchersRequest represents request to create multiple vouchers for multi-bill payment
 type CreateMultiVouchersRequest struct {
-	BusinessID uuid.UUID            `json:"business_id"`
-	UserID     uuid.UUID            `json:"user_id"`
+	BusinessID uuid.UUID            `json:"-"` // Populated from X-Business-ID header
+	UserID     uuid.UUID            `json:"-"` // Populated from JWT token
 	Vouchers   []BillVoucherRequest `json:"vouchers"`
 }
 
 // BillVoucherRequest represents a single bill in multi-bill payment
 type BillVoucherRequest struct {
-	RelationID       uuid.UUID              `json:"relation_id"` // Single identifier for business-payee-account relationship
-	InvoiceNumber    string                 `json:"invoice_number"`
-	InvoiceDate      *time.Time             `json:"invoice_date,omitempty"`
+	RelationID    uuid.UUID   `json:"relation_id"` // Single identifier for business-payee-account relationship
+	InvoiceNumber string      `json:"invoice_number"`
+	InvoiceDate   *types.Date `json:"invoice_date,omitempty"`
 	GrossAmount      int64                  `json:"gross_amount"`
 	NetAmount        int64                  `json:"net_amount"`
 	GSTAmount        int64                  `json:"gst_amount"`

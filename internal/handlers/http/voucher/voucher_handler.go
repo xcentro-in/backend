@@ -1,7 +1,9 @@
 package voucher
 
 import (
+	"bytes"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"time"
@@ -32,6 +34,47 @@ func NewVoucherHandler(voucherService voucherSvc.VoucherService, logger *logger.
 func (h *VoucherHandler) CreateDraftVoucher(c echo.Context) error {
 	h.logger.InfoWith("CreateDraftVoucher API called")
 
+	// Extract business_id from X-Business-ID header
+	businessIDStr := c.Request().Header.Get("X-Business-ID")
+	if businessIDStr == "" {
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "MISSING_BUSINESS_ID",
+			"message": "X-Business-ID header is required",
+		})
+	}
+
+	businessID, err := uuid.Parse(businessIDStr)
+	if err != nil {
+		h.logger.ErrorWith("Invalid business_id format", "error", err)
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "invalid_request",
+			"message": "Invalid business_id format",
+		})
+	}
+
+	// Extract userId from JWT context
+	userIDStr, ok := c.Get("userId").(string)
+	if !ok || userIDStr == "" {
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "MISSING_USER_ID",
+			"message": "User ID not found in token",
+		})
+	}
+
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		h.logger.ErrorWith("Invalid user_id format", "error", err)
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "invalid_user_id",
+			"message": "Invalid user ID format",
+		})
+	}
+
+	// DEBUG: Print raw request body
+	bodyBytes, _ := io.ReadAll(c.Request().Body)
+	c.Request().Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+	fmt.Printf("DEBUG - Request Body: %s\n", string(bodyBytes))
+
 	// Parse request body
 	var req voucherSvc.CreateDraftVoucherRequest
 	if err := c.Bind(&req); err != nil {
@@ -42,16 +85,9 @@ func (h *VoucherHandler) CreateDraftVoucher(c echo.Context) error {
 		})
 	}
 
-	// TODO: Extract business_id and user_id from JWT
-	// For now using hardcoded values (Phase 6 will integrate JWT)
-	if req.BusinessID == uuid.Nil {
-		// TODO: Extract from JWT token claims
-		req.BusinessID = uuid.MustParse("00000000-0000-0000-0000-000000000000") // Placeholder
-	}
-	if req.UserID == uuid.Nil {
-		// TODO: Extract from JWT token claims
-		req.UserID = uuid.MustParse("00000000-0000-0000-0000-000000000000") // Placeholder
-	}
+	// Set businessID and userID from context
+	req.BusinessID = businessID
+	req.UserID = userID
 
 	h.logger.DebugWith("Draft voucher request",
 		"relation_id", req.RelationID,
@@ -258,6 +294,42 @@ func (h *VoucherHandler) FinalizeVoucher(c echo.Context) error {
 func (h *VoucherHandler) CreateMultiVouchers(c echo.Context) error {
 	h.logger.InfoWith("CreateMultiVouchers API called")
 
+	// Extract business_id from X-Business-ID header
+	businessIDStr := c.Request().Header.Get("X-Business-ID")
+	if businessIDStr == "" {
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "MISSING_BUSINESS_ID",
+			"message": "X-Business-ID header is required",
+		})
+	}
+
+	businessID, err := uuid.Parse(businessIDStr)
+	if err != nil {
+		h.logger.ErrorWith("Invalid business_id format", "error", err)
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "invalid_request",
+			"message": "Invalid business_id format",
+		})
+	}
+
+	// Extract userId from JWT context
+	userIDStr, ok := c.Get("userId").(string)
+	if !ok || userIDStr == "" {
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "MISSING_USER_ID",
+			"message": "User ID not found in token",
+		})
+	}
+
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		h.logger.ErrorWith("Invalid user_id format", "error", err)
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "invalid_user_id",
+			"message": "Invalid user ID format",
+		})
+	}
+
 	// Parse request body
 	var req voucherSvc.CreateMultiVouchersRequest
 	if err := c.Bind(&req); err != nil {
@@ -268,13 +340,9 @@ func (h *VoucherHandler) CreateMultiVouchers(c echo.Context) error {
 		})
 	}
 
-	// TODO: Extract business_id and user_id from JWT
-	if req.BusinessID == uuid.Nil {
-		req.BusinessID = uuid.MustParse("00000000-0000-0000-0000-000000000000") // Placeholder
-	}
-	if req.UserID == uuid.Nil {
-		req.UserID = uuid.MustParse("00000000-0000-0000-0000-000000000000") // Placeholder
-	}
+	// Set businessID and userID from context
+	req.BusinessID = businessID
+	req.UserID = userID
 
 	h.logger.DebugWith("Multi voucher request", "bill_count", len(req.Vouchers))
 

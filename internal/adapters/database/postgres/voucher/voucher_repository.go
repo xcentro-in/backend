@@ -1170,8 +1170,8 @@ func (r *PostgresVoucherRepository) GetVoucherListForBusiness(ctx context.Contex
 			return nil, 0, fmt.Errorf("failed to scan voucher list item: %w", err)
 		}
 
-		// Convert amount from paise to rupees
-		item.TotalAmount = float64(netAmount) / 100.0
+		// Keep amount in paise (int64)
+		item.TotalAmount = netAmount
 
 		// Set invoice due date
 		item.InvoiceDueDate = invoiceDueDateDB
@@ -1383,7 +1383,7 @@ func (r *PostgresVoucherRepository) GetApprovalInboxVouchers(ctx context.Context
 				InvoiceNumber:         invoiceNumber,
 				InvoiceDueDate:        invoiceDueDateDB,
 				PayeeName:             payeeName,
-				TotalAmount:           float64(netAmount) / 100.0, // Convert paise to rupees
+				TotalAmount:           netAmount, // Keep in paise (int64)
 				VoucherStatus:         voucherStatus,
 				CurrentApprovalStatus: status, // Latest status from filter
 				ApprovalHistory:       []voucher.ApprovalHistoryItem{},
@@ -1612,7 +1612,7 @@ func (r *PostgresVoucherRepository) GetUnpaidBills(ctx context.Context, req *vou
 		SELECT
 			v.voucher_id,
 			v.invoice_number,
-			v.net_amount / 100.0 AS total_amount,
+			v.net_amount AS total_amount,
 			v.invoice_due_date,
 			CASE
 				WHEN v.invoice_due_date < CURRENT_DATE THEN 'overdue'
