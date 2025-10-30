@@ -1186,3 +1186,52 @@ func (h *VoucherHandler) GetVoucherCounts(c echo.Context) error {
 
 	return c.JSON(http.StatusOK, counts)
 }
+
+// GetVoucherActivity handles GET /vouchers/:id/activity - Get voucher activity history
+func (h *VoucherHandler) GetVoucherActivity(c echo.Context) error {
+	h.logger.InfoWith("GetVoucherActivity API called")
+
+	// Extract voucher_id from path parameter
+	voucherID := c.Param("id")
+	if voucherID == "" {
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "MISSING_VOUCHER_ID",
+			"message": "voucher_id path parameter is required",
+		})
+	}
+
+	// Validate UUID format
+	if _, err := uuid.Parse(voucherID); err != nil {
+		h.logger.ErrorWith("Invalid voucher_id format", "error", err)
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "INVALID_VOUCHER_ID",
+			"message": "voucher_id must be a valid UUID",
+		})
+	}
+
+	// Call service
+	activity, err := h.voucherService.GetVoucherActivity(c.Request().Context(), voucherID)
+	if err != nil {
+		h.logger.ErrorWith("Failed to get voucher activity", "voucher_id", voucherID, "error", err)
+
+		// Check if voucher not found
+		if err.Error() == fmt.Sprintf("voucher not found: %s", voucherID) {
+			return c.JSON(http.StatusNotFound, map[string]any{
+				"error":   "VOUCHER_NOT_FOUND",
+				"message": "Voucher not found",
+			})
+		}
+
+		return c.JSON(http.StatusInternalServerError, map[string]any{
+			"error":   "SERVICE_ERROR",
+			"message": err.Error(),
+		})
+	}
+
+	h.logger.InfoWith("Voucher activity fetched successfully",
+		"voucher_id", voucherID,
+		"voucher_number", activity.VoucherNumber,
+		"total_activities", activity.TotalCount)
+
+	return c.JSON(http.StatusOK, activity)
+}

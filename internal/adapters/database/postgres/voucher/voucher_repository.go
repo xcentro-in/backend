@@ -175,6 +175,7 @@ func (r *PostgresVoucherRepository) GetByID(ctx context.Context, voucherID uuid.
 		       fee_amount, discount_amount,
 		       financial_details, attachments,
 		       expense_category, description,
+		       payment_terms, vendor_reference_number,
 		       status, payment_id,
 		       erp_sync_status, erp_reference_id, erp_posting_date, erp_last_sync_at, erp_sync_attempts, erp_metadata,
 		       payout_status, payout_initiated_at, payout_initiated_by, payout_completed_at, payout_reference_id, payout_utr, payout_metadata,
@@ -196,6 +197,82 @@ func (r *PostgresVoucherRepository) GetByID(ctx context.Context, voucherID uuid.
 	}
 
 	return v, nil
+}
+
+// GetPayeeDetailsByIDs retrieves enriched payee details for given payee_id and account_id
+func (r *PostgresVoucherRepository) GetPayeeDetailsByIDs(ctx context.Context, payeeID, accountID uuid.UUID) (map[string]interface{}, error) {
+	query := `
+		SELECT
+			bpr.relation_id,
+			bpr.payee_id,
+			bpr.account_id,
+			bpr.display_name,
+			COALESCE(pv.gstin, '') AS gstin,
+			CASE
+				WHEN pv.payee_id IS NOT NULL THEN 'vendor'
+				WHEN pe.payee_id IS NOT NULL THEN 'employee'
+				WHEN pb.payee_id IS NOT NULL THEN 'biller'
+				ELSE 'unknown'
+			END AS payee_type,
+			COALESCE(pba.account_label, 'Account ending ****') AS bank_account_masked,
+			pba.ifsc_code,
+			pba.bank_name,
+			pba.account_type
+		FROM xcentro.business_payee_relation bpr
+		LEFT JOIN xcentro.payee_vendor pv ON bpr.payee_id = pv.payee_id
+		LEFT JOIN xcentro.payee_employee pe ON bpr.payee_id = pe.payee_id
+		LEFT JOIN xcentro.payee_biller pb ON bpr.payee_id = pb.payee_id
+		INNER JOIN xcentro.payee_bank_accounts pba ON bpr.account_id = pba.account_id
+		WHERE bpr.payee_id = $1 AND bpr.account_id = $2
+	`
+
+	var (
+		relationID        uuid.UUID
+		dbPayeeID         uuid.UUID
+		dbAccountID       uuid.UUID
+		displayName       string
+		gstin             string
+		payeeType         string
+		bankAccountMasked string
+		ifscCode          string
+		bankName          string
+		accountType       string
+	)
+
+	err := r.querier.QueryRow(ctx, query, payeeID, accountID).Scan(
+		&relationID,
+		&dbPayeeID,
+		&dbAccountID,
+		&displayName,
+		&gstin,
+		&payeeType,
+		&bankAccountMasked,
+		&ifscCode,
+		&bankName,
+		&accountType,
+	)
+
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("payee relation not found for payee_id=%s, account_id=%s", payeeID, accountID)
+		}
+		return nil, fmt.Errorf("failed to get payee details: %w", err)
+	}
+
+	payeeDetails := map[string]interface{}{
+		"relation_id":         relationID,
+		"payee_id":            dbPayeeID,
+		"name":                displayName,
+		"gstin":               gstin,
+		"type":                payeeType,
+		"bank_account_masked": bankAccountMasked,
+		"account_id":          dbAccountID,
+		"ifsc_code":           ifscCode,
+		"bank_name":           bankName,
+		"account_type":        accountType,
+	}
+
+	return payeeDetails, nil
 }
 
 // GetByVoucherNumber retrieves a voucher by its voucher number
@@ -657,6 +734,9 @@ func (r *PostgresVoucherRepository) scanVoucher(row pgx.Row) (*voucher.Voucher, 
 	var financialDetailsJSON, attachmentsJSON, erpMetadataJSON, payoutMetadataJSON, refundMetadataJSON, metadataJSON []byte
 
 	// Nullable string fields
+	var invoiceNumber, expenseCategory, description sql.NullString
+	var paymentTerms, vendorReferenceNumber sql.NullString
+	var tdsSection sql.NullString
 	var erpReferenceID, payoutReferenceID, payoutUTR, cancellationReason, refundReferenceID sql.NullString
 	var glExpenseAccount, glBankAccount, costCenter sql.NullString
 
@@ -666,13 +746,14 @@ func (r *PostgresVoucherRepository) scanVoucher(row pgx.Row) (*voucher.Voucher, 
 	err := row.Scan(
 		&v.VoucherID, &v.VoucherNumber, &v.VoucherDate, &v.FiscalYear, &v.AccountingPeriod, &v.VoucherType,
 		&v.BusinessID, &v.PayeeID, &v.AccountID,
-		&v.InvoiceNumber, &v.InvoiceDate, &v.InvoiceDueDate,
+		&invoiceNumber, &v.InvoiceDate, &v.InvoiceDueDate,
 		&v.GrossAmount, &v.NetAmount, &v.Currency,
 		&v.GSTAmount, &gstRate, &v.CGSTAmount, &v.SGSTAmount, &v.IGSTAmount,
-		&v.TDSAmount, &tdsRate, &v.TDSSection,
+		&v.TDSAmount, &tdsRate, &tdsSection,
 		&v.FeeAmount, &v.DiscountAmount,
 		&financialDetailsJSON, &attachmentsJSON,
-		&v.ExpenseCategory, &v.Description,
+		&expenseCategory, &description,
+		&paymentTerms, &vendorReferenceNumber,
 		&v.Status, &v.PaymentID,
 		&v.ERPSyncStatus, &erpReferenceID, &v.ERPPostingDate, &v.ERPLastSyncAt, &v.ERPSyncAttempts, &erpMetadataJSON,
 		&v.PayoutStatus, &v.PayoutInitiatedAt, &v.PayoutInitiatedBy, &v.PayoutCompletedAt, &payoutReferenceID, &payoutUTR, &payoutMetadataJSON,
@@ -686,6 +767,24 @@ func (r *PostgresVoucherRepository) scanVoucher(row pgx.Row) (*voucher.Voucher, 
 	}
 
 	// Handle nullable strings
+	if invoiceNumber.Valid {
+		v.InvoiceNumber = invoiceNumber.String
+	}
+	if expenseCategory.Valid {
+		v.ExpenseCategory = expenseCategory.String
+	}
+	if description.Valid {
+		v.Description = description.String
+	}
+	if paymentTerms.Valid {
+		v.PaymentTerms = paymentTerms.String
+	}
+	if vendorReferenceNumber.Valid {
+		v.VendorReferenceNumber = vendorReferenceNumber.String
+	}
+	if tdsSection.Valid {
+		v.TDSSection = tdsSection.String
+	}
 	if erpReferenceID.Valid {
 		v.ERPReferenceID = erpReferenceID.String
 	}
@@ -765,6 +864,9 @@ func (r *PostgresVoucherRepository) scanVoucherRow(rows pgx.Rows) (*voucher.Vouc
 	var financialDetailsJSON, attachmentsJSON, erpMetadataJSON, payoutMetadataJSON, refundMetadataJSON, metadataJSON []byte
 
 	// Nullable string fields
+	var invoiceNumber, expenseCategory, description sql.NullString
+	var paymentTerms, vendorReferenceNumber sql.NullString
+	var tdsSection sql.NullString
 	var erpReferenceID, payoutReferenceID, payoutUTR, cancellationReason, refundReferenceID sql.NullString
 	var glExpenseAccount, glBankAccount, costCenter sql.NullString
 
@@ -777,7 +879,7 @@ func (r *PostgresVoucherRepository) scanVoucherRow(rows pgx.Rows) (*voucher.Vouc
 		&v.InvoiceNumber, &v.InvoiceDate, &v.InvoiceDueDate,
 		&v.GrossAmount, &v.NetAmount, &v.Currency,
 		&v.GSTAmount, &gstRate, &v.CGSTAmount, &v.SGSTAmount, &v.IGSTAmount,
-		&v.TDSAmount, &tdsRate, &v.TDSSection,
+		&v.TDSAmount, &tdsRate, &tdsSection,
 		&v.FeeAmount, &v.DiscountAmount,
 		&financialDetailsJSON, &attachmentsJSON,
 		&v.ExpenseCategory, &v.Description,
@@ -794,6 +896,24 @@ func (r *PostgresVoucherRepository) scanVoucherRow(rows pgx.Rows) (*voucher.Vouc
 	}
 
 	// Handle nullable strings
+	if invoiceNumber.Valid {
+		v.InvoiceNumber = invoiceNumber.String
+	}
+	if expenseCategory.Valid {
+		v.ExpenseCategory = expenseCategory.String
+	}
+	if description.Valid {
+		v.Description = description.String
+	}
+	if paymentTerms.Valid {
+		v.PaymentTerms = paymentTerms.String
+	}
+	if vendorReferenceNumber.Valid {
+		v.VendorReferenceNumber = vendorReferenceNumber.String
+	}
+	if tdsSection.Valid {
+		v.TDSSection = tdsSection.String
+	}
 	if erpReferenceID.Valid {
 		v.ERPReferenceID = erpReferenceID.String
 	}
@@ -1718,4 +1838,143 @@ func (r *PostgresVoucherRepository) GetVoucherCounts(ctx context.Context, busine
 	}
 
 	return &counts, nil
+}
+
+// GetVoucherActivity retrieves complete activity history for a voucher
+func (r *PostgresVoucherRepository) GetVoucherActivity(ctx context.Context, voucherID string) (*voucher.VoucherActivityResponse, error) {
+	// Query strategy:
+	// 1. CTE for voucher creation activity
+	// 2. CTE for approval activities with user joins
+	// 3. TODO: UNION with payment activities when payment activity table is created
+	// 4. ORDER BY timestamp chronologically (oldest first)
+
+	query := `
+		WITH voucher_creation AS (
+			SELECT
+				v.voucher_id::text as activity_id,
+				'voucher_created' as activity_type,
+				v.created_by_user_id::text as user_id,
+				COALESCE(u.name, '') as user_name,
+				'created' as action,
+				'' as remarks,
+				v.created_at as timestamp,
+				'' as metadata
+			FROM xcentro.payment_vouchers v
+			LEFT JOIN xcentro.user_table u ON v.created_by_user_id = u.id
+			WHERE v.voucher_id = $1
+		),
+		approval_activities AS (
+			SELECT
+				va.approval_id::text as activity_id,
+				CASE
+					WHEN va.action = 'pending' THEN 'approval_requested'
+					ELSE 'approval_action'
+				END as activity_type,
+				CASE
+					WHEN va.action = 'pending' THEN va.requester_user_id::text
+					ELSE va.approver_user_id::text
+				END as user_id,
+				CASE
+					WHEN va.action = 'pending' THEN COALESCE(req_user.name, '')
+					ELSE COALESCE(app_user.name, '')
+				END as user_name,
+				va.action::text as action,
+				COALESCE(va.remarks, '') as remarks,
+				va.created_at as timestamp,
+				CASE
+					WHEN va.action = 'pending' THEN
+						'Requested approval from ' || COALESCE(app_user.name, 'Unknown')
+					WHEN va.action = 'approved' THEN 'Approved the voucher'
+					WHEN va.action = 'rejected' THEN 'Rejected the voucher'
+					WHEN va.action = 'request_changes' THEN 'Requested changes'
+					ELSE ''
+				END as metadata
+			FROM xcentro.voucher_approvals va
+			LEFT JOIN xcentro.user_table req_user ON va.requester_user_id = req_user.id
+			LEFT JOIN xcentro.user_table app_user ON va.approver_user_id = app_user.id
+			WHERE va.voucher_id = $1
+		)
+		-- TODO: Add payment activities UNION when payment activity table is created
+		-- payment_activities AS (
+		--     SELECT
+		--         pa.payment_activity_id::text as activity_id,
+		--         pa.activity_type,
+		--         pa.user_id::text,
+		--         COALESCE(u.name, '') as user_name,
+		--         pa.status as action,
+		--         COALESCE(pa.remarks, '') as remarks,
+		--         pa.created_at as timestamp,
+		--         pa.metadata
+		--     FROM xcentro.payment_activities pa
+		--     LEFT JOIN xcentro.user_table u ON pa.user_id = u.id
+		--     WHERE pa.voucher_id = $1
+		-- )
+		SELECT
+			activity_id,
+			activity_type,
+			user_id,
+			user_name,
+			action,
+			remarks,
+			timestamp,
+			metadata
+		FROM (
+			SELECT * FROM voucher_creation
+			UNION ALL
+			SELECT * FROM approval_activities
+			-- TODO: Uncomment when payment activity table is created
+			-- UNION ALL
+			-- SELECT * FROM payment_activities
+		) combined_activities
+		ORDER BY timestamp ASC
+	`
+
+	rows, err := r.querier.Query(ctx, query, voucherID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query voucher activity: %w", err)
+	}
+	defer rows.Close()
+
+	var activities []voucher.VoucherActivityItem
+	for rows.Next() {
+		var activity voucher.VoucherActivityItem
+		err := rows.Scan(
+			&activity.ActivityID,
+			&activity.ActivityType,
+			&activity.UserID,
+			&activity.UserName,
+			&activity.Action,
+			&activity.Remarks,
+			&activity.Timestamp,
+			&activity.Metadata,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan voucher activity: %w", err)
+		}
+		activities = append(activities, activity)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating voucher activities: %w", err)
+	}
+
+	// Get voucher details for response
+	var voucherNumber string
+	voucherQuery := `SELECT voucher_number FROM xcentro.payment_vouchers WHERE voucher_id = $1`
+	err = r.querier.QueryRow(ctx, voucherQuery, voucherID).Scan(&voucherNumber)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("voucher not found: %s", voucherID)
+		}
+		return nil, fmt.Errorf("failed to get voucher number: %w", err)
+	}
+
+	response := &voucher.VoucherActivityResponse{
+		VoucherID:     voucherID,
+		VoucherNumber: voucherNumber,
+		Activities:    activities,
+		TotalCount:    len(activities),
+	}
+
+	return response, nil
 }

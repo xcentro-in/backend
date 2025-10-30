@@ -69,6 +69,9 @@ type VoucherService interface {
 
 	// GetVoucherCounts retrieves counts of vouchers by payment status
 	GetVoucherCounts(ctx context.Context, businessID string) (*voucher.VoucherCountsResponse, error)
+
+	// GetVoucherActivity retrieves complete activity history for a voucher
+	GetVoucherActivity(ctx context.Context, voucherID string) (*voucher.VoucherActivityResponse, error)
 }
 
 // VoucherServiceImpl implements the VoucherService interface
@@ -435,19 +438,33 @@ func (s *VoucherServiceImpl) GetVoucherDetails(ctx context.Context, voucherID uu
 		return nil, fmt.Errorf("failed to get voucher: %w", err)
 	}
 
-	// 2. TODO: Enrich with payee information
-	// payee, err := s.payeeRepo.GetByID(ctx, v.PayeeID)
-	// if err != nil {
-	//     return nil, fmt.Errorf("failed to get payee: %w", err)
-	// }
+	// 2. Get payee details from payee_id + account_id
+	var payeeDetails *PayeeDetails
+	if repo, ok := s.voucherRepo.(interface {
+		GetPayeeDetailsByIDs(ctx context.Context, payeeID, accountID uuid.UUID) (map[string]interface{}, error)
+	}); ok {
+		payeeData, err := repo.GetPayeeDetailsByIDs(ctx, v.PayeeID, v.AccountID)
+		if err != nil {
+			// Log error but continue - payee details are optional
+			fmt.Printf("Warning: failed to get payee details: %v\n", err)
+		} else {
+			// Convert map to PayeeDetails struct
+			payeeDetails = &PayeeDetails{
+				RelationID:        payeeData["relation_id"].(uuid.UUID),
+				PayeeID:           payeeData["payee_id"].(uuid.UUID),
+				Name:              payeeData["name"].(string),
+				GSTIN:             payeeData["gstin"].(string),
+				Type:              payeeData["type"].(string),
+				BankAccountMasked: payeeData["bank_account_masked"].(string),
+				AccountID:         payeeData["account_id"].(uuid.UUID),
+				IFSCCode:          payeeData["ifsc_code"].(string),
+				BankName:          payeeData["bank_name"].(string),
+				AccountType:       payeeData["account_type"].(string),
+			}
+		}
+	}
 
-	// 3. TODO: Enrich with bank account information
-	// account, err := s.payeeRepo.GetAccountByID(ctx, v.AccountID)
-	// if err != nil {
-	//     return nil, fmt.Errorf("failed to get account: %w", err)
-	// }
-
-	// 4. Build response (currently without enrichment)
+	// 4. Build response with payee enrichment
 	response := &VoucherDetailsResponse{
 		VoucherID:        v.VoucherID,
 		VoucherNumber:    v.VoucherNumber,
@@ -456,13 +473,7 @@ func (s *VoucherServiceImpl) GetVoucherDetails(ctx context.Context, voucherID uu
 		AccountingPeriod: v.AccountingPeriod,
 		VoucherType:      v.VoucherType,
 		Status:           v.Status,
-		// TODO: Add payee enrichment
-		// PayeeName:    payee.DisplayName,
-		// PayeeGSTIN:   payee.GSTIN,
-		// PayeeType:    payee.Type,
-		// BankAccountMasked: maskAccountNumber(account.AccountNumber),
-		// IFSCCode:     account.IFSCCode,
-		// BankName:     account.BankName,
+		Payee:            payeeDetails, // Nested payee object
 		InvoiceNumber:    v.InvoiceNumber,
 		InvoiceDate:      v.InvoiceDate,
 		InvoiceDueDate:   v.InvoiceDueDate,
@@ -1094,4 +1105,25 @@ func (s *VoucherServiceImpl) GetVoucherCounts(ctx context.Context, businessID st
 	}
 
 	return counts, nil
+}
+
+// GetVoucherActivity retrieves complete activity history for a voucher
+func (s *VoucherServiceImpl) GetVoucherActivity(ctx context.Context, voucherID string) (*voucher.VoucherActivityResponse, error) {
+	// Validate voucher ID
+	if voucherID == "" {
+		return nil, fmt.Errorf("voucher_id is required")
+	}
+
+	// Validate UUID format
+	if _, err := uuid.Parse(voucherID); err != nil {
+		return nil, fmt.Errorf("invalid voucher_id format: %w", err)
+	}
+
+	// Get activity from repository
+	activity, err := s.voucherRepo.GetVoucherActivity(ctx, voucherID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get voucher activity: %w", err)
+	}
+
+	return activity, nil
 }

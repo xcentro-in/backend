@@ -96,6 +96,13 @@ type VoucherRepository interface {
 	// GetVoucherCounts retrieves counts of vouchers by payment status
 	// Returns counts for: all, paid, open, overdue
 	GetVoucherCounts(ctx context.Context, businessID string) (*VoucherCountsResponse, error)
+
+	// GetVoucherActivity retrieves complete activity history for a voucher
+	// Returns chronologically sorted list of activities including:
+	// - Voucher creation
+	// - Approval actions (request, approve, reject, request_changes)
+	// - Payment activities (TODO: when payment activity table is created)
+	GetVoucherActivity(ctx context.Context, voucherID string) (*VoucherActivityResponse, error)
 }
 
 // VoucherFilters defines filter criteria for listing vouchers

@@ -134,6 +134,20 @@ type FinalizeVoucherResponse struct {
 	Message       string                `json:"message"`
 }
 
+// PayeeDetails represents payee information in voucher details
+type PayeeDetails struct {
+	RelationID        uuid.UUID `json:"relation_id"`         // business_payee_relation ID
+	PayeeID           uuid.UUID `json:"payee_id"`            // Payee entity ID
+	Name              string    `json:"name"`                // Legal/Display name
+	GSTIN             string    `json:"gstin,omitempty"`     // GST number
+	Type              string    `json:"type"`                // vendor, employee, biller
+	BankAccountMasked string    `json:"bank_account_masked"` // ****3456
+	AccountID         uuid.UUID `json:"account_id"`          // Bank account ID
+	IFSCCode          string    `json:"ifsc_code"`           // IFSC code
+	BankName          string    `json:"bank_name"`           // Bank name
+	AccountType       string    `json:"account_type"`        // savings, current
+}
+
 // VoucherDetailsResponse represents enriched voucher details with payee information
 type VoucherDetailsResponse struct {
 	// Voucher details
@@ -145,15 +159,8 @@ type VoucherDetailsResponse struct {
 	VoucherType      voucher.VoucherType   `json:"voucher_type"`
 	Status           voucher.VoucherStatus `json:"status"`
 
-	// Payee information (enriched)
-	PayeeName  string `json:"payee_name"`
-	PayeeGSTIN string `json:"payee_gstin,omitempty"`
-	PayeeType  string `json:"payee_type"`
-
-	// Bank account information (enriched)
-	BankAccountMasked string `json:"bank_account_masked"` // ****3456
-	IFSCCode          string `json:"ifsc_code"`
-	BankName          string `json:"bank_name"`
+	// Payee information (nested object)
+	Payee *PayeeDetails `json:"payee"`
 
 	// Invoice details
 	InvoiceNumber  string     `json:"invoice_number"`

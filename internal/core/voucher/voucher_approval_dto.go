@@ -109,3 +109,23 @@ type BatchApprovalResultItem struct {
 	Message       string `json:"message"`
 	ApprovalID    string `json:"approval_id,omitempty"` // Only present if successful
 }
+
+// VoucherActivityItem represents a single activity entry in voucher history
+type VoucherActivityItem struct {
+	ActivityID   string    `json:"activity_id"`   // Unique ID for this activity (approval_id or payment_id or voucher_id for creation)
+	ActivityType string    `json:"activity_type"` // voucher_created, approval_requested, approval_action, payment_initiated, payment_completed, payment_failed
+	UserID       string    `json:"user_id"`       // User who performed the action
+	UserName     string    `json:"user_name"`     // Name of the user
+	Action       string    `json:"action"`        // created, pending, approved, rejected, request_changes, payment_success, payment_failed
+	Remarks      string    `json:"remarks"`       // Optional remarks/description
+	Timestamp    time.Time `json:"timestamp"`     // When this activity occurred
+	Metadata     string    `json:"metadata"`      // Additional contextual information
+}
+
+// VoucherActivityResponse represents the complete activity history for a voucher
+type VoucherActivityResponse struct {
+	VoucherID     string                `json:"voucher_id"`
+	VoucherNumber string                `json:"voucher_number"`
+	Activities    []VoucherActivityItem `json:"activities"` // Sorted chronologically (oldest first)
+	TotalCount    int                   `json:"total_count"`
+}
