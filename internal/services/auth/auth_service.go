@@ -25,6 +25,7 @@ import (
 
 type AuthService struct {
 	config          *config.JWTSecretConfig
+	bcryptConfig    *config.BcryptConfig
 	rclient         *redis.RedisClient
 	sessionRepo     auth.SessionRepository
 	userRepo        user.UserRepository
@@ -45,6 +46,7 @@ func NewAuthService(
 ) *AuthService {
 	return &AuthService{
 		config:          &cfg.JWT,                 // Extract JWT config
+		bcryptConfig:    &cfg.Bcrypt,              // Extract Bcrypt config
 		rclient:         clients.GetRedisClient(), // Extract from clients
 		sessionRepo:     sessionRepo,
 		userRepo:        userRepo,
@@ -368,9 +370,11 @@ func (s *AuthService) ChangePassword(ctx context.Context, userID, oldPassword, n
 	return nil
 }
 
-// HashPassword hashes a password using bcrypt
+// HashPassword hashes a password using bcrypt with pepper
 func (s *AuthService) HashPassword(password string) (string, error) {
-	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	// Add pepper to password before hashing
+	pepperedPassword := password + s.bcryptConfig.Pepper
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(pepperedPassword), s.bcryptConfig.Cost)
 	if err != nil {
 		return "", err
 	}
@@ -379,7 +383,9 @@ func (s *AuthService) HashPassword(password string) (string, error) {
 
 // ComparePassword compares a hashed password with a plaintext password
 func (s *AuthService) ComparePassword(hashedPassword, password string) error {
-	return bcrypt.CompareHashAndPassword([]byte(hashedPassword), []byte(password))
+	// Add pepper to password before comparing
+	pepperedPassword := password + s.bcryptConfig.Pepper
+	return bcrypt.CompareHashAndPassword([]byte(hashedPassword), []byte(pepperedPassword))
 }
 
 // GetRedisClient returns the Redis client
@@ -730,8 +736,9 @@ func (s *AuthService) ResetPasswordWithToken(ctx context.Context, token string, 
 		return fmt.Errorf("reset token has expired")
 	}
 
-	// Hash the new password
-	hashedPasswordBytes, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+	// Hash the new password with pepper
+	pepperedPassword := newPassword + s.bcryptConfig.Pepper
+	hashedPasswordBytes, err := bcrypt.GenerateFromPassword([]byte(pepperedPassword), s.bcryptConfig.Cost)
 	if err != nil {
 		return fmt.Errorf("failed to hash password: %w", err)
 	}

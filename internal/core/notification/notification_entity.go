@@ -7,37 +7,38 @@ import "time"
 // #############################################################################
 
 // Common notification event types (for reference and type safety)
+// Format: category.action.details where category matches CategoryPreferences fields
 const (
-	// Payment notifications
-	EventPaymentApprovalRequired = "payment.approval.required"
-	EventPaymentApproved         = "payment.approved"
-	EventPaymentRejected         = "payment.rejected"
-	EventPaymentCompleted        = "payment.completed"
-	EventPaymentFailed           = "payment.failed"
-	EventPaymentRefunded         = "payment.refunded"
+	// Payments category (payments)
+	EventPaymentApprovalRequired = "payments.approval.required"
+	EventPaymentApproved         = "payments.approved"
+	EventPaymentRejected         = "payments.rejected"
+	EventPaymentCompleted        = "payments.completed"
+	EventPaymentFailed           = "payments.failed"
+	EventPaymentRefunded         = "payments.refunded"
 
-	// Settlement notifications
-	EventSettlementReceived = "settlement.received"
-	EventSettlementFailed   = "settlement.failed"
+	// Payments category - settlements
+	EventSettlementReceived = "payments.settlement.received"
+	EventSettlementFailed   = "payments.settlement.failed"
 
-	// Payee notifications
-	EventPayeeVerificationFailed = "payee.verification.failed"
-	EventPayeeVerified           = "payee.verified"
+	// Payees category (payees)
+	EventPayeeVerificationFailed = "payees.verification.failed"
+	EventPayeeVerified           = "payees.verified"
 
-	// Payout notifications
-	EventPayoutCompleted = "payout.completed"
-	EventPayoutFailed    = "payout.failed"
+	// Payments category - payouts
+	EventPayoutCompleted = "payments.payout.completed"
+	EventPayoutFailed    = "payments.payout.failed"
 
-	// Report notifications
-	EventReportReady = "report.ready"
+	// Insights category (insights)
+	EventReportReady = "insights.report.ready"
 
-	// System notifications
-	EventSystemMaintenance = "system.maintenance"
-	EventSystemAlert       = "system.alert"
+	// Announcements category (announcements)
+	EventSystemMaintenance = "announcements.maintenance"
+	EventSystemAlert       = "announcements.alert"
 
-	// User notifications
-	EventUserInvited     = "user.invited"
-	EventUserRoleChanged = "user.role.changed"
+	// Security category (security)
+	EventUserInvited     = "security.user.invited"
+	EventUserRoleChanged = "security.user.role.changed"
 )
 
 // Notification channels
@@ -124,6 +125,38 @@ type CategoryPreferences struct {
 	Approvals     bool `json:"approvals"`
 	Security      bool `json:"security"`
 	Insights      bool `json:"insights"`
+}
+
+// GetEventCategory extracts the category from event type (first segment before dot)
+// Returns empty string if event type doesn't follow category.* format
+func GetEventCategory(eventType string) string {
+	if eventType == "" {
+		return ""
+	}
+	// Find first dot
+	for i := 0; i < len(eventType); i++ {
+		if eventType[i] == '.' {
+			return eventType[:i]
+		}
+	}
+	return eventType // No dot found, return entire string
+}
+
+// IsCategoryEnabled checks if a category is enabled in user preferences
+func IsCategoryEnabled(categoryPrefs map[string]interface{}, eventType string) bool {
+	category := GetEventCategory(eventType)
+	if category == "" {
+		return true // Unknown category, allow by default
+	}
+
+	// Check if category exists and is enabled in preferences
+	if enabled, ok := categoryPrefs[category]; ok {
+		if boolVal, ok := enabled.(bool); ok {
+			return boolVal
+		}
+	}
+
+	return true // Default to enabled if category not found
 }
 
 // #############################################################################

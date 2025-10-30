@@ -451,9 +451,12 @@ func (s *BusinessServiceImpl) AddUserToBusiness(ctx context.Context, relation *b
 
 	// Notify admins and above about new user addition
 	adminRole := "admin"
-	notification.TriggerMulticast(ctx, relation.BID, coreNotification.EventUserInvited, "New User Added",
+	if err := notification.TriggerMulticast(ctx, relation.BID, coreNotification.EventUserInvited, "New User Added",
 		fmt.Sprintf("A new user has been added to the business with role: %s", relation.Role),
-		&adminRole, nil, coreNotification.EntityReferences{}, []coreNotification.ActionButton{})
+		&adminRole, nil, coreNotification.EntityReferences{}, []coreNotification.ActionButton{}); err != nil {
+		s.logger.Errorf("Failed to trigger user invited notification: %v", err)
+		// Don't fail the operation if notification trigger fails
+	}
 
 	// Invalidate user roles cache after successful addition
 	go func() {

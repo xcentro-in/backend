@@ -20,6 +20,8 @@ type DispatchService struct {
 	txManager        client.TxManager
 	logger           *logger.Logger
 	maxRetryAttempts int
+	fromEmail        string
+	fromName         string
 }
 
 // NewDispatchService creates a new dispatch service
@@ -29,6 +31,8 @@ func NewDispatchService(
 	emailClient *mailers.SESClient,
 	txManager client.TxManager,
 	maxRetryAttempts int,
+	fromEmail string,
+	fromName string,
 	logger *logger.Logger,
 ) *DispatchService {
 	return &DispatchService{
@@ -38,6 +42,8 @@ func NewDispatchService(
 		txManager:        txManager,
 		logger:           logger,
 		maxRetryAttempts: maxRetryAttempts,
+		fromEmail:        fromEmail,
+		fromName:         fromName,
 	}
 }
 
@@ -122,7 +128,7 @@ func (s *DispatchService) ProcessEmailDispatches(ctx context.Context, batchSize 
 		// Send email via SES with idempotency protection
 		// The notification ID is passed as an idempotency key via SES tags
 		// This prevents duplicate emails if worker crashes between send and status update
-		if err := SendEmailNotification(ctx, s.emailClient, job.ID, u.Email, title, body, actions); err != nil {
+		if err := SendEmailNotification(ctx, s.emailClient, job.ID, u.Email, title, body, actions, s.fromEmail, s.fromName); err != nil {
 			s.logger.Errorf("Failed to send email for job %d to %s: %v", job.ID, u.Email, err)
 			failedIDs = append(failedIDs, job.ID)
 		} else {
@@ -130,17 +136,21 @@ func (s *DispatchService) ProcessEmailDispatches(ctx context.Context, batchSize 
 		}
 	}
 
-	// Step 3: Update job statuses in a NEW transaction
-	// This ensures status updates are atomic and durable
+	// Step 3: Delete successful jobs, update failed jobs in a NEW transaction
+	// Email/push notifications are DELETED after successful send (not persisted)
+	// Web notifications would stay (but email channel doesn't hit this code path)
 	err = s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
 		txUserNotifRepo := s.userNotifRepo.WithTx(tx)
 
+		// Delete successfully sent email/push notifications (keeps table tiny)
+		// Web notifications are NOT deleted (handled by channel != 'web' filter in DeleteSentNotifications)
 		if len(succeededIDs) > 0 {
-			if err := txUserNotifRepo.UpdateJobStatuses(ctx, succeededIDs, notification.StatusSent); err != nil {
-				return fmt.Errorf("failed to mark jobs as sent: %w", err)
+			if err := txUserNotifRepo.DeleteSentNotifications(ctx, succeededIDs); err != nil {
+				return fmt.Errorf("failed to delete sent notifications: %w", err)
 			}
 		}
 
+		// Update failed jobs status for retry
 		if len(failedIDs) > 0 {
 			if err := txUserNotifRepo.UpdateJobStatuses(ctx, failedIDs, notification.StatusFailed); err != nil {
 				return fmt.Errorf("failed to mark jobs as failed: %w", err)
@@ -153,8 +163,7 @@ func (s *DispatchService) ProcessEmailDispatches(ctx context.Context, batchSize 
 	if err != nil {
 		s.logger.Errorf("Failed to update job statuses: %v", err)
 		// IMPORTANT: If this transaction fails, jobs remain in "processing" status
-		// They will be stuck unless we have a cleanup job that resets "processing" jobs
-		// older than X minutes back to "pending" (not implemented in MVP)
+		// Recovery worker will reset them back to "pending" after timeout
 		return 0, fmt.Errorf("failed to update job statuses after sending: %w", err)
 	}
 

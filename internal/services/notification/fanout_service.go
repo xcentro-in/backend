@@ -90,7 +90,9 @@ func (s *FanoutService) ProcessPendingEvents(ctx context.Context, batchSize int)
 				continue
 			}
 
-			// 3. Create user notifications for each target user
+			// 3. Accumulate ALL notifications for this event across all users (batch insert optimization)
+			var allNotificationsForEvent []*notification.UserNotification
+
 			for _, targetUser := range users {
 				// Get user preferences (uses Redis cache with read-through pattern)
 				prefs, err := s.getPreferencesWithCache(ctx, txPrefsRepo, targetUser.UserID)
@@ -108,24 +110,19 @@ func (s *FanoutService) ProcessPendingEvents(ctx context.Context, batchSize int)
 					businessID = &event.Payload.Target.BusinessID
 				}
 
-				// Create notifications based on user preferences (one row per enabled channel)
-				var notificationsToCreate []*notification.UserNotification
+				// 4. ALWAYS create 'web' notification (shown in website/app, web shows ALL notifications regardless of category)
+				allNotificationsForEvent = append(allNotificationsForEvent, &notification.UserNotification{
+					UserID:     targetUser.UserID,
+					BusinessID: businessID,
+					EventID:    event.ID,
+					Channel:    notification.ChannelWeb,
+					Status:     notification.StatusPending,
+					Content:    content,
+				})
 
-				// 4. Create 'web' notification if messages are enabled
-				if prefs.MessagesEnabled {
-					notificationsToCreate = append(notificationsToCreate, &notification.UserNotification{
-						UserID:     targetUser.UserID,
-						BusinessID: businessID,
-						EventID:    event.ID,
-						Channel:    notification.ChannelWeb,
-						Status:     notification.StatusPending,
-						Content:    content,
-					})
-				}
-
-				// 5. Create 'email' notification if email is enabled
-				if prefs.EmailEnabled {
-					notificationsToCreate = append(notificationsToCreate, &notification.UserNotification{
+				// 5. Create 'email' notification if email is enabled AND category is enabled
+				if prefs.EmailEnabled && notification.IsCategoryEnabled(prefs.CategoryPreferences, event.EventType) {
+					allNotificationsForEvent = append(allNotificationsForEvent, &notification.UserNotification{
 						UserID:     targetUser.UserID,
 						BusinessID: businessID,
 						EventID:    event.ID,
@@ -135,9 +132,9 @@ func (s *FanoutService) ProcessPendingEvents(ctx context.Context, batchSize int)
 					})
 				}
 
-				// NOTE: Push is not implemented in MVP, but we keep the structure
-				// if prefs.PushEnabled {
-				// 	notificationsToCreate = append(notificationsToCreate, &notification.UserNotification{
+				// NOTE: Push/SMS not implemented in MVP, but we keep the structure
+				// if prefs.PushEnabled && notification.IsCategoryEnabled(prefs.CategoryPreferences, event.EventType) {
+				// 	allNotificationsForEvent = append(allNotificationsForEvent, &notification.UserNotification{
 				// 		UserID:     targetUser.UserID,
 				// 		BusinessID: businessID,
 				// 		EventID:    event.ID,
@@ -146,23 +143,36 @@ func (s *FanoutService) ProcessPendingEvents(ctx context.Context, batchSize int)
 				// 		Content:    content,
 				// 	})
 				// }
+				//
+				// if prefs.MessagesEnabled && notification.IsCategoryEnabled(prefs.CategoryPreferences, event.EventType) {
+				// 	allNotificationsForEvent = append(allNotificationsForEvent, &notification.UserNotification{
+				// 		UserID:     targetUser.UserID,
+				// 		BusinessID: businessID,
+				// 		EventID:    event.ID,
+				// 		Channel:    "sms", // SMS channel
+				// 		Status:     notification.StatusPending,
+				// 		Content:    content,
+				// 	})
+				// }
+			}
 
-				// 6. Batch insert (with ON CONFLICT for idempotency)
-				if len(notificationsToCreate) > 0 {
-					if err := txUserNotifRepo.CreateUserNotifications(ctx, notificationsToCreate); err != nil {
-						s.logger.Errorf("Failed to create user notifications: %v", err)
-						continue
-					}
+			// 6. Single batch insert for ALL notifications of this event (one DB round trip instead of N)
+			if len(allNotificationsForEvent) > 0 {
+				if err := txUserNotifRepo.CreateUserNotifications(ctx, allNotificationsForEvent); err != nil {
+					s.logger.Errorf("Failed to create user notifications for event %d: %v", event.ID, err)
+					// Don't mark event as processed if insert fails, will retry
+					continue
 				}
 			}
 
 			eventIDs = append(eventIDs, event.ID)
 		}
 
-		// 7. Mark events as processed
+		// 7. Delete events after fanout (keeps table tiny)
+		// Events are deleted in same transaction, so if anything fails, tx rolls back
 		if len(eventIDs) > 0 {
-			if err := txEventRepo.MarkEventsProcessed(ctx, eventIDs); err != nil {
-				return fmt.Errorf("failed to mark events as processed: %w", err)
+			if err := txEventRepo.DeleteEvents(ctx, eventIDs); err != nil {
+				return fmt.Errorf("failed to delete events: %w", err)
 			}
 		}
 
@@ -275,11 +285,14 @@ func (s *FanoutService) getUsersByBusinessAndRole(ctx context.Context, businessI
 	}
 
 	// Role hierarchy for filtering
+	// Maps business roles to hierarchy levels (higher = more permissions)
 	roleHierarchy := map[string]int{
-		notification.RoleOwner:   4,
-		notification.RoleAdmin:   3,
-		notification.RoleFinance: 2,
-		notification.RoleSupport: 1,
+		notification.RoleOwner:   4, // "owner"
+		notification.RoleAdmin:   3, // "admin"
+		"manager":                2, // Manager role from business module
+		notification.RoleFinance: 2, // "finance" - same level as manager
+		"auditor":                1, // Auditor role from business module
+		notification.RoleSupport: 1, // "support" - same level as auditor
 	}
 
 	minRoleLevel := roleHierarchy[minimumRole]

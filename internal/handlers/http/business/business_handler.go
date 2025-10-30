@@ -469,6 +469,10 @@ func (h *BusinessHandler) InviteUser(c echo.Context) error {
 		h.logger.Infof("Invitation email sent successfully to %s", req.Email)
 	}
 
+	// TODO: Trigger user invited notification
+	// This requires importing notification service and calling notification.TriggerUnicast
+	// with EventUserInvited event type to send notification to the invited user
+
 	return c.JSON(201, map[string]interface{}{
 		"message": "User invited successfully. Invitation email sent.",
 		"data": map[string]interface{}{

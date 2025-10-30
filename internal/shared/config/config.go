@@ -18,6 +18,7 @@ type Config struct {
 	Server            ServerConfig            `json:"server"`
 	Rcache            RedisConfig             `json:"rcache"`
 	JWT               JWTSecretConfig         `json:"jwt"`
+	Bcrypt            BcryptConfig            `json:"bcrypt"`
 	Cookie            CookieConfig            `json:"cookie"`
 	CORS              CORSConfig              `json:"cors"`
 	S3                S3Config                `json:"s3"`
@@ -34,6 +35,12 @@ type JWTSecretConfig struct {
 	SecretKey          string        `json:"secret_key" env:"JWT_SECRET_KEY" env-required:"true"`
 	AccessTokenExpiry  time.Duration `json:"access_token_expiry" env:"JWT_ACCESS_TOKEN_EXPIRY" env-default:"1h"`
 	RefreshTokenExpiry time.Duration `json:"refresh_token_expiry" env:"JWT_REFRESH_TOKEN_EXPIRY" env-default:"720h"` // 30 days
+}
+
+// BcryptConfig holds bcrypt password hashing configuration.
+type BcryptConfig struct {
+	Cost   int    `json:"cost" env:"BCRYPT_COST" env-default:"12"`
+	Pepper string `json:"-" env:"BCRYPT_PEPPER" env-required:"true"`
 }
 
 // CookieConfig holds cookie configuration for authentication.
@@ -66,15 +73,17 @@ type S3Config struct {
 // SESConfig holds AWS SES related configuration.
 // Access/Secret keys are optional if the environment uses IAM roles or other providers.
 type SESConfig struct {
-	DefaultFromEmail string `json:"default_from_email" env:"SES_DEFAULT_FROM_EMAIL" env-required:"true"`
-	DefaultFromName  string `json:"default_from_name" env:"SES_DEFAULT_FROM_NAME"`
-	DefaultConfigSet string `json:"default_config_set" env:"SES_DEFAULT_CONFIG_SET"`
-	Region           string `json:"region" env:"SES_REGION" env-required:"true"`
-	Endpoint         string `json:"endpoint" env:"SES_ENDPOINT"` // optional custom endpoint (localstack)
-	AccessKey        string `json:"-" env:"SES_ACCESS_KEY"`      // optional static credentials
-	SecretKey        string `json:"-" env:"SES_SECRET_KEY"`
-	SessionToken     string `json:"-" env:"SES_SESSION_TOKEN"`
-	Profile          string `json:"profile" env:"AWS_PROFILE"` // optional shared profile
+	DefaultFromEmail       string `json:"default_from_email" env:"SES_DEFAULT_FROM_EMAIL" env-required:"true"`
+	DefaultFromName        string `json:"default_from_name" env:"SES_DEFAULT_FROM_NAME"`
+	NotificationFromEmail  string `json:"notification_from_email" env:"SES_NOTIFICATION_FROM_EMAIL" env-default:"noreply@transactions.xcentro.in"`
+	NotificationFromName   string `json:"notification_from_name" env:"SES_NOTIFICATION_FROM_NAME" env-default:"Xcentro Notifications"`
+	DefaultConfigSet       string `json:"default_config_set" env:"SES_DEFAULT_CONFIG_SET"`
+	Region                 string `json:"region" env:"SES_REGION" env-required:"true"`
+	Endpoint               string `json:"endpoint" env:"SES_ENDPOINT"` // optional custom endpoint (localstack)
+	AccessKey              string `json:"-" env:"SES_ACCESS_KEY"`      // optional static credentials
+	SecretKey              string `json:"-" env:"SES_SECRET_KEY"`
+	SessionToken           string `json:"-" env:"SES_SESSION_TOKEN"`
+	Profile                string `json:"profile" env:"AWS_PROFILE"` // optional shared profile
 }
 
 // CastlerConfig holds Castler payout provider configuration.
@@ -275,6 +284,7 @@ func (c Config) Safe() Config {
 	c.Database.Password = "***REDACTED***"
 	c.MigrationDatabase.Password = "***REDACTED***"
 	c.JWT.SecretKey = "***REDACTED***"
+	c.Bcrypt.Pepper = "***REDACTED***"
 	c.Rcache.Password = "***REDACTED***"
 	c.S3.AccessKey = "***REDACTED***"
 	c.S3.SecretKey = "***REDACTED***"

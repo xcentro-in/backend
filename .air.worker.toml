@@ -1,0 +1,9 @@
+root = "."
+tmp_dir = "bin"
+
+[build]
+  bin = "./bin/notification_worker"
+  cmd = "go build -o ./bin/notification_worker ./cmd/workers/notification_worker"
+  include_ext = ["go"]
+  stop_on_error = true
+  rerun = false

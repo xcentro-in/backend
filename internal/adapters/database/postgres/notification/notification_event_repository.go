@@ -46,11 +46,12 @@ func (r *PgNotificationEventRepository) CreateEvent(ctx context.Context, event *
 }
 
 // FetchPendingEvents retrieves pending events for processing with FOR UPDATE SKIP LOCKED
+// Index used: PRIMARY KEY (id) - sufficient for temporary queue
+// Performance: O(1) - table stays tiny as events are deleted after fanout
 func (r *PgNotificationEventRepository) FetchPendingEvents(ctx context.Context, limit int) ([]*notification.NotificationEvent, error) {
 	query := `
 		SELECT id, event_type, payload, created_at
 		FROM xcentro.notification_events
-		WHERE processed_at IS NULL
 		ORDER BY id
 		LIMIT $1
 		FOR UPDATE SKIP LOCKED
@@ -82,17 +83,21 @@ func (r *PgNotificationEventRepository) FetchPendingEvents(ctx context.Context, 
 	return events, nil
 }
 
-// MarkEventsProcessed marks events as processed
-func (r *PgNotificationEventRepository) MarkEventsProcessed(ctx context.Context, eventIDs []int64) error {
+// DeleteEvents deletes events after fanout is complete
+// Called within the same transaction as user_notification inserts
+func (r *PgNotificationEventRepository) DeleteEvents(ctx context.Context, eventIDs []int64) error {
+	if len(eventIDs) == 0 {
+		return nil
+	}
+
 	query := `
-		UPDATE xcentro.notification_events
-		SET processed_at = NOW()
+		DELETE FROM xcentro.notification_events
 		WHERE id = ANY($1)
 	`
 
 	_, err := r.querier.Exec(ctx, query, eventIDs)
 	if err != nil {
-		return fmt.Errorf("failed to mark events as processed: %w", err)
+		return fmt.Errorf("failed to delete events: %w", err)
 	}
 
 	return nil

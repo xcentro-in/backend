@@ -14,8 +14,8 @@ type NotificationEventRepository interface {
 	// FetchPendingEvents retrieves pending events for processing (with FOR UPDATE SKIP LOCKED)
 	FetchPendingEvents(ctx context.Context, limit int) ([]*NotificationEvent, error)
 
-	// MarkEventsProcessed marks events as processed
-	MarkEventsProcessed(ctx context.Context, eventIDs []int64) error
+	// DeleteEvents deletes events after fanout is complete (called in same transaction)
+	DeleteEvents(ctx context.Context, eventIDs []int64) error
 
 	// WithTx creates a new repository instance that uses a transaction
 	WithTx(tx client.Tx) NotificationEventRepository
@@ -45,8 +45,11 @@ type UserNotificationRepository interface {
 	// This prevents duplicate processing by multiple workers and implements retry logic for failed jobs
 	FetchAndMarkJobsAsProcessing(ctx context.Context, channel string, limit int, maxRetryAttempts int) ([]*UserNotification, error)
 
-	// UpdateJobStatuses updates the status of notification jobs
+	// UpdateJobStatuses updates the status of notification jobs (used for failed status)
 	UpdateJobStatuses(ctx context.Context, jobIDs []int64, status string) error
+
+	// DeleteSentNotifications deletes successfully sent notifications (email/push only, NOT web)
+	DeleteSentNotifications(ctx context.Context, jobIDs []int64) error
 
 	// DeletePermanentlyFailedJobs deletes jobs that have exceeded max retry attempts
 	DeletePermanentlyFailedJobs(ctx context.Context, channel string, maxRetryAttempts int) (int64, error)

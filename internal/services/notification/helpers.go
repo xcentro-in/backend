@@ -133,11 +133,12 @@ func buildEmailHTML(title, body string, actions []notification.ActionButton) str
 
 // SendEmailNotification sends a formatted HTML email notification
 // The notificationID is used as an idempotency key to prevent duplicate sends
-func SendEmailNotification(ctx context.Context, emailClient *mailers.SESClient, notificationID int64, to, subject, body string, actions []notification.ActionButton) error {
+func SendEmailNotification(ctx context.Context, emailClient *mailers.SESClient, notificationID int64, to, subject, body string, actions []notification.ActionButton, fromEmail, fromName string) error {
 	htmlBody := buildEmailHTML(subject, body, actions)
 
 	msg := &mailers.EmailMessage{
-		From:     "noreply@transactions.xcentro.in",
+		From:     fromEmail,
+		FromName: fromName,
 		To:       []string{to},
 		Subject:  subject,
 		HTMLBody: htmlBody,

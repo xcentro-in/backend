@@ -67,21 +67,25 @@ func (r *PgUserNotificationRepository) CreateUserNotifications(ctx context.Conte
 		return nil
 	}
 
-	query := `
-		INSERT INTO xcentro.user_notifications (
-			user_id, business_id, event_id, channel, status, content
-		) VALUES ($1, $2, $3, $4, $5, $6)
-		ON CONFLICT (event_id, user_id, channel) DO NOTHING
-	`
+	// Build batch insert query with multiple value sets
+	// Example: INSERT INTO ... VALUES ($1,$2,...), ($7,$8,...), ($13,$14,...)
+	valueStrings := make([]string, 0, len(notifications))
+	valueArgs := make([]interface{}, 0, len(notifications)*6)
 
-	// Insert each notification individually (idempotent due to ON CONFLICT)
-	for _, notif := range notifications {
+	for i, notif := range notifications {
+		// Marshal content to JSON
 		contentJSON, err := json.Marshal(notif.Content)
 		if err != nil {
-			return fmt.Errorf("failed to marshal content: %w", err)
+			return fmt.Errorf("failed to marshal content for notification %d: %w", i, err)
 		}
 
-		_, err = r.querier.Exec(ctx, query,
+		// Calculate parameter positions for this row
+		pos := i * 6
+		valueStrings = append(valueStrings, fmt.Sprintf("($%d, $%d, $%d, $%d, $%d, $%d)",
+			pos+1, pos+2, pos+3, pos+4, pos+5, pos+6))
+
+		// Add values for this row
+		valueArgs = append(valueArgs,
 			notif.UserID,
 			notif.BusinessID,
 			notif.EventID,
@@ -89,28 +93,49 @@ func (r *PgUserNotificationRepository) CreateUserNotifications(ctx context.Conte
 			notif.Status,
 			contentJSON,
 		)
-		if err != nil {
-			return fmt.Errorf("failed to insert user notification: %w", err)
+	}
+
+	// Join all value strings with commas
+	allValues := ""
+	for i, vs := range valueStrings {
+		if i > 0 {
+			allValues += ", "
 		}
+		allValues += vs
+	}
+
+	// Build complete query
+	query := fmt.Sprintf(`
+		INSERT INTO xcentro.user_notifications (
+			user_id, business_id, event_id, channel, status, content
+		) VALUES %s
+		ON CONFLICT (event_id, user_id, channel) DO NOTHING
+	`, allValues)
+
+	// Execute single batch insert
+	_, err := r.querier.Exec(ctx, query, valueArgs...)
+	if err != nil {
+		return fmt.Errorf("failed to batch insert %d user notifications: %w", len(notifications), err)
 	}
 
 	return nil
 }
 
-// GetUserNotifications retrieves notifications for a user (sorted by created_at DESC)
-// Index used: idx_user_notifications_user_id (user_id, created_at DESC)
-// Performance: O(log n) + limit, scales well with pagination
+// GetUserNotifications retrieves web notifications for a user (unread first, then by time)
+// Only fetches web channel notifications as email/push notifications are transient
+// Index used: idx_user_notifications_user_web (user_id, read_at NULLS FIRST, created_at DESC) WHERE channel = 'web'
+// Performance: O(log n) + limit, unread notifications appear first, scales well with pagination
 func (r *PgUserNotificationRepository) GetUserNotifications(ctx context.Context, userID string, limit, offset int) ([]*notification.UserNotification, error) {
 	query := `
 		SELECT id, user_id, business_id, event_id, channel, status, content, retry_count,
 		       created_at, sent_at, read_at
 		FROM xcentro.user_notifications
-		WHERE user_id = $1
-		ORDER BY created_at DESC
-		LIMIT $2 OFFSET $3
+		WHERE user_id = $1 AND channel = $2
+		ORDER BY read_at NULLS FIRST, created_at DESC
+		LIMIT $3 OFFSET $4
 	`
 
-	rows, err := r.querier.Query(ctx, query, userID, limit, offset)
+	rows, err := r.querier.Query(ctx, query, userID, notification.ChannelWeb, limit, offset)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch user notifications: %w", err)
 	}
@@ -121,6 +146,8 @@ func (r *PgUserNotificationRepository) GetUserNotifications(ctx context.Context,
 
 // MarkAsRead marks a notification as read
 // NOTE: Only web channel notifications can be marked as read (email/push cannot)
+// Index used: PRIMARY KEY (id) - already optimal for single row lookup
+// Performance: O(log n), PK lookup + row filter is extremely fast
 func (r *PgUserNotificationRepository) MarkAsRead(ctx context.Context, notificationID int64, userID string) error {
 	query := `
 		UPDATE xcentro.user_notifications
@@ -142,6 +169,8 @@ func (r *PgUserNotificationRepository) MarkAsRead(ctx context.Context, notificat
 
 // MarkMultipleAsRead marks multiple notifications as read
 // NOTE: Only web channel notifications can be marked as read (email/push are ignored)
+// Index used: PRIMARY KEY (id) - already optimal for batch lookup
+// Performance: O(k * log n) where k = number of IDs, PK lookup for each ID
 func (r *PgUserNotificationRepository) MarkMultipleAsRead(ctx context.Context, notificationIDs []int64, userID string) error {
 	query := `
 		UPDATE xcentro.user_notifications
@@ -158,8 +187,8 @@ func (r *PgUserNotificationRepository) MarkMultipleAsRead(ctx context.Context, n
 }
 
 // GetUnreadCount gets count of unread notifications for a user
-// Index used: idx_user_notifications_user_unread (user_id, created_at DESC) WHERE read_at IS NULL AND channel = 'web'
-// Performance: O(log n), COUNT(*) optimized by partial index
+// Index used: idx_user_notifications_user_web (user_id, read_at NULLS FIRST, created_at DESC) WHERE channel = 'web'
+// Performance: O(log n), index optimized for read_at IS NULL filter (unread notifications)
 func (r *PgUserNotificationRepository) GetUnreadCount(ctx context.Context, userID string) (int, error) {
 	query := `
 		SELECT COUNT(*)
@@ -221,6 +250,7 @@ func (r *PgUserNotificationRepository) FetchAndMarkJobsAsProcessing(ctx context.
 }
 
 // UpdateJobStatuses updates the status and sent_at timestamp of notification jobs
+// Used for failed jobs (to update retry_count and status)
 func (r *PgUserNotificationRepository) UpdateJobStatuses(ctx context.Context, jobIDs []int64, status string) error {
 	if len(jobIDs) == 0 {
 		return nil
@@ -235,6 +265,26 @@ func (r *PgUserNotificationRepository) UpdateJobStatuses(ctx context.Context, jo
 	_, err := r.querier.Exec(ctx, query, status, jobIDs)
 	if err != nil {
 		return fmt.Errorf("failed to update job statuses: %w", err)
+	}
+
+	return nil
+}
+
+// DeleteSentNotifications deletes successfully sent notifications (email/push channels only)
+// Web notifications are NOT deleted - they persist for the user's inbox
+func (r *PgUserNotificationRepository) DeleteSentNotifications(ctx context.Context, jobIDs []int64) error {
+	if len(jobIDs) == 0 {
+		return nil
+	}
+
+	query := `
+		DELETE FROM xcentro.user_notifications
+		WHERE id = ANY($1) AND channel != $2
+	`
+
+	_, err := r.querier.Exec(ctx, query, jobIDs, notification.ChannelWeb)
+	if err != nil {
+		return fmt.Errorf("failed to delete sent notifications: %w", err)
 	}
 
 	return nil

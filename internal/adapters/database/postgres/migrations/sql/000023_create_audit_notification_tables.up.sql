@@ -19,34 +19,30 @@
 
 -- TABLE 1: notification_events (The Queue)
 -- Temporary queue of business events to be "fanned out" to users.
+-- Events are DELETED after fanout completes (within same transaction)
 CREATE TABLE xcentro.notification_events (
     id BIGSERIAL PRIMARY KEY,
-    processed_at TIMESTAMPTZ DEFAULT NULL,
     event_type TEXT NOT NULL,      -- e.g., 'payment.failed', 'report.ready'
     payload JSONB NOT NULL,        -- Full message data (target, entities, message, actions)
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Index for fast lookup of pending events
-CREATE INDEX idx_notification_events_pending
-ON xcentro.notification_events (created_at)
-WHERE processed_at IS NULL;
+-- No additional indexes needed - PRIMARY KEY (id) is sufficient
+-- Events are deleted immediately after fanout, keeping table tiny
 
--- Index for event type analytics
-CREATE INDEX idx_notification_events_type
-ON xcentro.notification_events (event_type);
-
-COMMENT ON TABLE xcentro.notification_events IS 'Temporary queue of notification events to be fanned out';
+COMMENT ON TABLE xcentro.notification_events IS 'Temporary queue of notification events to be fanned out and deleted';
 COMMENT ON COLUMN xcentro.notification_events.payload IS 'JSON schema: {timestamp (RFC3339), event_type, target, entities, message, actions}';
 
 
 -- TABLE 2: user_notifications (The Destination)
--- Persistent "bell icon" inbox for each user.
+-- Persistent "bell icon" inbox for web notifications.
+-- Email/push notifications are DELETED after successful send.
+-- Only web channel persists for user's notification inbox.
 CREATE TABLE xcentro.user_notifications (
     id BIGSERIAL PRIMARY KEY,
     user_id UUID NOT NULL REFERENCES xcentro.user_table(id) ON DELETE CASCADE,
     business_id UUID DEFAULT NULL REFERENCES xcentro.business(bid) ON DELETE CASCADE,
-    event_id BIGINT NOT NULL REFERENCES xcentro.notification_events(id) ON DELETE CASCADE,
+    event_id BIGINT NOT NULL,          -- No FK, just for unique constraint (events are deleted after fanout)
     channel TEXT NOT NULL,             -- 'email', 'push', 'web'
     status TEXT NOT NULL DEFAULT 'pending', -- 'pending', 'processing', 'sent', 'failed', 'read'
     content JSONB NOT NULL,            -- {title, body, actions, entities}
@@ -56,30 +52,31 @@ CREATE TABLE xcentro.user_notifications (
     read_at TIMESTAMPTZ DEFAULT NULL,
 
     -- Prevent duplicate notifications per user per event per channel
+    -- event_id is not a FK, just used for idempotency
     CONSTRAINT uq_user_notifications_event UNIQUE (event_id, user_id, channel)
 );
 
--- Indexes for fast lookups
+-- Indexes for fast lookups (minimal, supporting workers + user handlers only)
 
--- Index 1: User inbox queries (GetUserNotifications)
--- Covers: WHERE user_id = X ORDER BY created_at DESC
-CREATE INDEX idx_user_notifications_user_id
-ON xcentro.user_notifications (user_id, created_at DESC);
+-- Index 1: User inbox queries (GetUserNotifications - unread first, then by time)
+-- Covers: WHERE user_id = X AND channel = 'web' ORDER BY read_at NULLS FIRST, created_at DESC
+-- Also covers: WHERE user_id = X AND channel = 'web' AND read_at IS NULL (GetUnreadCount)
+-- Partial index for web-only notifications (email/push are deleted after send)
+-- NULLS FIRST ensures unread notifications (read_at IS NULL) appear before read ones
+CREATE INDEX idx_user_notifications_user_web
+ON xcentro.user_notifications (user_id, read_at NULLS FIRST, created_at DESC)
+WHERE channel = 'web';
 
--- Index 2: Unread count queries (GetUnreadCount)
--- Covers: WHERE user_id = X AND read_at IS NULL
-CREATE INDEX idx_user_notifications_user_unread
-ON xcentro.user_notifications (user_id, created_at DESC)
-WHERE read_at IS NULL AND channel = 'web';
-
--- Index 3: Worker job fetching (FetchAndMarkJobsAsProcessing)
+-- Index 2: Worker job fetching (FetchAndMarkJobsAsProcessing)
 -- Covers: WHERE channel = X AND status IN ('pending', 'failed') AND retry_count < max ORDER BY created_at
+-- Partial index for pending/failed jobs only (very small, transient)
 CREATE INDEX idx_user_notifications_worker_jobs
 ON xcentro.user_notifications (channel, status, retry_count, created_at)
 WHERE status IN ('pending', 'failed');
 
--- Index 4: Recovery worker - stuck processing jobs (RecoverStuckProcessingJobs)
+-- Index 3: Recovery worker - stuck processing jobs (RecoverStuckProcessingJobs)
 -- Covers: WHERE status = 'processing' AND created_at < timeout
+-- Partial index for stuck jobs only (tiny)
 CREATE INDEX idx_user_notifications_stuck_processing
 ON xcentro.user_notifications (created_at)
 WHERE status = 'processing';

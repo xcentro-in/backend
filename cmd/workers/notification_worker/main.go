@@ -72,7 +72,10 @@ func main() {
 
 	dispatchService := notificationService.NewDispatchService(
 		userNotifRepo, userRepository, emailClient, txManager,
-		workerCfg.MaxRetryAttempts, logger.GetDefault(),
+		workerCfg.MaxRetryAttempts,
+		cfg.SES.NotificationFromEmail,
+		cfg.SES.NotificationFromName,
+		logger.GetDefault(),
 	)
 
 	recoveryService := notificationService.NewRecoveryService(
