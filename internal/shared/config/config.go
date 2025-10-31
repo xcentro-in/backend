@@ -13,21 +13,22 @@ import (
 // Config holds the application configuration.
 // Sensitive fields (like Password) are excluded from JSON marshalling.
 type Config struct {
-	Database             DatabaseConfig          `json:"database"`
-	MigrationDatabase    MigrationDatabaseConfig `json:"migration_database"`
-	Server               ServerConfig            `json:"server"`
-	Rcache               RedisConfig             `json:"rcache"`
-	JWT                  JWTSecretConfig         `json:"jwt"`
-	Bcrypt               BcryptConfig            `json:"bcrypt"`
-	Cookie               CookieConfig            `json:"cookie"`
-	CORS                 CORSConfig              `json:"cors"`
-	S3                   S3Config                `json:"s3"`
-	SES                  SESConfig               `json:"ses"`
-	Castler              CastlerConfig           `json:"castler"`
-	JioPay               JioPayConfig            `json:"jiopay"`
-	Easebuzz             EasebuzzConfig          `json:"easebuzz"`
-	CloudWatch           CloudWatchConfig        `json:"cloudwatch"`
-	Workers              WorkersConfig           `json:"workers"`
+	Database              DatabaseConfig              `json:"database"`
+	MigrationDatabase     MigrationDatabaseConfig     `json:"migration_database"`
+	Server                ServerConfig                `json:"server"`
+	Rcache                RedisConfig                 `json:"rcache"`
+	JWT                   JWTSecretConfig             `json:"jwt"`
+	Bcrypt                BcryptConfig                `json:"bcrypt"`
+	Cookie                CookieConfig                `json:"cookie"`
+	CORS                  CORSConfig                  `json:"cors"`
+	S3                    S3Config                    `json:"s3"`
+	SES                   SESConfig                   `json:"ses"`
+	Castler               CastlerConfig               `json:"castler"`
+	JioPay                JioPayConfig                `json:"jiopay"`
+	Easebuzz              EasebuzzConfig              `json:"easebuzz"`
+	CloudWatch            CloudWatchConfig            `json:"cloudwatch"`
+	Workers               WorkersConfig               `json:"workers"`
+	Frontend              FrontendConfig              `json:"frontend"`
 	BankAccountEncryption BankAccountEncryptionConfig `json:"bank_account_encryption"`
 }
 
@@ -74,17 +75,17 @@ type S3Config struct {
 // SESConfig holds AWS SES related configuration.
 // Access/Secret keys are optional if the environment uses IAM roles or other providers.
 type SESConfig struct {
-	DefaultFromEmail       string `json:"default_from_email" env:"SES_DEFAULT_FROM_EMAIL" env-required:"true"`
-	DefaultFromName        string `json:"default_from_name" env:"SES_DEFAULT_FROM_NAME"`
-	NotificationFromEmail  string `json:"notification_from_email" env:"SES_NOTIFICATION_FROM_EMAIL" env-default:"noreply@transactions.xcentro.in"`
-	NotificationFromName   string `json:"notification_from_name" env:"SES_NOTIFICATION_FROM_NAME" env-default:"Xcentro Notifications"`
-	DefaultConfigSet       string `json:"default_config_set" env:"SES_DEFAULT_CONFIG_SET"`
-	Region                 string `json:"region" env:"SES_REGION" env-required:"true"`
-	Endpoint               string `json:"endpoint" env:"SES_ENDPOINT"` // optional custom endpoint (localstack)
-	AccessKey              string `json:"-" env:"SES_ACCESS_KEY"`      // optional static credentials
-	SecretKey              string `json:"-" env:"SES_SECRET_KEY"`
-	SessionToken           string `json:"-" env:"SES_SESSION_TOKEN"`
-	Profile                string `json:"profile" env:"AWS_PROFILE"` // optional shared profile
+	DefaultFromEmail      string `json:"default_from_email" env:"SES_DEFAULT_FROM_EMAIL" env-required:"true"`
+	DefaultFromName       string `json:"default_from_name" env:"SES_DEFAULT_FROM_NAME"`
+	NotificationFromEmail string `json:"notification_from_email" env:"SES_NOTIFICATION_FROM_EMAIL" env-default:"noreply@transactions.xcentro.in"`
+	NotificationFromName  string `json:"notification_from_name" env:"SES_NOTIFICATION_FROM_NAME" env-default:"Xcentro Notifications"`
+	DefaultConfigSet      string `json:"default_config_set" env:"SES_DEFAULT_CONFIG_SET"`
+	Region                string `json:"region" env:"SES_REGION" env-required:"true"`
+	Endpoint              string `json:"endpoint" env:"SES_ENDPOINT"` // optional custom endpoint (localstack)
+	AccessKey             string `json:"-" env:"SES_ACCESS_KEY"`      // optional static credentials
+	SecretKey             string `json:"-" env:"SES_SECRET_KEY"`
+	SessionToken          string `json:"-" env:"SES_SESSION_TOKEN"`
+	Profile               string `json:"profile" env:"AWS_PROFILE"` // optional shared profile
 }
 
 // CastlerConfig holds Castler payout provider configuration.
@@ -175,6 +176,12 @@ type MigrationDatabaseConfig struct {
 type ServerConfig struct {
 	Host string `json:"host" env:"SERVER_HOST" env-default:"0.0.0.0"`
 	Port int    `json:"port" env:"SERVER_PORT" env-default:"8080"`
+	URL  string `json:"url" env:"SERVER_URL" env-default:"http://localhost:8888"` // Public-facing backend URL for callbacks
+}
+
+// FrontendConfig holds frontend application configuration.
+type FrontendConfig struct {
+	URL string `json:"url" env:"FRONTEND_URL" env-default:"http://localhost:3000"`
 }
 
 // WorkersConfig holds worker configuration.
@@ -185,15 +192,15 @@ type WorkersConfig struct {
 // NotificationWorkerConfig holds notification worker configuration.
 type NotificationWorkerConfig struct {
 	// Fanout configuration
-	FanoutBatchSize       int `json:"fanout_batch_size" env:"NOTIFICATION_FANOUT_BATCH_SIZE" env-default:"50"`
-	FanoutPollInterval    int `json:"fanout_poll_interval_seconds" env:"NOTIFICATION_FANOUT_POLL_INTERVAL_SECONDS" env-default:"2"`
-	FanoutWorkers         int `json:"fanout_workers" env:"NOTIFICATION_FANOUT_WORKERS" env-default:"1"`
+	FanoutBatchSize    int `json:"fanout_batch_size" env:"NOTIFICATION_FANOUT_BATCH_SIZE" env-default:"50"`
+	FanoutPollInterval int `json:"fanout_poll_interval_seconds" env:"NOTIFICATION_FANOUT_POLL_INTERVAL_SECONDS" env-default:"2"`
+	FanoutWorkers      int `json:"fanout_workers" env:"NOTIFICATION_FANOUT_WORKERS" env-default:"1"`
 
 	// Dispatch configuration
-	DispatchBatchSize       int `json:"dispatch_batch_size" env:"NOTIFICATION_DISPATCH_BATCH_SIZE" env-default:"50"`
-	DispatchPollInterval    int `json:"dispatch_poll_interval_seconds" env:"NOTIFICATION_DISPATCH_POLL_INTERVAL_SECONDS" env-default:"2"`
-	EmailDispatchWorkers    int `json:"email_dispatch_workers" env:"NOTIFICATION_EMAIL_DISPATCH_WORKERS" env-default:"2"`
-	PushDispatchWorkers     int `json:"push_dispatch_workers" env:"NOTIFICATION_PUSH_DISPATCH_WORKERS" env-default:"0"` // 0 = disabled (MVP)
+	DispatchBatchSize    int `json:"dispatch_batch_size" env:"NOTIFICATION_DISPATCH_BATCH_SIZE" env-default:"50"`
+	DispatchPollInterval int `json:"dispatch_poll_interval_seconds" env:"NOTIFICATION_DISPATCH_POLL_INTERVAL_SECONDS" env-default:"2"`
+	EmailDispatchWorkers int `json:"email_dispatch_workers" env:"NOTIFICATION_EMAIL_DISPATCH_WORKERS" env-default:"2"`
+	PushDispatchWorkers  int `json:"push_dispatch_workers" env:"NOTIFICATION_PUSH_DISPATCH_WORKERS" env-default:"0"` // 0 = disabled (MVP)
 
 	// Retry configuration
 	MaxRetryAttempts int `json:"max_retry_attempts" env:"NOTIFICATION_MAX_RETRY_ATTEMPTS" env-default:"3"`

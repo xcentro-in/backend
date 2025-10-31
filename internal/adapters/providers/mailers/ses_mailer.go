@@ -3,8 +3,10 @@ package mailers
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -12,6 +14,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ses"
 	"github.com/aws/aws-sdk-go-v2/service/ses/types"
 	"xcentro.in/internal/shared/config"
+	"xcentro.in/internal/shared/logger"
 )
 
 // EmailMessage represents an email to be sent
@@ -91,6 +94,43 @@ func formatAddress(email, name string) string {
 	return fmt.Sprintf("%s <%s>", name, email)
 }
 
+// retryWithExponentialBackoff executes a function with retry logic using exponential backoff
+// maxRetries: number of retry attempts (3 means total 4 attempts: 1 initial + 3 retries)
+// baseDelay: initial delay duration (will be doubled on each retry)
+func retryWithExponentialBackoff(ctx context.Context, maxRetries int, baseDelay time.Duration, operation func() error) error {
+	var lastErr error
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		// Execute the operation
+		err := operation()
+		if err == nil {
+			// Success
+			return nil
+		}
+
+		lastErr = err
+
+		// Don't sleep after the last attempt
+		if attempt < maxRetries {
+			// Calculate exponential backoff: baseDelay * 2^attempt
+			backoffDuration := time.Duration(float64(baseDelay) * math.Pow(2, float64(attempt)))
+
+			logger.GetDefault().Warnf("Operation failed (attempt %d/%d), retrying after %v: %v",
+				attempt+1, maxRetries+1, backoffDuration, err)
+
+			// Check if context is cancelled before sleeping
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("context cancelled during retry: %w", ctx.Err())
+			case <-time.After(backoffDuration):
+				// Continue to next retry
+			}
+		}
+	}
+
+	return fmt.Errorf("operation failed after %d attempts: %w", maxRetries+1, lastErr)
+}
+
 // SESClient implements EmailService interface for AWS SES
 type SESClient struct {
 	client           *ses.Client
@@ -168,7 +208,7 @@ func NewSESClientFromConfig(c config.SESConfig) (*SESClient, error) {
 	}, nil
 }
 
-// SendEmail sends an email via SES
+// SendEmail sends an email via SES with retry logic (3 retries with exponential backoff)
 func (s *SESClient) SendEmail(ctx context.Context, msg *EmailMessage) (messageID string, err error) {
 	if err := msg.Validate(); err != nil {
 		return "", fmt.Errorf("validation failed: %w", err)
@@ -245,15 +285,24 @@ func (s *SESClient) SendEmail(ctx context.Context, msg *EmailMessage) (messageID
 		input.Tags = tags
 	}
 
-	resp, err := s.client.SendEmail(ctx, input)
+	// Retry logic: 3 retries with exponential backoff starting at 1 second
+	// Total attempts: 4 (initial + 3 retries)
+	// Backoff delays: 1s, 2s, 4s
+	var resp *ses.SendEmailOutput
+	err = retryWithExponentialBackoff(ctx, 3, 1*time.Second, func() error {
+		var sendErr error
+		resp, sendErr = s.client.SendEmail(ctx, input)
+		return sendErr
+	})
+
 	if err != nil {
-		return "", fmt.Errorf("failed to send email: %w", err)
+		return "", fmt.Errorf("failed to send email after retries: %w", err)
 	}
 
 	return aws.ToString(resp.MessageId), nil
 }
 
-// SendBulkEmail sends personalized emails to multiple recipients
+// SendBulkEmail sends personalized emails to multiple recipients with retry logic for each email
 func (s *SESClient) SendBulkEmail(ctx context.Context, recipients []BulkRecipient, subject, htmlBody, textBody string) ([]string, error) {
 	if len(recipients) == 0 {
 		return nil, fmt.Errorf("at least one recipient required")
@@ -263,6 +312,7 @@ func (s *SESClient) SendBulkEmail(ctx context.Context, recipients []BulkRecipien
 	}
 
 	messageIDs := make([]string, 0, len(recipients))
+	var failedRecipients []string
 
 	for _, recipient := range recipients {
 		msg := &EmailMessage{
@@ -285,16 +335,25 @@ func (s *SESClient) SendBulkEmail(ctx context.Context, recipients []BulkRecipien
 			}
 		}
 
+		// SendEmail now has retry logic built-in (3 retries with exponential backoff)
 		msgID, err := s.SendEmail(ctx, msg)
 		if err != nil {
-			// Continue with other recipients on error
+			// Log failed recipient and continue with others
+			logger.GetDefault().Errorf("Failed to send email to %s after retries: %v", recipient.Email, err)
+			failedRecipients = append(failedRecipients, recipient.Email)
 			continue
 		}
 		messageIDs = append(messageIDs, msgID)
 	}
 
 	if len(messageIDs) == 0 {
-		return nil, fmt.Errorf("failed to send any emails")
+		return nil, fmt.Errorf("failed to send any emails to %d recipients", len(recipients))
+	}
+
+	// Log summary if there were any failures
+	if len(failedRecipients) > 0 {
+		logger.GetDefault().Warnf("Bulk email completed with %d successes and %d failures. Failed recipients: %v",
+			len(messageIDs), len(failedRecipients), failedRecipients)
 	}
 
 	return messageIDs, nil

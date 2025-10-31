@@ -3,11 +3,13 @@ package business
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	redisClient "xcentro.in/internal/adapters/cache/redis/client"
 	"xcentro.in/internal/adapters/cache/redis/keys"
 	"xcentro.in/internal/adapters/database/postgres/client"
+	"xcentro.in/internal/adapters/providers/fileupload"
 	"xcentro.in/internal/core/business"
 	coreNotification "xcentro.in/internal/core/notification"
 	"xcentro.in/internal/core/shared"
@@ -25,9 +27,11 @@ type BusinessServiceImpl struct {
 	businessRepo        business.BusinessRepository
 	businessUserRelRepo business.BusinessUserRelationRepository
 	userRepo            user.UserRepository
+	userService         user.UserService
 	txManager           client.TxManager
 	rclient             *redisClient.RedisClient
 	verificationService *verification.DocumentVerificationService
+	s3Config            *config.S3Config
 	logger              *logger.Logger
 }
 
@@ -36,6 +40,7 @@ func NewBusinessService(
 	businessRepo business.BusinessRepository,
 	businessUserRelRepo business.BusinessUserRelationRepository,
 	userRepo user.UserRepository,
+	userService user.UserService,
 	clients sharedClients.ExternalClients,
 	cfg *config.Config,
 ) business.BusinessService {
@@ -49,9 +54,11 @@ func NewBusinessService(
 		businessRepo:        businessRepo,
 		businessUserRelRepo: businessUserRelRepo,
 		userRepo:            userRepo,
+		userService:         userService,
 		txManager:           clients.GetTxManager(),   // Extract from clients
 		rclient:             clients.GetRedisClient(), // Extract from clients
 		verificationService: verificationSvc,
+		s3Config:            &cfg.S3,
 		logger:              logger.GetDefault(),
 	}
 }
@@ -90,6 +97,63 @@ func (s *BusinessServiceImpl) UpdateBusinessDeedDocumentKey(ctx context.Context,
 
 	// Business details cache will expire via TTL (10 minutes)
 	return nil
+}
+
+// GetKYBDocumentUploadURL generates a presigned S3 URL for KYB document upload
+func (s *BusinessServiceImpl) GetKYBDocumentUploadURL(ctx context.Context, userRoles []*business.BusinessUserRelation) (string, error) {
+	// Authorization: User must have exactly one role with KYB initiated
+	if !(len(userRoles) == 1 && userRoles[0].KybInitiated) {
+		return "", fmt.Errorf("kyb completed or unauthorized")
+	}
+
+	// Create S3 client
+	fileuploader, err := s.createS3Client()
+	if err != nil {
+		return "", fmt.Errorf("failed to create S3 client: %w", err)
+	}
+
+	// Generate presigned upload URL
+	key := fmt.Sprintf("PII/%s/%s", userRoles[0].BID, "business_deed")
+	url, _, err := fileuploader.GetPresignedUploadURL(ctx, "test.pdf", "application/pdf", key, 15*time.Minute)
+	if err != nil {
+		return "", fmt.Errorf("failed to get presigned upload URL: %w", err)
+	}
+
+	return url, nil
+}
+
+// ConfirmKYBDocumentUpload confirms the S3 upload and updates the database
+func (s *BusinessServiceImpl) ConfirmKYBDocumentUpload(ctx context.Context, userRoles []*business.BusinessUserRelation) (string, error) {
+	// Authorization: User must have exactly one role with KYB initiated
+	if !(len(userRoles) == 1 && userRoles[0].KybInitiated) {
+		return "", fmt.Errorf("kyb completed or unauthorized")
+	}
+
+	// Create S3 client
+	fileuploader, err := s.createS3Client()
+	if err != nil {
+		return "", fmt.Errorf("failed to create S3 client: %w", err)
+	}
+
+	// Confirm upload and get file URL
+	key := fmt.Sprintf("PII/%s/%s", userRoles[0].BID, "business_deed.pdf")
+	fileurl, err := fileuploader.ConfirmUpload(ctx, key, 15*time.Minute)
+	if err != nil {
+		return "", fmt.Errorf("failed to confirm upload: %w", err)
+	}
+
+	// Update database with document key
+	err = s.UpdateBusinessDeedDocumentKey(ctx, userRoles[0].BID, key)
+	if err != nil {
+		return "", fmt.Errorf("failed to update business deed document key: %w", err)
+	}
+
+	return fileurl, nil
+}
+
+// createS3Client is a helper method to create S3 client from config
+func (s *BusinessServiceImpl) createS3Client() (*fileupload.S3Client, error) {
+	return fileupload.NewS3ClientFromConfig(*s.s3Config)
 }
 
 // ============================================================================
@@ -440,6 +504,103 @@ func (s *BusinessServiceImpl) GetOnboardingStatus(ctx context.Context, uid strin
 	return response, nil
 }
 
+// InviteUserToBusiness invites a user to a business with authorization checks and sends invitation email
+func (s *BusinessServiceImpl) InviteUserToBusiness(ctx context.Context, bid string, email string, name string, role shared.UserRole, requesterRole shared.UserRole) (*business.InviteUserResponse, error) {
+	s.logger.Infof("Inviting user %s to business %s with role %s (requester role: %s)", email, bid, role, requesterRole)
+
+	// Validate role is valid
+	validRoles := []shared.UserRole{shared.Owner, shared.Admin, shared.Manager, shared.Auditor}
+	isValidRole := false
+	for _, validRole := range validRoles {
+		if role == validRole {
+			isValidRole = true
+			break
+		}
+	}
+	if !isValidRole {
+		return nil, fmt.Errorf("invalid role. Must be one of: owner, admin, manager, auditor")
+	}
+
+	// Authorization: Only admin or owner can invite users
+	if requesterRole != shared.Owner && requesterRole != shared.Admin {
+		return nil, fmt.Errorf("only business owners and admins can invite users")
+	}
+
+	// Admin cannot invite another owner (only owner can invite owner)
+	if requesterRole == shared.Admin && role == shared.Owner {
+		return nil, fmt.Errorf("only business owners can invite other owners")
+	}
+
+	var response *business.InviteUserResponse
+
+	// Use transaction to ensure atomicity
+	err := s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
+		// Create invited user (always require KYC for invited users)
+		createdUser, err := s.userService.CreateInvitedUser(ctx, email, name, true)
+		if err != nil {
+			s.logger.Errorf("Error creating invited user: %v", err)
+			return fmt.Errorf("failed to create invited user: %w", err)
+		}
+
+		// Add user to business with specified role
+		relation := &business.BusinessUserRelation{
+			UserID:       createdUser.Id,
+			BID:          bid,
+			Role:         role,
+			RoleClaim:    role,
+			KybInitiated: false,
+			KycNeeded:    false, // Always require KYC for invited users in business relation
+		}
+
+		txBusinessUserRelRepo := s.businessUserRelRepo.WithTx(tx)
+		err = txBusinessUserRelRepo.AddUserToBusiness(ctx, relation)
+		if err != nil {
+			s.logger.Errorf("Error adding user to business: %v", err)
+			return fmt.Errorf("failed to add user to business: %w", err)
+		}
+
+		// Notify admins and above about new user addition
+		adminRole := "admin"
+		if err := notification.TriggerMulticast(ctx, bid, coreNotification.EventUserInvited, "New User Added",
+			fmt.Sprintf("A new user has been added to the business with role: %s", role),
+			&adminRole, nil, coreNotification.EntityReferences{}, []coreNotification.ActionButton{
+				{
+					Type: "button-positive",
+					Text: "View Settings",
+					Href: "/settings",
+				},
+			}); err != nil {
+			s.logger.Errorf("Failed to trigger user invited notification: %v", err)
+			// Don't fail the operation if notification trigger fails
+		}
+
+		response = &business.InviteUserResponse{
+			UserID: createdUser.Id,
+			Email:  createdUser.Email,
+			Name:   createdUser.Name,
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	// Note: Invitation email should be sent by the caller (handler) after this succeeds
+
+	// Invalidate user roles cache (outside transaction)
+	go func() {
+		bgCtx := context.Background()
+		invalidationKeys := keys.InvalidateUserRoles(response.UserID)
+		if err := s.rclient.Delete(bgCtx, invalidationKeys...); err != nil {
+			s.logger.Warnf("Failed to invalidate user roles cache for user %s: %v", response.UserID, err)
+		}
+	}()
+
+	return response, nil
+}
+
 // AddUserToBusiness adds a user to a business (for invited users)
 func (s *BusinessServiceImpl) AddUserToBusiness(ctx context.Context, relation *business.BusinessUserRelation) error {
 	s.logger.Infof("Adding user %s to business %s with role %s", relation.UserID, relation.BID, relation.Role)
@@ -471,8 +632,13 @@ func (s *BusinessServiceImpl) AddUserToBusiness(ctx context.Context, relation *b
 }
 
 // GetBusinessUsers retrieves all users associated with a business
-func (s *BusinessServiceImpl) GetBusinessUsers(ctx context.Context, bid string) ([]*business.BusinessUserDTO, error) {
-	s.logger.Infof("Getting users for business %s", bid)
+func (s *BusinessServiceImpl) GetBusinessUsers(ctx context.Context, bid string, requesterRole shared.UserRole) ([]*business.BusinessUserDTO, error) {
+	s.logger.Infof("Getting users for business %s (requester role: %s)", bid, requesterRole)
+
+	// Authorization: Only admin or owner can list users
+	if requesterRole != shared.Owner && requesterRole != shared.Admin {
+		return nil, fmt.Errorf("only business owners and admins can list users")
+	}
 
 	users, err := s.businessUserRelRepo.GetBusinessUsersWithDetails(ctx, bid)
 	if err != nil {
@@ -486,43 +652,71 @@ func (s *BusinessServiceImpl) GetBusinessUsers(ctx context.Context, bid string) 
 func (s *BusinessServiceImpl) UpdateUserRoleInBusiness(ctx context.Context, bid string, targetUserID string, requesterRole shared.UserRole, newRole shared.UserRole) error {
 	s.logger.Infof("Updating user %s role in business %s to %s (requester role: %s)", targetUserID, bid, newRole, requesterRole)
 
-	// Get target user's current role
-	relations, err := s.businessUserRelRepo.FindByBusiness(ctx, bid)
-	if err != nil {
-		return fmt.Errorf("error finding business relations: %w", err)
-	}
-
-	var targetUserCurrentRole shared.UserRole
-	found := false
-	for _, rel := range relations {
-		if rel.UserID == targetUserID {
-			targetUserCurrentRole = rel.Role
-			found = true
+	// Validate new role is valid
+	validRoles := []shared.UserRole{shared.Owner, shared.Admin, shared.Manager, shared.Auditor}
+	isValidRole := false
+	for _, validRole := range validRoles {
+		if newRole == validRole {
+			isValidRole = true
 			break
 		}
 	}
-
-	if !found {
-		return fmt.Errorf("user not found in business")
+	if !isValidRole {
+		return fmt.Errorf("invalid role. Must be one of: owner, admin, manager, auditor")
 	}
 
-	// Authorization check: Admin cannot change owner's role
-	if requesterRole == shared.Admin && targetUserCurrentRole == shared.Owner {
-		return fmt.Errorf("admin cannot change owner's role")
+	// Authorization: Only admin or owner can update users
+	if requesterRole != shared.Owner && requesterRole != shared.Admin {
+		return fmt.Errorf("only business owners and admins can update user roles")
 	}
 
-	// Authorization check: Admin cannot promote someone to owner
-	if requesterRole == shared.Admin && newRole == shared.Owner {
-		return fmt.Errorf("admin cannot promote users to owner role")
-	}
+	// Use transaction to ensure atomicity
+	err := s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
+		// Get target user's current role within transaction
+		txBusinessUserRelRepo := s.businessUserRelRepo.WithTx(tx)
+		relations, err := txBusinessUserRelRepo.FindByBusiness(ctx, bid)
+		if err != nil {
+			return fmt.Errorf("error finding business relations: %w", err)
+		}
 
-	// Update the role
-	err = s.businessUserRelRepo.UpdateUserRole(ctx, targetUserID, bid, newRole)
+		var targetUserCurrentRole shared.UserRole
+		found := false
+		for _, rel := range relations {
+			if rel.UserID == targetUserID {
+				targetUserCurrentRole = rel.Role
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			return fmt.Errorf("user not found in business")
+		}
+
+		// Authorization check: Admin cannot change owner's role
+		if requesterRole == shared.Admin && targetUserCurrentRole == shared.Owner {
+			return fmt.Errorf("admin cannot change owner's role")
+		}
+
+		// Authorization check: Admin cannot promote someone to owner
+		if requesterRole == shared.Admin && newRole == shared.Owner {
+			return fmt.Errorf("admin cannot promote users to owner role")
+		}
+
+		// Update the role
+		err = txBusinessUserRelRepo.UpdateUserRole(ctx, targetUserID, bid, newRole)
+		if err != nil {
+			return fmt.Errorf("error updating user role: %w", err)
+		}
+
+		return nil
+	})
+
 	if err != nil {
-		return fmt.Errorf("error updating user role: %w", err)
+		return err
 	}
 
-	// Invalidate user roles cache after successful update
+	// Invalidate user roles cache after successful update (outside transaction)
 	go func() {
 		bgCtx := context.Background()
 		invalidationKeys := keys.InvalidateUserRoles(targetUserID)
@@ -536,21 +730,56 @@ func (s *BusinessServiceImpl) UpdateUserRoleInBusiness(ctx context.Context, bid 
 }
 
 // RemoveUserFromBusiness removes a user from a business with authorization checks
-func (s *BusinessServiceImpl) RemoveUserFromBusiness(ctx context.Context, bid string, targetUserID string, targetUserRole shared.UserRole, requesterRole shared.UserRole) error {
-	s.logger.Infof("Removing user %s from business %s (requester role: %s, target role: %s)", targetUserID, bid, requesterRole, targetUserRole)
+func (s *BusinessServiceImpl) RemoveUserFromBusiness(ctx context.Context, bid string, targetUserID string, requesterRole shared.UserRole) error {
+	s.logger.Infof("Removing user %s from business %s (requester role: %s)", targetUserID, bid, requesterRole)
 
-	// Authorization check: Admin cannot remove owner
-	if requesterRole == shared.Admin && targetUserRole == shared.Owner {
-		return fmt.Errorf("admin cannot remove owner from business")
+	// Authorization: Only admin or owner can remove users
+	if requesterRole != shared.Owner && requesterRole != shared.Admin {
+		return fmt.Errorf("only business owners and admins can remove users")
 	}
 
-	// Remove user from business
-	err := s.businessUserRelRepo.RemoveUserFromBusiness(ctx, targetUserID, bid)
+	// Use transaction to ensure atomicity
+	err := s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
+		// Get target user's role within transaction for authorization check
+		txBusinessUserRelRepo := s.businessUserRelRepo.WithTx(tx)
+		relations, err := txBusinessUserRelRepo.FindByBusiness(ctx, bid)
+		if err != nil {
+			return fmt.Errorf("error finding business relations: %w", err)
+		}
+
+		var targetUserRole shared.UserRole
+		found := false
+		for _, rel := range relations {
+			if rel.UserID == targetUserID {
+				targetUserRole = rel.Role
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			return fmt.Errorf("user not found in business")
+		}
+
+		// Authorization check: Admin cannot remove owner
+		if requesterRole == shared.Admin && targetUserRole == shared.Owner {
+			return fmt.Errorf("admin cannot remove owner from business")
+		}
+
+		// Remove user from business
+		err = txBusinessUserRelRepo.RemoveUserFromBusiness(ctx, targetUserID, bid)
+		if err != nil {
+			return fmt.Errorf("error removing user from business: %w", err)
+		}
+
+		return nil
+	})
+
 	if err != nil {
-		return fmt.Errorf("error removing user from business: %w", err)
+		return err
 	}
 
-	// Invalidate user roles cache after successful removal
+	// Invalidate user roles cache after successful removal (outside transaction)
 	go func() {
 		bgCtx := context.Background()
 		invalidationKeys := keys.InvalidateUserRoles(targetUserID)

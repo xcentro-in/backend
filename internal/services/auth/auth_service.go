@@ -2,9 +2,6 @@ package auth
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"time"
 
@@ -12,6 +9,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	redis "xcentro.in/internal/adapters/cache/redis/client"
 	"xcentro.in/internal/adapters/cache/redis/keys"
+	"xcentro.in/internal/adapters/database/postgres/client"
 	"xcentro.in/internal/adapters/providers/mailers"
 	"xcentro.in/internal/core/auth"
 	"xcentro.in/internal/core/business"
@@ -21,6 +19,7 @@ import (
 	sharedClients "xcentro.in/internal/shared/clients"
 	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/logger"
+	"xcentro.in/internal/shared/security"
 )
 
 type AuthService struct {
@@ -34,6 +33,7 @@ type AuthService struct {
 	emailService    mailers.EmailService
 	metrics         metrics.MetricsProvider
 	appConfig       *config.Config
+	txManager       client.TxManager
 }
 
 func NewAuthService(
@@ -55,6 +55,7 @@ func NewAuthService(
 		emailService:    clients.GetEmailService(), // Extract from clients
 		metrics:         clients.GetMetrics().(metrics.MetricsProvider),
 		appConfig:       cfg,
+		txManager:       clients.GetTxManager(), // Extract from clients
 	}
 }
 
@@ -99,7 +100,7 @@ func (s *AuthService) CreateTokenPair(ctx context.Context, userID, userAgent str
 	}
 
 	// Hash the refresh token for storage
-	tokenHash := hashToken(refreshToken)
+	tokenHash := security.HashToken(refreshToken)
 
 	// Store refresh token session in database
 	_, err = s.sessionRepo.CreateSession(
@@ -127,7 +128,7 @@ func (s *AuthService) RefreshAccessToken(ctx context.Context, refreshToken strin
 	}
 
 	userID := claims.Subject
-	tokenHash := hashToken(refreshToken)
+	tokenHash := security.HashToken(refreshToken)
 
 	// Check if token is revoked in Redis cache first
 	revokedKey := keys.User.RevokedTokens(userID)
@@ -180,7 +181,7 @@ func (s *AuthService) RevokeRefreshToken(ctx context.Context, userID, refreshTok
 	}
 
 	// Hash the token
-	tokenHash := hashToken(refreshToken)
+	tokenHash := security.HashToken(refreshToken)
 
 	// Delete from database
 	if err := s.sessionRepo.DeleteSession(ctx, userID, tokenHash); err != nil {
@@ -272,88 +273,61 @@ func (s *AuthService) parseAndValidateToken(tokenString string) (*jwt.Registered
 	return claims, nil
 }
 
-// hashToken creates a SHA-256 hash of the token for storage
-func hashToken(token string) string {
-	hash := sha256.Sum256([]byte(token))
-	return hex.EncodeToString(hash[:])
-}
-
-// validatePasswordStrength validates password strength requirements
-func validatePasswordStrength(password string) error {
-	if len(password) < 8 {
-		return fmt.Errorf("password must be at least 8 characters long")
-	}
-
-	var (
-		hasUpper   = false
-		hasLower   = false
-		hasNumber  = false
-		hasSpecial = false
-	)
-
-	for _, char := range password {
-		switch {
-		case 'A' <= char && char <= 'Z':
-			hasUpper = true
-		case 'a' <= char && char <= 'z':
-			hasLower = true
-		case '0' <= char && char <= '9':
-			hasNumber = true
-		case char == '!' || char == '@' || char == '#' || char == '$' || char == '%' || char == '^' || char == '&' || char == '*' || char == '(' || char == ')' || char == '-' || char == '_' || char == '+' || char == '=' || char == '{' || char == '}' || char == '[' || char == ']' || char == '|' || char == '\\' || char == ':' || char == ';' || char == '"' || char == '\'' || char == '<' || char == '>' || char == ',' || char == '.' || char == '?' || char == '/':
-			hasSpecial = true
-		}
-	}
-
-	if !hasUpper || !hasLower || !hasNumber || !hasSpecial {
-		return fmt.Errorf("password must contain at least one uppercase letter, one lowercase letter, one number, and one special character")
-	}
-
-	return nil
-}
 
 // ChangePassword changes the user's password after verifying the old password.
 func (s *AuthService) ChangePassword(ctx context.Context, userID, oldPassword, newPassword string) error {
 	logger.Infof("Processing password change for user: %s", userID)
 
 	// Validate new password strength
-	if err := validatePasswordStrength(newPassword); err != nil {
+	if err := security.ValidatePasswordStrength(newPassword); err != nil {
 		logger.Errorf("Password validation failed: %v", err)
 		return err
 	}
 
-	// Get user by ID
-	userObj, err := s.userService.GetUserByID(ctx, userID)
-	if err != nil {
-		logger.Errorf("Failed to get user by ID: %v", err)
-		return fmt.Errorf("user not found")
-	}
-	if userObj == nil {
-		logger.Error("User not found for ID: %s", userID)
-		return fmt.Errorf("user not found")
-	}
-
-	// Verify old password
-	if err := s.ComparePassword(userObj.PwdHash, oldPassword); err != nil {
-		logger.Error("Invalid old password for user: %s", userObj.Id)
-		return fmt.Errorf("invalid old password")
-	}
-
-	// Check if new password is same as old password
-	if err := s.ComparePassword(userObj.PwdHash, newPassword); err == nil {
-		logger.Error("New password is same as old password for user: %s", userObj.Id)
-		return fmt.Errorf("new password cannot be the same as old password")
-	}
-
-	// Hash new password
+	// Hash new password upfront
 	hashedPassword, err := s.HashPassword(newPassword)
 	if err != nil {
 		logger.Errorf("Failed to hash new password: %v", err)
 		return fmt.Errorf("failed to process new password")
 	}
 
-	// Update user password hash
-	if err := s.userRepo.UpdateUserPasswordHash(ctx, userID, hashedPassword); err != nil {
-		return fmt.Errorf("failed to update password: %w", err)
+	// Use transaction to ensure atomicity
+	err = s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
+		txUserRepo := s.userRepo.WithTx(tx)
+
+		// Get user by ID within transaction
+		userObj, err := txUserRepo.GetUserByID(ctx, userID)
+		if err != nil {
+			logger.Errorf("Failed to get user by ID: %v", err)
+			return fmt.Errorf("user not found")
+		}
+		if userObj == nil {
+			logger.Error("User not found for ID: %s", userID)
+			return fmt.Errorf("user not found")
+		}
+
+		// Verify old password
+		if err := s.ComparePassword(userObj.PwdHash, oldPassword); err != nil {
+			logger.Error("Invalid old password for user: %s", userObj.Id)
+			return fmt.Errorf("invalid old password")
+		}
+
+		// Check if new password is same as old password
+		if err := s.ComparePassword(userObj.PwdHash, newPassword); err == nil {
+			logger.Error("New password is same as old password for user: %s", userObj.Id)
+			return fmt.Errorf("new password cannot be the same as old password")
+		}
+
+		// Update user password hash
+		if err := txUserRepo.UpdateUserPasswordHash(ctx, userID, hashedPassword); err != nil {
+			return fmt.Errorf("failed to update password: %w", err)
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return err
 	}
 
 	logger.Infof("Password changed successfully for user: %s", userID)
@@ -403,7 +377,7 @@ func (s *AuthService) Signup(ctx context.Context, email, password string) (*auth
 	}
 
 	// Validate password strength
-	if err := validatePasswordStrength(password); err != nil {
+	if err := security.ValidatePasswordStrength(password); err != nil {
 		logger.Errorf("Password validation failed: %v", err)
 		return nil, err
 	}
@@ -432,7 +406,7 @@ func (s *AuthService) Signup(ctx context.Context, email, password string) (*auth
 	userID := createdUser.Id // Capture the ID to avoid race conditions
 	go func() {
 		bgCtx := context.Background()
-		if err := s.userService.SendEmailVerification(bgCtx, userID); err != nil {
+		if err := s.SendEmailVerification(bgCtx, userID); err != nil {
 			logger.Errorf("Failed to send email verification: %v", err)
 		}
 	}()
@@ -518,7 +492,7 @@ func (s *AuthService) SendPasswordResetEmail(ctx context.Context, email string, 
 	}
 
 	// Generate secure verification token (32 bytes = 256 bits)
-	resetToken, err := generateSecureToken()
+	resetToken, err := security.GenerateSecureToken()
 	if err != nil {
 		logger.Errorf("Failed to generate reset token: %v", err)
 		// Return success to prevent information disclosure (for reset type)
@@ -529,7 +503,7 @@ func (s *AuthService) SendPasswordResetEmail(ctx context.Context, email string, 
 	}
 
 	// Hash the token before storing in database
-	hashedToken := hashPasswordResetToken(resetToken)
+	hashedToken := security.HashTokenWithPepper(resetToken, s.bcryptConfig.Pepper)
 
 	// Calculate timestamps - 1 hour expiry for password reset
 	now := time.Now()
@@ -557,7 +531,7 @@ func (s *AuthService) SendPasswordResetEmail(ctx context.Context, email string, 
 	}
 
 	// Create password reset URL with token as query parameter
-	resetURL := fmt.Sprintf("http://localhost:8080/reset-password?token=%s", resetToken)
+	resetURL := fmt.Sprintf("%s/reset-password?token=%s", s.appConfig.Frontend.URL, resetToken)
 
 	// Generate email content based on type
 	var subject, htmlBody, textBody string
@@ -708,88 +682,282 @@ func (s *AuthService) ResetPasswordWithToken(ctx context.Context, token string, 
 		return fmt.Errorf("new password is required")
 	}
 
+	// Validate new password strength
+	if err := security.ValidatePasswordStrength(newPassword); err != nil {
+		logger.Errorf("Password validation failed: %v", err)
+		return err
+	}
+
 	// Hash the incoming token to compare with stored hash
-	hashedToken := hashPasswordResetToken(token)
+	hashedToken := security.HashTokenWithPepper(token, s.bcryptConfig.Pepper)
 
-	// Get verification code record using hashed token
-	verificationCode, err := s.userRepo.GetVerificationCodeByCode(ctx, hashedToken, shared.PasswordReset)
+	// Hash the new password using existing HashPassword method
+	hashedPassword, err := s.HashPassword(newPassword)
 	if err != nil {
-		logger.Errorf("Failed to get password reset code: %v", err)
-		return fmt.Errorf("invalid or expired reset token")
-	}
-
-	if verificationCode == nil {
-		return fmt.Errorf("reset token not found")
-	}
-
-	if verificationCode.Used {
-		return fmt.Errorf("reset token already used")
-	}
-
-	// Check if token is expired
-	expiresAt, err := time.Parse(time.RFC3339, verificationCode.ExpiresAt)
-	if err != nil {
-		return fmt.Errorf("invalid expiration time format")
-	}
-
-	if time.Now().After(expiresAt) {
-		return fmt.Errorf("reset token has expired")
-	}
-
-	// Hash the new password with pepper
-	pepperedPassword := newPassword + s.bcryptConfig.Pepper
-	hashedPasswordBytes, err := bcrypt.GenerateFromPassword([]byte(pepperedPassword), s.bcryptConfig.Cost)
-	if err != nil {
+		logger.Errorf("Failed to hash new password: %v", err)
 		return fmt.Errorf("failed to hash password: %w", err)
 	}
-	hashedPassword := string(hashedPasswordBytes)
 
-	// Mark verification code as used (token is automatically erased after use)
-	if err := s.userRepo.MarkVerificationCodeAsUsed(ctx, verificationCode.ID); err != nil {
-		return fmt.Errorf("failed to mark reset code as used: %w", err)
+	var userID string
+
+	// Use transaction to ensure atomicity
+	err = s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
+		txUserRepo := s.userRepo.WithTx(tx)
+
+		// Get verification code record using hashed token
+		verificationCode, err := txUserRepo.GetVerificationCodeByCode(ctx, hashedToken, shared.PasswordReset)
+		if err != nil {
+			logger.Errorf("Failed to get password reset code: %v", err)
+			return fmt.Errorf("invalid or expired reset token")
+		}
+
+		if verificationCode == nil {
+			return fmt.Errorf("reset token not found")
+		}
+
+		if verificationCode.Used {
+			return fmt.Errorf("reset token already used")
+		}
+
+		// Check if token is expired
+		expiresAt, err := time.Parse(time.RFC3339, verificationCode.ExpiresAt)
+		if err != nil {
+			return fmt.Errorf("invalid expiration time format")
+		}
+
+		if time.Now().After(expiresAt) {
+			return fmt.Errorf("reset token has expired")
+		}
+
+		// Mark verification code as used (token is automatically erased after use)
+		if err := txUserRepo.MarkVerificationCodeAsUsed(ctx, verificationCode.ID); err != nil {
+			return fmt.Errorf("failed to mark reset code as used: %w", err)
+		}
+
+		// Update user password hash
+		if err := txUserRepo.UpdateUserPasswordHash(ctx, verificationCode.UserID, hashedPassword); err != nil {
+			return fmt.Errorf("failed to update password: %w", err)
+		}
+
+		userID = verificationCode.UserID
+		return nil
+	})
+
+	if err != nil {
+		return err
 	}
 
-	// Update user password hash
-	if err := s.userRepo.UpdateUserPasswordHash(ctx, verificationCode.UserID, hashedPassword); err != nil {
-		return fmt.Errorf("failed to update password: %w", err)
-	}
-
-	logger.Infof("Password reset successfully for user: %s", verificationCode.UserID)
+	logger.Infof("Password reset successfully for user: %s", userID)
 
 	// Invalidate all refresh tokens for security (done after password update)
-	logger.Infof("Invalidating all refresh tokens for user: %s", verificationCode.UserID)
+	logger.Infof("Invalidating all refresh tokens for user: %s", userID)
 
-	if revokeErr := s.RevokeAllUserTokens(ctx, verificationCode.UserID); revokeErr != nil {
-		logger.Errorf("Failed to revoke all tokens for user %s: %v", verificationCode.UserID, revokeErr)
+	if revokeErr := s.RevokeAllUserTokens(ctx, userID); revokeErr != nil {
+		logger.Errorf("Failed to revoke all tokens for user %s: %v", userID, revokeErr)
 		// Don't fail the password reset if token revocation fails, just log it
 	} else {
-		logger.Infof("All refresh tokens invalidated for user: %s", verificationCode.UserID)
+		logger.Infof("All refresh tokens invalidated for user: %s", userID)
 	}
 
 	return nil
 }
 
-// generateSecureToken generates a cryptographically secure random token
-func generateSecureToken() (string, error) {
-	// Generate 32 random bytes (256 bits)
-	randomBytes := make([]byte, 32)
-	if _, err := rand.Read(randomBytes); err != nil {
-		return "", fmt.Errorf("failed to generate random bytes: %w", err)
+// ============================================================================
+// Email Verification Methods
+// ============================================================================
+
+// SendEmailVerification sends email verification token to user's email
+func (s *AuthService) SendEmailVerification(ctx context.Context, userID string) error {
+	logger.Infof("Sending email verification for user: %s", userID)
+
+	// Get user details
+	userObj, err := s.userRepo.GetUserByID(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("failed to get user: %w", err)
 	}
-	return hex.EncodeToString(randomBytes), nil
+
+	if userObj == nil {
+		return fmt.Errorf("user not found")
+	}
+
+	if userObj.EmailVerified {
+		return fmt.Errorf("email already verified")
+	}
+
+	// Generate secure verification token (32 bytes = 256 bits)
+	verificationToken, err := security.GenerateSecureToken()
+	if err != nil {
+		return fmt.Errorf("failed to generate verification token: %w", err)
+	}
+
+	// Hash the token before storing in database (SECURITY: Never store plaintext tokens)
+	hashedToken := security.HashTokenWithPepper(verificationToken, s.bcryptConfig.Pepper)
+
+	// Calculate proper timestamps
+	now := time.Now()
+	expiresAt := now.Add(24 * time.Hour) // 24 hour expiry for email verification
+
+	// Create verification code record with 24 hour expiry
+	verificationCode := &user.UserVerificationCodes{
+		UserID:        userID,
+		Code:          hashedToken, // Store hashed version, not plaintext
+		CodeType:      shared.EmailVerification,
+		ExpiresAt:     expiresAt.Format(time.RFC3339),
+		CreatedAt:     now.Format(time.RFC3339),
+		Used:          false,
+		RetryAttempts: 0,
+	}
+
+	// Store verification code in database
+	if err := s.userRepo.CreateVerificationCode(ctx, verificationCode); err != nil {
+		return fmt.Errorf("failed to create verification code: %w", err)
+	}
+
+	// Create verification URL
+	verificationURL := fmt.Sprintf("%s/verify-email?token=%s", s.appConfig.Frontend.URL, verificationToken)
+
+	// Prepare email content
+	htmlBody := fmt.Sprintf(`
+		<html>
+		<body>
+			<h2>Email Verification - Xcentro</h2>
+			<p>Hi there,</p>
+			<p>Thank you for signing up with Xcentro. Please click the link below to verify your email address:</p>
+			<p><a href="%s" style="background-color: #007bff; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">Verify Email</a></p>
+			<p>Or copy and paste this link in your browser:</p>
+			<p>%s</p>
+			<p>This link will expire in 24 hours.</p>
+			<p>If you didn't create an account with us, please ignore this email.</p>
+			<p>Best regards,<br>Xcentro Team</p>
+		</body>
+		</html>
+	`, verificationURL, verificationURL)
+
+	textBody := fmt.Sprintf(`
+		Email Verification - Xcentro
+
+		Hi there,
+
+		Thank you for signing up with Xcentro. Please click the link below to verify your email address:
+
+		%s
+
+		This link will expire in 24 hours.
+
+		If you didn't create an account with us, please ignore this email.
+
+		Best regards,
+		Xcentro Team
+	`, verificationURL)
+
+	// Create email message
+	emailMsg := &mailers.EmailMessage{
+		To:       []string{userObj.Email},
+		From:     s.appConfig.SES.DefaultFromEmail,
+		FromName: s.appConfig.SES.DefaultFromName,
+		Subject:  "Verify your Xcentro account",
+		HTMLBody: htmlBody,
+		TextBody: textBody,
+	}
+
+	// Send email
+	messageID, err := s.emailService.SendEmail(ctx, emailMsg)
+	if err != nil {
+		logger.Errorf("Failed to send verification email to %s: %v", userObj.Email, err)
+		return fmt.Errorf("failed to send verification email: %w", err)
+	}
+
+	logger.Infof("Verification email sent successfully to %s, Message ID: %s", userObj.Email, messageID)
+
+	return nil
 }
 
-// hashPasswordResetToken creates a SHA-256 hash of the token for secure database storage
-func hashPasswordResetToken(token string) string {
-	// Use application-wide salt from environment/config
-	appSalt := "xcentro_password_reset_salt_2024"
+// VerifyEmailWithToken verifies user's email using verification token
+func (s *AuthService) VerifyEmailWithToken(ctx context.Context, token string) error {
+	logger.Infof("Verifying email with token")
 
-	// Combine token with application salt
-	saltedToken := fmt.Sprintf("%s_%s_%s", appSalt, token, "xcentro")
+	if token == "" {
+		return fmt.Errorf("verification token is required")
+	}
 
-	// Create SHA-256 hash
-	hash := sha256.Sum256([]byte(saltedToken))
+	// Hash the incoming token to compare with stored hash
+	hashedToken := security.HashTokenWithPepper(token, s.bcryptConfig.Pepper)
 
-	// Return hex-encoded hash
-	return hex.EncodeToString(hash[:])
+	var userID string
+
+	// Use transaction to ensure atomicity
+	err := s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
+		txUserRepo := s.userRepo.WithTx(tx)
+
+		// Get verification code record using hashed token
+		verificationCode, err := txUserRepo.GetVerificationCodeByCode(ctx, hashedToken, shared.EmailVerification)
+		if err != nil {
+			logger.Errorf("Failed to get verification code: %v", err)
+			return fmt.Errorf("invalid or expired verification token")
+		}
+
+		if verificationCode == nil {
+			return fmt.Errorf("verification token not found")
+		}
+
+		if verificationCode.Used {
+			return fmt.Errorf("verification token already used")
+		}
+
+		// Check if token is expired
+		expiresAt, err := time.Parse(time.RFC3339, verificationCode.ExpiresAt)
+		if err != nil {
+			return fmt.Errorf("invalid expiration time format")
+		}
+
+		if time.Now().After(expiresAt) {
+			return fmt.Errorf("verification token has expired")
+		}
+
+		// Mark verification code as used
+		if err := txUserRepo.MarkVerificationCodeAsUsed(ctx, verificationCode.ID); err != nil {
+			return fmt.Errorf("failed to mark verification code as used: %w", err)
+		}
+
+		// Update user email verification status
+		if err := txUserRepo.UpdateUserEmailVerification(ctx, verificationCode.UserID, true); err != nil {
+			return fmt.Errorf("failed to update user email verification: %w", err)
+		}
+
+		userID = verificationCode.UserID
+		return nil
+	})
+
+	if err != nil {
+		return err
+	}
+
+	logger.Infof("Email verified successfully for user: %s", userID)
+	return nil
+}
+
+// ResendEmailVerification resends email verification for a given email
+func (s *AuthService) ResendEmailVerification(ctx context.Context, email string) error {
+	logger.Infof("Resending email verification for email: %s", email)
+
+	if email == "" {
+		return fmt.Errorf("email is required")
+	}
+
+	// Get user details
+	userObj, err := s.userRepo.GetUserByEmail(ctx, email)
+	if err != nil {
+		return fmt.Errorf("failed to get user: %w", err)
+	}
+
+	if userObj == nil {
+		return fmt.Errorf("user not found")
+	}
+
+	if userObj.EmailVerified {
+		return fmt.Errorf("email already verified")
+	}
+
+	// Send verification email
+	return s.SendEmailVerification(ctx, userObj.Id)
 }

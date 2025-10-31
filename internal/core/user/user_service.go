@@ -27,11 +27,6 @@ type UserService interface {
 	// UpdateKYCStatus updates user's KYC status
 	UpdateKYCStatus(ctx context.Context, userID string, status shared.KYCStatus) error
 
-	// Email verification specific methods
-	SendEmailVerification(ctx context.Context, userID string) error
-	VerifyEmailWithToken(ctx context.Context, token string) error
-	ResendEmailVerification(ctx context.Context, email string) error
-
 	// User onboarding methods
 	InitiateOnboarding(ctx context.Context, userID, name, dob, taxID, nationalID string) (*InitiateOnboardingResponseDTO, error)
 	CompleteOnboarding(ctx context.Context, userID, businessID, gstin string, claimedRole shared.UserRole) error

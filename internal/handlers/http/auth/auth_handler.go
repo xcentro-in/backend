@@ -42,6 +42,8 @@ func RegisterAuthRoutes(e *echo.Group, authService auth.AuthService, businessSer
 	authGroup.POST("/logout", authHandler.HandleLogout)
 	authGroup.GET("/forgot-password", authHandler.HandleForgotPassword)
 	authGroup.POST("/reset-password", authHandler.HandleResetPassword)
+	authGroup.POST("/verify-email", authHandler.HandleVerifyEmail)
+	authGroup.POST("/resend-verification", authHandler.HandleResendEmailVerification)
 
 	// Protected routes (require JWT)
 	protectedAuth := authGroup.Group("")
@@ -388,5 +390,76 @@ func (ah AuthHandler) HandleGetBusinessOnboardingFlags(c echo.Context) error {
 	return c.JSON(200, map[string]any{
 		"message": "Business onboarding status retrieved successfully",
 		"data":    status,
+	})
+}
+
+// HandleVerifyEmail verifies user's email using verification token
+func (ah AuthHandler) HandleVerifyEmail(c echo.Context) error {
+	// Parse request body
+	type VerifyEmailRequest struct {
+		Token string `json:"token"`
+	}
+
+	var req VerifyEmailRequest
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(400, map[string]string{"message": "Invalid request payload"})
+	}
+
+	if req.Token == "" {
+		return c.JSON(400, map[string]string{"message": "Verification token is required"})
+	}
+
+	if err := ah.authService.VerifyEmailWithToken(c.Request().Context(), req.Token); err != nil {
+		logger.Errorf("Error verifying email with token: %v", err)
+
+		// Handle specific error cases
+		switch err.Error() {
+		case "verification token not found":
+			return c.JSON(404, map[string]string{"message": "Invalid verification token"})
+		case "verification token already used":
+			return c.JSON(400, map[string]string{"message": "Verification token has already been used"})
+		case "verification token has expired":
+			return c.JSON(400, map[string]string{"message": "Verification token has expired"})
+		default:
+			return c.JSON(500, map[string]string{"message": "Failed to verify email"})
+		}
+	}
+
+	return c.JSON(200, map[string]interface{}{
+		"message": "Email verified successfully. You can now log in.",
+		"data":    nil,
+	})
+}
+
+// HandleResendEmailVerification resends email verification token
+func (ah AuthHandler) HandleResendEmailVerification(c echo.Context) error {
+	var req struct {
+		Email string `json:"email"`
+	}
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(400, map[string]string{"message": "Invalid request payload"})
+	}
+
+	if req.Email == "" {
+		return c.JSON(400, map[string]string{"message": "Email is required"})
+	}
+
+	if err := ah.authService.ResendEmailVerification(c.Request().Context(), req.Email); err != nil {
+		logger.Errorf("Error resending email verification for %s: %v", req.Email, err)
+
+		// Handle specific error cases
+		switch err.Error() {
+		case "user not found":
+			return c.JSON(404, map[string]string{"message": "User not found"})
+		case "email already verified":
+			return c.JSON(400, map[string]string{"message": "Email is already verified"})
+		default:
+			return c.JSON(500, map[string]string{"message": "Failed to resend verification email"})
+		}
+	}
+
+	return c.JSON(200, map[string]interface{}{
+		"message": "Verification email sent successfully. Please check your inbox.",
+		"data":    nil,
 	})
 }

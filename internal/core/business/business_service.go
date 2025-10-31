@@ -10,6 +10,8 @@ import (
 type BusinessService interface {
 	// Utility methods
 	UpdateBusinessDeedDocumentKey(ctx context.Context, bid string, key string) error
+	GetKYBDocumentUploadURL(ctx context.Context, userRoles []*BusinessUserRelation) (string, error)
+	ConfirmKYBDocumentUpload(ctx context.Context, userRoles []*BusinessUserRelation) (string, error)
 
 	// Onboarding flow methods
 	InitiateOnboarding(ctx context.Context, uid string, name string, gstin string) (*OnboardingInitResponse, error)
@@ -25,8 +27,9 @@ type BusinessService interface {
 	UpdateOnboardingStatus(ctx context.Context, bid string, flagName string, value bool) error
 
 	// User management methods
+	InviteUserToBusiness(ctx context.Context, bid string, email string, name string, role shared.UserRole, requesterRole shared.UserRole) (*InviteUserResponse, error)
 	AddUserToBusiness(ctx context.Context, relation *BusinessUserRelation) error
-	GetBusinessUsers(ctx context.Context, bid string) ([]*BusinessUserDTO, error)
+	GetBusinessUsers(ctx context.Context, bid string, requesterRole shared.UserRole) ([]*BusinessUserDTO, error)
 	UpdateUserRoleInBusiness(ctx context.Context, bid string, targetUserID string, requesterRole shared.UserRole, newRole shared.UserRole) error
-	RemoveUserFromBusiness(ctx context.Context, bid string, targetUserID string, targetUserRole shared.UserRole, requesterRole shared.UserRole) error
+	RemoveUserFromBusiness(ctx context.Context, bid string, targetUserID string, requesterRole shared.UserRole) error
 }

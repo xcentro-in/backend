@@ -64,9 +64,12 @@ func (f *serviceFactory) createCoreServices(verificationSvc *verification.Docume
 	businessRepo = business.NewPgBusinessRepository(f.clients.db).(*business.PgBusinessRepository)
 	businessUserRelRepo = business.NewPgBusinessUserRelationRepository(f.clients.db).(*business.PgBusinessUserRelationRepository)
 
-	// Create services
-	busSvc = businessSvc.NewBusinessService(businessRepo, businessUserRelRepo, userRepository, f.clients, f.cfg)
+	// Create services with proper dependency injection order
+	// 1. User service (no circular dependencies)
 	userService = userSvc.NewUserService(userRepository, businessRepo, businessUserRelRepo, verificationSvc, f.clients, f.cfg)
+	// 2. Business service (depends on user service)
+	busSvc = businessSvc.NewBusinessService(businessRepo, businessUserRelRepo, userRepository, userService, f.clients, f.cfg)
+	// 3. Auth service (depends on user service and business service)
 	authSvc = authservice.NewAuthService(sessionRepo, userRepository, userService, busSvc, f.clients, f.cfg)
 	return
 }

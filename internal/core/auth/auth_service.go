@@ -28,6 +28,10 @@ type AuthService interface {
 	ResetPasswordWithToken(ctx context.Context, token string, newPassword string) error
 	ChangePassword(ctx context.Context, userID, oldPassword, newPassword string) error
 
+	// Email verification
+	SendEmailVerification(ctx context.Context, userID string) error
+	VerifyEmailWithToken(ctx context.Context, token string) error
+	ResendEmailVerification(ctx context.Context, email string) error
 
 	// Utility
 	GetRedisClient() *redis.RedisClient

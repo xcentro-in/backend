@@ -120,6 +120,13 @@ type BusinessUserDTO struct {
 	UpdatedAt string          `json:"updatedAt"`
 }
 
+// InviteUserResponse represents the response when inviting a user to a business
+type InviteUserResponse struct {
+	UserID string `json:"userId"`
+	Email  string `json:"email"`
+	Name   string `json:"name"`
+}
+
 // BusinessDetailsResponse represents the response for getting business details
 type BusinessDetailsResponse struct {
 	BID          string              `json:"bid"`
