@@ -1235,3 +1235,54 @@ func (h *VoucherHandler) GetVoucherActivity(c echo.Context) error {
 
 	return c.JSON(http.StatusOK, activity)
 }
+
+// GetVoucherPaymentDetails handles GET /vouchers/:id/payment - Get payment details for voucher
+func (h *VoucherHandler) GetVoucherPaymentDetails(c echo.Context) error {
+	h.logger.InfoWith("GetVoucherPaymentDetails API called")
+
+	// Extract voucher_id from path parameter
+	voucherID := c.Param("id")
+	if voucherID == "" {
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "MISSING_VOUCHER_ID",
+			"message": "voucher_id path parameter is required",
+		})
+	}
+
+	// Validate UUID format
+	if _, err := uuid.Parse(voucherID); err != nil {
+		h.logger.ErrorWith("Invalid voucher_id format", "error", err)
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "INVALID_VOUCHER_ID",
+			"message": "voucher_id must be a valid UUID",
+		})
+	}
+
+	// Call service
+	paymentDetails, err := h.voucherService.GetVoucherPaymentDetails(c.Request().Context(), voucherID)
+	if err != nil {
+		h.logger.ErrorWith("Failed to get voucher payment details", "voucher_id", voucherID, "error", err)
+
+		// Check for specific errors
+		errorMsg := err.Error()
+		if errorMsg == fmt.Sprintf("payment not found for voucher: %s", voucherID) {
+			return c.JSON(http.StatusNotFound, map[string]any{
+				"error":   "PAYMENT_NOT_FOUND",
+				"message": "No payment linked to this voucher. The voucher may still be in draft status.",
+			})
+		}
+
+		return c.JSON(http.StatusInternalServerError, map[string]any{
+			"error":   "SERVICE_ERROR",
+			"message": err.Error(),
+		})
+	}
+
+	h.logger.InfoWith("Voucher payment details fetched successfully",
+		"voucher_id", voucherID,
+		"payment_id", paymentDetails.PaymentID,
+		"payment_status", paymentDetails.PaymentStatus,
+		"total_amount_paid", paymentDetails.TotalAmountPaid)
+
+	return c.JSON(http.StatusOK, paymentDetails)
+}

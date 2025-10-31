@@ -72,6 +72,18 @@ type VoucherService interface {
 
 	// GetVoucherActivity retrieves complete activity history for a voucher
 	GetVoucherActivity(ctx context.Context, voucherID string) (*voucher.VoucherActivityResponse, error)
+
+	// GetVoucherPaymentDetails retrieves complete payment details for a voucher
+	GetVoucherPaymentDetails(ctx context.Context, voucherID string) (*VoucherPaymentDetailsResponse, error)
+}
+
+// ensureEmptyObject ensures that a map is never nil - returns empty map if nil
+// This prevents frontend errors when accessing nested properties
+func ensureEmptyObject(m map[string]interface{}) map[string]interface{} {
+	if m == nil {
+		return map[string]interface{}{}
+	}
+	return m
 }
 
 // VoucherServiceImpl implements the VoucherService interface
@@ -464,7 +476,13 @@ func (s *VoucherServiceImpl) GetVoucherDetails(ctx context.Context, voucherID uu
 		}
 	}
 
-	// 4. Build response with payee enrichment
+	// 4. Determine payment status
+	paymentStatus := "unpaid"
+	if v.PaymentID != nil {
+		paymentStatus = "paid"
+	}
+
+	// 5. Build response with payee enrichment
 	response := &VoucherDetailsResponse{
 		VoucherID:        v.VoucherID,
 		VoucherNumber:    v.VoucherNumber,
@@ -490,11 +508,11 @@ func (s *VoucherServiceImpl) GetVoucherDetails(ctx context.Context, voucherID uu
 		TDSSection:       v.TDSSection,
 		FeeAmount:        v.FeeAmount,
 		DiscountAmount:   v.DiscountAmount,
-		FinancialDetails: v.FinancialDetails,
-		Attachments:      v.Attachments,
+		FinancialDetails: ensureEmptyObject(v.FinancialDetails),
+		Attachments:      ensureEmptyObject(v.Attachments),
 		ExpenseCategory:  v.ExpenseCategory,
 		Description:      v.Description,
-		PaymentID:        v.PaymentID,
+		PaymentStatus:    paymentStatus,
 		ERPSyncStatus:    v.ERPSyncStatus,
 		ERPReferenceID:   v.ERPReferenceID,
 		ERPPostingDate:   v.ERPPostingDate,
@@ -1126,4 +1144,93 @@ func (s *VoucherServiceImpl) GetVoucherActivity(ctx context.Context, voucherID s
 	}
 
 	return activity, nil
+}
+
+// GetVoucherPaymentDetails retrieves complete payment details for a voucher
+func (s *VoucherServiceImpl) GetVoucherPaymentDetails(ctx context.Context, voucherID string) (*VoucherPaymentDetailsResponse, error) {
+	// Validate voucher ID
+	if voucherID == "" {
+		return nil, fmt.Errorf("voucher_id is required")
+	}
+
+	// Validate UUID format
+	if _, err := uuid.Parse(voucherID); err != nil {
+		return nil, fmt.Errorf("invalid voucher_id format: %w", err)
+	}
+
+	// Get payment details from repository
+	details, err := s.voucherRepo.GetPaymentDetailsByVoucher(ctx, voucherID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get payment details: %w", err)
+	}
+
+	// Calculate convenience fee breakdown
+	// Total fee = convenience_fee + GST_on_fee
+	// We need to reverse calculate: convenience_fee = total_fee / 1.18
+	convenienceFee := int64(0)
+	gstOnFee := int64(0)
+	if details.FeeAmount > 0 {
+		// Assuming 18% GST (can be made configurable later)
+		convenienceFee = (details.FeeAmount * 100) / 118  // Reverse calculate base fee
+		gstOnFee = details.FeeAmount - convenienceFee     // GST is the difference
+	}
+
+	// Format convenience fee rate
+	convenienceFeeRate := ""
+	if details.PaymentMethod == "card" {
+		// For cards, it's usually percentage-based
+		if details.Amount > 0 {
+			rate := (float64(convenienceFee) / float64(details.Amount)) * 100
+			convenienceFeeRate = fmt.Sprintf("%.2f%%", rate)
+		}
+	} else {
+		// For net banking/UPI, it's usually fixed
+		convenienceFeeRate = fmt.Sprintf("₹%.2f (fixed)", float64(convenienceFee)/100.0)
+	}
+
+	// Format MDR rate
+	mdrRate := ""
+	if details.SettlementAmount > 0 && details.MDRAmount > 0 {
+		rate := (float64(details.MDRAmount) / float64(details.SettlementAmount)) * 100
+		mdrRate = fmt.Sprintf("%.2f%%", rate)
+	}
+
+	response := &VoucherPaymentDetailsResponse{
+		PaymentID:        details.PaymentID,
+		VoucherID:        details.VoucherID,
+		VoucherNumber:    details.VoucherNumber,
+		PaymentStatus:    details.PaymentStatus,
+		PaymentDate:      details.PaymentDate,
+		GatewayUsed:      details.GatewayUsed,
+		GatewayPaymentID: details.GatewayPaymentID,
+
+		PaymentMethod:     details.PaymentMethod,
+		PaymentSourceType: details.PaymentSourceType,
+		CardType:          details.CardType,
+		CardCategory:      details.CardCategory,
+		LastFourDigits:    details.LastFourDigits,
+		BankName:          details.BankName,
+
+		VoucherAmount:      details.Amount,
+		ConvenienceFee:     convenienceFee,
+		ConvenienceFeeRate: convenienceFeeRate,
+		GSTOnFee:           gstOnFee,
+		GSTRate:            "18.00%",
+		TotalFeeAmount:     details.FeeAmount,
+		TotalAmountPaid:    details.TotalAmount,
+
+		SettlementStatus:      details.SettlementStatus,
+		SettledAt:             details.SettledAt,
+		SettlementAmount:      details.SettlementAmount,
+		MDRAmount:             details.MDRAmount,
+		MDRRate:               mdrRate,
+		NetSettlementAmount:   details.NetSettlementAmount,
+		SettlementReferenceID: details.SettlementReferenceID,
+		SettlementUTR:         details.SettlementUTR,
+
+		Description: details.Description,
+		Metadata:    ensureEmptyObject(details.Metadata),
+	}
+
+	return response, nil
 }

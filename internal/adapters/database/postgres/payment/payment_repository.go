@@ -10,28 +10,32 @@ import (
 	"github.com/jackc/pgx/v5"
 	"xcentro.in/internal/adapters/database/postgres/client"
 	"xcentro.in/internal/core/payment"
+	"xcentro.in/internal/shared/crypto"
 	"xcentro.in/internal/shared/logger"
 )
 
 // PgPaymentRepository implements payment.PaymentRepository using PostgreSQL
 type PgPaymentRepository struct {
-	querier client.Querier
-	logger  *logger.Logger
+	querier       client.Querier
+	logger        *logger.Logger
+	encryptionKey string
 }
 
 // NewPgPaymentRepository creates a new PostgreSQL payment repository
-func NewPgPaymentRepository(db client.DB) *PgPaymentRepository {
+func NewPgPaymentRepository(db client.DB, encryptionKey string) *PgPaymentRepository {
 	return &PgPaymentRepository{
-		querier: db,
-		logger:  logger.GetDefault(),
+		querier:       db,
+		logger:        logger.GetDefault(),
+		encryptionKey: encryptionKey,
 	}
 }
 
 // WithTx creates a new repository instance that uses a transaction
 func (r *PgPaymentRepository) WithTx(tx interface{}) payment.PaymentRepository {
 	return &PgPaymentRepository{
-		querier: tx.(client.Tx),
-		logger:  r.logger, // Preserve logger in transaction
+		querier:       tx.(client.Tx),
+		logger:        r.logger, // Preserve logger in transaction
+		encryptionKey: r.encryptionKey,
 	}
 }
 
@@ -801,15 +805,28 @@ func fetchBankAccountDetails(ctx context.Context, r *PgPaymentRepository, accoun
 	query := `
 		SELECT
 			bank_name,
-			SUBSTRING(account_number_encrypted FROM LENGTH(account_number_encrypted) - 3) as last4
+			account_number_encrypted
 		FROM xcentro.bank_accounts
 		WHERE account_id = $1
 	`
 
-	var result bankDetailsResult
-	err := r.querier.QueryRow(ctx, query, accountID).Scan(&result.BankName, &result.Last4)
+	var bankName, encryptedAccountNumber string
+	err := r.querier.QueryRow(ctx, query, accountID).Scan(&bankName, &encryptedAccountNumber)
 	if err != nil {
 		return &bankDetailsResult{BankName: "Bank", Last4: "****"}
 	}
-	return &result
+
+	// Decrypt account number to extract last 4 digits (with backwards compatibility for plaintext)
+	decryptedAccountNumber, err := crypto.DecryptBankAccountNumber(encryptedAccountNumber, r.encryptionKey)
+	if err != nil {
+		// If decryption fails, assume it's legacy plaintext data
+		// TODO: Remove this fallback after migrating all accounts to encrypted format
+		r.logger.WarnWith("Failed to decrypt account number for payment display, treating as plaintext",
+			"account_id", accountID,
+			"error", err)
+		decryptedAccountNumber = encryptedAccountNumber
+	}
+
+	last4 := crypto.ExtractLastDigits(decryptedAccountNumber, 4)
+	return &bankDetailsResult{BankName: bankName, Last4: last4}
 }

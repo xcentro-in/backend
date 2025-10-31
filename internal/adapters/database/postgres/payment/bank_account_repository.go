@@ -11,24 +11,28 @@ import (
 	"github.com/jackc/pgx/v5"
 	"xcentro.in/internal/adapters/database/postgres/client"
 	"xcentro.in/internal/core/payment"
+	"xcentro.in/internal/shared/crypto"
 )
 
 // PgBankAccountRepository implements payment.BankAccountRepository using PostgreSQL
 type PgBankAccountRepository struct {
-	querier client.Querier
+	querier       client.Querier
+	encryptionKey string
 }
 
 // NewPgBankAccountRepository creates a new PostgreSQL bank account repository
-func NewPgBankAccountRepository(db client.DB) *PgBankAccountRepository {
+func NewPgBankAccountRepository(db client.DB, encryptionKey string) *PgBankAccountRepository {
 	return &PgBankAccountRepository{
-		querier: db,
+		querier:       db,
+		encryptionKey: encryptionKey,
 	}
 }
 
 // WithTx creates a new repository instance that uses a transaction
 func (r *PgBankAccountRepository) WithTx(tx interface{}) payment.BankAccountRepository {
 	return &PgBankAccountRepository{
-		querier: tx.(client.Tx),
+		querier:       tx.(client.Tx),
+		encryptionKey: r.encryptionKey,
 	}
 }
 
@@ -41,8 +45,11 @@ func (r *PgBankAccountRepository) CreateBankAccount(ctx context.Context, account
 	hash := sha256.Sum256([]byte(account.AccountNumber))
 	accountNumberHash := hex.EncodeToString(hash[:])
 
-	// Phase 4.3.5: Store plaintext in encrypted field (encryption in Phase 4.5)
-	accountNumberPlaintext := account.AccountNumber
+	// Encrypt account number using AES-256-GCM
+	encryptedAccountNumber, err := crypto.EncryptBankAccountNumber(account.AccountNumber, r.encryptionKey)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt account number: %w", err)
+	}
 
 	query := `
 		INSERT INTO xcentro.bank_accounts (
@@ -62,10 +69,10 @@ func (r *PgBankAccountRepository) CreateBankAccount(ctx context.Context, account
 		}
 	}
 
-	err := r.querier.QueryRow(ctx, query,
+	err = r.querier.QueryRow(ctx, query,
 		account.BusinessID,
 		accountNumberHash,
-		accountNumberPlaintext, // TODO-PHASE-4.5: Replace with encryption
+		encryptedAccountNumber,
 		account.IFSCCode,
 		account.AccountHolderName,
 		account.BankName,
@@ -98,11 +105,12 @@ func (r *PgBankAccountRepository) GetBankAccountByID(ctx context.Context, accoun
 	var account payment.BankAccount
 	var bankName, branchName, accountType *string
 	var metadataJSON []byte
+	var encryptedAccountNumber string
 
 	err := r.querier.QueryRow(ctx, query, accountID).Scan(
 		&account.AccountID,
 		&account.BusinessID,
-		&account.AccountNumber, // TODO-PHASE-4.5: Replace with decryption
+		&encryptedAccountNumber,
 		&account.IFSCCode,
 		&account.AccountHolderName,
 		&bankName,
@@ -119,6 +127,17 @@ func (r *PgBankAccountRepository) GetBankAccountByID(ctx context.Context, accoun
 			return nil, nil
 		}
 		return nil, fmt.Errorf("failed to get bank account: %w", err)
+	}
+
+	// Decrypt account number (with backwards compatibility for plaintext)
+	decryptedAccountNumber, err := crypto.DecryptBankAccountNumber(encryptedAccountNumber, r.encryptionKey)
+	if err != nil {
+		// If decryption fails, assume it's legacy plaintext data
+		// TODO: Remove this fallback after migrating all accounts to encrypted format
+		fmt.Printf("[PgBankAccountRepository] WARN: Failed to decrypt account %s, treating as plaintext: %v\n", account.AccountID, err)
+		account.AccountNumber = encryptedAccountNumber
+	} else {
+		account.AccountNumber = decryptedAccountNumber
 	}
 
 	// Handle NULL fields
@@ -140,9 +159,7 @@ func (r *PgBankAccountRepository) GetBankAccountByID(ctx context.Context, accoun
 	}
 
 	// Extract last five digits for display
-	if len(account.AccountNumber) >= 5 {
-		account.LastFiveDigits = account.AccountNumber[len(account.AccountNumber)-5:]
-	}
+	account.LastFiveDigits = crypto.ExtractLastDigits(account.AccountNumber, 5)
 
 	return &account, nil
 }
@@ -171,11 +188,12 @@ func (r *PgBankAccountRepository) GetBankAccountsByBusinessID(ctx context.Contex
 		var account payment.BankAccount
 		var bankName, branchName, accountType *string
 		var metadataJSON []byte
+		var encryptedAccountNumber string
 
 		err := rows.Scan(
 			&account.AccountID,
 			&account.BusinessID,
-			&account.AccountNumber, // TODO-PHASE-4.5: Replace with decryption
+			&encryptedAccountNumber,
 			&account.IFSCCode,
 			&account.AccountHolderName,
 			&bankName,
@@ -188,6 +206,17 @@ func (r *PgBankAccountRepository) GetBankAccountsByBusinessID(ctx context.Contex
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan bank account: %w", err)
+		}
+
+		// Decrypt account number (with backwards compatibility for plaintext)
+		decryptedAccountNumber, err := crypto.DecryptBankAccountNumber(encryptedAccountNumber, r.encryptionKey)
+		if err != nil {
+			// If decryption fails, assume it's legacy plaintext data
+			// TODO: Remove this fallback after migrating all accounts to encrypted format
+			fmt.Printf("[PgBankAccountRepository] WARN: Failed to decrypt account %s, treating as plaintext: %v\n", account.AccountID, err)
+			account.AccountNumber = encryptedAccountNumber
+		} else {
+			account.AccountNumber = decryptedAccountNumber
 		}
 
 		// Handle NULL fields
@@ -209,9 +238,7 @@ func (r *PgBankAccountRepository) GetBankAccountsByBusinessID(ctx context.Contex
 		}
 
 		// Extract last five digits for display
-		if len(account.AccountNumber) >= 5 {
-			account.LastFiveDigits = account.AccountNumber[len(account.AccountNumber)-5:]
-		}
+		account.LastFiveDigits = crypto.ExtractLastDigits(account.AccountNumber, 5)
 
 		accounts = append(accounts, &account)
 	}

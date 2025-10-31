@@ -465,3 +465,134 @@ func DecryptFromEasebuzz(encryptedData string, encryptionKey string) (string, er
 		IV:      nil, // IV is in the data
 	})
 }
+
+// ============================================================================
+// Bank Account Number Encryption (AES-256-GCM for PCI DSS Compliance)
+// ============================================================================
+
+// EncryptBankAccountNumber encrypts a bank account number using AES-256-GCM
+// This provides authenticated encryption with additional data (AEAD) for maximum security
+//
+// Parameters:
+//   - accountNumber: Plaintext bank account number
+//   - encryptionKey: 32-byte encryption key (will be hashed if longer)
+//
+// Returns:
+//   - Encrypted data in format "base64_encrypted:base64_nonce"
+//   - Error if encryption fails
+//
+// Note: Uses GCM mode (not CBC) for authenticated encryption
+func EncryptBankAccountNumber(accountNumber string, encryptionKey string) (string, error) {
+	if accountNumber == "" {
+		return "", fmt.Errorf("account number cannot be empty")
+	}
+
+	// Derive 32-byte key for AES-256
+	key := deriveKey(encryptionKey, 32)
+
+	// Create AES cipher
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", fmt.Errorf("failed to create cipher: %w", err)
+	}
+
+	// Create GCM mode
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", fmt.Errorf("failed to create GCM: %w", err)
+	}
+
+	// Generate random nonce (12 bytes for GCM)
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		return "", fmt.Errorf("failed to generate nonce: %w", err)
+	}
+
+	// Encrypt and authenticate
+	ciphertext := gcm.Seal(nil, nonce, []byte(accountNumber), nil)
+
+	// Encode to base64
+	encryptedB64 := base64.StdEncoding.EncodeToString(ciphertext)
+	nonceB64 := base64.StdEncoding.EncodeToString(nonce)
+
+	// Return in format "encrypted:nonce"
+	return fmt.Sprintf("%s:%s", encryptedB64, nonceB64), nil
+}
+
+// DecryptBankAccountNumber decrypts a bank account number using AES-256-GCM
+//
+// Parameters:
+//   - encryptedData: Encrypted string in format "base64_encrypted:base64_nonce"
+//   - encryptionKey: 32-byte encryption key (same as used for encryption)
+//
+// Returns:
+//   - Decrypted plaintext bank account number
+//   - Error if decryption or authentication fails
+func DecryptBankAccountNumber(encryptedData string, encryptionKey string) (string, error) {
+	if encryptedData == "" {
+		return "", fmt.Errorf("encrypted data cannot be empty")
+	}
+
+	// Split the data to get encrypted content and nonce
+	parts := strings.Split(encryptedData, ":")
+	if len(parts) != 2 {
+		return "", fmt.Errorf("invalid encrypted data format. Expected 'encrypted:nonce', got %d parts", len(parts))
+	}
+
+	encryptedB64, nonceB64 := parts[0], parts[1]
+
+	// Decode from base64
+	ciphertext, err := base64.StdEncoding.DecodeString(encryptedB64)
+	if err != nil {
+		return "", fmt.Errorf("failed to decode encrypted data: %w", err)
+	}
+
+	nonce, err := base64.StdEncoding.DecodeString(nonceB64)
+	if err != nil {
+		return "", fmt.Errorf("failed to decode nonce: %w", err)
+	}
+
+	// Derive 32-byte key for AES-256
+	key := deriveKey(encryptionKey, 32)
+
+	// Create AES cipher
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", fmt.Errorf("failed to create cipher: %w", err)
+	}
+
+	// Create GCM mode
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", fmt.Errorf("failed to create GCM: %w", err)
+	}
+
+	// Validate nonce size
+	if len(nonce) != gcm.NonceSize() {
+		return "", fmt.Errorf("invalid nonce size: expected %d bytes, got %d bytes", gcm.NonceSize(), len(nonce))
+	}
+
+	// Decrypt and verify authentication
+	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to decrypt or authenticate: %w", err)
+	}
+
+	return string(plaintext), nil
+}
+
+// ExtractLastDigits extracts the last N digits from a bank account number
+// This is a utility function to avoid exposing full account numbers
+//
+// Parameters:
+//   - accountNumber: Full plaintext account number
+//   - numDigits: Number of digits to extract (typically 4 or 5)
+//
+// Returns:
+//   - Last N digits, or entire number if shorter than N
+func ExtractLastDigits(accountNumber string, numDigits int) string {
+	if len(accountNumber) <= numDigits {
+		return accountNumber
+	}
+	return accountNumber[len(accountNumber)-numDigits:]
+}

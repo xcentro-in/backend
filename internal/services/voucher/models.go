@@ -183,13 +183,13 @@ type VoucherDetailsResponse struct {
 	DiscountAmount int64   `json:"discount_amount,omitempty"`
 
 	// Additional details
-	FinancialDetails map[string]interface{} `json:"financial_details,omitempty"`
-	Attachments      map[string]interface{} `json:"attachments,omitempty"`
+	FinancialDetails map[string]interface{} `json:"financial_details"`
+	Attachments      map[string]interface{} `json:"attachments"`
 	ExpenseCategory  string                 `json:"expense_category,omitempty"`
 	Description      string                 `json:"description,omitempty"`
 
-	// Payment link
-	PaymentID *uuid.UUID `json:"payment_id,omitempty"`
+	// Payment status
+	PaymentStatus string `json:"payment_status"` // "paid" if payment_id exists, "unpaid" otherwise
 
 	// ERP integration
 	ERPSyncStatus   voucher.ERPSyncStatus `json:"erp_sync_status"`
@@ -355,4 +355,47 @@ type VouchersByPayeeSummary struct {
 	TotalAmount    int64 `json:"total_amount"`   // Sum of net amounts (in paise)
 	DraftCount     int64 `json:"draft_count"`
 	CompletedCount int64 `json:"completed_count"`
+}
+
+// VoucherPaymentDetailsResponse represents complete payment details for a voucher
+type VoucherPaymentDetailsResponse struct {
+	// Payment identification
+	PaymentID        string    `json:"payment_id"`
+	VoucherID        string    `json:"voucher_id"`
+	VoucherNumber    string    `json:"voucher_number"`
+	PaymentStatus    string    `json:"payment_status"`      // success, pending, failed
+	PaymentDate      time.Time `json:"payment_date"`        // When payment was made
+	GatewayUsed      string    `json:"gateway_used"`        // jiopay, easebuzz
+	GatewayPaymentID string    `json:"gateway_payment_id"`  // Gateway transaction ID
+
+	// Payment source details
+	PaymentMethod     string `json:"payment_method"`      // card, net_banking, upi
+	PaymentSourceType string `json:"payment_source_type"` // credit, debit, savings, current
+	CardType          string `json:"card_type"`           // visa, mastercard, rupay, amex, diners (for cards)
+	CardCategory      string `json:"card_category"`       // credit, debit (for cards)
+	LastFourDigits    string `json:"last_four_digits"`    // Last 4 digits of card/account
+	BankName          string `json:"bank_name"`           // Bank name for net banking or card issuer
+
+	// Payment amount breakdown (all in paise)
+	VoucherAmount      int64 `json:"voucher_amount"`       // Original voucher amount (what vendor gets)
+	ConvenienceFee     int64 `json:"convenience_fee"`      // Service charge (before GST)
+	ConvenienceFeeRate string `json:"convenience_fee_rate"` // e.g., "2.00%" or "₹28.00 (fixed)"
+	GSTOnFee           int64  `json:"gst_on_fee"`           // 18% GST on convenience fee
+	GSTRate            string `json:"gst_rate"`             // e.g., "18.00%"
+	TotalFeeAmount     int64  `json:"total_fee_amount"`     // convenience_fee + gst_on_fee
+	TotalAmountPaid    int64  `json:"total_amount_paid"`    // voucher_amount + total_fee_amount (what customer paid)
+
+	// Settlement details (what merchant receives)
+	SettlementStatus       string     `json:"settlement_status"`        // pending, settled, failed
+	SettledAt              *time.Time `json:"settled_at"`               // When funds were settled to merchant
+	SettlementAmount       int64      `json:"settlement_amount"`        // Amount before MDR deduction
+	MDRAmount              int64      `json:"mdr_amount"`               // Merchant Discount Rate (gateway fees)
+	MDRRate                string     `json:"mdr_rate"`                 // e.g., "1.90%"
+	NetSettlementAmount    int64      `json:"net_settlement_amount"`    // Final amount received (settlement_amount - mdr_amount)
+	SettlementReferenceID  string     `json:"settlement_reference_id"`  // Gateway settlement reference
+	SettlementUTR          string     `json:"settlement_utr"`           // Bank UTR for settlement
+
+	// Additional payment metadata
+	Description string                 `json:"description"`
+	Metadata    map[string]interface{} `json:"metadata"`
 }

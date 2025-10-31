@@ -11,28 +11,32 @@ import (
 	"github.com/jackc/pgx/v5"
 	"xcentro.in/internal/adapters/database/postgres/client"
 	"xcentro.in/internal/core/payee"
+	"xcentro.in/internal/shared/crypto"
 	"xcentro.in/internal/shared/logger"
 )
 
 // PgPayeeBankAccountRepository implements payee.PayeeBankAccountRepository using PostgreSQL
 type PgPayeeBankAccountRepository struct {
-	querier client.Querier
-	logger  *logger.Logger
+	querier       client.Querier
+	logger        *logger.Logger
+	encryptionKey string
 }
 
 // NewPgPayeeBankAccountRepository creates a new PostgreSQL payee bank account repository
-func NewPgPayeeBankAccountRepository(db client.DB) payee.PayeeBankAccountRepository {
+func NewPgPayeeBankAccountRepository(db client.DB, encryptionKey string) payee.PayeeBankAccountRepository {
 	return &PgPayeeBankAccountRepository{
-		querier: db,
-		logger:  logger.GetDefault(),
+		querier:       db,
+		logger:        logger.GetDefault(),
+		encryptionKey: encryptionKey,
 	}
 }
 
 // WithTx creates a new repository instance that uses a transaction
 func (r *PgPayeeBankAccountRepository) WithTx(tx client.Tx) payee.PayeeBankAccountRepository {
 	return &PgPayeeBankAccountRepository{
-		querier: tx,
-		logger:  r.logger,
+		querier:       tx,
+		logger:        r.logger,
+		encryptionKey: r.encryptionKey,
 	}
 }
 
@@ -42,8 +46,11 @@ func (r *PgPayeeBankAccountRepository) CreateBankAccount(ctx context.Context, ac
 	hash := sha256.Sum256([]byte(account.AccountNumber))
 	accountNumberHash := hex.EncodeToString(hash[:])
 
-	// Phase 5.3: Store plaintext in encrypted field (encryption in Phase 5.5)
-	accountNumberPlaintext := account.AccountNumber
+	// Encrypt account number using AES-256-GCM
+	encryptedAccountNumber, err := crypto.EncryptBankAccountNumber(account.AccountNumber, r.encryptionKey)
+	if err != nil {
+		return fmt.Errorf("failed to encrypt account number: %w", err)
+	}
 
 	query := `
 		INSERT INTO xcentro.payee_bank_accounts (
@@ -58,7 +65,6 @@ func (r *PgPayeeBankAccountRepository) CreateBankAccount(ctx context.Context, ac
 	`
 
 	var bankVerificationDataJSON, metadataJSON []byte
-	var err error
 
 	if account.VerificationData != nil {
 		bankVerificationDataJSON, err = json.Marshal(account.VerificationData)
@@ -82,7 +88,7 @@ func (r *PgPayeeBankAccountRepository) CreateBankAccount(ctx context.Context, ac
 
 	err = r.querier.QueryRow(ctx, query,
 		account.PayeeID,
-		accountNumberPlaintext, // TODO-PHASE-5.5: Replace with encryption
+		encryptedAccountNumber,
 		accountNumberHash,
 		account.IFSCCode,
 		account.BankName,
@@ -137,11 +143,12 @@ func (r *PgPayeeBankAccountRepository) FindByID(ctx context.Context, accountID s
 	var castlerBeneficiaryID sql.NullString
 	var bankVerificationDataJSON, metadataJSON []byte
 	var updatedAt sql.NullTime
+	var encryptedAccountNumber string
 
 	err := r.querier.QueryRow(ctx, query, accountID).Scan(
 		&account.AccountID,
 		&account.PayeeID,
-		&account.AccountNumber,
+		&encryptedAccountNumber,
 		&account.AccountNumberHash,
 		&account.IFSCCode,
 		&bankName,
@@ -171,6 +178,19 @@ func (r *PgPayeeBankAccountRepository) FindByID(ctx context.Context, accountID s
 			"error", err,
 			"account_id", accountID)
 		return nil, fmt.Errorf("failed to find payee bank account: %w", err)
+	}
+
+	// Decrypt account number (with backwards compatibility for plaintext)
+	decryptedAccountNumber, err := crypto.DecryptBankAccountNumber(encryptedAccountNumber, r.encryptionKey)
+	if err != nil {
+		// If decryption fails, assume it's legacy plaintext data
+		// TODO: Remove this fallback after migrating all accounts to encrypted format
+		r.logger.WarnWith("Failed to decrypt account number, treating as plaintext",
+			"account_id", accountID,
+			"error", err)
+		account.AccountNumber = encryptedAccountNumber
+	} else {
+		account.AccountNumber = decryptedAccountNumber
 	}
 
 	// Handle nullable fields
@@ -238,11 +258,12 @@ func (r *PgPayeeBankAccountRepository) FindByPayeeID(ctx context.Context, payeeI
 		var castlerBeneficiaryID sql.NullString
 		var bankVerificationDataJSON, metadataJSON []byte
 		var updatedAt sql.NullTime
+		var encryptedAccountNumber string
 
 		err := rows.Scan(
 			&account.AccountID,
 			&account.PayeeID,
-			&account.AccountNumber,
+			&encryptedAccountNumber,
 			&account.AccountNumberHash,
 			&account.IFSCCode,
 			&bankName,
@@ -269,10 +290,25 @@ func (r *PgPayeeBankAccountRepository) FindByPayeeID(ctx context.Context, payeeI
 			return nil, fmt.Errorf("failed to scan payee bank account: %w", err)
 		}
 
+		// Decrypt account number (with backwards compatibility for plaintext)
+		decryptedAccountNumber, err := crypto.DecryptBankAccountNumber(encryptedAccountNumber, r.encryptionKey)
+		if err != nil {
+			// If decryption fails, assume it's legacy plaintext data
+			// TODO: Remove this fallback after migrating all accounts to encrypted format
+			r.logger.WarnWith("Failed to decrypt account number, treating as plaintext",
+				"account_id", account.AccountID,
+				"payee_id", payeeID,
+				"error", err)
+			account.AccountNumber = encryptedAccountNumber
+		} else {
+			account.AccountNumber = decryptedAccountNumber
+		}
+
 		// Handle nullable fields
 		account.BankName = bankName.String
 		account.BranchName = branchName.String
 		account.AccountLabel = accountLabel.String
+		account.CastlerBeneficiaryID = castlerBeneficiaryID.String
 		if verifiedAt.Valid {
 			account.VerifiedAt = &verifiedAt.Time
 		}

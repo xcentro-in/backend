@@ -13,21 +13,22 @@ import (
 // Config holds the application configuration.
 // Sensitive fields (like Password) are excluded from JSON marshalling.
 type Config struct {
-	Database          DatabaseConfig          `json:"database"`
-	MigrationDatabase MigrationDatabaseConfig `json:"migration_database"`
-	Server            ServerConfig            `json:"server"`
-	Rcache            RedisConfig             `json:"rcache"`
-	JWT               JWTSecretConfig         `json:"jwt"`
-	Bcrypt            BcryptConfig            `json:"bcrypt"`
-	Cookie            CookieConfig            `json:"cookie"`
-	CORS              CORSConfig              `json:"cors"`
-	S3                S3Config                `json:"s3"`
-	SES               SESConfig               `json:"ses"`
-	Castler           CastlerConfig           `json:"castler"`
-	JioPay            JioPayConfig            `json:"jiopay"`
-	Easebuzz          EasebuzzConfig          `json:"easebuzz"`
-	CloudWatch        CloudWatchConfig        `json:"cloudwatch"`
-	Workers           WorkersConfig           `json:"workers"`
+	Database             DatabaseConfig          `json:"database"`
+	MigrationDatabase    MigrationDatabaseConfig `json:"migration_database"`
+	Server               ServerConfig            `json:"server"`
+	Rcache               RedisConfig             `json:"rcache"`
+	JWT                  JWTSecretConfig         `json:"jwt"`
+	Bcrypt               BcryptConfig            `json:"bcrypt"`
+	Cookie               CookieConfig            `json:"cookie"`
+	CORS                 CORSConfig              `json:"cors"`
+	S3                   S3Config                `json:"s3"`
+	SES                  SESConfig               `json:"ses"`
+	Castler              CastlerConfig           `json:"castler"`
+	JioPay               JioPayConfig            `json:"jiopay"`
+	Easebuzz             EasebuzzConfig          `json:"easebuzz"`
+	CloudWatch           CloudWatchConfig        `json:"cloudwatch"`
+	Workers              WorkersConfig           `json:"workers"`
+	BankAccountEncryption BankAccountEncryptionConfig `json:"bank_account_encryption"`
 }
 
 // JWTSecretConfig holds JWT secret configuration.
@@ -201,6 +202,11 @@ type NotificationWorkerConfig struct {
 	ProcessingTimeoutMinutes int `json:"processing_timeout_minutes" env:"NOTIFICATION_PROCESSING_TIMEOUT_MINUTES" env-default:"10"`
 	RecoveryWorkers          int `json:"recovery_workers" env:"NOTIFICATION_RECOVERY_WORKERS" env-default:"1"`
 	RecoveryIntervalSeconds  int `json:"recovery_interval_seconds" env:"NOTIFICATION_RECOVERY_INTERVAL_SECONDS" env-default:"60"`
+}
+
+// BankAccountEncryptionConfig holds bank account encryption configuration for PCI DSS compliance.
+type BankAccountEncryptionConfig struct {
+	EncryptionKey string `json:"-" env:"BANK_ACCOUNT_ENCRYPTION_KEY" env-required:"true"` // AES-256-GCM key (sensitive, 32 bytes recommended)
 }
 
 var (

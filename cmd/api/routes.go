@@ -85,9 +85,9 @@ func registerV1AuthRoutes(clients *externalClients, cfg *config.Config, group *e
 func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
 	factory := &serviceFactory{clients, cfg}
 
-	paymentRepository := paymentRepo.NewPgPaymentRepository(clients.db)
+	paymentRepository := paymentRepo.NewPgPaymentRepository(clients.db, cfg.BankAccountEncryption.EncryptionKey)
 	storedCardRepository := paymentRepo.NewPgStoredCardRepository(clients.db)
-	bankAccountRepository := paymentRepo.NewPgBankAccountRepository(clients.db)
+	bankAccountRepository := paymentRepo.NewPgBankAccountRepository(clients.db, cfg.BankAccountEncryption.EncryptionKey)
 
 	_, _, _, _, _, busSvc, authSvc := factory.createCoreServices(nil)
 
@@ -102,11 +102,11 @@ func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group
 	databaseFeeCalculator := business_rules.NewDatabaseFeeCalculator(feeRulesRepository)
 	paymentSourceService := payments.NewPaymentSourceService(walletService, databaseFeeCalculator)
 
-	voucherRepository := voucherRepo.NewPostgresVoucherRepository(clients.db)
+	voucherRepository := voucherRepo.NewPostgresVoucherRepository(clients.db, cfg.BankAccountEncryption.EncryptionKey)
 	approvalRepository := voucherRepo.NewPostgresApprovalRepository(clients.db)
 	queueRepository := voucherRepo.NewPostgresERPSyncQueueRepository(clients.db)
 	voucherCoreService := coreVoucher.NewVoucherService(voucherRepository)
-	businessPayeeRelationRepo := payeeRepo.NewPgBusinessPayeeRelationRepository(clients.db)
+	businessPayeeRelationRepo := payeeRepo.NewPgBusinessPayeeRelationRepository(clients.db, cfg.BankAccountEncryption.EncryptionKey)
 	voucherService := voucherSvc.NewVoucherService(voucherRepository, approvalRepository, queueRepository, voucherCoreService, businessPayeeRelationRepo)
 
 	paymentService := payments.NewPaymentService(orchestrator, paymentRepository, storedCardRepository, bankAccountRepository, walletService, feeCalculator, clients.txManager, voucherService, busSvc, logger.GetDefault())
@@ -164,11 +164,11 @@ func registerV1VoucherRoutes(clients *externalClients, cfg *config.Config, group
 	factory := &serviceFactory{clients, cfg}
 	_, _, _, businessUserRelRepo, _, _, authSvc := factory.createCoreServices(nil)
 
-	voucherRepository := voucherRepo.NewPostgresVoucherRepository(clients.db)
+	voucherRepository := voucherRepo.NewPostgresVoucherRepository(clients.db, cfg.BankAccountEncryption.EncryptionKey)
 	approvalRepository := voucherRepo.NewPostgresApprovalRepository(clients.db)
 	queueRepository := voucherRepo.NewPostgresERPSyncQueueRepository(clients.db)
 	voucherCoreService := coreVoucher.NewVoucherService(voucherRepository)
-	businessPayeeRelationRepo := payeeRepo.NewPgBusinessPayeeRelationRepository(clients.db)
+	businessPayeeRelationRepo := payeeRepo.NewPgBusinessPayeeRelationRepository(clients.db, cfg.BankAccountEncryption.EncryptionKey)
 	voucherService := voucherSvc.NewVoucherService(voucherRepository, approvalRepository, queueRepository, voucherCoreService, businessPayeeRelationRepo)
 
 	voucherGroup := group.Group("/vouchers")
@@ -178,8 +178,8 @@ func registerV1VoucherRoutes(clients *externalClients, cfg *config.Config, group
 func registerV1PayoutRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
 	transferRepository := payoutRepo.NewPostgresPayoutTransferRepository(clients.db)
 	configRepository := payoutRepo.NewPostgresPayoutConfigurationRepository(clients.db)
-	voucherRepository := voucherRepo.NewPostgresVoucherRepository(clients.db)
-	bankAccountRepository := payeeRepo.NewPgPayeeBankAccountRepository(clients.db)
+	voucherRepository := voucherRepo.NewPostgresVoucherRepository(clients.db, cfg.BankAccountEncryption.EncryptionKey)
+	bankAccountRepository := payeeRepo.NewPgPayeeBankAccountRepository(clients.db, cfg.BankAccountEncryption.EncryptionKey)
 
 	providerFactory := factory.NewPayoutProviderFactory(cfg)
 	payoutService := payoutSvc.NewPayoutService(voucherRepository, transferRepository, bankAccountRepository, configRepository, providerFactory)

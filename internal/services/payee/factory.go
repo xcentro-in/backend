@@ -40,8 +40,8 @@ func (f *PayeeServiceFactory) NewPayeeService() *PayeeService {
 	payeeBillerRepo := payeeRepo.NewPgPayeeBillerRepository(f.db)
 	payeeBillerAccountRepo := payeeRepo.NewPgPayeeBillerAccountRepository(f.db)
 	payeeEmployeeRepo := payeeRepo.NewPgPayeeEmployeeRepository(f.db)
-	payeeBankAccountRepo := payeeRepo.NewPgPayeeBankAccountRepository(f.db)
-	businessPayeeRelationRepo := payeeRepo.NewPgBusinessPayeeRelationRepository(f.db)
+	payeeBankAccountRepo := payeeRepo.NewPgPayeeBankAccountRepository(f.db, f.config.BankAccountEncryption.EncryptionKey)
+	businessPayeeRelationRepo := payeeRepo.NewPgBusinessPayeeRelationRepository(f.db, f.config.BankAccountEncryption.EncryptionKey)
 
 	// Create payout provider client (Castler with encryption support)
 	castlerClient, err := castler.NewCastlerClient(

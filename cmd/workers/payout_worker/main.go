@@ -39,7 +39,7 @@ func main() {
 	fmt.Println("✅ Database connection established")
 
 	// Create repositories
-	voucherRepository := voucherRepo.NewPostgresVoucherRepository(db)
+	voucherRepository := voucherRepo.NewPostgresVoucherRepository(db, cfg.BankAccountEncryption.EncryptionKey)
 	transferRepository := payoutRepo.NewPostgresPayoutTransferRepository(db)
 	configRepository := payoutRepo.NewPostgresPayoutConfigurationRepository(db)
 	mappingRepository := payoutRepo.NewPostgresProviderMappingRepository(db)

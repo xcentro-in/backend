@@ -103,6 +103,11 @@ type VoucherRepository interface {
 	// - Approval actions (request, approve, reject, request_changes)
 	// - Payment activities (TODO: when payment activity table is created)
 	GetVoucherActivity(ctx context.Context, voucherID string) (*VoucherActivityResponse, error)
+
+	// GetPaymentDetailsByVoucher retrieves complete payment details for a voucher
+	// Returns payment breakdown including convenience fees, GST, settlement status, etc.
+	// Returns error if voucher not found or payment not linked
+	GetPaymentDetailsByVoucher(ctx context.Context, voucherID string) (*VoucherPaymentDetails, error)
 }
 
 // VoucherFilters defines filter criteria for listing vouchers

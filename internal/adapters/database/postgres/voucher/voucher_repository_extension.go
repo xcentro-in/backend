@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"xcentro.in/internal/core/voucher"
+	"xcentro.in/internal/shared/crypto"
 )
 
 // GetVouchersByRelation retrieves all vouchers for a specific payee relation with payment method details
@@ -33,7 +34,7 @@ func (r *PostgresVoucherRepository) GetVouchersByRelation(ctx context.Context, b
 	}
 
 	// Main query with LEFT JOINs to payments, stored_cards, and bank_accounts
-	// Note: account_number_encrypted currently stores plaintext (TODO-PHASE-4.5 for actual encryption)
+	// Fetch encrypted bank account and decrypt in Go code
 	query := `
 		SELECT
 			pv.voucher_id,
@@ -45,16 +46,8 @@ func (r *PostgresVoucherRepository) GetVouchersByRelation(ctx context.Context, b
 			pv.payment_id,
 			p.status as payment_status,
 			p.payment_source_type,
-			CASE
-				WHEN p.payment_source_type = 'card' THEN sc.last_four_digits
-				WHEN p.payment_source_type = 'bank_account' THEN
-					CASE
-						WHEN LENGTH(ba.account_number_encrypted) >= 5
-						THEN RIGHT(ba.account_number_encrypted, 5)
-						ELSE ba.account_number_encrypted
-					END
-				ELSE ''
-			END as source_digits
+			COALESCE(sc.last_four_digits, '') as card_last_four,
+			COALESCE(ba.account_number_encrypted, '') as bank_account_encrypted
 		FROM xcentro.payment_vouchers pv
 		INNER JOIN xcentro.business_payee_relation bpr
 			ON pv.business_id = bpr.business_id
@@ -87,7 +80,8 @@ func (r *PostgresVoucherRepository) GetVouchersByRelation(ctx context.Context, b
 		var paymentID sql.NullString
 		var paymentStatus sql.NullString
 		var paymentSourceType sql.NullString
-		var sourceDigits sql.NullString
+		var cardLastFour string
+		var bankAccountEncrypted string
 
 		err := rows.Scan(
 			&v.VoucherID,
@@ -99,7 +93,8 @@ func (r *PostgresVoucherRepository) GetVouchersByRelation(ctx context.Context, b
 			&paymentID,
 			&paymentStatus,
 			&paymentSourceType,
-			&sourceDigits,
+			&cardLastFour,
+			&bankAccountEncrypted,
 		)
 		if err != nil {
 			return nil, 0, fmt.Errorf("failed to scan voucher row: %w", err)
@@ -124,9 +119,21 @@ func (r *PostgresVoucherRepository) GetVouchersByRelation(ctx context.Context, b
 		}
 		if paymentSourceType.Valid {
 			v.PaymentSourceType = paymentSourceType.String
-		}
-		if sourceDigits.Valid {
-			v.PaymentSourceDigits = sourceDigits.String
+
+			// Decrypt and extract last digits based on payment source type
+			if paymentSourceType.String == "card" && cardLastFour != "" {
+				v.PaymentSourceDigits = cardLastFour
+			} else if paymentSourceType.String == "bank_account" && bankAccountEncrypted != "" {
+				// Decrypt bank account to get last digits (with backwards compatibility for plaintext)
+				decryptedAccountNumber, err := crypto.DecryptBankAccountNumber(bankAccountEncrypted, r.encryptionKey)
+				if err != nil {
+					// If decryption fails, assume it's legacy plaintext data
+					// TODO: Remove this fallback after migrating all accounts to encrypted format
+					fmt.Printf("[VoucherRepositoryExtension] WARN: Failed to decrypt bank account for voucher %s, treating as plaintext: %v\n", v.VoucherID, err)
+					decryptedAccountNumber = bankAccountEncrypted
+				}
+				v.PaymentSourceDigits = crypto.ExtractLastDigits(decryptedAccountNumber, 5)
+			}
 		}
 
 		vouchersList = append(vouchersList, v)
