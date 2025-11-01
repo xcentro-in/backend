@@ -17,6 +17,7 @@ const (
 	GSTIN       DocumentType = 23
 	CIN         DocumentType = 15
 	AADHAAR     DocumentType = 472 // Used for both LINK and STATUS actions
+	BANK_VERIFY DocumentType = 92
 )
 
 // DocumentInfo holds information about each document type including its endpoint
@@ -62,6 +63,11 @@ var DocumentRegistry = map[DocumentType]DocumentInfo{
 		Type:     AADHAAR,
 		Name:     "AADHAAR",
 		Endpoint: "https://www.truthscreen.com/api/v1.0/eaadhaardigilocker",
+	},
+	BANK_VERIFY: {
+		Type:     BANK_VERIFY,
+		Name:     "BANK_VERIFY",
+		Endpoint: "https://www.truthscreen.com/v1/apicall/bank/bankAccountVerification",
 	},
 }
 
@@ -447,4 +453,53 @@ func GetDocumentName(docType DocumentType) string {
 func IsValidDocumentType(docType DocumentType) bool {
 	_, exists := DocumentRegistry[docType]
 	return exists
+}
+
+// =============================================================================
+// Bank Verification Document Types
+// =============================================================================
+
+// BankVerificationRequest represents the request structure for bank verification
+type BankVerificationRequest struct {
+	DocType       DocumentType `json:"docType"`
+	TransID       string       `json:"transID"`
+	AccountNumber string       `json:"beneAccNo"`
+	IFSC          string       `json:"ifsc"`
+}
+
+// NewBankVerificationRequest creates a new BankVerificationRequest with default DocType and action
+func NewBankVerificationRequest(transID, accountNumber, ifsc string) *BankVerificationRequest {
+	req := &BankVerificationRequest{
+		DocType:       BANK_VERIFY,
+		TransID:       transID,
+		AccountNumber: accountNumber,
+		IFSC:          ifsc,
+	}
+
+	return req
+}
+
+func (r BankVerificationRequest) GetDocType() DocumentType {
+	return r.DocType
+}
+
+func (r BankVerificationRequest) Validate() error {
+	if r.TransID == "" {
+		return fmt.Errorf("transID is required")
+	}
+	if r.AccountNumber == "" {
+		return fmt.Errorf("accountNumber is required")
+	}
+	if r.IFSC == "" {
+		return fmt.Errorf("ifscCode is required")
+	}
+	return nil
+}
+
+func (r BankVerificationRequest) ToJSON() (string, error) {
+	jsonBytes, err := json.Marshal(r)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal Bank verification request: %v", err)
+	}
+	return string(jsonBytes), nil
 }

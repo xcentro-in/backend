@@ -956,8 +956,11 @@ func (h *PaymentHandler) GetPaymentSourcesWithFees(c echo.Context) error {
 		})
 	}
 
-	fmt.Printf("📥 Request: Business ID: %s, Context: %s, Amount: %d\n",
-		req.BusinessID, req.PaymentContext, req.BaseAmount)
+	// Round base amount to nearest integer (paise)
+	baseAmountInt := int64(req.BaseAmount + 0.5) // Round to nearest int64
+
+	fmt.Printf("📥 Request: Business ID: %s, Context: %s, Amount: %.2f (rounded to %d paise)\n",
+		req.BusinessID, req.PaymentContext, req.BaseAmount, baseAmountInt)
 
 	// Validate payment context
 	paymentContext := payment.PaymentContext(req.PaymentContext)
@@ -970,8 +973,8 @@ func (h *PaymentHandler) GetPaymentSourcesWithFees(c echo.Context) error {
 	}
 
 	// Validate base amount
-	if req.BaseAmount <= 0 {
-		fmt.Printf("❌ Invalid base amount: %d\n", req.BaseAmount)
+	if baseAmountInt <= 0 {
+		fmt.Printf("❌ Invalid base amount: %d\n", baseAmountInt)
 		return c.JSON(http.StatusBadRequest, map[string]any{
 			"error":   "invalid_amount",
 			"message": "Base amount must be greater than 0",
@@ -987,7 +990,7 @@ func (h *PaymentHandler) GetPaymentSourcesWithFees(c echo.Context) error {
 		ctx,
 		req.BusinessID,
 		paymentContext,
-		req.BaseAmount,
+		baseAmountInt,
 	)
 	if err != nil {
 		fmt.Printf("❌ Payment source service error: %v\n", err)

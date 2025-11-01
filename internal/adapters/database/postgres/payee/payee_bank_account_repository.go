@@ -180,18 +180,15 @@ func (r *PgPayeeBankAccountRepository) FindByID(ctx context.Context, accountID s
 		return nil, fmt.Errorf("failed to find payee bank account: %w", err)
 	}
 
-	// Decrypt account number (with backwards compatibility for plaintext)
+	// Decrypt account number
 	decryptedAccountNumber, err := crypto.DecryptBankAccountNumber(encryptedAccountNumber, r.encryptionKey)
 	if err != nil {
-		// If decryption fails, assume it's legacy plaintext data
-		// TODO: Remove this fallback after migrating all accounts to encrypted format
-		r.logger.WarnWith("Failed to decrypt account number, treating as plaintext",
+		r.logger.ErrorWith("Failed to decrypt account number",
 			"account_id", accountID,
 			"error", err)
-		account.AccountNumber = encryptedAccountNumber
-	} else {
-		account.AccountNumber = decryptedAccountNumber
+		return nil, fmt.Errorf("failed to decrypt account number: %w", err)
 	}
+	account.AccountNumber = decryptedAccountNumber
 
 	// Handle nullable fields
 	account.BankName = bankName.String
@@ -290,19 +287,16 @@ func (r *PgPayeeBankAccountRepository) FindByPayeeID(ctx context.Context, payeeI
 			return nil, fmt.Errorf("failed to scan payee bank account: %w", err)
 		}
 
-		// Decrypt account number (with backwards compatibility for plaintext)
+		// Decrypt account number
 		decryptedAccountNumber, err := crypto.DecryptBankAccountNumber(encryptedAccountNumber, r.encryptionKey)
 		if err != nil {
-			// If decryption fails, assume it's legacy plaintext data
-			// TODO: Remove this fallback after migrating all accounts to encrypted format
-			r.logger.WarnWith("Failed to decrypt account number, treating as plaintext",
+			r.logger.ErrorWith("Failed to decrypt account number",
 				"account_id", account.AccountID,
 				"payee_id", payeeID,
 				"error", err)
-			account.AccountNumber = encryptedAccountNumber
-		} else {
-			account.AccountNumber = decryptedAccountNumber
+			return nil, fmt.Errorf("failed to decrypt account number for account %s: %w", account.AccountID, err)
 		}
+		account.AccountNumber = decryptedAccountNumber
 
 		// Handle nullable fields
 		account.BankName = bankName.String

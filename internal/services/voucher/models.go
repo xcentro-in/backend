@@ -58,14 +58,10 @@ type CreateDraftVoucherRequest struct {
 
 // CreateDraftVoucherResponse represents the response after creating a draft voucher
 type CreateDraftVoucherResponse struct {
-	VoucherID        uuid.UUID             `json:"voucher_id"`
-	VoucherNumber    string                `json:"voucher_number"`
-	VoucherDate      time.Time             `json:"voucher_date"`
-	FiscalYear       string                `json:"fiscal_year"`
-	AccountingPeriod string                `json:"accounting_period"`
-	Status           voucher.VoucherStatus `json:"status"`
-	ERPSyncStatus    voucher.ERPSyncStatus `json:"erp_sync_status"`
-	Message          string                `json:"message"`
+	VoucherID     uuid.UUID             `json:"voucher_id"`
+	InvoiceNumber string                `json:"invoice_number"`
+	Status        voucher.VoucherStatus `json:"status"`
+	Message       string                `json:"message"`
 }
 
 // UpdateVoucherRequest represents the request to update a draft voucher

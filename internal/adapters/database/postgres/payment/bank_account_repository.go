@@ -129,16 +129,12 @@ func (r *PgBankAccountRepository) GetBankAccountByID(ctx context.Context, accoun
 		return nil, fmt.Errorf("failed to get bank account: %w", err)
 	}
 
-	// Decrypt account number (with backwards compatibility for plaintext)
+	// Decrypt account number
 	decryptedAccountNumber, err := crypto.DecryptBankAccountNumber(encryptedAccountNumber, r.encryptionKey)
 	if err != nil {
-		// If decryption fails, assume it's legacy plaintext data
-		// TODO: Remove this fallback after migrating all accounts to encrypted format
-		fmt.Printf("[PgBankAccountRepository] WARN: Failed to decrypt account %s, treating as plaintext: %v\n", account.AccountID, err)
-		account.AccountNumber = encryptedAccountNumber
-	} else {
-		account.AccountNumber = decryptedAccountNumber
+		return nil, fmt.Errorf("failed to decrypt account number for account %s: %w", account.AccountID, err)
 	}
+	account.AccountNumber = decryptedAccountNumber
 
 	// Handle NULL fields
 	if bankName != nil {
@@ -208,16 +204,12 @@ func (r *PgBankAccountRepository) GetBankAccountsByBusinessID(ctx context.Contex
 			return nil, fmt.Errorf("failed to scan bank account: %w", err)
 		}
 
-		// Decrypt account number (with backwards compatibility for plaintext)
+		// Decrypt account number
 		decryptedAccountNumber, err := crypto.DecryptBankAccountNumber(encryptedAccountNumber, r.encryptionKey)
 		if err != nil {
-			// If decryption fails, assume it's legacy plaintext data
-			// TODO: Remove this fallback after migrating all accounts to encrypted format
-			fmt.Printf("[PgBankAccountRepository] WARN: Failed to decrypt account %s, treating as plaintext: %v\n", account.AccountID, err)
-			account.AccountNumber = encryptedAccountNumber
-		} else {
-			account.AccountNumber = decryptedAccountNumber
+			return nil, fmt.Errorf("failed to decrypt account number for account %s: %w", account.AccountID, err)
 		}
+		account.AccountNumber = decryptedAccountNumber
 
 		// Handle NULL fields
 		if bankName != nil {

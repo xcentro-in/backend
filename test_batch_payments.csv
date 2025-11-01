@@ -1,0 +1,21 @@
+payee_name,account_last_4,ifsc_code,amount,payment_context,description,expense_category,gst_amount,tds_amount,invoice_number
+TechCorp IT Services,5678,HDFC0001234,50000,vendor_payment,Software license renewal Q1 2025,IT Services,9000,5000,INV-2025-001
+Office Supplies - GOS,1234,ICIC0001234,15000,vendor_payment,Stationery and printing materials,Office Expenses,2700,0,INV-2025-002
+BuildRight - Construction,9876,SBIN0012345,250000,vendor_payment,Office renovation phase 1,Construction,45000,25000,INV-2025-003
+Rajesh Kumar,3456,HDFC0001234,35000,payroll,January 2025 salary,Salary,0,3500,SAL-JAN-2025-001
+Priya Sharma,3210,ICIC0001234,42000,payroll,January 2025 salary with bonus,Salary,0,4200,SAL-JAN-2025-002
+TechCorp,5678,HDFC0001234,25000,vendor_payment,Cloud hosting charges,IT Services,4500,2500,INV-2025-004
+Office Supplies,1234,ICIC0001234,8000,vendor_payment,Office furniture,Office Expenses,1440,0,INV-2025-005
+BuildRight Construction,9876,SBIN0012345,100000,vendor_payment,Construction materials,Construction,18000,10000,INV-2025-006
+Rajesh,3456,HDFC0001234,5000,vendor_payment,Consulting work,Professional Fees,900,500,INV-2025-007
+Unknown Vendor XYZ,,,50000,vendor_payment,Random payment,Miscellaneous,9000,0,INV-2025-008
+Test Vendor,3456,HDFC0001234,75000,vendor_payment,Equipment purchase,Equipment,13500,7500,INV-2025-009
+Completely Wrong Name,,,30000,vendor_payment,This should not match,Unknown,5400,0,INV-2025-010
+Chandu Chai wala,4421,AUBL0002521,2000,vendor_payment,Monthly tea/coffee supplies,Pantry Expenses,360,0,INV-2025-011
+TechCorp IT,5678,HDFC0001234,12000,vendor_payment,Support and maintenance,IT Services,2160,1200,INV-2025-012
+GOS Office,1234,ICIC0001234,6000,vendor_payment,Office cleaning supplies,Office Expenses,1080,0,INV-2025-013
+Kumar Rajesh,3456,HDFC0001234,10000,payroll,Performance bonus,Bonus,0,1000,BONUS-JAN-2025-001
+Sharma Priya,3210,ICIC0001234,15000,payroll,Travel reimbursement,Reimbursement,0,0,REIMB-JAN-2025-001
+Random Company ABC,,,100000,vendor_payment,Non-existent vendor payment,Services,18000,10000,INV-2025-014
+BuildRight,,,80000,vendor_payment,Final payment for renovation,Construction,14400,8000,INV-2025-015
+Chandu,4421,AUBL0002521,1500,vendor_payment,Chai supplies,Pantry Expenses,270,0,INV-2025-016

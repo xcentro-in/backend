@@ -193,14 +193,10 @@ func (s *VoucherServiceImpl) CreateDraftVoucher(ctx context.Context, req *Create
 
 	// 7. Return response
 	return &CreateDraftVoucherResponse{
-		VoucherID:        v.VoucherID,
-		VoucherNumber:    v.VoucherNumber,
-		VoucherDate:      v.VoucherDate,
-		FiscalYear:       v.FiscalYear,
-		AccountingPeriod: v.AccountingPeriod,
-		Status:           v.Status,
-		ERPSyncStatus:    v.ERPSyncStatus,
-		Message:          fmt.Sprintf("Draft voucher %s created successfully", v.VoucherNumber),
+		VoucherID:     v.VoucherID,
+		InvoiceNumber: v.InvoiceNumber,
+		Status:        v.Status,
+		Message:       "Draft voucher created successfully",
 	}, nil
 }
 

@@ -777,26 +777,22 @@ func (r *PgBusinessPayeeRelationRepository) fetchVendorDetails(ctx context.Conte
 		&bankDetails.IsVerified,
 	)
 
-	if err == nil {
-		// Decrypt account number (with backwards compatibility for plaintext)
-		bankDetails.AccountNumber, err = crypto.DecryptBankAccountNumber(encryptedAccountNumber, r.encryptionKey)
-		if err != nil {
-			// If decryption fails, assume it's legacy plaintext data
-			// TODO: Remove this fallback after migrating all accounts to encrypted format
-			r.logger.WarnWith("Failed to decrypt account number, treating as plaintext",
-				"payee_id", payeeID,
-				"account_id", accountID,
-				"error", err)
-			bankDetails.AccountNumber = encryptedAccountNumber
-		}
-	}
-
 	if err != nil {
 		r.logger.ErrorWith("failed to fetch bank details",
 			"error", err,
 			"payee_id", payeeID,
 			"account_id", accountID)
 		return nil, fmt.Errorf("failed to fetch bank details: %w", err)
+	}
+
+	// Decrypt account number
+	bankDetails.AccountNumber, err = crypto.DecryptBankAccountNumber(encryptedAccountNumber, r.encryptionKey)
+	if err != nil {
+		r.logger.ErrorWith("Failed to decrypt account number",
+			"payee_id", payeeID,
+			"account_id", accountID,
+			"error", err)
+		return nil, fmt.Errorf("failed to decrypt account number: %w", err)
 	}
 
 	details.BankDetails = &bankDetails
@@ -860,26 +856,22 @@ func (r *PgBusinessPayeeRelationRepository) fetchEmployeeDetails(ctx context.Con
 		&bankDetails.IsVerified,
 	)
 
-	if err == nil {
-		// Decrypt account number (with backwards compatibility for plaintext)
-		bankDetails.AccountNumber, err = crypto.DecryptBankAccountNumber(encryptedAccountNumber, r.encryptionKey)
-		if err != nil {
-			// If decryption fails, assume it's legacy plaintext data
-			// TODO: Remove this fallback after migrating all accounts to encrypted format
-			r.logger.WarnWith("Failed to decrypt account number, treating as plaintext",
-				"payee_id", payeeID,
-				"account_id", accountID,
-				"error", err)
-			bankDetails.AccountNumber = encryptedAccountNumber
-		}
-	}
-
 	if err != nil {
 		r.logger.ErrorWith("failed to fetch bank details",
 			"error", err,
 			"payee_id", payeeID,
 			"account_id", accountID)
 		return nil, fmt.Errorf("failed to fetch bank details: %w", err)
+	}
+
+	// Decrypt account number
+	bankDetails.AccountNumber, err = crypto.DecryptBankAccountNumber(encryptedAccountNumber, r.encryptionKey)
+	if err != nil {
+		r.logger.ErrorWith("Failed to decrypt account number",
+			"payee_id", payeeID,
+			"account_id", accountID,
+			"error", err)
+		return nil, fmt.Errorf("failed to decrypt account number: %w", err)
 	}
 
 	details.BankDetails = &bankDetails

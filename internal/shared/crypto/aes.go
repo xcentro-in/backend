@@ -231,7 +231,6 @@ func EncryptAES_CBC(data string, password string, opts EncryptionOptions) (strin
 	}
 
 	// Derive key based on specified size
-	fmt.Printf("Password === \n %s", password)
 	var key []byte
 	if opts.DerivedKey {
 		key = deriveKey(password, opts.KeySize)

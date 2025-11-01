@@ -102,7 +102,7 @@ func (h *VoucherHandler) CreateDraftVoucher(c echo.Context) error {
 		return h.handleError(c, err)
 	}
 
-	h.logger.InfoWith("Draft voucher created", "voucher_number", resp.VoucherNumber)
+	h.logger.InfoWith("Draft voucher created", "voucher_id", resp.VoucherID, "invoice_number", resp.InvoiceNumber)
 
 	return c.JSON(http.StatusCreated, map[string]any{
 		"message": "Draft voucher created successfully",

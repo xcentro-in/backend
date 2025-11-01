@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"xcentro.in/internal/adapters/database/postgres/client"
 	"xcentro.in/internal/adapters/external/payout/castler"
+	"xcentro.in/internal/adapters/providers/authbridge"
 	"xcentro.in/internal/core/business"
 	"xcentro.in/internal/core/business_rules"
 	"xcentro.in/internal/core/payee"
@@ -44,8 +45,8 @@ type PayeeService struct {
 	businessPayeeRelationRepo payee.BusinessPayeeRelationRepository
 
 	// Payout provider integration (Phase 8)
-	payoutProvider      payout.PayoutProvider
-	castlerClient       CastlerPayeeOnboarder // For Castler-specific payee onboarding
+	payoutProvider payout.PayoutProvider
+	castlerClient  CastlerPayeeOnboarder // For Castler-specific payee onboarding
 
 	// Verification services
 	docVerificationSvc   *verification.DocumentVerificationService // AuthBridge for GST, PAN verification
@@ -235,39 +236,59 @@ func (s *PayeeService) onboardVendor(ctx context.Context, req payee.OnboardPayee
 			s.logger.WarnWith("account_type not provided, defaulting to current")
 		}
 
+		bankReq := authbridge.NewBankVerificationRequest(
+			"10000",
+			vendor.AccountNumber,
+			vendor.IFSCCode,
+		)
+
+		s.logger.InfoWith("Bank Request body", bankReq)
+
 		// Step 5: Verify bank account (penny drop)
-		bankReq := business_rules.BankVerificationRequest{
-			BusinessID:        req.BusinessID,
-			RequestID:         fmt.Sprintf("onboard_%s_%d", req.BusinessID, time.Now().Unix()),
-			AccountNumber:     vendor.AccountNumber,
-			IFSCCode:          vendor.IFSCCode,
-			AccountHolderName: vendor.AccountHolderName,
-			BankName:          vendor.BankName,
-			BranchName:        vendor.BranchName,
-			AccountType:       accountType,
-			Metadata: map[string]any{
-				"email": req.ContactEmail,
-				"phone": req.ContactPhone,
-			},
+		authbridgeClient, err := authbridge.NewClient()
+		if err != nil {
+			s.logger.ErrorWith("Failed to create authbridge client", err)
+			return nil, fmt.Errorf("failed to create authbridge client: %w", err)
+		}
+		bankResp, err := authbridgeClient.SearchDocument(bankReq)
+		if err != nil {
+			s.logger.ErrorWith("Failed to search document", err)
+			return nil, fmt.Errorf("failed to search document: %w", err)
 		}
 
-		bankResp, err := s.bankVerificationSvc.VerifyBankAccount(ctx, bankReq)
+		// Step 5: Verify bank account (penny drop)
+		// bankReq := business_rules.BankVerificationRequest{
+		// 	BusinessID:        req.BusinessID,
+		// 	RequestID:         fmt.Sprintf("onboard_%s_%d", req.BusinessID, time.Now().Unix()),
+		// 	AccountNumber:     vendor.AccountNumber,
+		// 	IFSCCode:          vendor.IFSCCode,
+		// 	AccountHolderName: vendor.AccountHolderName,
+		// 	BankName:          vendor.BankName,
+		// 	BranchName:        vendor.BranchName,
+		// 	AccountType:       accountType,
+		// 	Metadata: map[string]any{
+		// 		"email": req.ContactEmail,
+		// 		"phone": req.ContactPhone,
+		// 	},
+		// }
+
+		// bankResp, err := s.bankVerificationSvc.VerifyBankAccount(ctx, bankReq)
 		if err != nil {
 			return nil, fmt.Errorf("bank verification failed: %w", err)
 		}
 
-		if bankResp.Status != business_rules.BankVerificationStatusSuccess {
-			return nil, fmt.Errorf("bank verification failed: %s", bankResp.Status)
+		if bankResp["status"] != business_rules.BankVerificationStatusSuccess {
+			return nil, fmt.Errorf("bank verification failed: %s", bankResp["status"])
 		}
-
+		s.logger.InfoWith("Bank verification response", bankResp)
 		s.logger.InfoWith("Bank verification successful",
-			"verified_name", bankResp.VerifiedAccountName,
-			"bank_name", bankResp.BankName)
+			"verified_name", bankResp["verified_name"],
+			"bank_name", bankResp["bank_name"])
 
 		// Step 6: Money rotation check
-		if err := s.checkMoneyRotation(ctx, req.BusinessID, bankResp.VerifiedAccountName); err != nil {
-			return nil, err
-		}
+		// if err := s.checkMoneyRotation(ctx, req.BusinessID, bankResp.VerifiedAccountName); err != nil {
+		// 	return nil, err
+		// }
 
 		// Step 7.5: Onboard payee to Castler (after all verifications pass)
 		s.logger.InfoWith("Onboarding payee to Castler")
@@ -445,6 +466,10 @@ func (s *PayeeService) onboardVendor(ctx context.Context, req payee.OnboardPayee
 		IsFullyVerified:         true,
 		Message:                 fmt.Sprintf("Payee '%s' successfully onboarded", req.DisplayName),
 	}, nil
+}
+
+func gen_random_string(i int) string {
+	panic("unimplemented")
 }
 
 // onboardGSTPayee handles GST payment payee onboarding (government virtual account)

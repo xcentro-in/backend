@@ -816,15 +816,13 @@ func fetchBankAccountDetails(ctx context.Context, r *PgPaymentRepository, accoun
 		return &bankDetailsResult{BankName: "Bank", Last4: "****"}
 	}
 
-	// Decrypt account number to extract last 4 digits (with backwards compatibility for plaintext)
+	// Decrypt account number to extract last 4 digits
 	decryptedAccountNumber, err := crypto.DecryptBankAccountNumber(encryptedAccountNumber, r.encryptionKey)
 	if err != nil {
-		// If decryption fails, assume it's legacy plaintext data
-		// TODO: Remove this fallback after migrating all accounts to encrypted format
-		r.logger.WarnWith("Failed to decrypt account number for payment display, treating as plaintext",
+		r.logger.ErrorWith("Failed to decrypt account number for payment display",
 			"account_id", accountID,
 			"error", err)
-		decryptedAccountNumber = encryptedAccountNumber
+		return &bankDetailsResult{BankName: "Bank", Last4: "****"} // Return masked fallback on error
 	}
 
 	last4 := crypto.ExtractLastDigits(decryptedAccountNumber, 4)

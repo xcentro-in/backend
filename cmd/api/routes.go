@@ -3,6 +3,7 @@ package main
 import (
 	"github.com/labstack/echo/v4"
 	authRepo "xcentro.in/internal/adapters/database/postgres/auth"
+	batchPaymentRepo "xcentro.in/internal/adapters/database/postgres/batch_payment"
 	"xcentro.in/internal/adapters/database/postgres/business"
 	"xcentro.in/internal/adapters/database/postgres/client"
 	notificationRepo "xcentro.in/internal/adapters/database/postgres/notification"
@@ -20,7 +21,9 @@ import (
 	corePayment "xcentro.in/internal/core/payment"
 	coreUser "xcentro.in/internal/core/user"
 	coreVoucher "xcentro.in/internal/core/voucher"
+	"xcentro.in/internal/middleware"
 	"xcentro.in/internal/handlers/http/auth"
+	batchPaymentHandler "xcentro.in/internal/handlers/http/batch_payment"
 	businessHandler "xcentro.in/internal/handlers/http/business"
 	notificationHandler "xcentro.in/internal/handlers/http/notification"
 	"xcentro.in/internal/handlers/http/payee"
@@ -29,6 +32,7 @@ import (
 	userHandler "xcentro.in/internal/handlers/http/user"
 	voucherHandler "xcentro.in/internal/handlers/http/voucher"
 	authservice "xcentro.in/internal/services/auth"
+	batchPaymentSvc "xcentro.in/internal/services/batch_payment"
 	businessSvc "xcentro.in/internal/services/business"
 	notificationService "xcentro.in/internal/services/notification"
 	payeeSvc "xcentro.in/internal/services/payee"
@@ -206,6 +210,41 @@ func registerV1PayoutRoutes(clients *externalClients, cfg *config.Config, group 
 	payoutGroup.POST("/initiate", dashboardHandler.InitiatePayoutManually)
 }
 
+func registerV1BatchPaymentRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
+	factory := &serviceFactory{clients, cfg}
+	_, _, _, _, _, _, authSvc := factory.createCoreServices(nil)
+
+	// Repositories
+	batchPaymentRepository := batchPaymentRepo.NewPgBatchPaymentRepository(clients.db)
+	businessPayeeRelationRepo := payeeRepo.NewPgBusinessPayeeRelationRepository(clients.db, cfg.BankAccountEncryption.EncryptionKey)
+
+	// Voucher service dependencies
+	voucherRepository := voucherRepo.NewPostgresVoucherRepository(clients.db, cfg.BankAccountEncryption.EncryptionKey)
+	approvalRepository := voucherRepo.NewPostgresApprovalRepository(clients.db)
+	queueRepository := voucherRepo.NewPostgresERPSyncQueueRepository(clients.db)
+	voucherCoreService := coreVoucher.NewVoucherService(voucherRepository)
+	voucherService := voucherSvc.NewVoucherService(voucherRepository, approvalRepository, queueRepository, voucherCoreService, businessPayeeRelationRepo)
+
+	// Batch payment service
+	batchPaymentService := batchPaymentSvc.NewBatchPaymentService(
+		batchPaymentRepository,
+		businessPayeeRelationRepo,
+		voucherService,
+	)
+
+	// Handler
+	handler := batchPaymentHandler.NewBatchPaymentHandler(batchPaymentService)
+
+	// Routes
+	batchGroup := group.Group("/batch_payments")
+	batchGroup.Use(middleware.JWTMiddleware(authSvc))
+
+	batchGroup.POST("/upload", handler.UploadCSV)
+	batchGroup.GET("", handler.GetBatchList)
+	batchGroup.GET("/:batch_id", handler.GetBatchStatus)
+	batchGroup.POST("/:batch_id/process", handler.ProcessBatch)
+}
+
 func registerV1NotificationRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
 	factory := &serviceFactory{clients, cfg}
 
@@ -244,6 +283,7 @@ func registerV1Routes(s *xcentroServer) {
 	registerV1PayeeRoutes(clients, cfg, v1)
 	registerV1VoucherRoutes(clients, cfg, v1)
 	registerV1PayoutRoutes(clients, cfg, v1)
+	registerV1BatchPaymentRoutes(clients, cfg, v1)
 	registerV1NotificationRoutes(clients, cfg, v1)
 }
 

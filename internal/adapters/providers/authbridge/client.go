@@ -234,6 +234,30 @@ func (c *AuthBridgeClient) getMockResponse(req DocumentRequest) (map[string]inte
 				"is_valid":   true,
 			},
 		}, nil
+	
+	case BANK_VERIFY:
+		// Mock Bank Account verification
+		return map[string]interface{}{
+			"status":  float64(1),
+			"message": "Bank account verification successful",
+			"data": map[string]interface{}{
+				"msg": map[string]interface{}{
+					"Account Holder Name": "Axxxxxx",
+					"Bank Account Number": "0xxxxxxxx",
+					"Bank Branch - Address": map[string]interface{}{
+						"Address":  "Ixxxxxx",
+						"Branch":   "Sxxxxx",
+						"City":     "Pxxxxx",
+						"Contact":  "8xxxxx",
+						"District": "Pxxxx",
+						"State":    "Hxxxx",
+					},
+					"Bank Name": "Ixxxxxxxx",
+					"IFSC Code": "Ixxxxxx",
+				},
+				"status": float64(1),
+			},
+		}, nil
 
 	default:
 		// Generic mock response for other document types

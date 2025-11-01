@@ -235,9 +235,9 @@ type ErrorResponse struct {
 
 // GetPaymentSourcesWithFeesRequest represents the request for Phase 10
 type GetPaymentSourcesWithFeesRequest struct {
-	BusinessID     string `json:"business_id"`     // Business identifier
-	PaymentContext string `json:"payment_context"` // vendor_payment, gst_payment, bill_payment, payroll
-	BaseAmount     int64  `json:"base_amount"`     // Amount in paise
+	BusinessID     string  `json:"business_id"`     // Business identifier
+	PaymentContext string  `json:"payment_context"` // vendor_payment, gst_payment, bill_payment, payroll
+	BaseAmount     float64 `json:"base_amount"`     // Amount in paise (accepts decimal, will be rounded)
 }
 
 // GetPaymentSourcesWithFeesResponse represents the response for Phase 10

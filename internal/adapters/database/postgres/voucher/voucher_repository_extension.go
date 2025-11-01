@@ -124,13 +124,11 @@ func (r *PostgresVoucherRepository) GetVouchersByRelation(ctx context.Context, b
 			if paymentSourceType.String == "card" && cardLastFour != "" {
 				v.PaymentSourceDigits = cardLastFour
 			} else if paymentSourceType.String == "bank_account" && bankAccountEncrypted != "" {
-				// Decrypt bank account to get last digits (with backwards compatibility for plaintext)
+				// Decrypt bank account to get last digits
 				decryptedAccountNumber, err := crypto.DecryptBankAccountNumber(bankAccountEncrypted, r.encryptionKey)
 				if err != nil {
-					// If decryption fails, assume it's legacy plaintext data
-					// TODO: Remove this fallback after migrating all accounts to encrypted format
-					fmt.Printf("[VoucherRepositoryExtension] WARN: Failed to decrypt bank account for voucher %s, treating as plaintext: %v\n", v.VoucherID, err)
-					decryptedAccountNumber = bankAccountEncrypted
+					fmt.Printf("[VoucherRepositoryExtension] ERROR: Failed to decrypt bank account for voucher %s: %v\n", v.VoucherID, err)
+					continue // Skip this voucher instead of returning error for list operations
 				}
 				v.PaymentSourceDigits = crypto.ExtractLastDigits(decryptedAccountNumber, 5)
 			}

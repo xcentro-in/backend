@@ -9,5 +9,5 @@ ALTER TABLE xcentro.voucher_approvals
 
 -- Restore partial unique index
 CREATE UNIQUE INDEX idx_voucher_approvals_pending_unique
-    ON xcentro.voucher_approvals(voucher_id)
+    ON xcentro.voucher_approvals(approval_id)
     WHERE action = 'pending';
