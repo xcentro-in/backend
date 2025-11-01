@@ -1,0 +1,54 @@
+# Git
+.git
+.gitignore
+.github
+
+# Documentation
+*.md
+docs/
+CLAUDE.md
+API_REFERENCE.md
+EXAMPLES.md
+GATEWAY_INTEGRATION.md
+
+# Build artifacts
+bin/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test files
+*_test.go
+testdata/
+
+# Environment files
+.env
+.env.*
+!.env.example
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Deployment
+deployments/docker/
+deployments/kubernetes/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Dependencies (will be downloaded in container)
+vendor/
