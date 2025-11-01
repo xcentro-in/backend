@@ -41,8 +41,8 @@ RUN chown -R appuser:appuser /app
 # Switch to non-root user
 USER appuser
 
-# Expose port (adjust based on your configuration)
-EXPOSE 8080
+# Expose port
+EXPOSE 80
 
 # Run the binary
 ENTRYPOINT ["/app/api"]

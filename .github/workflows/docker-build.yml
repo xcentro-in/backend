@@ -4,13 +4,11 @@ on:
   push:
     branches:
       - main
-      - develop
     tags:
       - 'v*'
   pull_request:
     branches:
       - main
-      - develop
 
 env:
   REGISTRY: ghcr.io
@@ -31,6 +29,9 @@ jobs:
             context: .
           - dockerfile: Dockerfile.notification_worker
             image-suffix: notification-worker
+            context: .
+          - dockerfile: Dockerfile.migrate
+            image-suffix: migrate
             context: .
 
     steps:
