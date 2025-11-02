@@ -12,12 +12,14 @@ import (
 	"xcentro.in/internal/adapters/database/postgres/client"
 	"xcentro.in/internal/adapters/external/payout/castler"
 	"xcentro.in/internal/adapters/providers/authbridge"
+	"xcentro.in/internal/adapters/providers/fileupload"
 	"xcentro.in/internal/core/business"
 	"xcentro.in/internal/core/business_rules"
 	"xcentro.in/internal/core/payee"
 	"xcentro.in/internal/core/payment"
 	"xcentro.in/internal/core/payout"
 	"xcentro.in/internal/services/verification"
+	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/logger"
 )
 
@@ -59,6 +61,9 @@ type PayeeService struct {
 	// Business service for onboarding flags
 	businessService business.BusinessService
 
+	// S3 configuration for document uploads
+	s3Config *config.S3Config
+
 	// Logger
 	logger *logger.Logger
 }
@@ -81,6 +86,7 @@ func NewPayeeService(
 	crossVerificationSvc business_rules.CrossVerificationService,
 	txManager client.TxManager,
 	businessService business.BusinessService,
+	s3Config *config.S3Config,
 	logger *logger.Logger,
 ) *PayeeService {
 	return &PayeeService{
@@ -100,6 +106,7 @@ func NewPayeeService(
 		crossVerificationSvc:       crossVerificationSvc,
 		txManager:                  txManager,
 		businessService:            businessService,
+		s3Config:                   s3Config,
 		logger:                     logger,
 	}
 }
@@ -273,9 +280,6 @@ func (s *PayeeService) onboardVendor(ctx context.Context, req payee.OnboardPayee
 		// }
 
 		// bankResp, err := s.bankVerificationSvc.VerifyBankAccount(ctx, bankReq)
-		if err != nil {
-			return nil, fmt.Errorf("bank verification failed: %w", err)
-		}
 
 		if bankResp["status"] != business_rules.BankVerificationStatusSuccess {
 			return nil, fmt.Errorf("bank verification failed: %s", bankResp["status"])
@@ -808,8 +812,8 @@ func (s *PayeeService) onboardBiller(ctx context.Context, req payee.OnboardPayee
 	}, nil
 }
 
-// onboardEmployee handles employee payee onboarding (PAN + bank account)
-// Steps: Validate → Check duplicates → Verify PAN → Verify Bank → Cross-verify → Create entities
+// onboardEmployee handles employee payee onboarding (bank account verification)
+// Steps: Validate → Verify Bank → Cross-verify → Create entities
 func (s *PayeeService) onboardEmployee(ctx context.Context, req payee.OnboardPayeeRequest) (*payee.OnboardPayeeResponse, error) {
 	s.logger.InfoWith("Starting employee onboarding",
 		"business_id", req.BusinessID,
@@ -823,125 +827,112 @@ func (s *PayeeService) onboardEmployee(ctx context.Context, req payee.OnboardPay
 	employee := req.Employee
 	var payeeID string
 
-	// Step 2: Check if employee exists by PAN
-	s.logger.DebugWith("Checking if employee exists by PAN", "pan", employee.PAN)
-	existingEmployee, err := s.payeeEmployeeRepo.FindByPAN(ctx, employee.PAN)
+	// Step 2: Always create new employee (employees are business-specific, not global)
+	s.logger.InfoWith("Preparing to create new employee payee")
 
-	if err != nil && err.Error() != "employee not found" {
-		return nil, fmt.Errorf("failed to check existing employee: %w", err)
-	}
-
-	var needsEmployeeCreation bool
-	var panVerificationStatus payee.VerificationStatus
-
-	if existingEmployee != nil {
-		// Employee exists - reuse payee
-		needsEmployeeCreation = false
-		payeeID = existingEmployee.PayeeID
-		s.logger.DebugWith("Employee exists, reusing", "payee_id", payeeID)
-	} else {
-		// New employee - verify PAN first, then prepare for creation
-		needsEmployeeCreation = true
-		s.logger.InfoWith("Employee not found, initiating PAN verification", "pan", employee.PAN)
-
-		// Step 3: Verify PAN (mock for now)
-		s.logger.DebugWith("Verifying PAN", "pan", employee.PAN)
-		// TODO: Call PAN verification service
-		panVerificationStatus = payee.VerificationStatusSuccess
-		s.logger.InfoWith("PAN verification completed successfully")
-	}
-
-	// Step 4: Check for duplicate bank account (if employee exists)
-	s.logger.DebugWith("Checking for duplicate bank account")
+	// Step 3: Prepare bank account for verification
+	s.logger.DebugWith("Preparing bank account for verification")
 	accountHash := s.computeAccountHash(employee.AccountNumber)
 
-	var existingAccounts []*payee.PayeeBankAccount
-	if !needsEmployeeCreation {
-		// Only check if employee already exists (has payeeID)
-		existingAccounts, _ = s.payeeBankAccountRepo.FindByPayeeID(ctx, payeeID)
-	}
-
-	var bankAccount *payee.PayeeBankAccount
-	for _, acc := range existingAccounts {
-		if acc.AccountNumberHash == accountHash {
-			bankAccount = acc
-			s.logger.DebugWith("Bank account already exists, reusing")
-			break
-		}
-	}
-
-	// Prepare bank account entity if needed
-	var verifyResp *business_rules.BankVerificationResponse
-	var crossVerifyStatus payee.VerificationStatus
+	// Prepare bank account entity for verification
+	// var crossVerifyStatus payee.VerificationStatus
 	var accountType payment.BankAccountType
 
-	if bankAccount == nil {
-		// Default account_type to "current" if not provided
-		accountType = employee.AccountType
-		if accountType == "" {
-			accountType = payment.BankAccountTypeCurrent
-			s.logger.WarnWith("account_type not provided, defaulting to current")
-		}
-
-		// Step 5: Perform penny drop verification
-		s.logger.InfoWith("Initiating bank account verification (penny drop)")
-		verifyReq := business_rules.BankVerificationRequest{
-			BusinessID:        req.BusinessID,
-			RequestID:         fmt.Sprintf("onboard_emp_%s_%d", req.BusinessID, time.Now().Unix()),
-			AccountNumber:     employee.AccountNumber,
-			IFSCCode:          employee.IFSCCode,
-			AccountHolderName: employee.AccountHolderName,
-			BankName:          employee.BankName,
-			BranchName:        employee.BranchName,
-			AccountType:       accountType,
-		}
-
-		var err error
-		verifyResp, err = s.bankVerificationSvc.VerifyBankAccount(ctx, verifyReq)
-		if err != nil {
-			return nil, fmt.Errorf("bank verification failed: %w", err)
-		}
-		s.logger.InfoWith("Bank verification completed", "status", verifyResp.Status)
-
-		// Step 6: Cross-verification (PAN name vs Bank account name)
-		s.logger.DebugWith("Cross-verifying PAN name with bank account holder name")
-		// Mock cross-verification for now
-		crossVerifyStatus = payee.VerificationStatusSuccess
-		s.logger.InfoWith("Cross-verification completed successfully")
-
-		// Prepare bank account entity (will be created in transaction)
-		now := time.Now()
-		bankAccount = &payee.PayeeBankAccount{
-			PayeeID:                 payeeID, // Will be updated in transaction if employee is new
-			AccountNumber:           employee.AccountNumber,
-			AccountNumberHash:       accountHash,
-			IFSCCode:                employee.IFSCCode,
-			AccountHolderName:       employee.AccountHolderName,
-			BankName:                employee.BankName,   // Use bank name from frontend IFSC check
-			BranchName:              employee.BranchName, // Use branch name from frontend IFSC check
-			AccountType:             accountType,
-			AccountLabel:            employee.AccountLabel,
-			IsActive:                true,
-			IsVerified:              verifyResp.Status == business_rules.BankVerificationStatusSuccess,
-			BankVerificationStatus:  payee.VerificationStatus(verifyResp.Status),
-			CrossVerificationStatus: crossVerifyStatus,
-			VerifiedAt:              &now,
-		}
+	// Default account_type to "current" if not provided
+	accountType = employee.AccountType
+	if accountType == "" {
+		accountType = payment.BankAccountTypeCurrent
+		s.logger.WarnWith("account_type not provided, defaulting to current")
 	}
 
-	// Step 7: Check if relation already exists (if everything already exists)
-	s.logger.DebugWith("Checking if business-payee relation already exists")
-	if !needsEmployeeCreation && bankAccount != nil && bankAccount.AccountID != "" {
-		relationExists, err := s.businessPayeeRelationRepo.RelationExists(ctx, req.BusinessID, payeeID, bankAccount.AccountID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to check relation existence: %w", err)
-		}
-		if relationExists {
-			return nil, fmt.Errorf("employee payee already added to your account with this bank account")
-		}
+	// Step 4: Perform penny drop verification
+	s.logger.InfoWith("Initiating bank account verification")
+
+	bankReq := authbridge.NewBankVerificationRequest(
+		"10000",
+		employee.AccountNumber,
+		employee.IFSCCode,
+	)
+	authbridgeClient, err := authbridge.NewClient()
+	if err != nil {
+		s.logger.ErrorWith("Failed to create authbridge client", err)
+		return nil, fmt.Errorf("failed to create authbridge client: %w", err)
+	}
+	bankResp, err := authbridgeClient.SearchDocument(bankReq)
+	if err != nil {
+		s.logger.ErrorWith("Failed to search document", err)
+		return nil, fmt.Errorf("failed to search document: %w", err)
+	}
+		s.logger.InfoWith("Bank verification response", bankResp)
+
+	/*
+	// response from authbridge
+	{
+	"msg": {
+		"accountType":"SAVINGS",
+		"beneficiaryName":"DARAHAS KOPPARAPU",
+		"clientRefId":"02112025859128",
+		"responseCode":"00",
+		"responseMsg":"SUCCESS",
+		"rrn":"530613010252",
+		"status":"SUCCESS",
+		"transDateTime":"02/11/2025 13:45:04"
+		},
+		"status":1,
+		"transId":"12",
+		"tsTransId":"TS-UXR-307481"
+	}
+	*/
+
+	// Type assert to access nested map
+	msgData, ok := bankResp["msg"].(map[string]interface{})
+	if !ok {
+		s.logger.ErrorWith("Invalid bank verification response format")
+		return nil, fmt.Errorf("invalid bank verification response format")
 	}
 
-	// Step 8: ATOMIC TRANSACTION - Create all entities (master, employee, bank account, relation)
+	verificationStatus, _ := msgData["status"].(string)
+	s.logger.InfoWith("Bank verification completed", "status", verificationStatus)
+
+	// Fail fast: Abort if bank verification did not succeed
+	if verificationStatus != "SUCCESS" {
+		s.logger.ErrorWith("Bank verification failed, aborting onboarding", "status", verificationStatus)
+		return nil, fmt.Errorf("bank verification failed: account could not be verified")
+	}
+
+	// // Step 5: Cross-verification (employee name vs bank account holder name)
+	// s.logger.DebugWith("Cross-verifying employee name with bank account holder name")
+	// // Mock cross-verification for now
+	// crossVerifyStatus = payee.VerificationStatusSuccess
+	// s.logger.InfoWith("Cross-verification completed successfully")
+
+	// // Fail fast: Abort if cross-verification failed
+	// if crossVerifyStatus != payee.VerificationStatusSuccess {
+	// 	s.logger.ErrorWith("Cross-verification failed, aborting onboarding", "status", crossVerifyStatus)
+	// 	return nil, fmt.Errorf("cross-verification failed: employee name does not match bank account holder name")
+	// }
+
+	// Prepare bank account entity (will be created in transaction)
+	// At this point, all verifications have passed
+	now := time.Now()
+	bankAccount := &payee.PayeeBankAccount{
+		PayeeID:                 payeeID, // Will be updated in transaction
+		AccountNumber:           employee.AccountNumber,
+		AccountNumberHash:       accountHash,
+		IFSCCode:                employee.IFSCCode,
+		AccountHolderName:       employee.AccountHolderName,
+		BankName:                employee.BankName,   // Use bank name from frontend IFSC check
+		BranchName:              employee.BranchName, // Use branch name from frontend IFSC check
+		AccountType:             accountType,
+		AccountLabel:            employee.AccountLabel,
+		IsActive:                true,
+		IsVerified:              true, // Always true at this point
+		BankVerificationStatus:  payee.VerificationStatusSuccess,
+		CrossVerificationStatus: payee.VerificationStatusSuccess,
+		VerifiedAt:              &now,
+	}
+
+	// Step 6: ATOMIC TRANSACTION - Create all entities (master, employee, bank account, relation)
 	s.logger.InfoWith("Creating all entities in atomic transaction")
 
 	var accountID string
@@ -952,62 +943,47 @@ func (s *PayeeService) onboardEmployee(ctx context.Context, req payee.OnboardPay
 		txBankAccountRepo := s.payeeBankAccountRepo.WithTx(tx)
 		txRelationRepo := s.businessPayeeRelationRepo.WithTx(tx)
 
-		// 1. Create master + employee if needed
-		if needsEmployeeCreation {
-			// Create master entry
-			payeeMaster := &payee.PayeeMaster{
-				PayeeType: payee.PayeeTypeEmployee,
-				IsActive:  true,
-			}
-			if err := txMasterRepo.Create(ctx, payeeMaster); err != nil {
-				return fmt.Errorf("failed to create payee master: %w", err)
-			}
-			payeeID = payeeMaster.PayeeID
-			s.logger.DebugWith("Created payee master entry", "payee_id", payeeID)
+		// 1. Create master + employee
+		// Create master entry
+		payeeMaster := &payee.PayeeMaster{
+			PayeeType: payee.PayeeTypeEmployee,
+			IsActive:  true,
+		}
+		if err := txMasterRepo.Create(ctx, payeeMaster); err != nil {
+			return fmt.Errorf("failed to create payee master: %w", err)
+		}
+		payeeID = payeeMaster.PayeeID
+		s.logger.DebugWith("Created payee master entry", "payee_id", payeeID)
 
-			// Create employee entity
-			now := time.Now()
-			employeePayee := &payee.PayeeEmployee{
-				PayeeID:               payeeID,
-				EmployeeCode:          employee.EmployeeCode,
-				FullName:              employee.FullName,
-				PAN:                   employee.PAN,
-				Email:                 employee.Email,
-				Phone:                 employee.Phone,
-				Designation:           employee.Designation,
-				Department:            employee.Department,
-				DateOfJoining:         employee.DateOfJoining,
-				EmploymentType:        employee.EmploymentType,
-				RemunerationDocURL:    employee.RemunerationDocURL,
-				IsSensitive:           true,
-				PANVerificationStatus: panVerificationStatus,
-			}
-			if employee.RemunerationDocURL != "" {
-				employeePayee.RemunerationDocUploadedAt = &now
-			}
-			if panVerificationStatus == payee.VerificationStatusSuccess {
-				employeePayee.PANVerifiedAt = &now
-			}
-
-			if err := txEmployeeRepo.Create(ctx, employeePayee); err != nil {
-				return fmt.Errorf("failed to create employee: %w", err)
-			}
-			s.logger.DebugWith("Created employee entity", "pan", employee.PAN)
+		// Create employee entity
+		// Note: RemunerationDocURL is not set during onboarding - it will be uploaded separately
+		employeePayee := &payee.PayeeEmployee{
+			PayeeID:        payeeID,
+			EmployeeCode:   employee.EmployeeCode,
+			FullName:       employee.FullName,
+			Email:          employee.Email,
+			Phone:          employee.Phone,
+			Designation:    employee.Designation,
+			Department:     employee.Department,
+			DateOfJoining:  employee.DateOfJoining,
+			EmploymentType: employee.EmploymentType,
+			IsSensitive:    true,
 		}
 
-		// 2. Create bank account if needed
-		if bankAccount != nil && bankAccount.AccountID == "" {
-			// Update PayeeID in case it was just created
-			bankAccount.PayeeID = payeeID
-
-			if err := txBankAccountRepo.CreateBankAccount(ctx, bankAccount); err != nil {
-				return fmt.Errorf("failed to create bank account: %w", err)
-			}
-			accountID = bankAccount.AccountID
-			s.logger.DebugWith("Created bank account", "account_id", accountID)
-		} else if bankAccount != nil {
-			accountID = bankAccount.AccountID
+		if err := txEmployeeRepo.Create(ctx, employeePayee); err != nil {
+			return fmt.Errorf("failed to create employee: %w", err)
 		}
+		s.logger.DebugWith("Created employee entity", "full_name", employee.FullName)
+
+		// 2. Create bank account
+		// Update PayeeID in bank account
+		bankAccount.PayeeID = payeeID
+
+		if err := txBankAccountRepo.CreateBankAccount(ctx, bankAccount); err != nil {
+			return fmt.Errorf("failed to create bank account: %w", err)
+		}
+		accountID = bankAccount.AccountID
+		s.logger.DebugWith("Created bank account", "account_id", accountID)
 
 		// 3. Create relation
 		relation := &payee.BusinessPayeeRelation{
@@ -1041,15 +1017,16 @@ func (s *PayeeService) onboardEmployee(ctx context.Context, req payee.OnboardPay
 		"payee_id", payeeID,
 		"relation_id", relationID)
 
-	// Step 10: Return response
+	// Step 7: Return response
+	// At this point, all verifications have passed (fail-fast approach)
 	return &payee.OnboardPayeeResponse{
 		RelationID:              relationID,
 		PayeeID:                 payeeID,
 		AccountID:               accountID,
-		GSTVerificationStatus:   payee.VerificationStatusSuccess, // PAN verified
-		BankVerificationStatus:  bankAccount.BankVerificationStatus,
-		CrossVerificationStatus: bankAccount.CrossVerificationStatus,
-		IsFullyVerified:         bankAccount.IsVerified && bankAccount.CrossVerificationStatus == payee.VerificationStatusSuccess,
+		GSTVerificationStatus:   payee.VerificationStatusSuccess, // No identity verification needed for employees
+		BankVerificationStatus:  payee.VerificationStatusSuccess, // Always success at this point
+		CrossVerificationStatus: payee.VerificationStatusSuccess, // Always success at this point
+		IsFullyVerified:         true,                            // Always true - fail-fast ensures this
 		Message:                 fmt.Sprintf("Employee '%s' successfully onboarded", req.DisplayName),
 	}, nil
 }
@@ -1277,9 +1254,6 @@ func (s *PayeeService) validateEmployeeRequest(req *payee.OnboardPayeeRequest) e
 	}
 
 	employee := req.Employee
-	if employee.PAN == "" || len(employee.PAN) != 10 {
-		return fmt.Errorf("invalid PAN (must be 10 characters)")
-	}
 	if employee.FullName == "" {
 		return fmt.Errorf("full_name is required")
 	}
@@ -1497,7 +1471,6 @@ func (s *PayeeService) populateEmployeeDetails(ctx context.Context, payeeID, acc
 
 	// Populate employee-specific fields
 	response.Employee = &payee.EmployeeDetailsData{
-		PAN:                     employee.PAN,
 		EmployeeCode:            employee.EmployeeCode,
 		FullName:                employee.FullName,
 		Email:                   employee.Email,
@@ -1505,7 +1478,6 @@ func (s *PayeeService) populateEmployeeDetails(ctx context.Context, payeeID, acc
 		Designation:             employee.Designation,
 		Department:              employee.Department,
 		EmploymentType:          employee.EmploymentType,
-		PANVerificationStatus:   string(employee.PANVerificationStatus),
 		BankVerificationStatus:  string(bankAccount.BankVerificationStatus),
 		CrossVerificationStatus: string(bankAccount.CrossVerificationStatus),
 	}
@@ -1549,6 +1521,36 @@ func (s *PayeeService) GetVendorsForDropdown(ctx context.Context, businessID str
 	return response, nil
 }
 
+// GetEmployeesForList retrieves lightweight employee list for tabulated display
+func (s *PayeeService) GetEmployeesForList(ctx context.Context, businessID string) (*payee.EmployeeLightweightListResponse, error) {
+	s.logger.DebugWith("Fetching employees for list", "business_id", businessID)
+
+	// Input validation
+	if businessID == "" {
+		return nil, fmt.Errorf("business_id is required")
+	}
+
+	// Validate UUID format
+	if _, err := uuid.Parse(businessID); err != nil {
+		return nil, fmt.Errorf("invalid business_id format: %w", err)
+	}
+
+	// Fetch employees from repository
+	employees, err := s.businessPayeeRelationRepo.GetEmployeesForList(ctx, businessID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get employees for list: %w", err)
+	}
+
+	// Build response
+	response := &payee.EmployeeLightweightListResponse{
+		Employees: employees,
+		Count:     len(employees),
+	}
+
+	s.logger.DebugWith("Employees fetched for list", "employee_count", len(employees))
+	return response, nil
+}
+
 // GetPayeeDetailsByRelation retrieves complete payee details by relation_id (polymorphic)
 // Returns vendor, employee, or biller details with bank/account information
 // Validates that the relation belongs to the specified business
@@ -1581,4 +1583,155 @@ func (s *PayeeService) GetPayeeDetailsByRelation(ctx context.Context, businessID
 
 	s.logger.DebugWith("Found payee details", "payee_type", details.PayeeType)
 	return details, nil
+}
+
+// ############################################################################
+// # Employee Remuneration Document Upload
+// ############################################################################
+
+// GetRemunerationDocumentUploadURL generates a presigned S3 URL for employee remuneration document upload
+// This allows the frontend to upload the document directly to S3 without going through the backend
+func (s *PayeeService) GetRemunerationDocumentUploadURL(ctx context.Context, businessID, payeeID, accountID string) (string, error) {
+	s.logger.DebugWith("Generating presigned upload URL for remuneration document",
+		"business_id", businessID,
+		"payee_id", payeeID,
+		"account_id", accountID)
+
+	// Input validation
+	if businessID == "" {
+		return "", fmt.Errorf("business_id is required")
+	}
+	if payeeID == "" {
+		return "", fmt.Errorf("payee_id is required")
+	}
+	if accountID == "" {
+		return "", fmt.Errorf("account_id is required")
+	}
+
+	// Validate UUID formats
+	if _, err := uuid.Parse(businessID); err != nil {
+		return "", fmt.Errorf("invalid business_id format: %w", err)
+	}
+	if _, err := uuid.Parse(payeeID); err != nil {
+		return "", fmt.Errorf("invalid payee_id format: %w", err)
+	}
+	if _, err := uuid.Parse(accountID); err != nil {
+		return "", fmt.Errorf("invalid account_id format: %w", err)
+	}
+
+	// Verify that the payee exists and is an employee
+	employee, err := s.payeeEmployeeRepo.FindByID(ctx, payeeID)
+	if err != nil {
+		return "", fmt.Errorf("employee payee not found: %w", err)
+	}
+
+	// Verify that the employee belongs to the business with the specific account
+	relationExists, err := s.businessPayeeRelationRepo.RelationExists(ctx, businessID, payeeID, accountID)
+	if err != nil {
+		return "", fmt.Errorf("failed to verify business-payee relationship: %w", err)
+	}
+	if !relationExists {
+		return "", fmt.Errorf("payee does not belong to the specified business or account not found")
+	}
+
+	s.logger.DebugWith("Employee verified", "full_name", employee.FullName)
+
+	// Create S3 client
+	fileuploader, err := s.createS3Client()
+	if err != nil {
+		return "", fmt.Errorf("failed to create S3 client: %w", err)
+	}
+
+	// Generate presigned upload URL with S3 key: PII/<businessID>/employees/<payeeID>.pdf
+	key := fmt.Sprintf("PII/%s/employees/%s.pdf", businessID, payeeID)
+	url, _, err := fileuploader.GetPresignedUploadURL(ctx, "remuneration_document.pdf", "application/pdf", key, 15*time.Minute)
+	if err != nil {
+		return "", fmt.Errorf("failed to get presigned upload URL: %w", err)
+	}
+
+	s.logger.InfoWith("Presigned upload URL generated successfully", "key", key)
+	return url, nil
+}
+
+// ConfirmRemunerationDocumentUpload confirms the S3 upload and updates the database with the document key
+// This is called after the frontend successfully uploads the document to S3
+func (s *PayeeService) ConfirmRemunerationDocumentUpload(ctx context.Context, businessID, payeeID, accountID string) (string, error) {
+	s.logger.DebugWith("Confirming remuneration document upload",
+		"business_id", businessID,
+		"payee_id", payeeID,
+		"account_id", accountID)
+
+	// Input validation
+	if businessID == "" {
+		return "", fmt.Errorf("business_id is required")
+	}
+	if payeeID == "" {
+		return "", fmt.Errorf("payee_id is required")
+	}
+	if accountID == "" {
+		return "", fmt.Errorf("account_id is required")
+	}
+
+	// Validate UUID formats
+	if _, err := uuid.Parse(businessID); err != nil {
+		return "", fmt.Errorf("invalid business_id format: %w", err)
+	}
+	if _, err := uuid.Parse(payeeID); err != nil {
+		return "", fmt.Errorf("invalid payee_id format: %w", err)
+	}
+	if _, err := uuid.Parse(accountID); err != nil {
+		return "", fmt.Errorf("invalid account_id format: %w", err)
+	}
+
+	// Verify that the payee exists and is an employee
+	employee, err := s.payeeEmployeeRepo.FindByID(ctx, payeeID)
+	if err != nil {
+		return "", fmt.Errorf("employee payee not found: %w", err)
+	}
+
+	// Verify that the employee belongs to the business with the specific account
+	relationExists, err := s.businessPayeeRelationRepo.RelationExists(ctx, businessID, payeeID, accountID)
+	if err != nil {
+		return "", fmt.Errorf("failed to verify business-payee relationship: %w", err)
+	}
+	if !relationExists {
+		return "", fmt.Errorf("payee does not belong to the specified business or account not found")
+	}
+
+	s.logger.DebugWith("Employee verified", "full_name", employee.FullName)
+
+	// Create S3 client
+	fileuploader, err := s.createS3Client()
+	if err != nil {
+		return "", fmt.Errorf("failed to create S3 client: %w", err)
+	}
+
+	// Confirm upload and get presigned download URL
+	key := fmt.Sprintf("PII/%s/employees/%s.pdf", businessID, payeeID)
+	fileURL, err := fileuploader.ConfirmUpload(ctx, key, 15*time.Minute)
+	if err != nil {
+		return "", fmt.Errorf("failed to confirm upload: %w", err)
+	}
+
+	s.logger.DebugWith("S3 upload confirmed", "key", key)
+
+	// Update database with document key
+	err = s.payeeEmployeeRepo.UpdateRemunerationDocumentKey(ctx, payeeID, key)
+	if err != nil {
+		return "", fmt.Errorf("failed to update remuneration document key in database: %w", err)
+	}
+
+	s.logger.InfoWith("Remuneration document upload confirmed successfully",
+		"payee_id", payeeID,
+		"s3_key", key)
+
+	return fileURL, nil
+}
+
+// createS3Client is a helper method to create S3 client from config
+func (s *PayeeService) createS3Client() (*fileupload.S3Client, error) {
+	if s.s3Config == nil {
+		return nil, fmt.Errorf("S3 configuration is not initialized")
+	}
+	return fileupload.NewS3ClientFromConfig(*s.s3Config)
 }

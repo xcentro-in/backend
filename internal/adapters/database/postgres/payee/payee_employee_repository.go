@@ -34,10 +34,10 @@ func (r *PgPayeeEmployeeRepository) WithTx(tx client.Tx) payee.PayeeEmployeeRepo
 func (r *PgPayeeEmployeeRepository) Create(ctx context.Context, employee *payee.PayeeEmployee) error {
 	query := `
 		INSERT INTO xcentro.payee_employee (
-			payee_id, employee_code, full_name, pan, email, phone, designation, department,
+			payee_id, employee_code, full_name, email, phone, designation, department,
 			employment_type, date_of_joining, remuneration_doc_url, remuneration_doc_uploaded_at,
-			is_sensitive, pan_verification_status, pan_verified_at, metadata
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+			is_sensitive, metadata
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 		RETURNING created_at
 	`
 
@@ -56,7 +56,6 @@ func (r *PgPayeeEmployeeRepository) Create(ctx context.Context, employee *payee.
 		employee.PayeeID,
 		employee.EmployeeCode,
 		employee.FullName,
-		employee.PAN,
 		employee.Email,
 		employee.Phone,
 		employee.Designation,
@@ -66,8 +65,6 @@ func (r *PgPayeeEmployeeRepository) Create(ctx context.Context, employee *payee.
 		employee.RemunerationDocURL,
 		employee.RemunerationDocUploadedAt,
 		employee.IsSensitive,
-		employee.PANVerificationStatus,
-		employee.PANVerifiedAt,
 		metadataJSON,
 	).Scan(&employee.CreatedAt)
 
@@ -81,16 +78,16 @@ func (r *PgPayeeEmployeeRepository) Create(ctx context.Context, employee *payee.
 // FindByID retrieves an employee payee by its payee ID
 func (r *PgPayeeEmployeeRepository) FindByID(ctx context.Context, payeeID string) (*payee.PayeeEmployee, error) {
 	query := `
-		SELECT payee_id, employee_code, full_name, pan, email, phone, designation, department,
+		SELECT payee_id, employee_code, full_name, email, phone, designation, department,
 		       employment_type, date_of_joining, remuneration_doc_url, remuneration_doc_uploaded_at,
-		       is_sensitive, pan_verification_status, pan_verified_at, metadata, created_at, updated_at
+		       is_sensitive, metadata, created_at, updated_at
 		FROM xcentro.payee_employee
 		WHERE payee_id = $1
 	`
 
 	var e payee.PayeeEmployee
 	var employeeCode, email, phone, designation, department, employmentType, remunerationDocURL sql.NullString
-	var dateOfJoining, remunerationDocUploadedAt, panVerifiedAt sql.NullTime
+	var dateOfJoining, remunerationDocUploadedAt sql.NullTime
 	var metadataJSON []byte
 	var updatedAt sql.NullTime
 
@@ -98,7 +95,6 @@ func (r *PgPayeeEmployeeRepository) FindByID(ctx context.Context, payeeID string
 		&e.PayeeID,
 		&employeeCode,
 		&e.FullName,
-		&e.PAN,
 		&email,
 		&phone,
 		&designation,
@@ -108,8 +104,6 @@ func (r *PgPayeeEmployeeRepository) FindByID(ctx context.Context, payeeID string
 		&remunerationDocURL,
 		&remunerationDocUploadedAt,
 		&e.IsSensitive,
-		&e.PANVerificationStatus,
-		&panVerifiedAt,
 		&metadataJSON,
 		&e.CreatedAt,
 		&updatedAt,
@@ -136,84 +130,6 @@ func (r *PgPayeeEmployeeRepository) FindByID(ctx context.Context, payeeID string
 	if remunerationDocUploadedAt.Valid {
 		e.RemunerationDocUploadedAt = &remunerationDocUploadedAt.Time
 	}
-	if panVerifiedAt.Valid {
-		e.PANVerifiedAt = &panVerifiedAt.Time
-	}
-	if updatedAt.Valid {
-		e.UpdatedAt = updatedAt.Time
-	}
-
-	// Deserialize JSONB fields
-	if len(metadataJSON) > 0 {
-		if err := json.Unmarshal(metadataJSON, &e.Metadata); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal metadata: %w", err)
-		}
-	}
-
-	return &e, nil
-}
-
-// FindByPAN retrieves an employee payee by PAN
-func (r *PgPayeeEmployeeRepository) FindByPAN(ctx context.Context, pan string) (*payee.PayeeEmployee, error) {
-	query := `
-		SELECT payee_id, employee_code, full_name, pan, email, phone, designation, department,
-		       employment_type, date_of_joining, remuneration_doc_url, remuneration_doc_uploaded_at,
-		       is_sensitive, pan_verification_status, pan_verified_at, metadata, created_at, updated_at
-		FROM xcentro.payee_employee
-		WHERE pan = $1
-	`
-
-	var e payee.PayeeEmployee
-	var employeeCode, email, phone, designation, department, employmentType, remunerationDocURL sql.NullString
-	var dateOfJoining, remunerationDocUploadedAt, panVerifiedAt sql.NullTime
-	var metadataJSON []byte
-	var updatedAt sql.NullTime
-
-	err := r.querier.QueryRow(ctx, query, pan).Scan(
-		&e.PayeeID,
-		&employeeCode,
-		&e.FullName,
-		&e.PAN,
-		&email,
-		&phone,
-		&designation,
-		&department,
-		&employmentType,
-		&dateOfJoining,
-		&remunerationDocURL,
-		&remunerationDocUploadedAt,
-		&e.IsSensitive,
-		&e.PANVerificationStatus,
-		&panVerifiedAt,
-		&metadataJSON,
-		&e.CreatedAt,
-		&updatedAt,
-	)
-
-	if err != nil {
-		if err == pgx.ErrNoRows {
-			return nil, nil // Return nil without error if not found (normal case)
-		}
-		return nil, fmt.Errorf("failed to find employee payee by PAN: %w", err)
-	}
-
-	// Handle nullable fields
-	e.EmployeeCode = employeeCode.String
-	e.Email = email.String
-	e.Phone = phone.String
-	e.Designation = designation.String
-	e.Department = department.String
-	e.EmploymentType = employmentType.String
-	e.RemunerationDocURL = remunerationDocURL.String
-	if dateOfJoining.Valid {
-		e.DateOfJoining = &dateOfJoining.Time
-	}
-	if remunerationDocUploadedAt.Valid {
-		e.RemunerationDocUploadedAt = &remunerationDocUploadedAt.Time
-	}
-	if panVerifiedAt.Valid {
-		e.PANVerifiedAt = &panVerifiedAt.Time
-	}
 	if updatedAt.Valid {
 		e.UpdatedAt = updatedAt.Time
 	}
@@ -234,8 +150,7 @@ func (r *PgPayeeEmployeeRepository) Update(ctx context.Context, employee *payee.
 		UPDATE xcentro.payee_employee
 		SET employee_code = $2, full_name = $3, email = $4, phone = $5, designation = $6,
 		    department = $7, employment_type = $8, date_of_joining = $9,
-		    remuneration_doc_url = $10, remuneration_doc_uploaded_at = $11,
-		    pan_verification_status = $12, pan_verified_at = $13, metadata = $14
+		    remuneration_doc_url = $10, remuneration_doc_uploaded_at = $11, metadata = $12
 		WHERE payee_id = $1
 	`
 
@@ -262,8 +177,6 @@ func (r *PgPayeeEmployeeRepository) Update(ctx context.Context, employee *payee.
 		employee.DateOfJoining,
 		employee.RemunerationDocURL,
 		employee.RemunerationDocUploadedAt,
-		employee.PANVerificationStatus,
-		employee.PANVerifiedAt,
 		metadataJSON,
 	)
 
@@ -278,12 +191,34 @@ func (r *PgPayeeEmployeeRepository) Update(ctx context.Context, employee *payee.
 	return nil
 }
 
+// UpdateRemunerationDocumentKey updates the remuneration document S3 key and timestamp
+func (r *PgPayeeEmployeeRepository) UpdateRemunerationDocumentKey(ctx context.Context, payeeID, s3Key string) error {
+	query := `
+		UPDATE xcentro.payee_employee
+		SET remuneration_doc_url = $2,
+		    remuneration_doc_uploaded_at = NOW(),
+		    updated_at = NOW()
+		WHERE payee_id = $1
+	`
+
+	result, err := r.querier.Exec(ctx, query, payeeID, s3Key)
+	if err != nil {
+		return fmt.Errorf("failed to update remuneration document key: %w", err)
+	}
+
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("employee payee not found")
+	}
+
+	return nil
+}
+
 // Search searches for employee payees with filters
 func (r *PgPayeeEmployeeRepository) Search(ctx context.Context, filters payee.EmployeeSearchFilters) ([]*payee.PayeeEmployee, error) {
 	query := `
-		SELECT payee_id, employee_code, full_name, pan, email, phone, designation, department,
+		SELECT payee_id, employee_code, full_name, email, phone, designation, department,
 		       employment_type, date_of_joining, remuneration_doc_url, remuneration_doc_uploaded_at,
-		       is_sensitive, pan_verification_status, pan_verified_at, metadata, created_at, updated_at
+		       is_sensitive, metadata, created_at, updated_at
 		FROM xcentro.payee_employee
 		WHERE 1=1
 	`
@@ -295,12 +230,6 @@ func (r *PgPayeeEmployeeRepository) Search(ctx context.Context, filters payee.Em
 	if filters.FullName != "" {
 		query += fmt.Sprintf(" AND full_name ILIKE $%d", argIdx)
 		args = append(args, "%"+filters.FullName+"%")
-		argIdx++
-	}
-
-	if filters.PAN != "" {
-		query += fmt.Sprintf(" AND pan = $%d", argIdx)
-		args = append(args, filters.PAN)
 		argIdx++
 	}
 
@@ -341,7 +270,7 @@ func (r *PgPayeeEmployeeRepository) Search(ctx context.Context, filters payee.Em
 	for rows.Next() {
 		var e payee.PayeeEmployee
 		var employeeCode, email, phone, designation, department, employmentType, remunerationDocURL sql.NullString
-		var dateOfJoining, remunerationDocUploadedAt, panVerifiedAt sql.NullTime
+		var dateOfJoining, remunerationDocUploadedAt sql.NullTime
 		var metadataJSON []byte
 		var updatedAt sql.NullTime
 
@@ -349,7 +278,6 @@ func (r *PgPayeeEmployeeRepository) Search(ctx context.Context, filters payee.Em
 			&e.PayeeID,
 			&employeeCode,
 			&e.FullName,
-			&e.PAN,
 			&email,
 			&phone,
 			&designation,
@@ -359,8 +287,6 @@ func (r *PgPayeeEmployeeRepository) Search(ctx context.Context, filters payee.Em
 			&remunerationDocURL,
 			&remunerationDocUploadedAt,
 			&e.IsSensitive,
-			&e.PANVerificationStatus,
-			&panVerifiedAt,
 			&metadataJSON,
 			&e.CreatedAt,
 			&updatedAt,
@@ -383,9 +309,6 @@ func (r *PgPayeeEmployeeRepository) Search(ctx context.Context, filters payee.Em
 		}
 		if remunerationDocUploadedAt.Valid {
 			e.RemunerationDocUploadedAt = &remunerationDocUploadedAt.Time
-		}
-		if panVerifiedAt.Valid {
-			e.PANVerifiedAt = &panVerifiedAt.Time
 		}
 		if updatedAt.Valid {
 			e.UpdatedAt = updatedAt.Time
@@ -411,11 +334,10 @@ func (r *PgPayeeEmployeeRepository) Search(ctx context.Context, filters payee.Em
 // FindByBusiness retrieves all employee payees linked to a specific business
 func (r *PgPayeeEmployeeRepository) FindByBusiness(ctx context.Context, businessID string, filters payee.EmployeeSearchFilters) ([]*payee.PayeeEmployee, error) {
 	query := `
-		SELECT e.payee_id, e.employee_code, e.full_name, e.pan, e.email, e.phone,
+		SELECT e.payee_id, e.employee_code, e.full_name, e.email, e.phone,
 		       e.designation, e.department, e.employment_type, e.date_of_joining,
 		       e.remuneration_doc_url, e.remuneration_doc_uploaded_at, e.is_sensitive,
-		       e.pan_verification_status, e.pan_verified_at, e.metadata,
-		       e.created_at, e.updated_at
+		       e.metadata, e.created_at, e.updated_at
 		FROM xcentro.payee_employee e
 		INNER JOIN xcentro.business_payee_relation r ON e.payee_id = r.payee_id
 		WHERE r.business_id = $1 AND r.is_active = TRUE
@@ -428,12 +350,6 @@ func (r *PgPayeeEmployeeRepository) FindByBusiness(ctx context.Context, business
 	if filters.FullName != "" {
 		query += fmt.Sprintf(" AND e.full_name ILIKE $%d", argIdx)
 		args = append(args, "%"+filters.FullName+"%")
-		argIdx++
-	}
-
-	if filters.PAN != "" {
-		query += fmt.Sprintf(" AND e.pan = $%d", argIdx)
-		args = append(args, filters.PAN)
 		argIdx++
 	}
 
@@ -474,7 +390,7 @@ func (r *PgPayeeEmployeeRepository) FindByBusiness(ctx context.Context, business
 	for rows.Next() {
 		var e payee.PayeeEmployee
 		var employeeCode, email, phone, designation, department, employmentType, remunerationDocURL sql.NullString
-		var dateOfJoining, remunerationDocUploadedAt, panVerifiedAt sql.NullTime
+		var dateOfJoining, remunerationDocUploadedAt sql.NullTime
 		var metadataJSON []byte
 		var updatedAt sql.NullTime
 
@@ -482,7 +398,6 @@ func (r *PgPayeeEmployeeRepository) FindByBusiness(ctx context.Context, business
 			&e.PayeeID,
 			&employeeCode,
 			&e.FullName,
-			&e.PAN,
 			&email,
 			&phone,
 			&designation,
@@ -492,8 +407,6 @@ func (r *PgPayeeEmployeeRepository) FindByBusiness(ctx context.Context, business
 			&remunerationDocURL,
 			&remunerationDocUploadedAt,
 			&e.IsSensitive,
-			&e.PANVerificationStatus,
-			&panVerifiedAt,
 			&metadataJSON,
 			&e.CreatedAt,
 			&updatedAt,
@@ -516,9 +429,6 @@ func (r *PgPayeeEmployeeRepository) FindByBusiness(ctx context.Context, business
 		}
 		if remunerationDocUploadedAt.Valid {
 			e.RemunerationDocUploadedAt = &remunerationDocUploadedAt.Time
-		}
-		if panVerifiedAt.Valid {
-			e.PANVerifiedAt = &panVerifiedAt.Time
 		}
 		if updatedAt.Valid {
 			e.UpdatedAt = updatedAt.Time

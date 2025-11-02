@@ -178,7 +178,6 @@ type PayeeEmployee struct {
 	PayeeID                 string             `json:"payee_id"` // FK → payee_master.payee_id
 	EmployeeCode            string             `json:"employee_code,omitempty"`
 	FullName                string             `json:"full_name"`
-	PAN                     string             `json:"pan"` // Permanent Account Number
 	Email                   string             `json:"email,omitempty"`
 	Phone                   string             `json:"phone,omitempty"`
 	Designation             string             `json:"designation,omitempty"`
@@ -188,8 +187,6 @@ type PayeeEmployee struct {
 	RemunerationDocURL      string             `json:"remuneration_doc_url,omitempty"` // S3 URL
 	RemunerationDocUploadedAt *time.Time       `json:"remuneration_doc_uploaded_at,omitempty"`
 	IsSensitive             bool               `json:"is_sensitive"` // Always true
-	PANVerificationStatus   VerificationStatus `json:"pan_verification_status"`
-	PANVerifiedAt           *time.Time         `json:"pan_verified_at,omitempty"`
 	CreatedAt               time.Time          `json:"created_at"`
 	UpdatedAt               time.Time          `json:"updated_at"`
 	Metadata                map[string]any     `json:"metadata,omitempty"`

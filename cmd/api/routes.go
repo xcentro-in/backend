@@ -164,7 +164,8 @@ func registerV1PayeeRoutes(clients *externalClients, cfg *config.Config, group *
 
 	payeeGroup := group.Group("/payees")
 	payee.RegisterPayeeRoutes(payeeGroup, payeeService, authSvc)
-	payee.RegisterVendorDropdownRoute(group, payeeService)
+	payee.RegisterVendorDropdownRoute(group, payeeService, authSvc)
+	payee.RegisterEmployeeListRoute(group, payeeService, authSvc)
 }
 
 func registerV1VoucherRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {

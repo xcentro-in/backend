@@ -85,7 +85,7 @@ func (h *PayeeHandler) OnboardPayee(c echo.Context) error {
 				"message": "employee data is required for payee_type=employee",
 			})
 		}
-		h.logger.DebugWith("Employee onboard request", "pan", req.Employee.PAN, "display_name", req.DisplayName)
+		h.logger.DebugWith("Employee onboard request", "full_name", req.Employee.FullName, "display_name", req.DisplayName)
 	case payee.PayeeTypeBiller:
 		if req.Biller == nil {
 			return c.JSON(http.StatusBadRequest, map[string]any{
@@ -304,9 +304,14 @@ func (h *PayeeHandler) UpdatePayee(c echo.Context) error {
 
 	h.logger.DebugWith("Request body parsed", "display_name", req.DisplayName, "is_favorite", req.IsFavorite)
 
-	// Extract business_id from JWT
-	// TODO: Extract from JWT token claims
-	businessID := "bid12345"
+	// Extract business_id from X-Business-ID header
+	businessID := c.Request().Header.Get("X-Business-ID")
+	if businessID == "" {
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "MISSING_BUSINESS_ID",
+			"message": "X-Business-ID header is required",
+		})
+	}
 	h.logger.DebugWith("Business context", "business_id", businessID)
 
 	// Convert to service request
@@ -350,9 +355,14 @@ func (h *PayeeHandler) DeactivatePayee(c echo.Context) error {
 
 	h.logger.DebugWith("Path parameters", "payee_id", payeeID, "account_id", accountID)
 
-	// Extract business_id from JWT
-	// TODO: Extract from JWT token claims
-	businessID := "bid12345"
+	// Extract business_id from X-Business-ID header
+	businessID := c.Request().Header.Get("X-Business-ID")
+	if businessID == "" {
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "MISSING_BUSINESS_ID",
+			"message": "X-Business-ID header is required",
+		})
+	}
 	h.logger.DebugWith("Business context", "business_id", businessID)
 
 	// Call payee service
@@ -373,22 +383,22 @@ func (h *PayeeHandler) DeactivatePayee(c echo.Context) error {
 	})
 }
 
-// GetVendorsForDropdown handles GET /vendors?bid=xxx - Get lightweight vendor list for dropdown
+// GetVendorsForDropdown handles GET /vendors - Get lightweight vendor list for dropdown
 // Returns only active vendors with minimal fields for voucher creation UI
 func (h *PayeeHandler) GetVendorsForDropdown(c echo.Context) error {
 	h.logger.InfoWith("GetVendorsForDropdown API called")
 
-	// Extract business_id from query parameter
-	businessID := c.QueryParam("bid")
+	// Extract business_id from X-Business-ID header
+	businessID := c.Request().Header.Get("X-Business-ID")
 	if businessID == "" {
-		h.logger.WarnWith("Missing business_id query parameter")
+		h.logger.WarnWith("Missing X-Business-ID header")
 		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "invalid_request",
-			"message": "business_id (bid) query parameter is required",
+			"error":   "MISSING_BUSINESS_ID",
+			"message": "X-Business-ID header is required",
 		})
 	}
 
-	h.logger.DebugWith("Query parameter", "business_id", businessID)
+	h.logger.DebugWith("Business context", "business_id", businessID)
 
 	// Call payee service
 	h.logger.DebugWith("Calling payee service")
@@ -406,5 +416,180 @@ func (h *PayeeHandler) GetVendorsForDropdown(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]any{
 		"status": "success",
 		"data":   resp,
+	})
+}
+
+// GetEmployeesForList handles GET /employees - Get lightweight employee list for tabulated display
+// Returns only active employees with minimal fields
+func (h *PayeeHandler) GetEmployeesForList(c echo.Context) error {
+	h.logger.InfoWith("GetEmployeesForList API called")
+
+	// Extract business_id from X-Business-ID header
+	businessID := c.Request().Header.Get("X-Business-ID")
+	if businessID == "" {
+		h.logger.WarnWith("Missing X-Business-ID header")
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "MISSING_BUSINESS_ID",
+			"message": "X-Business-ID header is required",
+		})
+	}
+
+	h.logger.DebugWith("Business context", "business_id", businessID)
+
+	// Call payee service
+	h.logger.DebugWith("Calling payee service")
+	resp, err := h.payeeService.GetEmployeesForList(c.Request().Context(), businessID)
+	if err != nil {
+		h.logger.ErrorWith("Failed to fetch employees", "error", err)
+		return c.JSON(http.StatusInternalServerError, map[string]any{
+			"error":   "fetch_failed",
+			"message": err.Error(),
+		})
+	}
+
+	h.logger.InfoWith("Employees fetched for list", "count", resp.Count)
+
+	return c.JSON(http.StatusOK, map[string]any{
+		"status": "success",
+		"data":   resp,
+	})
+}
+
+// GetRemunerationDocumentUploadURL handles POST /payees/remuneration/upload-url
+// Returns a presigned S3 URL for uploading employee remuneration document
+func (h *PayeeHandler) GetRemunerationDocumentUploadURL(c echo.Context) error {
+	h.logger.InfoWith("GetRemunerationDocumentUploadURL API called")
+
+	// Parse request body
+	var req struct {
+		PayeeID   string `json:"payee_id"`
+		AccountID string `json:"account_id"`
+	}
+
+	if err := c.Bind(&req); err != nil {
+		h.logger.ErrorWith("Error binding request", "error", err)
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "invalid_request",
+			"message": "Invalid request body",
+		})
+	}
+
+	// Validate required fields
+	if req.PayeeID == "" {
+		h.logger.WarnWith("Missing payee_id in request body")
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "invalid_request",
+			"message": "payee_id is required",
+		})
+	}
+	if req.AccountID == "" {
+		h.logger.WarnWith("Missing account_id in request body")
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "invalid_request",
+			"message": "account_id is required",
+		})
+	}
+
+	// Extract business_id from X-Business-ID header
+	businessID := c.Request().Header.Get("X-Business-ID")
+	if businessID == "" {
+		h.logger.WarnWith("Missing X-Business-ID header")
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "MISSING_BUSINESS_ID",
+			"message": "X-Business-ID header is required",
+		})
+	}
+
+	h.logger.DebugWith("Request parameters", "payee_id", req.PayeeID, "account_id", req.AccountID, "business_id", businessID)
+
+	// Call payee service to get presigned upload URL
+	h.logger.DebugWith("Calling payee service")
+	uploadURL, err := h.payeeService.GetRemunerationDocumentUploadURL(c.Request().Context(), businessID, req.PayeeID, req.AccountID)
+	if err != nil {
+		h.logger.ErrorWith("Failed to get upload URL", "error", err)
+		return c.JSON(http.StatusInternalServerError, map[string]any{
+			"error":   "upload_url_failed",
+			"message": err.Error(),
+		})
+	}
+
+	h.logger.InfoWith("Presigned upload URL generated", "payee_id", req.PayeeID, "account_id", req.AccountID)
+
+	return c.JSON(http.StatusOK, map[string]any{
+		"status": "success",
+		"data": map[string]any{
+			"upload_url": uploadURL,
+			"expires_in": "15 minutes",
+		},
+	})
+}
+
+// ConfirmRemunerationDocumentUpload handles POST /payees/remuneration/confirm-upload
+// Confirms the S3 upload and updates the database with the document key
+func (h *PayeeHandler) ConfirmRemunerationDocumentUpload(c echo.Context) error {
+	h.logger.InfoWith("ConfirmRemunerationDocumentUpload API called")
+
+	// Parse request body
+	var req struct {
+		PayeeID   string `json:"payee_id"`
+		AccountID string `json:"account_id"`
+	}
+
+	if err := c.Bind(&req); err != nil {
+		h.logger.ErrorWith("Error binding request", "error", err)
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "invalid_request",
+			"message": "Invalid request body",
+		})
+	}
+
+	// Validate required fields
+	if req.PayeeID == "" {
+		h.logger.WarnWith("Missing payee_id in request body")
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "invalid_request",
+			"message": "payee_id is required",
+		})
+	}
+	if req.AccountID == "" {
+		h.logger.WarnWith("Missing account_id in request body")
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "invalid_request",
+			"message": "account_id is required",
+		})
+	}
+
+	// Extract business_id from X-Business-ID header
+	businessID := c.Request().Header.Get("X-Business-ID")
+	if businessID == "" {
+		h.logger.WarnWith("Missing X-Business-ID header")
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "MISSING_BUSINESS_ID",
+			"message": "X-Business-ID header is required",
+		})
+	}
+
+	h.logger.DebugWith("Request parameters", "payee_id", req.PayeeID, "account_id", req.AccountID, "business_id", businessID)
+
+	// Call payee service to confirm upload and get presigned download URL
+	h.logger.DebugWith("Calling payee service")
+	downloadURL, err := h.payeeService.ConfirmRemunerationDocumentUpload(c.Request().Context(), businessID, req.PayeeID, req.AccountID)
+	if err != nil {
+		h.logger.ErrorWith("Failed to confirm upload", "error", err)
+		return c.JSON(http.StatusInternalServerError, map[string]any{
+			"error":   "confirm_upload_failed",
+			"message": err.Error(),
+		})
+	}
+
+	h.logger.InfoWith("Remuneration document upload confirmed", "payee_id", req.PayeeID, "account_id", req.AccountID)
+
+	return c.JSON(http.StatusOK, map[string]any{
+		"status":  "success",
+		"message": "Document upload confirmed successfully",
+		"data": map[string]any{
+			"document_url": downloadURL,
+			"expires_in":   "15 minutes",
+		},
 	})
 }

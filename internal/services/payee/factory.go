@@ -86,6 +86,7 @@ func (f *PayeeServiceFactory) NewPayeeService() *PayeeService {
 		crossVerificationSvc,
 		f.txManager,
 		f.businessService,
+		&f.config.S3,        // S3 configuration for document uploads
 		log,                 // logger instance
 	)
 }

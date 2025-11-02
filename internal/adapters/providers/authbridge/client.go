@@ -238,25 +238,19 @@ func (c *AuthBridgeClient) getMockResponse(req DocumentRequest) (map[string]inte
 	case BANK_VERIFY:
 		// Mock Bank Account verification
 		return map[string]interface{}{
-			"status":  float64(1),
-			"message": "Bank account verification successful",
-			"data": map[string]interface{}{
-				"msg": map[string]interface{}{
-					"Account Holder Name": "Axxxxxx",
-					"Bank Account Number": "0xxxxxxxx",
-					"Bank Branch - Address": map[string]interface{}{
-						"Address":  "Ixxxxxx",
-						"Branch":   "Sxxxxx",
-						"City":     "Pxxxxx",
-						"Contact":  "8xxxxx",
-						"District": "Pxxxx",
-						"State":    "Hxxxx",
-					},
-					"Bank Name": "Ixxxxxxxx",
-					"IFSC Code": "Ixxxxxx",
-				},
-				"status": float64(1),
-			},
+		"msg": map[string]interface{}{
+			"accountType": "SAVINGS",
+			"beneficiaryName": "DARAHAS KOPPARAPU",
+			"clientRefId": "02112025859128",
+			"responseCode": "00",
+			"responseMsg": "SUCCESS",
+			"rrn": "530613010252",
+			"status": "SUCCESS",
+			"transDateTime": "02/11/2025 13:45:04",
+		},
+		"status": float64(1),
+		"transId": "12",
+		"tsTransId": "TS-UXR-307481",
 		}, nil
 
 	default:

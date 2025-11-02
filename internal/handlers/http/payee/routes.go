@@ -20,13 +20,34 @@ func RegisterPayeeRoutes(group *echo.Group, payeeService *payeeSvc.PayeeService,
 	group.GET("", handler.GetPayees)                           // GET /payees
 	group.GET("/details/:relation_id", handler.GetPayeeDetails) // GET /payees/details/:relation_id
 	group.DELETE("/:payee_id/accounts/:account_id", handler.DeactivatePayee) // DELETE /payees/:id/accounts/:id (kept for now)
+
+	// Employee remuneration document upload endpoints
+	group.POST("/remuneration/upload-url", handler.GetRemunerationDocumentUploadURL)       // POST /payees/remuneration/upload-url
+	group.POST("/remuneration/confirm-upload", handler.ConfirmRemunerationDocumentUpload) // POST /payees/remuneration/confirm-upload
 }
 
 // RegisterVendorDropdownRoute registers the lightweight vendor dropdown endpoint
 // This is registered separately at /v1/vendors (not under /v1/payees)
-func RegisterVendorDropdownRoute(group *echo.Group, payeeService *payeeSvc.PayeeService) {
+func RegisterVendorDropdownRoute(group *echo.Group, payeeService *payeeSvc.PayeeService, authService auth.AuthService) {
 	handler := NewPayeeHandler(payeeService, logger.GetDefault())
 
+	// Apply JWT middleware
+	vendorGroup := group.Group("/vendors")
+	vendorGroup.Use(middleware.JWTMiddleware(authService))
+
 	// Vendor dropdown endpoint (optimized for voucher creation UI)
-	group.GET("/vendors", handler.GetVendorsForDropdown) // GET /v1/vendors?bid=xxx
+	vendorGroup.GET("", handler.GetVendorsForDropdown) // GET /v1/vendors
+}
+
+// RegisterEmployeeListRoute registers the lightweight employee list endpoint
+// This is registered separately at /v1/employees (not under /v1/payees)
+func RegisterEmployeeListRoute(group *echo.Group, payeeService *payeeSvc.PayeeService, authService auth.AuthService) {
+	handler := NewPayeeHandler(payeeService, logger.GetDefault())
+
+	// Apply JWT middleware
+	employeeGroup := group.Group("/employees")
+	employeeGroup.Use(middleware.JWTMiddleware(authService))
+
+	// Employee list endpoint (for tabulated display)
+	employeeGroup.GET("", handler.GetEmployeesForList) // GET /v1/employees
 }

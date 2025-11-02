@@ -13,9 +13,9 @@ import (
 // OnboardPayeeRequest represents a polymorphic request to onboard a new payee
 // The PayeeType field determines which type-specific fields are required
 type OnboardPayeeRequest struct {
-	BusinessID string     `json:"business_id"` // Our customer (extracted from header)
-	AddedBy    string     `json:"-"`           // User who is adding this payee (extracted from JWT, not from request body)
-	PayeeType  PayeeType  `json:"payee_type"`  // Type discriminator: vendor, gst_payment, biller, employee
+	BusinessID string    `json:"-"` // Our customer (extracted from X-Business-ID header)
+	AddedBy    string    `json:"-"` // User who is adding this payee (extracted from JWT context)
+	PayeeType  PayeeType `json:"payee_type"` // Type discriminator: vendor, gst_payment, biller, employee
 
 	// Customer-specific metadata (common to all types)
 	DisplayName  string `json:"display_name"`            // How customer refers to this payee
@@ -65,9 +65,8 @@ type OnboardBillerData struct {
 	AutoFetch      bool           `json:"auto_fetch"`      // Enable auto bill fetching
 }
 
-// OnboardEmployeeData contains employee payee onboarding data (PAN + bank account)
+// OnboardEmployeeData contains employee payee onboarding data (bank account + employment details)
 type OnboardEmployeeData struct {
-	PAN          string  `json:"pan"`                    // 10-character PAN
 	EmployeeCode string  `json:"employee_code,omitempty"`
 	FullName     string  `json:"full_name"`
 	Email        string  `json:"email,omitempty"`
@@ -86,8 +85,8 @@ type OnboardEmployeeData struct {
 	AccountType       payment.BankAccountType `json:"account_type,omitempty"` // Optional - defaults to "current"
 	AccountLabel      string                  `json:"account_label,omitempty"`
 
-	// Remuneration document (salary slip, contract, etc.)
-	RemunerationDocURL string `json:"remuneration_doc_url,omitempty"`
+	// Note: Remuneration document is uploaded separately via dedicated upload endpoints
+	// after employee creation, not during onboarding
 }
 
 // OnboardPayeeResponse represents the response after payee onboarding
@@ -108,7 +107,7 @@ type OnboardPayeeResponse struct {
 
 // UpdateRelationRequest represents a request to update customer-payee relationship metadata
 type UpdateRelationRequest struct {
-	BusinessID string `json:"business_id"` // Our customer
+	BusinessID string `json:"-"` // Our customer (extracted from X-Business-ID header)
 	PayeeID    string `json:"payee_id"`
 	AccountID  string `json:"account_id"`
 
@@ -196,7 +195,6 @@ type BillerDetailsData struct {
 
 // EmployeeDetailsData contains employee payee-specific details
 type EmployeeDetailsData struct {
-	PAN                   string     `json:"pan"`
 	EmployeeCode          string     `json:"employee_code,omitempty"`
 	FullName              string     `json:"full_name"`
 	Email                 string     `json:"email,omitempty"`
@@ -204,7 +202,6 @@ type EmployeeDetailsData struct {
 	Designation           string     `json:"designation,omitempty"`
 	Department            string     `json:"department,omitempty"`
 	EmploymentType        string     `json:"employment_type,omitempty"`
-	PANVerificationStatus string     `json:"pan_verification_status"`
 	BankVerificationStatus string    `json:"bank_verification_status"`
 	CrossVerificationStatus string   `json:"cross_verification_status"`
 }
@@ -267,6 +264,26 @@ type VendorDropdownListResponse struct {
 }
 
 // ############################################################################
+// # Employee Lightweight List (For Tabulated Display)
+// ############################################################################
+
+// EmployeeLightweight represents minimal employee info for list display
+type EmployeeLightweight struct {
+	RelationID         string `json:"relation_id"`          // Surrogate key
+	FullName           string `json:"full_name"`            // Employee full name
+	Email              string `json:"email,omitempty"`      // Employee email
+	Phone              string `json:"phone,omitempty"`      // Employee phone
+	AccountNumberLast4 string `json:"account_number_last4"` // Last 4 digits of account number
+	IFSCCode           string `json:"ifsc_code"`            // Bank IFSC code
+}
+
+// EmployeeLightweightListResponse represents the response for employee list
+type EmployeeLightweightListResponse struct {
+	Employees []*EmployeeLightweight `json:"employees"`
+	Count     int                    `json:"count"`
+}
+
+// ############################################################################
 // # Payee Full Details (Polymorphic Response by Relation ID)
 // ############################################################################
 
@@ -290,7 +307,6 @@ type PayeeFullDetails struct {
 	State      string `json:"state,omitempty"`       // Vendor only
 
 	// Employee-specific fields
-	PAN            string `json:"pan,omitempty"`             // Employee only
 	FullName       string `json:"full_name,omitempty"`       // Employee only
 	EmployeeCode   string `json:"employee_code,omitempty"`   // Employee only
 	Designation    string `json:"designation,omitempty"`     // Employee only

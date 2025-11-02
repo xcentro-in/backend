@@ -125,8 +125,10 @@ type PayeeEmployeeRepository interface {
 	// CRUD operations
 	Create(ctx context.Context, employee *PayeeEmployee) error
 	FindByID(ctx context.Context, payeeID string) (*PayeeEmployee, error)
-	FindByPAN(ctx context.Context, pan string) (*PayeeEmployee, error)
 	Update(ctx context.Context, employee *PayeeEmployee) error
+
+	// Document management
+	UpdateRemunerationDocumentKey(ctx context.Context, payeeID, s3Key string) error
 
 	// Search operations
 	Search(ctx context.Context, filters EmployeeSearchFilters) ([]*PayeeEmployee, error)
@@ -179,6 +181,9 @@ type BusinessPayeeRelationRepository interface {
 	// Vendor Dropdown (lightweight query for voucher creation)
 	GetVendorsForDropdown(ctx context.Context, businessID string) ([]*VendorDropdownItem, error)
 
+	// Employee lightweight list (for tabulated display)
+	GetEmployeesForList(ctx context.Context, businessID string) ([]*EmployeeLightweight, error)
+
 	// Validation helper (used by voucher service)
 	ValidateRelationForBusiness(ctx context.Context, businessID, relationID string) (payeeID, accountID string, err error)
 
@@ -212,7 +217,6 @@ type BillerSearchFilters struct {
 // EmployeeSearchFilters defines search criteria for employee payees
 type EmployeeSearchFilters struct {
 	FullName       string // Partial match on full name
-	PAN            string // Exact match on PAN
 	Department     string // Exact match on department
 	EmploymentType string // Exact match on employment type
 	Limit          int

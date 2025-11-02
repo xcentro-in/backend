@@ -623,6 +623,89 @@ func (r *PgBusinessPayeeRelationRepository) GetVendorsForDropdown(ctx context.Co
 	return vendors, nil
 }
 
+// GetEmployeesForList retrieves lightweight employee list for tabulated display
+// Returns only employees with minimal fields including bank account info
+func (r *PgBusinessPayeeRelationRepository) GetEmployeesForList(ctx context.Context, businessID string) ([]*payee.EmployeeLightweight, error) {
+	query := `
+		SELECT
+			bpr.relation_id,
+			pe.full_name,
+			COALESCE(pe.email, '') as email,
+			COALESCE(pe.phone, '') as phone,
+			COALESCE(pba.account_number_encrypted, '') as account_number_encrypted,
+			COALESCE(pba.ifsc_code, '') as ifsc_code
+		FROM xcentro.business_payee_relation bpr
+		INNER JOIN xcentro.payee_master pm ON bpr.payee_id = pm.payee_id
+		INNER JOIN xcentro.payee_employee pe ON bpr.payee_id = pe.payee_id
+		LEFT JOIN xcentro.payee_bank_accounts pba ON bpr.account_id = pba.account_id
+		WHERE bpr.business_id = $1
+		  AND pm.payee_type = 'employee'
+		  AND bpr.is_active = TRUE
+		  AND pm.is_active = TRUE
+		ORDER BY pe.full_name ASC
+	`
+
+	rows, err := r.querier.Query(ctx, query, businessID)
+	if err != nil {
+		r.logger.ErrorWith("failed to query employees for list",
+			"error", err,
+			"business_id", businessID)
+		return nil, fmt.Errorf("failed to query employees for list: %w", err)
+	}
+	defer rows.Close()
+
+	var employees []*payee.EmployeeLightweight
+	for rows.Next() {
+		var employee payee.EmployeeLightweight
+		var encryptedAccountNumber string
+
+		err := rows.Scan(
+			&employee.RelationID,
+			&employee.FullName,
+			&employee.Email,
+			&employee.Phone,
+			&encryptedAccountNumber,
+			&employee.IFSCCode,
+		)
+		if err != nil {
+			r.logger.ErrorWith("failed to scan employee lightweight item",
+				"error", err,
+				"business_id", businessID)
+			return nil, fmt.Errorf("failed to scan employee lightweight item: %w", err)
+		}
+
+		// Decrypt account number and get last 4 digits
+		if encryptedAccountNumber != "" {
+			decryptedAccountNumber, err := crypto.DecryptBankAccountNumber(encryptedAccountNumber, r.encryptionKey)
+			if err != nil {
+				r.logger.ErrorWith("failed to decrypt account number",
+					"error", err,
+					"relation_id", employee.RelationID)
+				// Don't fail the entire query, just leave account number empty
+				employee.AccountNumberLast4 = ""
+			} else {
+				// Get last 4 digits
+				if len(decryptedAccountNumber) >= 4 {
+					employee.AccountNumberLast4 = decryptedAccountNumber[len(decryptedAccountNumber)-4:]
+				} else {
+					employee.AccountNumberLast4 = decryptedAccountNumber
+				}
+			}
+		}
+
+		employees = append(employees, &employee)
+	}
+
+	if err = rows.Err(); err != nil {
+		r.logger.ErrorWith("error iterating employee rows",
+			"error", err,
+			"business_id", businessID)
+		return nil, fmt.Errorf("error iterating employee rows: %w", err)
+	}
+
+	return employees, nil
+}
+
 // ValidateRelationForBusiness validates that a relation_id belongs to a business and returns payee/account IDs
 // This is used by voucher service to resolve relation_id without circular dependencies
 func (r *PgBusinessPayeeRelationRepository) ValidateRelationForBusiness(ctx context.Context, businessID, relationID string) (payeeID, accountID string, err error) {
@@ -804,7 +887,6 @@ func (r *PgBusinessPayeeRelationRepository) fetchEmployeeDetails(ctx context.Con
 	// Get employee details
 	employeeQuery := `
 		SELECT
-			pan,
 			full_name,
 			COALESCE(employee_code, '') as employee_code,
 			COALESCE(designation, '') as designation,
@@ -815,7 +897,6 @@ func (r *PgBusinessPayeeRelationRepository) fetchEmployeeDetails(ctx context.Con
 	`
 
 	err := r.querier.QueryRow(ctx, employeeQuery, payeeID).Scan(
-		&details.PAN,
 		&details.FullName,
 		&details.EmployeeCode,
 		&details.Designation,
