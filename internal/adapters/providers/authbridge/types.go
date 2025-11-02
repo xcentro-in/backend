@@ -17,7 +17,7 @@ const (
 	GSTIN       DocumentType = 23
 	CIN         DocumentType = 15
 	AADHAAR     DocumentType = 472 // Used for both LINK and STATUS actions
-	BANK_VERIFY DocumentType = 92
+	BANK_VERIFY DocumentType = 573
 )
 
 // DocumentInfo holds information about each document type including its endpoint
@@ -67,7 +67,7 @@ var DocumentRegistry = map[DocumentType]DocumentInfo{
 	BANK_VERIFY: {
 		Type:     BANK_VERIFY,
 		Name:     "BANK_VERIFY",
-		Endpoint: "https://www.truthscreen.com/v1/apicall/bank/bankAccountVerification",
+		Endpoint: "https://www.truthscreen.com/v1/apicall/bank/bav_pennyless",
 	},
 }
 
@@ -462,9 +462,9 @@ func IsValidDocumentType(docType DocumentType) bool {
 // BankVerificationRequest represents the request structure for bank verification
 type BankVerificationRequest struct {
 	DocType       DocumentType `json:"docType"`
-	TransID       string       `json:"transID"`
-	AccountNumber string       `json:"beneAccNo"`
-	IFSC          string       `json:"ifsc"`
+	TransID       string       `json:"TransID"`
+	AccountNumber string       `json:"to_account_no"`
+	IFSC          string       `json:"toIFSC"`
 }
 
 // NewBankVerificationRequest creates a new BankVerificationRequest with default DocType and action
