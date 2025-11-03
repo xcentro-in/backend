@@ -281,13 +281,21 @@ func (s *PayeeService) onboardVendor(ctx context.Context, req payee.OnboardPayee
 
 		// bankResp, err := s.bankVerificationSvc.VerifyBankAccount(ctx, bankReq)
 
-		if bankResp["status"] != business_rules.BankVerificationStatusSuccess {
-			return nil, fmt.Errorf("bank verification failed: %s", bankResp["status"])
+		// Type assert to access nested map
+		msgData, ok := bankResp["msg"].(map[string]interface{})
+		if !ok {
+			s.logger.ErrorWith("Invalid bank verification response format")
+			return nil, fmt.Errorf("invalid bank verification response format")
 		}
-		s.logger.InfoWith("Bank verification response", bankResp)
-		s.logger.InfoWith("Bank verification successful",
-			"verified_name", bankResp["verified_name"],
-			"bank_name", bankResp["bank_name"])
+
+		verificationStatus, _ := msgData["status"].(string)
+		s.logger.InfoWith("Bank verification completed", "status", verificationStatus)
+
+		// Fail fast: Abort if bank verification did not succeed
+		if verificationStatus != "SUCCESS" {
+			s.logger.ErrorWith("Bank verification failed, aborting onboarding", "status", verificationStatus)
+			return nil, fmt.Errorf("bank verification failed: account could not be verified")
+		}
 
 		// Step 6: Money rotation check
 		// if err := s.checkMoneyRotation(ctx, req.BusinessID, bankResp.VerifiedAccountName); err != nil {
@@ -329,7 +337,7 @@ func (s *PayeeService) onboardVendor(ctx context.Context, req payee.OnboardPayee
 			CastlerBeneficiaryID:    castlerPayeeResp.Result, // Store Castler payee ID
 			IsActive:                true,
 			AccountLabel:            vendor.AccountLabel,
-			VerificationData:        map[string]any{"test": "test"},
+			VerificationData:        map[string]any{"test": "test"}, // TODO: Store actual verification data
 		}
 	}
 
@@ -863,25 +871,25 @@ func (s *PayeeService) onboardEmployee(ctx context.Context, req payee.OnboardPay
 		s.logger.ErrorWith("Failed to search document", err)
 		return nil, fmt.Errorf("failed to search document: %w", err)
 	}
-		s.logger.InfoWith("Bank verification response", bankResp)
+	s.logger.InfoWith("Bank verification response", bankResp)
 
 	/*
-	// response from authbridge
-	{
-	"msg": {
-		"accountType":"SAVINGS",
-		"beneficiaryName":"DARAHAS KOPPARAPU",
-		"clientRefId":"02112025859128",
-		"responseCode":"00",
-		"responseMsg":"SUCCESS",
-		"rrn":"530613010252",
-		"status":"SUCCESS",
-		"transDateTime":"02/11/2025 13:45:04"
-		},
-		"status":1,
-		"transId":"12",
-		"tsTransId":"TS-UXR-307481"
-	}
+		// response from authbridge
+		{
+		"msg": {
+			"accountType":"SAVINGS",
+			"beneficiaryName":"DARAHAS KOPPARAPU",
+			"clientRefId":"02112025859128",
+			"responseCode":"00",
+			"responseMsg":"SUCCESS",
+			"rrn":"530613010252",
+			"status":"SUCCESS",
+			"transDateTime":"02/11/2025 13:45:04"
+			},
+			"status":1,
+			"transId":"12",
+			"tsTransId":"TS-UXR-307481"
+		}
 	*/
 
 	// Type assert to access nested map
@@ -899,6 +907,22 @@ func (s *PayeeService) onboardEmployee(ctx context.Context, req payee.OnboardPay
 		s.logger.ErrorWith("Bank verification failed, aborting onboarding", "status", verificationStatus)
 		return nil, fmt.Errorf("bank verification failed: account could not be verified")
 	}
+
+	s.logger.InfoWith("Onboarding payee to Castler")
+	castlerPayeeResp, err := s.castlerClient.OnboardPayeeToCastler(
+		ctx,
+		req.DisplayName,
+		req.ContactEmail,
+		req.ContactPhone,
+		employee.AccountNumber,
+		employee.IFSCCode,
+		employee.BankName,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("castler payee onboarding failed: %w", err)
+	}
+	s.logger.InfoWith("Castler onboarding successful",
+		"castler_payee_id", castlerPayeeResp.Result)
 
 	// // Step 5: Cross-verification (employee name vs bank account holder name)
 	// s.logger.DebugWith("Cross-verifying employee name with bank account holder name")
@@ -926,10 +950,12 @@ func (s *PayeeService) onboardEmployee(ctx context.Context, req payee.OnboardPay
 		AccountType:             accountType,
 		AccountLabel:            employee.AccountLabel,
 		IsActive:                true,
-		IsVerified:              true, // Always true at this point
+		IsVerified:              true,                    // Always true at this point
+		CastlerBeneficiaryID:    castlerPayeeResp.Result, // Store Castler payee ID
 		BankVerificationStatus:  payee.VerificationStatusSuccess,
 		CrossVerificationStatus: payee.VerificationStatusSuccess,
 		VerifiedAt:              &now,
+		VerificationData:        map[string]any{"test": "test"}, // TODO: Store actual verification data
 	}
 
 	// Step 6: ATOMIC TRANSACTION - Create all entities (master, employee, bank account, relation)
