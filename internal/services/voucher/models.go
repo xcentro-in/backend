@@ -66,16 +66,16 @@ type CreateDraftVoucherResponse struct {
 
 // UpdateVoucherRequest represents the request to update a draft voucher
 type UpdateVoucherRequest struct {
-	VoucherID     uuid.UUID `json:"-"` // From URL path parameter, not request body
-	EditorUserID  string    `json:"-"` // Set from JWT context, not from request body
+	VoucherID    uuid.UUID `json:"-"` // From URL path parameter, not request body
+	EditorUserID string    `json:"-"` // Set from JWT context, not from request body
 
 	// Payee reference (can be updated to change payee/account)
 	RelationID *uuid.UUID `json:"relation_id,omitempty"`
 
 	// Invoice details
 	InvoiceNumber  *string     `json:"invoice_number,omitempty"`
-	InvoiceDate    *time.Time  `json:"invoice_date,omitempty"`
-	InvoiceDueDate *time.Time  `json:"invoice_due_date,omitempty"`
+	InvoiceDate    *types.Date `json:"invoice_date,omitempty"`
+	InvoiceDueDate *types.Date `json:"invoice_due_date,omitempty"`
 
 	// Amounts (all in paise)
 	GrossAmount    *int64   `json:"gross_amount,omitempty"`
@@ -109,11 +109,11 @@ type UpdateVoucherRequest struct {
 
 // UpdateVoucherResponse represents the response after updating a voucher
 type UpdateVoucherResponse struct {
-	VoucherID        uuid.UUID             `json:"voucher_id"`
-	VoucherNumber    string                `json:"voucher_number"`
-	Status           voucher.VoucherStatus `json:"status"`
-	Message          string                `json:"message"`
-	UpdatedFields    []string              `json:"updated_fields"` // List of fields that were updated
+	VoucherID     uuid.UUID             `json:"voucher_id"`
+	VoucherNumber string                `json:"voucher_number"`
+	Status        voucher.VoucherStatus `json:"status"`
+	Message       string                `json:"message"`
+	UpdatedFields []string              `json:"updated_fields"` // List of fields that were updated
 }
 
 // FinalizeVoucherRequest represents the request to finalize a voucher
@@ -247,9 +247,9 @@ type CreateMultiVouchersRequest struct {
 
 // BillVoucherRequest represents a single bill in multi-bill payment
 type BillVoucherRequest struct {
-	RelationID    uuid.UUID   `json:"relation_id"` // Single identifier for business-payee-account relationship
-	InvoiceNumber string      `json:"invoice_number"`
-	InvoiceDate   *types.Date `json:"invoice_date,omitempty"`
+	RelationID       uuid.UUID              `json:"relation_id"` // Single identifier for business-payee-account relationship
+	InvoiceNumber    string                 `json:"invoice_number"`
+	InvoiceDate      *types.Date            `json:"invoice_date,omitempty"`
 	GrossAmount      int64                  `json:"gross_amount"`
 	NetAmount        int64                  `json:"net_amount"`
 	GSTAmount        int64                  `json:"gst_amount"`
@@ -332,11 +332,11 @@ type GetVouchersByPayeeRequest struct {
 type VoucherByPayeeItem struct {
 	VoucherID     uuid.UUID `json:"voucher_id"`
 	InvoiceNumber string    `json:"invoice_number"`
-	NetAmount     int64     `json:"net_amount"`      // Amount actually paid (in paise)
-	CreatedAt     time.Time `json:"created_at"`      // Voucher creation date
-	Status        string    `json:"status"`          // "Draft" or payment status
-	PaymentMethod string    `json:"payment_method"`  // e.g., "Card ****1234", "Bank ****67890"
-	Description   string    `json:"description"`     // Voucher description
+	NetAmount     int64     `json:"net_amount"`     // Amount actually paid (in paise)
+	CreatedAt     time.Time `json:"created_at"`     // Voucher creation date
+	Status        string    `json:"status"`         // "Draft" or payment status
+	PaymentMethod string    `json:"payment_method"` // e.g., "Card ****1234", "Bank ****67890"
+	Description   string    `json:"description"`    // Voucher description
 }
 
 // GetVouchersByPayeeResponse represents paginated response of vouchers for a payee
@@ -349,7 +349,7 @@ type GetVouchersByPayeeResponse struct {
 // VouchersByPayeeSummary provides aggregate statistics for payee vouchers
 type VouchersByPayeeSummary struct {
 	TotalVouchers  int64 `json:"total_vouchers"`
-	TotalAmount    int64 `json:"total_amount"`   // Sum of net amounts (in paise)
+	TotalAmount    int64 `json:"total_amount"` // Sum of net amounts (in paise)
 	DraftCount     int64 `json:"draft_count"`
 	CompletedCount int64 `json:"completed_count"`
 }
@@ -360,10 +360,10 @@ type VoucherPaymentDetailsResponse struct {
 	PaymentID        string    `json:"payment_id"`
 	VoucherID        string    `json:"voucher_id"`
 	VoucherNumber    string    `json:"voucher_number"`
-	PaymentStatus    string    `json:"payment_status"`      // success, pending, failed
-	PaymentDate      time.Time `json:"payment_date"`        // When payment was made
-	GatewayUsed      string    `json:"gateway_used"`        // jiopay, easebuzz
-	GatewayPaymentID string    `json:"gateway_payment_id"`  // Gateway transaction ID
+	PaymentStatus    string    `json:"payment_status"`     // success, pending, failed
+	PaymentDate      time.Time `json:"payment_date"`       // When payment was made
+	GatewayUsed      string    `json:"gateway_used"`       // jiopay, easebuzz
+	GatewayPaymentID string    `json:"gateway_payment_id"` // Gateway transaction ID
 
 	// Payment source details
 	PaymentMethod     string `json:"payment_method"`      // card, net_banking, upi
@@ -374,8 +374,8 @@ type VoucherPaymentDetailsResponse struct {
 	BankName          string `json:"bank_name"`           // Bank name for net banking or card issuer
 
 	// Payment amount breakdown (all in paise)
-	VoucherAmount      int64 `json:"voucher_amount"`       // Original voucher amount (what vendor gets)
-	ConvenienceFee     int64 `json:"convenience_fee"`      // Service charge (before GST)
+	VoucherAmount      int64  `json:"voucher_amount"`       // Original voucher amount (what vendor gets)
+	ConvenienceFee     int64  `json:"convenience_fee"`      // Service charge (before GST)
 	ConvenienceFeeRate string `json:"convenience_fee_rate"` // e.g., "2.00%" or "₹28.00 (fixed)"
 	GSTOnFee           int64  `json:"gst_on_fee"`           // 18% GST on convenience fee
 	GSTRate            string `json:"gst_rate"`             // e.g., "18.00%"
@@ -383,14 +383,14 @@ type VoucherPaymentDetailsResponse struct {
 	TotalAmountPaid    int64  `json:"total_amount_paid"`    // voucher_amount + total_fee_amount (what customer paid)
 
 	// Settlement details (what merchant receives)
-	SettlementStatus       string     `json:"settlement_status"`        // pending, settled, failed
-	SettledAt              *time.Time `json:"settled_at"`               // When funds were settled to merchant
-	SettlementAmount       int64      `json:"settlement_amount"`        // Amount before MDR deduction
-	MDRAmount              int64      `json:"mdr_amount"`               // Merchant Discount Rate (gateway fees)
-	MDRRate                string     `json:"mdr_rate"`                 // e.g., "1.90%"
-	NetSettlementAmount    int64      `json:"net_settlement_amount"`    // Final amount received (settlement_amount - mdr_amount)
-	SettlementReferenceID  string     `json:"settlement_reference_id"`  // Gateway settlement reference
-	SettlementUTR          string     `json:"settlement_utr"`           // Bank UTR for settlement
+	SettlementStatus      string     `json:"settlement_status"`       // pending, settled, failed
+	SettledAt             *time.Time `json:"settled_at"`              // When funds were settled to merchant
+	SettlementAmount      int64      `json:"settlement_amount"`       // Amount before MDR deduction
+	MDRAmount             int64      `json:"mdr_amount"`              // Merchant Discount Rate (gateway fees)
+	MDRRate               string     `json:"mdr_rate"`                // e.g., "1.90%"
+	NetSettlementAmount   int64      `json:"net_settlement_amount"`   // Final amount received (settlement_amount - mdr_amount)
+	SettlementReferenceID string     `json:"settlement_reference_id"` // Gateway settlement reference
+	SettlementUTR         string     `json:"settlement_utr"`          // Bank UTR for settlement
 
 	// Additional payment metadata
 	Description string                 `json:"description"`

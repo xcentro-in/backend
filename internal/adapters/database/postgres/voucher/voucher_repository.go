@@ -1848,7 +1848,7 @@ func (r *PostgresVoucherRepository) GetVoucherActivity(ctx context.Context, vouc
 	// Query strategy:
 	// 1. CTE for voucher creation activity
 	// 2. CTE for approval activities with user joins
-	// 3. TODO: UNION with payment activities when payment activity table is created
+	// 3. CTE for payment state changes with user-friendly action mapping
 	// 4. ORDER BY timestamp chronologically (oldest first)
 
 	query := `
@@ -1871,6 +1871,7 @@ func (r *PostgresVoucherRepository) GetVoucherActivity(ctx context.Context, vouc
 				va.approval_id::text as activity_id,
 				CASE
 					WHEN va.action = 'pending' THEN 'approval_requested'
+					WHEN va.action = 'edited' THEN 'voucher_edited'
 					ELSE 'approval_action'
 				END as activity_type,
 				CASE
@@ -1890,28 +1891,58 @@ func (r *PostgresVoucherRepository) GetVoucherActivity(ctx context.Context, vouc
 					WHEN va.action = 'approved' THEN 'Approved the voucher'
 					WHEN va.action = 'rejected' THEN 'Rejected the voucher'
 					WHEN va.action = 'request_changes' THEN 'Requested changes'
+					WHEN va.action = 'edited' THEN 'Edited the voucher'
 					ELSE ''
 				END as metadata
 			FROM xcentro.voucher_approvals va
 			LEFT JOIN xcentro.user_table req_user ON va.requester_user_id = req_user.id
 			LEFT JOIN xcentro.user_table app_user ON va.approver_user_id = app_user.id
 			WHERE va.voucher_id = $1
+		),
+		payment_activities AS (
+			SELECT
+				psc.state_change_id::text as activity_id,
+				'payment_activity' as activity_type,
+				COALESCE(psc.actor_user_id::text, '') as user_id,
+				CASE
+					WHEN psc.actor_type = 'user' AND psc.actor_user_id IS NOT NULL THEN COALESCE(u.name, '')
+					WHEN psc.actor_name IS NOT NULL AND psc.actor_name != '' THEN psc.actor_name
+					ELSE psc.actor_type::text
+				END as user_name,
+				-- Map internal payment actions to user-friendly strings
+				CASE
+					-- Payment lifecycle: Success paths → "Payment Initiated"
+					WHEN psc.action IN ('payment_initiated', 'payment_processing', 'payment_success') THEN 'Payment Initiated'
+					-- Payment failures
+					WHEN psc.action = 'payment_failed' THEN 'Payment Failed'
+					WHEN psc.action = 'payment_refunded' THEN 'Payment Refunded'
+					-- Payout lifecycle: In-progress → "Payment Processing"
+					WHEN psc.action IN ('payout_initiated', 'payout_processing') THEN 'Payment Processing'
+					-- Payout completed → Final success
+					WHEN psc.action = 'payout_completed' THEN 'Payment Completed to Payee'
+					-- Payout failures
+					WHEN psc.action = 'payout_failed' THEN 'Payout Failed'
+					WHEN psc.action = 'payout_timeout' THEN 'Payout Under Investigation'
+					WHEN psc.action = 'payout_cancelled' THEN 'Payout Cancelled'
+					ELSE psc.action::text
+				END as action,
+				COALESCE(psc.remarks, '') as remarks,
+				psc.action_timestamp as timestamp,
+				COALESCE(
+					CASE
+						WHEN psc.utr IS NOT NULL AND psc.utr != '' THEN 'UTR: ' || psc.utr
+						WHEN psc.provider IS NOT NULL AND psc.provider != '' THEN 'Provider: ' || psc.provider
+						ELSE ''
+					END,
+					''
+				) as metadata
+			FROM xcentro.payment_vouchers v
+			INNER JOIN xcentro.payment_state_changes psc ON psc.payment_id = v.payment_id
+			LEFT JOIN xcentro.user_table u ON psc.actor_user_id = u.id
+			WHERE v.voucher_id = $1
+			  -- Exclude settlement lifecycle (internal step, not user-facing)
+			  AND psc.action NOT IN ('settlement_pending', 'settlement_received', 'settlement_failed')
 		)
-		-- TODO: Add payment activities UNION when payment activity table is created
-		-- payment_activities AS (
-		--     SELECT
-		--         pa.payment_activity_id::text as activity_id,
-		--         pa.activity_type,
-		--         pa.user_id::text,
-		--         COALESCE(u.name, '') as user_name,
-		--         pa.status as action,
-		--         COALESCE(pa.remarks, '') as remarks,
-		--         pa.created_at as timestamp,
-		--         pa.metadata
-		--     FROM xcentro.payment_activities pa
-		--     LEFT JOIN xcentro.user_table u ON pa.user_id = u.id
-		--     WHERE pa.voucher_id = $1
-		-- )
 		SELECT
 			activity_id,
 			activity_type,
@@ -1925,9 +1956,8 @@ func (r *PostgresVoucherRepository) GetVoucherActivity(ctx context.Context, vouc
 			SELECT * FROM voucher_creation
 			UNION ALL
 			SELECT * FROM approval_activities
-			-- TODO: Uncomment when payment activity table is created
-			-- UNION ALL
-			-- SELECT * FROM payment_activities
+			UNION ALL
+			SELECT * FROM payment_activities
 		) combined_activities
 		ORDER BY timestamp ASC
 	`

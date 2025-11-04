@@ -141,39 +141,39 @@ func (s *VoucherServiceImpl) CreateDraftVoucher(ctx context.Context, req *Create
 
 	// 4. Create voucher entity
 	v := &voucher.Voucher{
-		VoucherID:        uuid.Must(uuid.NewV7()),
-		VoucherNumber:    voucherNumber,
-		VoucherDate:      now,
-		FiscalYear:       fiscalYear,
-		AccountingPeriod: accountingPeriod,
-		VoucherType:      voucher.VoucherTypePayment,
-		BusinessID:     req.BusinessID,
-		PayeeID:        payeeID,
-		AccountID:      accountID,
-		InvoiceNumber:  req.InvoiceNumber,
-		InvoiceDate:    convertDateToTimePtr(req.InvoiceDate),
-		InvoiceDueDate: convertDateToTimePtr(req.InvoiceDueDate),
-		GrossAmount:      req.GrossAmount,
-		NetAmount:        req.NetAmount,
-		Currency:         currency,
-		GSTAmount:        req.GSTAmount,
-		GSTRate:          req.GSTRate,
-		CGSTAmount:       req.CGSTAmount,
-		SGSTAmount:       req.SGSTAmount,
-		IGSTAmount:       req.IGSTAmount,
-		TDSAmount:        req.TDSAmount,
-		TDSRate:          req.TDSRate,
-		TDSSection:       req.TDSSection,
-		FeeAmount:        req.FeeAmount,
-		DiscountAmount:   req.DiscountAmount,
-		FinancialDetails: req.FinancialDetails,
-		Attachments:      req.Attachments,
-		ExpenseCategory:  req.ExpenseCategory,
-		Description:      req.Description,
-		Status:           voucher.StatusDraft,
-		PaymentID:        nil, // NULL when draft
-		ERPSyncStatus:    voucher.ERPNotSynced,
-		ERPSyncAttempts:  0,
+		VoucherID:             uuid.Must(uuid.NewV7()),
+		VoucherNumber:         voucherNumber,
+		VoucherDate:           now,
+		FiscalYear:            fiscalYear,
+		AccountingPeriod:      accountingPeriod,
+		VoucherType:           voucher.VoucherTypePayment,
+		BusinessID:            req.BusinessID,
+		PayeeID:               payeeID,
+		AccountID:             accountID,
+		InvoiceNumber:         req.InvoiceNumber,
+		InvoiceDate:           convertDateToTimePtr(req.InvoiceDate),
+		InvoiceDueDate:        convertDateToTimePtr(req.InvoiceDueDate),
+		GrossAmount:           req.GrossAmount,
+		NetAmount:             req.NetAmount,
+		Currency:              currency,
+		GSTAmount:             req.GSTAmount,
+		GSTRate:               req.GSTRate,
+		CGSTAmount:            req.CGSTAmount,
+		SGSTAmount:            req.SGSTAmount,
+		IGSTAmount:            req.IGSTAmount,
+		TDSAmount:             req.TDSAmount,
+		TDSRate:               req.TDSRate,
+		TDSSection:            req.TDSSection,
+		FeeAmount:             req.FeeAmount,
+		DiscountAmount:        req.DiscountAmount,
+		FinancialDetails:      req.FinancialDetails,
+		Attachments:           req.Attachments,
+		ExpenseCategory:       req.ExpenseCategory,
+		Description:           req.Description,
+		Status:                voucher.StatusDraft,
+		PaymentID:             nil, // NULL when draft
+		ERPSyncStatus:         voucher.ERPNotSynced,
+		ERPSyncAttempts:       0,
 		GLExpenseAccount:      req.GLExpenseAccount,
 		GLBankAccount:         req.GLBankAccount,
 		CostCenter:            req.CostCenter,
@@ -318,11 +318,11 @@ func (s *VoucherServiceImpl) UpdateVoucher(ctx context.Context, req *UpdateVouch
 		updatedFields = append(updatedFields, "invoice_number")
 	}
 	if req.InvoiceDate != nil {
-		v.InvoiceDate = req.InvoiceDate
+		v.InvoiceDate = req.InvoiceDate.ToTimePtr()
 		updatedFields = append(updatedFields, "invoice_date")
 	}
 	if req.InvoiceDueDate != nil {
-		v.InvoiceDueDate = req.InvoiceDueDate
+		v.InvoiceDueDate = req.InvoiceDueDate.ToTimePtr()
 		updatedFields = append(updatedFields, "invoice_due_date")
 	}
 
@@ -1217,8 +1217,8 @@ func (s *VoucherServiceImpl) GetVoucherPaymentDetails(ctx context.Context, vouch
 	gstOnFee := int64(0)
 	if details.FeeAmount > 0 {
 		// Assuming 18% GST (can be made configurable later)
-		convenienceFee = (details.FeeAmount * 100) / 118  // Reverse calculate base fee
-		gstOnFee = details.FeeAmount - convenienceFee     // GST is the difference
+		convenienceFee = (details.FeeAmount * 100) / 118 // Reverse calculate base fee
+		gstOnFee = details.FeeAmount - convenienceFee    // GST is the difference
 	}
 
 	// Format convenience fee rate
