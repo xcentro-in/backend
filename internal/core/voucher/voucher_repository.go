@@ -108,6 +108,11 @@ type VoucherRepository interface {
 	// Returns payment breakdown including convenience fees, GST, settlement status, etc.
 	// Returns error if voucher not found or payment not linked
 	GetPaymentDetailsByVoucher(ctx context.Context, voucherID string) (*VoucherPaymentDetails, error)
+
+	// Delete deletes a voucher by ID (only draft vouchers can be deleted)
+	// Cascades to voucher_approvals and erp_sync_queue
+	// Fails if payout_transfer_requests exist (ON DELETE RESTRICT)
+	Delete(ctx context.Context, voucherID uuid.UUID) error
 }
 
 // VoucherFilters defines filter criteria for listing vouchers

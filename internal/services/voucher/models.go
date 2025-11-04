@@ -66,7 +66,8 @@ type CreateDraftVoucherResponse struct {
 
 // UpdateVoucherRequest represents the request to update a draft voucher
 type UpdateVoucherRequest struct {
-	VoucherID uuid.UUID `json:"-"` // From URL path parameter, not request body
+	VoucherID     uuid.UUID `json:"-"` // From URL path parameter, not request body
+	EditorUserID  string    `json:"-"` // Set from JWT context, not from request body
 
 	// Payee reference (can be updated to change payee/account)
 	RelationID *uuid.UUID `json:"relation_id,omitempty"`

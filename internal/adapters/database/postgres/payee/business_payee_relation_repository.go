@@ -633,7 +633,8 @@ func (r *PgBusinessPayeeRelationRepository) GetEmployeesForList(ctx context.Cont
 			COALESCE(pe.email, '') as email,
 			COALESCE(pe.phone, '') as phone,
 			COALESCE(pba.account_number_encrypted, '') as account_number_encrypted,
-			COALESCE(pba.ifsc_code, '') as ifsc_code
+			COALESCE(pba.ifsc_code, '') as ifsc_code,
+			pe.remuneration_doc_verified
 		FROM xcentro.business_payee_relation bpr
 		INNER JOIN xcentro.payee_master pm ON bpr.payee_id = pm.payee_id
 		INNER JOIN xcentro.payee_employee pe ON bpr.payee_id = pe.payee_id
@@ -666,6 +667,7 @@ func (r *PgBusinessPayeeRelationRepository) GetEmployeesForList(ctx context.Cont
 			&employee.Phone,
 			&encryptedAccountNumber,
 			&employee.IFSCCode,
+			&employee.DocVerified,
 		)
 		if err != nil {
 			r.logger.ErrorWith("failed to scan employee lightweight item",

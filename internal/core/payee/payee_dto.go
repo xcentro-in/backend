@@ -275,6 +275,7 @@ type EmployeeLightweight struct {
 	Phone              string `json:"phone,omitempty"`      // Employee phone
 	AccountNumberLast4 string `json:"account_number_last4"` // Last 4 digits of account number
 	IFSCCode           string `json:"ifsc_code"`            // Bank IFSC code
+	DocVerified        bool   `json:"doc_verified"`         // Whether remuneration document is uploaded and verified
 }
 
 // EmployeeLightweightListResponse represents the response for employee list

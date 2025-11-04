@@ -27,6 +27,9 @@ type VoucherService interface {
 	// UpdateVoucher updates a draft voucher (only draft vouchers can be updated)
 	UpdateVoucher(ctx context.Context, req *UpdateVoucherRequest) (*UpdateVoucherResponse, error)
 
+	// DeleteVoucher deletes a voucher (only draft vouchers can be deleted)
+	DeleteVoucher(ctx context.Context, voucherID uuid.UUID, businessID uuid.UUID) error
+
 	// ListVouchersForBusiness lists vouchers for a business with filters and pagination
 	ListVouchersForBusiness(ctx context.Context, businessID uuid.UUID, filters voucher.VoucherFilters) (*VoucherListResponse, error)
 
@@ -288,8 +291,9 @@ func (s *VoucherServiceImpl) UpdateVoucher(ctx context.Context, req *UpdateVouch
 	}
 
 	// 2. Verify voucher is in draft status (only drafts can be updated)
+	// Paid/finalized vouchers cannot be modified for audit and compliance reasons
 	if v.Status != voucher.StatusDraft {
-		return nil, fmt.Errorf("can only update draft vouchers (current status: %s)", v.Status)
+		return nil, fmt.Errorf("cannot update paid or finalized voucher. Only draft vouchers can be edited (current status: %s)", v.Status)
 	}
 
 	// 3. Track updated fields
@@ -428,7 +432,26 @@ func (s *VoucherServiceImpl) UpdateVoucher(ctx context.Context, req *UpdateVouch
 		return nil, fmt.Errorf("failed to update voucher: %w", err)
 	}
 
-	// 13. Return response with updated fields
+	// 13. Log edit action in approval history (audit trail)
+	if req.EditorUserID != "" && len(updatedFields) > 0 {
+		remarks := fmt.Sprintf("Voucher edited. Updated fields: %v", updatedFields)
+		approvalReq := &voucher.VoucherApprovalRequest{
+			VoucherID:       v.VoucherID.String(),
+			BusinessID:      v.BusinessID.String(),
+			RequesterUserID: req.EditorUserID,
+			ApproverUserID:  req.EditorUserID, // Same user for edits
+			Action:          voucher.ApprovalActionEdited,
+			Remarks:         remarks,
+		}
+
+		// Create approval record (non-blocking - log error but don't fail the update)
+		if _, err := s.voucherRepo.CreateOrUpdateApproval(ctx, approvalReq); err != nil {
+			// Log the error but don't fail the voucher update
+			fmt.Printf("Warning: failed to log edit action for voucher %s: %v\n", v.VoucherNumber, err)
+		}
+	}
+
+	// 14. Return response with updated fields
 	return &UpdateVoucherResponse{
 		VoucherID:     v.VoucherID,
 		VoucherNumber: v.VoucherNumber,
@@ -436,6 +459,33 @@ func (s *VoucherServiceImpl) UpdateVoucher(ctx context.Context, req *UpdateVouch
 		Message:       fmt.Sprintf("Voucher %s updated successfully", v.VoucherNumber),
 		UpdatedFields: updatedFields,
 	}, nil
+}
+
+// DeleteVoucher deletes a voucher (only draft vouchers can be deleted)
+func (s *VoucherServiceImpl) DeleteVoucher(ctx context.Context, voucherID uuid.UUID, businessID uuid.UUID) error {
+	// 1. Fetch existing voucher
+	v, err := s.voucherRepo.GetByID(ctx, voucherID)
+	if err != nil {
+		return fmt.Errorf("failed to get voucher: %w", err)
+	}
+
+	// 2. Verify voucher belongs to the business
+	if v.BusinessID != businessID {
+		return fmt.Errorf("voucher does not belong to the specified business")
+	}
+
+	// 3. Verify voucher is in draft status (only drafts can be deleted)
+	// Finalized, posted, or synced vouchers cannot be deleted for audit and compliance
+	if v.Status != voucher.StatusDraft {
+		return fmt.Errorf("cannot delete voucher with status '%s'. Only draft vouchers can be deleted", v.Status)
+	}
+
+	// 4. Delete voucher (repository handles cascade and payout transfer checks)
+	if err := s.voucherRepo.Delete(ctx, voucherID); err != nil {
+		return fmt.Errorf("failed to delete voucher: %w", err)
+	}
+
+	return nil
 }
 
 // GetVoucherDetails retrieves enriched voucher details

@@ -212,7 +212,17 @@ func (h *VoucherHandler) UpdateVoucher(c echo.Context) error {
 	// Set voucher_id from URL path
 	req.VoucherID = voucherID
 
-	h.logger.DebugWith("Update voucher request", "voucher_id", voucherID)
+	// Extract userId from JWT context for audit logging
+	userID, ok := c.Get("userId").(string)
+	if !ok || userID == "" {
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "MISSING_USER_ID",
+			"message": "User ID not found in token",
+		})
+	}
+	req.EditorUserID = userID
+
+	h.logger.DebugWith("Update voucher request", "voucher_id", voucherID, "editor_user_id", userID)
 
 	// Call service
 	h.logger.DebugWith("Calling voucher service")
@@ -230,6 +240,57 @@ func (h *VoucherHandler) UpdateVoucher(c echo.Context) error {
 		"message": "Voucher updated successfully",
 		"status":  "success",
 		"data":    resp,
+	})
+}
+
+// DeleteVoucher handles DELETE /vouchers/:id - Delete a draft voucher
+func (h *VoucherHandler) DeleteVoucher(c echo.Context) error {
+	h.logger.InfoWith("DeleteVoucher API called")
+
+	// Extract business_id from X-Business-ID header
+	businessIDStr := c.Request().Header.Get("X-Business-ID")
+	if businessIDStr == "" {
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "MISSING_BUSINESS_ID",
+			"message": "X-Business-ID header is required",
+		})
+	}
+
+	businessID, err := uuid.Parse(businessIDStr)
+	if err != nil {
+		h.logger.ErrorWith("Invalid business_id format", "error", err)
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "invalid_request",
+			"message": "Invalid business_id format",
+		})
+	}
+
+	// Parse voucher_id from path
+	voucherIDStr := c.Param("id")
+	voucherID, err := uuid.Parse(voucherIDStr)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "invalid_voucher_id",
+			"message": "Invalid voucher ID format",
+		})
+	}
+
+	h.logger.DebugWith("Delete voucher request",
+		"voucher_id", voucherID,
+		"business_id", businessID)
+
+	// Call service
+	err = h.voucherService.DeleteVoucher(c.Request().Context(), voucherID, businessID)
+	if err != nil {
+		h.logger.ErrorWith("Delete voucher failed", "error", err)
+		return h.handleError(c, err)
+	}
+
+	h.logger.InfoWith("Voucher deleted", "voucher_id", voucherID)
+
+	return c.JSON(http.StatusOK, map[string]any{
+		"message": "Voucher deleted successfully",
+		"status":  "success",
 	})
 }
 

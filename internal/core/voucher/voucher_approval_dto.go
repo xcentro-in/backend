@@ -10,6 +10,7 @@ const (
 	ApprovalActionApproved       ApprovalAction = "approved"
 	ApprovalActionRejected       ApprovalAction = "rejected"
 	ApprovalActionRequestChanges ApprovalAction = "request_changes"
+	ApprovalActionEdited         ApprovalAction = "edited"
 )
 
 // VoucherApprovalRequest represents the request to create/update an approval
@@ -18,7 +19,7 @@ type VoucherApprovalRequest struct {
 	BusinessID      string         `json:"-"` // Set from header, not from request body
 	RequesterUserID string         `json:"-"` // Set from JWT context, not from request body
 	ApproverUserID  string         `json:"approver_user_id" validate:"required,uuid"` // Who should approve
-	Action          ApprovalAction `json:"action" validate:"required,oneof=pending approved rejected request_changes"`
+	Action          ApprovalAction `json:"action" validate:"required,oneof=pending approved rejected request_changes edited"`
 	Remarks         string         `json:"remarks"` // Optional remarks
 }
 
@@ -52,7 +53,7 @@ type ApprovalHistoryItem struct {
 // VoucherApprovalInboxRequest represents request for approval inbox listing
 type VoucherApprovalInboxRequest struct {
 	BusinessID string         `json:"business_id"` // From header
-	Status     ApprovalAction `json:"status" validate:"required,oneof=pending approved rejected request_changes"`
+	Status     ApprovalAction `json:"status" validate:"required,oneof=pending approved rejected request_changes edited"`
 }
 
 // VoucherApprovalInboxItem represents a single voucher in the approval inbox

@@ -2107,3 +2107,43 @@ func (r *PostgresVoucherRepository) GetPaymentDetailsByVoucher(ctx context.Conte
 
 	return &details, nil
 }
+
+// Delete deletes a voucher by ID
+// Only draft vouchers can be deleted (business logic enforced at service layer)
+// Cascades to voucher_approvals and erp_sync_queue automatically
+// Fails if payout_transfer_requests exist (ON DELETE RESTRICT constraint)
+func (r *PostgresVoucherRepository) Delete(ctx context.Context, voucherID uuid.UUID) error {
+	// Check for payout transfers first (better error message than constraint violation)
+	var payoutCount int
+	checkQuery := `
+		SELECT COUNT(*)
+		FROM xcentro.payout_transfer_requests
+		WHERE voucher_id = $1
+	`
+
+	err := r.querier.QueryRow(ctx, checkQuery, voucherID).Scan(&payoutCount)
+	if err != nil {
+		return fmt.Errorf("failed to check payout transfers: %w", err)
+	}
+
+	if payoutCount > 0 {
+		return fmt.Errorf("cannot delete voucher: %d active payout transfer(s) exist", payoutCount)
+	}
+
+	// Delete voucher (cascades to approvals and sync queue)
+	deleteQuery := `
+		DELETE FROM xcentro.payment_vouchers
+		WHERE voucher_id = $1
+	`
+
+	result, err := r.querier.Exec(ctx, deleteQuery, voucherID)
+	if err != nil {
+		return fmt.Errorf("failed to delete voucher: %w", err)
+	}
+
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("voucher not found")
+	}
+
+	return nil
+}

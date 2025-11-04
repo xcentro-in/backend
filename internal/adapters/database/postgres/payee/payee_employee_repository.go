@@ -191,12 +191,13 @@ func (r *PgPayeeEmployeeRepository) Update(ctx context.Context, employee *payee.
 	return nil
 }
 
-// UpdateRemunerationDocumentKey updates the remuneration document S3 key and timestamp
+// UpdateRemunerationDocumentKey updates the remuneration document S3 key, timestamp, and verification status
 func (r *PgPayeeEmployeeRepository) UpdateRemunerationDocumentKey(ctx context.Context, payeeID, s3Key string) error {
 	query := `
 		UPDATE xcentro.payee_employee
 		SET remuneration_doc_url = $2,
 		    remuneration_doc_uploaded_at = NOW(),
+		    remuneration_doc_verified = TRUE,
 		    updated_at = NOW()
 		WHERE payee_id = $1
 	`
