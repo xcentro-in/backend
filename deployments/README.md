@@ -32,14 +32,22 @@ air                             # Start API with hot reload
 
 ```bash
 cd prod
-./bootstrap-production.sh --email admin@xcentro.in
+
+# Test with staging first (recommended)
+./bootstrap-production.sh --email admin@xcentro.in --staging -v
+
+# Deploy to production after staging works
+./bootstrap-production.sh --email admin@xcentro.in -v
 ```
 
 This automatically sets up everything:
-- SSL certificates
-- Database users
-- Redis ACL users
-- All services running
+- ✅ SSL certificates (Let's Encrypt via ACME HTTP-01 challenge)
+- ✅ Automatic certificate renewal (every 30 days before expiry)
+- ✅ Database users (owner, xcentro_rw)
+- ✅ Redis ACL users (redis_super, xcentro_app)
+- ✅ All services running with health checks
+- ✅ nginx reverse proxy with SSL termination
+- ✅ Containerized certbot for certificate management
 
 ## Folders
 
@@ -61,26 +69,47 @@ Traditional development setup with manual user configuration.
 
 ### `prod/` - Production
 
-Fully automated production deployment with SSL, auto-renewal, and init scripts.
+Fully automated production deployment with containerized SSL certificate management.
 
-**Tools:**
-- `bootstrap-production.sh` - One-command deployment
-- `init-letsencrypt.sh` - SSL certificate automation
-- `manage-certs.sh` - Certificate management
+**Scripts:**
+- `bootstrap-production.sh` - One-command automated deployment
+- `init-letsencrypt.sh` - SSL certificate setup (called by bootstrap)
+- `manage-certs.sh` - Certificate management utilities
+- `init-postgres.sql` - PostgreSQL user auto-creation
+- `init-redis.sh` - Redis ACL user auto-creation
+- `redis-entrypoint.sh` - Production Redis entrypoint
+
+**Configuration:**
 - `docker-compose.production.yml` - Production orchestration
+- `nginx/` - nginx configs with SSL termination
+- `.env.example` - Environment template
 
-**Features:**
-- ✅ Automatic SSL certificates (Let's Encrypt)
-- ✅ Auto-renewal configured
-- ✅ Database users created automatically
-- ✅ Redis ACL users created automatically
+**Key Features:**
+- ✅ Containerized certbot (no VM dependencies)
+- ✅ Automatic SSL certificates via Let's Encrypt ACME HTTP-01 challenge
+- ✅ Auto-renewal every 12 hours (renews 30 days before expiry)
+- ✅ Automatic nginx reload every 6 hours (picks up renewed certs)
+- ✅ Database users created on first start (via init script)
+- ✅ Redis ACL users created on every start (idempotent)
 - ✅ nginx reverse proxy with SSL termination
-- ✅ Health checks and dependencies
+- ✅ Health checks and service dependencies
+- ✅ Staging support for testing (--staging flag)
+- ✅ Completely self-sufficient folder (no external dependencies)
+
+**Container Names:**
+- `xcentro-postgres` - PostgreSQL database
+- `xcentro-redis` - Redis cache
+- `xcentro-migrate` - Database migrations
+- `xcentro-api` - API server
+- `xcentro-notification-worker` - Background worker
+- `xcentro-frontend` - Frontend application
+- `xcentro-nginx` - Reverse proxy
+- `xcentro-certbot` - Certificate management
 
 **Use for:**
 - Production deployments
 - Staging environments
-- Any public-facing deployment
+- Any internet-facing deployment requiring SSL
 
 ### `local/` - Reserved
 
@@ -92,13 +121,18 @@ Add to `.gitignore` if needed for local overrides.
 
 | Feature | Local (docker/) | Production (prod/) |
 |---------|----------------|-------------------|
-| SSL | ❌ Not configured | ✅ Automatic Let's Encrypt |
-| DB Users | 🔧 Manual setup | ✅ Auto-created |
-| Redis Users | 🔧 Manual setup | ✅ Auto-created |
-| nginx | ❌ Not included | ✅ Reverse proxy + SSL |
-| Auto-renewal | ❌ N/A | ✅ Certbot cron |
-| Setup Time | ~5 minutes | ~3 minutes |
-| Commands | 5-6 commands | 1 command |
+| SSL Certificates | ❌ Not configured | ✅ Automatic Let's Encrypt (ACME HTTP-01) |
+| Certificate Renewal | ❌ N/A | ✅ Every 12h check, renews 30d before expiry |
+| Certbot | ❌ Not included | ✅ Containerized, always running |
+| nginx | ❌ Not included | ✅ Reverse proxy + SSL termination |
+| DB Users | 🔧 Manual setup (`setup-postgres-users.sh`) | ✅ Auto-created on first start |
+| Redis ACL Users | 🔧 Manual setup (`setup-redis-users.sh`) | ✅ Auto-created on every start |
+| Container Names | ❌ Not named | ✅ Named (xcentro-*) |
+| Health Checks | ❌ Not configured | ✅ All services |
+| Service Dependencies | ❌ Manual ordering | ✅ Automatic via depends_on |
+| Setup Time | ~5 minutes | ~2-3 minutes |
+| Commands Needed | 5-6 commands | 1 command |
+| Self-Sufficient | ❌ Needs parent folder | ✅ Fully independent |
 
 ## Migration Path
 

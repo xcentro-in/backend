@@ -54,6 +54,7 @@ services:
   # - redis: uses init-redis.sh called from redis-entrypoint.sh
   migrate:
     image: ghcr.io/xcentro-in/backend-migrate:main-b495ce0
+    container_name: xcentro-migrate
     env_file: .env
     depends_on:
       postgres:
@@ -66,6 +67,7 @@ services:
   # ----------------------------------------
   api:
     image: ghcr.io/xcentro-in/backend-api:main-b495ce0
+    container_name: xcentro-api
     restart: always
     env_file: .env
     expose:
@@ -80,6 +82,7 @@ services:
 
   notification-worker:
     image: ghcr.io/xcentro-in/backend-notification-worker:main-b495ce0
+    container_name: xcentro-notification-worker
     restart: always
     env_file: .env
     depends_on:
@@ -92,6 +95,7 @@ services:
 
   frontend:
     image: ghcr.io/xcentro-in/xcentro-app:mvp
+    container_name: xcentro-frontend
     restart: always
     env_file: .env
     depends_on:

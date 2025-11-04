@@ -27,6 +27,8 @@ print_usage() {
     echo "  -d, --domains DOMAINS      Comma-separated domains (default: api.xcentro.in,app.xcentro.in)"
     echo "  -s, --staging              Use Let's Encrypt staging environment"
     echo "  --skip-ssl                 Skip SSL certificate setup"
+    echo "  --break-my-certs           Delete existing certificates and request fresh ones"
+    echo "  -v, --verbose              Show verbose certbot output"
     echo "  --logs                     Show logs (foreground mode) instead of detached mode"
     echo "  -h, --help                 Show this help message"
     echo ""
@@ -35,6 +37,7 @@ print_usage() {
     echo "  $0 -e admin@xcentro.in -d api.com,app.com"
     echo "  $0 --skip-ssl              # Start services without SSL setup"
     echo "  $0 -e admin@xcentro.in --logs  # Show logs in foreground"
+    echo "  $0 -e admin@xcentro.in --break-my-certs -v  # Fresh certs with verbose output"
     echo ""
 }
 
@@ -44,6 +47,8 @@ DOMAINS="api.xcentro.in,app.xcentro.in"
 STAGING_FLAG=""
 SKIP_SSL=0
 SHOW_LOGS=0
+BREAK_CERTS=0
+VERBOSE_FLAG=""
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -62,6 +67,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --skip-ssl)
             SKIP_SSL=1
+            shift
+            ;;
+        --break-my-certs)
+            BREAK_CERTS=1
+            shift
+            ;;
+        -v|--verbose)
+            VERBOSE_FLAG="--verbose"
             shift
             ;;
         --logs)
@@ -145,9 +158,15 @@ echo "Step 1: Setting up SSL certificates"
 echo "==========================================${NC}"
 
 if [ $SKIP_SSL -eq 0 ]; then
-    # Run init-letsencrypt.sh
+    # Run init-letsencrypt.sh with all SSL-related flags
     echo "Running SSL certificate initialization..."
-    ./init-letsencrypt.sh --email "$EMAIL" --domains "$DOMAINS" $STAGING_FLAG
+
+    # Build the command with conditional flags
+    LETSENCRYPT_CMD="./init-letsencrypt.sh --email \"$EMAIL\" --domains \"$DOMAINS\" $STAGING_FLAG"
+    [ $BREAK_CERTS -eq 1 ] && LETSENCRYPT_CMD="$LETSENCRYPT_CMD --break-my-certs"
+    [ -n "$VERBOSE_FLAG" ] && LETSENCRYPT_CMD="$LETSENCRYPT_CMD $VERBOSE_FLAG"
+
+    eval $LETSENCRYPT_CMD
 
     if [ $? -ne 0 ]; then
         echo -e "${RED}ERROR: SSL setup failed${NC}"

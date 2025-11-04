@@ -11,29 +11,47 @@ This folder contains all production deployment configurations and automation scr
 cp .env.example .env
 nano .env  # Add your credentials
 
-# 2. Deploy everything (detached mode)
-./bootstrap-production.sh --email admin@xcentro.in
+# 2. Test with staging environment first (recommended)
+./bootstrap-production.sh \
+  --email admin@xcentro.in \
+  --staging \
+  -v
 
-# OR with logs (foreground mode)
-./bootstrap-production.sh --email admin@xcentro.in --logs
+# 3. Deploy to production after staging works
+./bootstrap-production.sh \
+  --email admin@xcentro.in \
+  -v
 
-# OR skip SSL (for testing)
+# OR with logs in foreground (for debugging)
+./bootstrap-production.sh --email admin@xcentro.in --logs -v
+
+# OR skip SSL for testing services without certificates
 ./bootstrap-production.sh --skip-ssl --logs
 ```
 
 This automatically:
-- Creates SSL certificates (dummy → real Let's Encrypt)
-- Starts all services (PostgreSQL, Redis, nginx, API)
-- Creates database users (owner, xcentro_rw)
-- Creates Redis ACL users (redis_super, xcentro_app)
-- Runs migrations
+- ✅ Creates dummy SSL certificates (prevents nginx crash)
+- ✅ Starts nginx with dummy certificates
+- ✅ Validates domains are accessible via HTTP
+- ✅ Removes dummy certificates (while nginx runs)
+- ✅ Requests real Let's Encrypt certificates via ACME challenge
+- ✅ Reloads nginx with real certificates
+- ✅ Starts all services (PostgreSQL, Redis, API, frontend)
+- ✅ Creates database users automatically (owner, xcentro_rw)
+- ✅ Creates Redis ACL users automatically (redis_super, xcentro_app)
+- ✅ Runs migrations
+- ✅ Sets up automatic certificate renewal (every 12 hours check)
+- ✅ Sets up automatic nginx reload (every 6 hours)
 
 **Options:**
-- `--email` - Email for SSL notifications (required unless --skip-ssl)
-- `--domains` - Comma-separated domains (default: api.xcentro.in,app.xcentro.in)
-- `--staging` - Use Let's Encrypt staging (for testing)
-- `--skip-ssl` - Skip SSL setup
-- `--logs` - Show logs in foreground (default: detached mode)
+- `-e, --email EMAIL` - Email for SSL notifications (required unless --skip-ssl)
+- `-d, --domains DOMAINS` - Comma-separated domains (default: api.xcentro.in,app.xcentro.in)
+- `-s, --staging` - Use Let's Encrypt staging environment (for testing, no rate limits)
+- `--break-my-certs` - Delete existing certificates before requesting new ones
+- `-v, --verbose` - Show verbose certbot output for debugging
+- `--skip-ssl` - Skip SSL setup (nginx and certbot won't start)
+- `--logs` - Show Docker logs in foreground (default: detached mode)
+- `-h, --help` - Show help message
 
 ### Manual Deployment
 
@@ -117,17 +135,35 @@ REDIS_APP_PASSWORD=...
 JWT_SECRET_KEY=...
 ```
 
+## Container Names
+
+All containers have consistent naming for easy management:
+
+| Service | Container Name |
+|---------|----------------|
+| PostgreSQL | `xcentro-postgres` |
+| Redis | `xcentro-redis` |
+| Migration | `xcentro-migrate` |
+| API | `xcentro-api` |
+| Notification Worker | `xcentro-notification-worker` |
+| Frontend | `xcentro-frontend` |
+| nginx | `xcentro-nginx` |
+| Certbot | `xcentro-certbot` |
+
 ## Common Commands
 
 ```bash
 # View service status
 docker compose -f docker-compose.production.yml ps
 
-# View logs
+# View all logs
 docker compose -f docker-compose.production.yml logs -f
 
-# View specific service logs
+# View specific service logs (by service name)
 docker compose -f docker-compose.production.yml logs -f api
+
+# View specific service logs (by container name)
+docker logs -f xcentro-api
 
 # Stop all services
 docker compose -f docker-compose.production.yml down
@@ -137,9 +173,23 @@ docker compose -f docker-compose.production.yml down -v
 
 # Restart a service
 docker compose -f docker-compose.production.yml restart api
+
+# Execute command in running container
+docker exec -it xcentro-api /bin/sh
+docker exec -it xcentro-postgres psql -U postgres -d xcentro
 ```
 
 ## SSL Certificate Management
+
+### Automatic Renewal (Default)
+
+Certificates are **automatically renewed** every 30 days before expiry:
+- ✅ Certbot checks every 12 hours
+- ✅ Renews when certificate has < 30 days remaining
+- ✅ nginx reloads every 6 hours to pick up new certificates
+- ✅ **Zero manual intervention required**
+
+### Manual Certificate Management
 
 ```bash
 # List certificates and expiry dates
@@ -159,6 +209,41 @@ docker compose -f docker-compose.production.yml restart api
 
 # Reload nginx
 ./manage-certs.sh reload-nginx
+```
+
+### Certificate Lifecycle
+
+```
+Day 0:   Certificate issued (90-day validity)
+Day 60:  Certbot starts renewal attempts (30 days before expiry)
+Day 60:  ✅ Certificate renewed
+Day 60:  Within 6 hours, nginx picks up new certificate
+Day 150: Next renewal cycle begins (new cert has 90 days)
+```
+
+### Staging vs Production Certificates
+
+**Staging (Testing):**
+- Use `--staging` flag
+- Issued by "(STAGING) Let's Encrypt"
+- Not trusted by browsers (⚠️ shows certificate warning)
+- **No rate limits** - test as much as you want!
+- Perfect for testing DNS, firewall, ACME challenges
+
+**Production:**
+- No `--staging` flag
+- Issued by "Let's Encrypt"
+- Trusted by all browsers (✅ green padlock)
+- **Rate limit:** 50 certificates per domain per week
+- Use after staging tests pass
+
+**To switch from staging to production:**
+```bash
+# Stop services
+docker compose -f docker-compose.production.yml down
+
+# Deploy with production certificates
+./bootstrap-production.sh --email admin@xcentro.in --break-my-certs -v
 ```
 
 ## Database & Redis Access
