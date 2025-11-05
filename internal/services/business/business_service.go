@@ -238,7 +238,7 @@ func (s *BusinessServiceImpl) InitiateOnboarding(ctx context.Context, uid string
 
 	var newBusiness *business.Business
 
-	err := s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
+	err = s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
 		txBusinessRepo := s.businessRepo.WithTx(tx)
 		txBusinessUserRelRepo := s.businessUserRelRepo.WithTx(tx)
 
@@ -360,7 +360,7 @@ func (s *BusinessServiceImpl) CompleteKYB(ctx context.Context, uid string, userR
 	var cidDataJSON string
 	if shared.RequiresCIN(req.BusinessType) {
 		// Query existing kyb_data for this business
-		existingBiz, existingKYB, err := s.businessRepo.GetBusinessWithKYBData(ctx, req.BID)
+		_, existingKYB, err := s.businessRepo.GetBusinessWithKYBData(ctx, req.BID)
 		if err != nil {
 			return nil, fmt.Errorf("error fetching business: %w", err)
 		}
