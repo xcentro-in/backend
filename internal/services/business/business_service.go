@@ -183,35 +183,43 @@ func (s *BusinessServiceImpl) InitiateOnboarding(ctx context.Context, uid string
 	s.logger.Infof("Extracted PAN %s from GSTIN %s", pan, gstin)
 
 	// Step 4: Verify GSTIN via AuthBridge (EXTERNAL API - do BEFORE transaction)
+	// NOTE: GSTIN verification is optional - if it fails, we proceed with empty data
 	var gstDataJSON string
 	if s.verificationService != nil {
 		transID := uuid.Must(uuid.NewV7()).String()
 		gstData, err := s.verificationService.VerifyGSTIN(ctx, gstin, transID)
 		if err != nil {
-			s.logger.Errorf("GSTIN verification failed: %v", err)
-			return nil, fmt.Errorf("GSTIN verification failed: %w", err)
+			s.logger.Warnf("GSTIN verification failed: %v (proceeding with empty data)", err)
+			gstDataJSON = "{}" // Empty JSON on failure
+		} else {
+			gstDataJSON, err = verification.ToJSON(gstData.RawResponse)
+			if err != nil {
+				s.logger.Errorf("Failed to serialize GST data: %v (using empty data)", err)
+				gstDataJSON = "{}" // Empty JSON on serialization failure
+			}
 		}
-
-		gstDataJSON, err = verification.ToJSON(gstData.RawResponse)
-		if err != nil {
-			s.logger.Errorf("Failed to serialize GST data: %v", err)
-		}
+	} else {
+		gstDataJSON = "{}" // Empty JSON if verification service unavailable
 	}
 
 	// Step 5: Verify PAN via AuthBridge PAN_COM (EXTERNAL API - do BEFORE transaction)
+	// NOTE: PAN verification is optional - if it fails, we proceed with empty data
 	var itidDataJSON string
 	if s.verificationService != nil {
 		transID := uuid.Must(uuid.NewV7()).String()
 		panData, err := s.verificationService.VerifyPANCOM(ctx, pan, transID)
 		if err != nil {
-			s.logger.Errorf("PAN verification failed: %v", err)
-			return nil, fmt.Errorf("PAN verification failed: %w", err)
+			s.logger.Warnf("PAN verification failed: %v (proceeding with empty data)", err)
+			itidDataJSON = "{}" // Empty JSON on failure
+		} else {
+			itidDataJSON, err = verification.ToJSON(panData)
+			if err != nil {
+				s.logger.Errorf("Failed to serialize PAN data: %v (using empty data)", err)
+				itidDataJSON = "{}" // Empty JSON on serialization failure
+			}
 		}
-
-		itidDataJSON, err = verification.ToJSON(panData)
-		if err != nil {
-			s.logger.Errorf("Failed to serialize PAN data: %v", err)
-		}
+	} else {
+		itidDataJSON = "{}" // Empty JSON if verification service unavailable
 	}
 
 	// ============================================================================
@@ -338,19 +346,23 @@ func (s *BusinessServiceImpl) CompleteKYB(ctx context.Context, uid string, userR
 	}
 
 	// Step 5: Verify CIN if required (EXTERNAL API - do BEFORE transaction)
+	// NOTE: CIN verification is optional - if it fails, we proceed with empty data
 	var cidDataJSON string
 	if shared.RequiresCIN(req.BusinessType) && s.verificationService != nil {
 		transID := uuid.Must(uuid.NewV7()).String()
 		cinData, err := s.verificationService.VerifyCIN(ctx, req.CID, transID)
 		if err != nil {
-			s.logger.Errorf("CIN verification failed: %v", err)
-			return nil, fmt.Errorf("CIN verification failed: %w", err)
+			s.logger.Warnf("CIN verification failed: %v (proceeding with empty data)", err)
+			cidDataJSON = "{}" // Empty JSON on failure
+		} else {
+			cidDataJSON, err = verification.ToJSON(cinData.RawResponse)
+			if err != nil {
+				s.logger.Errorf("Failed to serialize CIN data: %v (using empty data)", err)
+				cidDataJSON = "{}" // Empty JSON on serialization failure
+			}
 		}
-
-		cidDataJSON, err = verification.ToJSON(cinData.RawResponse)
-		if err != nil {
-			s.logger.Errorf("Failed to serialize CIN data: %v", err)
-		}
+	} else if shared.RequiresCIN(req.BusinessType) {
+		cidDataJSON = "{}" // Empty JSON if verification service unavailable
 	}
 
 	// ============================================================================

@@ -313,25 +313,35 @@ func (s *UserServiceImpl) InitiateOnboarding(
 	}
 
 	// Step 4: Verify PAN via PAN_COM (EXTERNAL API - do BEFORE transaction)
+	// NOTE: PAN verification is optional - if it fails, we proceed with empty data
 	s.logger.Info("Verifying PAN (tax ID) for user %s", userID)
 	panComTxnID := fmt.Sprintf("pancom_%s_%d", userID, time.Now().Unix())
+	var panComResultMap map[string]interface{}
 	panComResult, err := s.verificationService.VerifyPANCOM(ctx, taxID, panComTxnID)
 	if err != nil {
-		return nil, types.NewVerificationFailedError("Tax ID", err.Error())
+		s.logger.Warnf("PAN verification failed for user %s: %v (proceeding with empty data)", userID, err)
+		panComResultMap = map[string]interface{}{} // Empty JSON on failure
+	} else {
+		panComResultMap = panComResult.PANCOMResponse
 	}
 
 	// Step 5: Verify PAN-Aadhaar link (EXTERNAL API - do BEFORE transaction)
+	// NOTE: PAN-Aadhaar verification is optional - if it fails, we proceed with empty data
 	s.logger.Info("Verifying Tax ID-National ID link for user %s", userID)
 	panAadhaarTxnID := fmt.Sprintf("panaadhaar_%s_%d", userID, time.Now().Unix())
+	var panAadhaarResultMap map[string]interface{}
 	panAadhaarResult, err := s.verificationService.VerifyPANAadhaar(ctx, taxID, nationalID, panAadhaarTxnID)
 	if err != nil {
-		return nil, types.NewVerificationFailedError("Tax ID-National ID link", err.Error())
+		s.logger.Warnf("PAN-Aadhaar link verification failed for user %s: %v (proceeding with empty data)", userID, err)
+		panAadhaarResultMap = map[string]interface{}{} // Empty JSON on failure
+	} else {
+		panAadhaarResultMap = panAadhaarResult
 	}
 
 	// Step 6: Combine verification data
 	taxIDVerificationData := &user.UserTaxIDVerificationData{
-		PANCOMData:     panComResult.PANCOMResponse,
-		PANAadhaarLink: panAadhaarResult,
+		PANCOMData:     panComResultMap,
+		PANAadhaarLink: panAadhaarResultMap,
 	}
 
 	taxIDDataJSON, err := json.Marshal(taxIDVerificationData)
