@@ -9,6 +9,7 @@ import (
 	"xcentro.in/internal/middleware"
 	"xcentro.in/internal/shared/logger"
 	"xcentro.in/internal/shared/types"
+	customValidator "xcentro.in/internal/shared/validator"
 )
 
 type UserHandler struct {
@@ -50,8 +51,20 @@ func RegisterUserRoutes(e *echo.Group, userService user.UserService, authService
 // InitiateOnboarding initiates user onboarding process (identity verification only)
 func (h *UserHandler) InitiateOnboarding(c echo.Context) error {
 	var dto user.InitiateOnboardingDTO
+
+	// Bind input
 	if err := c.Bind(&dto); err != nil {
-		return c.JSON(400, map[string]string{"message": "Invalid request payload"})
+		h.logger.Errorf("Invalid input: %v", err)
+		return c.JSON(400, map[string]any{"message": "Invalid request payload", "data": nil})
+	}
+
+	// Validate input
+	if err := c.Validate(&dto); err != nil {
+		h.logger.Errorf("Validation failed: %v", err)
+		if ve, ok := err.(*customValidator.ValidationError); ok {
+			return c.JSON(400, map[string]any{"message": "Validation failed", "errors": ve.Errors, "data": nil})
+		}
+		return c.JSON(400, map[string]any{"message": "Validation failed", "data": nil})
 	}
 
 	userID := c.Get("userId").(string)
@@ -100,8 +113,20 @@ func (h *UserHandler) InitiateOnboarding(c echo.Context) error {
 // 2. Join existing business: gstin + claimedRole in body
 func (h *UserHandler) CompleteOnboarding(c echo.Context) error {
 	var dto user.CompleteOnboardingDTO
+
+	// Bind input
 	if err := c.Bind(&dto); err != nil {
-		return c.JSON(400, map[string]string{"message": "Invalid request payload"})
+		h.logger.Errorf("Invalid input: %v", err)
+		return c.JSON(400, map[string]any{"message": "Invalid request payload", "data": nil})
+	}
+
+	// Validate input
+	if err := c.Validate(&dto); err != nil {
+		h.logger.Errorf("Validation failed: %v", err)
+		if ve, ok := err.(*customValidator.ValidationError); ok {
+			return c.JSON(400, map[string]any{"message": "Validation failed", "errors": ve.Errors, "data": nil})
+		}
+		return c.JSON(400, map[string]any{"message": "Validation failed", "data": nil})
 	}
 
 	userID := c.Get("userId").(string)
@@ -200,12 +225,20 @@ func (h *UserHandler) GetProfile(c echo.Context) error {
 // UpdateProfile updates the user's profile information (mobile only)
 func (h *UserHandler) UpdateProfile(c echo.Context) error {
 	var dto user.UpdateProfileDTO
+
+	// Bind input
 	if err := c.Bind(&dto); err != nil {
-		return c.JSON(400, map[string]string{"message": "Invalid request payload"})
+		h.logger.Errorf("Invalid input: %v", err)
+		return c.JSON(400, map[string]any{"message": "Invalid request payload", "data": nil})
 	}
 
-	if dto.Mobile == "" {
-		return c.JSON(400, map[string]string{"message": "Mobile number is required"})
+	// Validate input
+	if err := c.Validate(&dto); err != nil {
+		h.logger.Errorf("Validation failed: %v", err)
+		if ve, ok := err.(*customValidator.ValidationError); ok {
+			return c.JSON(400, map[string]any{"message": "Validation failed", "errors": ve.Errors, "data": nil})
+		}
+		return c.JSON(400, map[string]any{"message": "Validation failed", "data": nil})
 	}
 
 	userID := c.Get("userId").(string)

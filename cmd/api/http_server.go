@@ -17,6 +17,7 @@ import (
 	"xcentro.in/internal/core/metrics"
 	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/logger"
+	customValidator "xcentro.in/internal/shared/validator"
 )
 
 type externalClients struct {
@@ -66,6 +67,7 @@ func NewXcentroServer() *xcentroServer {
 	}
 
 	server.loadConfig()
+	server.registerValidator()
 	server.registerGlobalMiddleware()
 	server.registerClients()
 	server.registerRouters()
@@ -113,6 +115,11 @@ func (s *xcentroServer) loadConfig() {
 	}
 	s.log.Info("Config loaded successfully")
 	s.meta.config = cfg
+}
+
+func (s *xcentroServer) registerValidator() {
+	s.echo.Validator = customValidator.NewCustomValidator()
+	s.log.Info("Custom validator registered successfully")
 }
 
 func (s *xcentroServer) registerClients() {

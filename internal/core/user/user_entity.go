@@ -41,8 +41,8 @@ type User struct {
 type InitiateOnboardingDTO struct {
 	Name       string `json:"name" validate:"required"`
 	DOB        string `json:"dob" validate:"required"` // Format: YYYY-MM-DD
-	TaxID      string `json:"taxId" validate:"required"`
-	NationalID string `json:"nationalId" validate:"required"`
+	TaxID      string `json:"taxId" validate:"required,pan"`
+	NationalID string `json:"nationalId" validate:"required,len=12"`
 }
 
 // CompleteOnboardingDTO represents the request payload for completing onboarding
@@ -50,7 +50,7 @@ type InitiateOnboardingDTO struct {
 // Note: BusinessID is now passed via X-Business-ID header
 type CompleteOnboardingDTO struct {
 	ClaimedRole shared.UserRole `json:"claimedRole" validate:"required"`
-	GSTIN       string          `json:"gstin,omitempty"`
+	GSTIN       string          `json:"gstin,omitempty" validate:"omitempty,gstin"`
 }
 
 // OnboardingStatusDTO represents the response for onboarding status
@@ -109,5 +109,5 @@ type UserProfileDTO struct {
 
 // UpdateProfileDTO represents the request payload for updating user profile
 type UpdateProfileDTO struct {
-	Mobile string `json:"mobile" validate:"required"`
+	Mobile string `json:"mobile" validate:"required,phone_in"`
 }

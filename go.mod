@@ -5,6 +5,7 @@ go 1.25.1
 
 require (
 	github.com/aws/aws-sdk-go-v2/credentials v1.18.17
+	github.com/go-playground/validator/v10 v10.24.0
 	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/golang-migrate/migrate/v4 v4.19.0
 	github.com/google/uuid v1.6.0

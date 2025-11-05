@@ -3,8 +3,8 @@ package auth
 import "time"
 
 type AuthPayload struct {
-	Email    string `json:"email"`
-	Password string `json:"password"`
+	Email    string `json:"email" validate:"required,email"`
+	Password string `json:"password" validate:"required,strong_password"`
 	AuthCode string `query:"code"`
 }
 
@@ -45,6 +45,28 @@ type RefreshTokenResponse struct {
 // RevokeTokenRequest represents the request to revoke a refresh token
 type RevokeTokenRequest struct {
 	RefreshToken string `json:"refreshToken" validate:"required"`
+}
+
+// ResetPasswordRequest represents the request to reset password with token
+type ResetPasswordRequest struct {
+	Token       string `json:"token" validate:"required"`
+	NewPassword string `json:"newPassword" validate:"required,strong_password"`
+}
+
+// ChangePasswordRequest represents the request to change password
+type ChangePasswordRequest struct {
+	OldPassword string `json:"oldPassword" validate:"required"`
+	NewPassword string `json:"newPassword" validate:"required,strong_password"`
+}
+
+// VerifyEmailRequest represents the request to verify email with token
+type VerifyEmailRequest struct {
+	Token string `json:"token" validate:"required"`
+}
+
+// ResendVerificationRequest represents the request to resend email verification
+type ResendVerificationRequest struct {
+	Email string `json:"email" validate:"required,email"`
 }
 
 // type AuthJWTClaim struct {
