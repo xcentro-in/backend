@@ -63,6 +63,20 @@ func NewUserService(
 	}
 }
 
+// maskAadhaar masks Aadhaar number, showing only last 4 digits
+// Example: "123456789012" -> "********9012"
+func maskAadhaar(aadhaar string) string {
+	if len(aadhaar) <= 4 {
+		return aadhaar // Don't mask if too short
+	}
+	lastFour := aadhaar[len(aadhaar)-4:]
+	masked := ""
+	for i := 0; i < len(aadhaar)-4; i++ {
+		masked += "*"
+	}
+	return masked + lastFour
+}
+
 // CreateUser creates a new user with proper validation and transaction handling
 func (s *UserServiceImpl) CreateUser(ctx context.Context, authPayload auth.AuthPayload) (*user.User, error) {
 	s.logger.Info("Creating user with email: %s", authPayload.Email)
@@ -417,10 +431,13 @@ func (s *UserServiceImpl) InitiateOnboarding(
 		txUserRepo := s.userRepo.WithTx(tx)
 
 		// Step 9: Create or update user identity
+		// Mask Aadhaar number before storing (only last 4 digits visible)
+		maskedAadhaar := maskAadhaar(nationalID)
+
 		identity := &user.UserIdentity{
 			TaxID:          taxID,
 			TaxIDData:      string(taxIDDataJSON),
-			NationalID:     nationalID,
+			NationalID:     maskedAadhaar, // Store masked Aadhaar
 			NationalIDData: "{}", // Will be populated after Aadhaar verification
 			NTxnID:         "",   // Will be set below
 		}
