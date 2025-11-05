@@ -42,7 +42,7 @@ type InitiateOnboardingDTO struct {
 	Name       string `json:"name" validate:"required"`
 	DOB        string `json:"dob" validate:"required"` // Format: YYYY-MM-DD
 	TaxID      string `json:"taxId" validate:"required,pan"`
-	NationalID string `json:"nationalId" validate:"required,len=12"`
+	NationalID string `json:"nationalId" validate:"required,aadhaar"`
 }
 
 // CompleteOnboardingDTO represents the request payload for completing onboarding

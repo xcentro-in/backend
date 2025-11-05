@@ -22,6 +22,8 @@ func NewCustomValidator() *CustomValidator {
 	// Register custom validators
 	v.RegisterValidation("pan", validatePAN)
 	v.RegisterValidation("gstin", validateGSTIN)
+	v.RegisterValidation("aadhaar", validateAadhaar)
+	v.RegisterValidation("cin", validateCIN)
 	v.RegisterValidation("phone_in", validateIndianPhone)
 	v.RegisterValidation("strong_password", validateStrongPassword)
 
@@ -80,6 +82,10 @@ func getErrorMessage(err validator.FieldError) string {
 		return fmt.Sprintf("%s must be a valid PAN number (format: AAAAA9999A)", field)
 	case "gstin":
 		return fmt.Sprintf("%s must be a valid GSTIN number (format: 22AAAAA9999A1Z5)", field)
+	case "aadhaar":
+		return fmt.Sprintf("%s must be a valid 12-digit Aadhaar number", field)
+	case "cin":
+		return fmt.Sprintf("%s must be a valid CIN number (format: L12345KA2010PLC012345)", field)
 	case "phone_in":
 		return fmt.Sprintf("%s must be a valid 10-digit Indian phone number", field)
 	case "strong_password":
@@ -101,21 +107,38 @@ func getErrorMessage(err validator.FieldError) string {
 
 // validatePAN validates Indian PAN format: AAAAA9999A
 func validatePAN(fl validator.FieldLevel) bool {
-	pan := fl.Field().String()
+	pan := strings.TrimSpace(fl.Field().String())
 	panRegex := regexp.MustCompile(`^[A-Z]{5}[0-9]{4}[A-Z]{1}$`)
 	return panRegex.MatchString(pan)
 }
 
 // validateGSTIN validates Indian GSTIN format: 22AAAAA9999A1Z5
 func validateGSTIN(fl validator.FieldLevel) bool {
-	gstin := fl.Field().String()
+	gstin := strings.TrimSpace(fl.Field().String())
 	gstinRegex := regexp.MustCompile(`^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$`)
 	return gstinRegex.MatchString(gstin)
 }
 
+// validateAadhaar validates Indian Aadhaar format: 2345 6789 0123 (with optional spaces)
+// Must start with 2-9 (not 0 or 1), exactly 12 digits
+func validateAadhaar(fl validator.FieldLevel) bool {
+	aadhaar := strings.TrimSpace(fl.Field().String())
+	// Allow optional spaces: 2345 6789 0123 or 234567890123
+	aadhaarRegex := regexp.MustCompile(`^[2-9]{1}[0-9]{3}\s?[0-9]{4}\s?[0-9]{4}$`)
+	return aadhaarRegex.MatchString(aadhaar)
+}
+
+// validateCIN validates Indian Company Identification Number format: L12345KA2010PLC012345
+// Starts with L or U, 21 characters total
+func validateCIN(fl validator.FieldLevel) bool {
+	cin := strings.TrimSpace(fl.Field().String())
+	cinRegex := regexp.MustCompile(`^[LU][0-9]{5}[A-Z]{2}[0-9]{4}[A-Z]{3}[0-9]{6}$`)
+	return cinRegex.MatchString(cin)
+}
+
 // validateIndianPhone validates 10-digit Indian phone number
 func validateIndianPhone(fl validator.FieldLevel) bool {
-	phone := fl.Field().String()
+	phone := strings.TrimSpace(fl.Field().String())
 	// Must be exactly 10 digits
 	phoneRegex := regexp.MustCompile(`^[0-9]{10}$`)
 	return phoneRegex.MatchString(phone)
