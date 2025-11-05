@@ -312,17 +312,37 @@ func (s *UserServiceImpl) InitiateOnboarding(
 		return nil, types.ErrKYCAlreadyCompleted
 	}
 
-	// Step 4: Verify PAN via PAN_COM (EXTERNAL API - do BEFORE transaction)
-	// NOTE: PAN verification is optional - if it fails, we proceed with empty data
-	s.logger.Info("Verifying PAN (tax ID) for user %s", userID)
-	panComTxnID := fmt.Sprintf("pancom_%s_%d", userID, time.Now().Unix())
+	// Step 4: Check if PAN already exists and reuse verification data (SMART OPTIMIZATION)
+	// If PAN exists with valid data, reuse PANCOMData; otherwise call verification API
 	var panComResultMap map[string]interface{}
-	panComResult, err := s.verificationService.VerifyPANCOM(ctx, taxID, panComTxnID)
-	if err != nil {
-		s.logger.Warnf("PAN verification failed for user %s: %v (proceeding with empty data)", userID, err)
-		panComResultMap = map[string]interface{}{} // Empty JSON on failure
-	} else {
-		panComResultMap = panComResult.PANCOMResponse
+	existingIdentity, err := s.userRepo.GetUserIdentity(ctx, taxID)
+
+	// Check if we can reuse existing PAN verification data
+	canReusePAN := false
+	if err == nil && existingIdentity != nil && existingIdentity.TaxIDData != "" && existingIdentity.TaxIDData != "{}" {
+		// PAN exists with data - try to extract PANCOMData
+		var existingTaxIDData user.UserTaxIDVerificationData
+		if err := json.Unmarshal([]byte(existingIdentity.TaxIDData), &existingTaxIDData); err == nil {
+			if len(existingTaxIDData.PANCOMData) > 0 {
+				// Valid PANCOMData found - reuse it
+				s.logger.Infof("PAN %s already exists with valid data, reusing existing verification data", taxID)
+				panComResultMap = existingTaxIDData.PANCOMData
+				canReusePAN = true
+			}
+		}
+	}
+
+	// If we can't reuse, call verification API
+	if !canReusePAN {
+		s.logger.Infof("PAN %s not found or has no valid data, calling verification API", taxID)
+		panComTxnID := fmt.Sprintf("pancom_%s_%d", userID, time.Now().Unix())
+		panComResult, err := s.verificationService.VerifyPANCOM(ctx, taxID, panComTxnID)
+		if err != nil {
+			s.logger.Warnf("PAN verification failed for user %s: %v (proceeding with empty data)", userID, err)
+			panComResultMap = map[string]interface{}{} // Empty JSON on failure
+		} else {
+			panComResultMap = panComResult.PANCOMResponse
+		}
 	}
 
 	// Step 5: Verify PAN-Aadhaar link (EXTERNAL API - do BEFORE transaction)
