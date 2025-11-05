@@ -201,8 +201,8 @@ func (s *UserServiceImpl) GetUserProfile(ctx context.Context, userID string) (*u
 	// Add identity data if available
 	if identityData != nil {
 		profile.TaxID = identityData.TaxID
-		// Mask national ID - show only last 4 characters
-		profile.MaskedNationalID = s.maskNationalID(identityData.NationalID)
+		// National ID is already masked at DB level - no need to re-mask
+		profile.MaskedNationalID = identityData.NationalID
 	}
 
 	// Cache profile asynchronously (fire-and-forget)
@@ -214,22 +214,6 @@ func (s *UserServiceImpl) GetUserProfile(ctx context.Context, userID string) (*u
 	}()
 
 	return profile, nil
-}
-
-// maskNationalID masks the national ID showing only the last 4 characters
-func (s *UserServiceImpl) maskNationalID(nationalID string) string {
-	if nationalID == "" {
-		return ""
-	}
-	if len(nationalID) <= 4 {
-		return nationalID
-	}
-	lastFour := nationalID[len(nationalID)-4:]
-	maskedPart := ""
-	for i := 0; i < len(nationalID)-4; i++ {
-		maskedPart += "*"
-	}
-	return maskedPart + lastFour
 }
 
 // UpdateUserProfile updates user profile information in a transaction (mobile only)
