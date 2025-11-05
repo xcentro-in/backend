@@ -202,24 +202,34 @@ func (s *BusinessServiceImpl) InitiateOnboarding(ctx context.Context, uid string
 		gstDataJSON = "{}" // Empty JSON if verification service unavailable
 	}
 
-	// Step 5: Verify PAN via AuthBridge PAN_COM (EXTERNAL API - do BEFORE transaction)
-	// NOTE: PAN verification is optional - if it fails, we proceed with empty data
+	// Step 5: Check if PAN already exists in kyb_data (SMART OPTIMIZATION)
+	// If exists, reuse existing PAN data instead of calling verification API
 	var itidDataJSON string
-	if s.verificationService != nil {
-		transID := uuid.Must(uuid.NewV7()).String()
-		panData, err := s.verificationService.VerifyPANCOM(ctx, pan, transID)
-		if err != nil {
-			s.logger.Warnf("PAN verification failed: %v (proceeding with empty data)", err)
-			itidDataJSON = "{}" // Empty JSON on failure
-		} else {
-			itidDataJSON, err = verification.ToJSON(panData)
-			if err != nil {
-				s.logger.Errorf("Failed to serialize PAN data: %v (using empty data)", err)
-				itidDataJSON = "{}" // Empty JSON on serialization failure
-			}
-		}
+	existingKYB, err := s.businessRepo.GetKYBDataByPAN(ctx, pan)
+
+	if err == nil && existingKYB != nil && existingKYB.ITIDData != "" && existingKYB.ITIDData != "{}" {
+		// PAN exists with data - reuse it
+		s.logger.Infof("PAN %s already exists in kyb_data, reusing existing verification data", pan)
+		itidDataJSON = existingKYB.ITIDData
 	} else {
-		itidDataJSON = "{}" // Empty JSON if verification service unavailable
+		// PAN doesn't exist or has no data - verify it
+		s.logger.Infof("PAN %s not found in kyb_data, calling verification API", pan)
+		if s.verificationService != nil {
+			transID := uuid.Must(uuid.NewV7()).String()
+			panData, err := s.verificationService.VerifyPANCOM(ctx, pan, transID)
+			if err != nil {
+				s.logger.Warnf("PAN verification failed: %v (proceeding with empty data)", err)
+				itidDataJSON = "{}" // Empty JSON on failure
+			} else {
+				itidDataJSON, err = verification.ToJSON(panData)
+				if err != nil {
+					s.logger.Errorf("Failed to serialize PAN data: %v (using empty data)", err)
+					itidDataJSON = "{}" // Empty JSON on serialization failure
+				}
+			}
+		} else {
+			itidDataJSON = "{}" // Empty JSON if verification service unavailable
+		}
 	}
 
 	// ============================================================================
@@ -345,24 +355,41 @@ func (s *BusinessServiceImpl) CompleteKYB(ctx context.Context, uid string, userR
 		return nil, types.ErrKYBNotInitiated
 	}
 
-	// Step 5: Verify CIN if required (EXTERNAL API - do BEFORE transaction)
-	// NOTE: CIN verification is optional - if it fails, we proceed with empty data
+	// Step 5: Check if CID already exists in business's kyb_data (SMART OPTIMIZATION)
+	// If exists, reuse existing CID data instead of calling verification API
 	var cidDataJSON string
-	if shared.RequiresCIN(req.BusinessType) && s.verificationService != nil {
-		transID := uuid.Must(uuid.NewV7()).String()
-		cinData, err := s.verificationService.VerifyCIN(ctx, req.CID, transID)
+	if shared.RequiresCIN(req.BusinessType) {
+		// Query existing kyb_data for this business
+		existingBiz, existingKYB, err := s.businessRepo.GetBusinessWithKYBData(ctx, req.BID)
 		if err != nil {
-			s.logger.Warnf("CIN verification failed: %v (proceeding with empty data)", err)
-			cidDataJSON = "{}" // Empty JSON on failure
+			return nil, fmt.Errorf("error fetching business: %w", err)
+		}
+
+		// Check if CID already exists with data
+		if existingKYB != nil && existingKYB.CID == req.CID && existingKYB.CIDData != "" && existingKYB.CIDData != "{}" {
+			// CID exists with data - reuse it
+			s.logger.Infof("CIN %s already exists for business %s, reusing existing verification data", req.CID, req.BID)
+			cidDataJSON = existingKYB.CIDData
 		} else {
-			cidDataJSON, err = verification.ToJSON(cinData.RawResponse)
-			if err != nil {
-				s.logger.Errorf("Failed to serialize CIN data: %v (using empty data)", err)
-				cidDataJSON = "{}" // Empty JSON on serialization failure
+			// CID doesn't exist or has no data - verify it
+			s.logger.Infof("CIN %s not found for business %s, calling verification API", req.CID, req.BID)
+			if s.verificationService != nil {
+				transID := uuid.Must(uuid.NewV7()).String()
+				cinData, err := s.verificationService.VerifyCIN(ctx, req.CID, transID)
+				if err != nil {
+					s.logger.Warnf("CIN verification failed: %v (proceeding with empty data)", err)
+					cidDataJSON = "{}" // Empty JSON on failure
+				} else {
+					cidDataJSON, err = verification.ToJSON(cinData.RawResponse)
+					if err != nil {
+						s.logger.Errorf("Failed to serialize CIN data: %v (using empty data)", err)
+						cidDataJSON = "{}" // Empty JSON on serialization failure
+					}
+				}
+			} else {
+				cidDataJSON = "{}" // Empty JSON if verification service unavailable
 			}
 		}
-	} else if shared.RequiresCIN(req.BusinessType) {
-		cidDataJSON = "{}" // Empty JSON if verification service unavailable
 	}
 
 	// ============================================================================
