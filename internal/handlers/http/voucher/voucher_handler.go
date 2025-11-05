@@ -1,9 +1,9 @@
 package voucher
 
 import (
-	"bytes"
+	// "bytes"
 	"fmt"
-	"io"
+	// "io"
 	"net/http"
 	"strconv"
 	"time"
@@ -71,9 +71,9 @@ func (h *VoucherHandler) CreateDraftVoucher(c echo.Context) error {
 	}
 
 	// DEBUG: Print raw request body
-	bodyBytes, _ := io.ReadAll(c.Request().Body)
-	c.Request().Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
-	fmt.Printf("DEBUG - Request Body: %s\n", string(bodyBytes))
+	// bodyBytes, _ := io.ReadAll(c.Request().Body)
+	// c.Request().Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+	// fmt.Printf("DEBUG - Request Body: %s\n", string(bodyBytes))
 
 	// Parse request body
 	var req voucherSvc.CreateDraftVoucherRequest

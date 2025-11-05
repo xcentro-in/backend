@@ -24,7 +24,7 @@ type TokenizeRequest struct {
 type MakePaymentRequest struct {
 	Amount        int64              `json:"amount"`
 	Currency      string             `json:"currency"`
-	PaymentMethod string             `json:"payment_method"` // card, token-card, netbanking, upi, wallet
+	PaymentMethod string             `json:"payment_method"` // card, token_card, net_banking, upi, wallet
 	Description   string             `json:"description"`
 	CallingDevice string             `json:"calling_device"` // web, mobile, pos (default: web)
 	VoucherIDs    []string           `json:"voucher_ids,omitempty"` // Optional: Draft voucher IDs to finalize on payment success

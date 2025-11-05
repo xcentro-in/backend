@@ -718,7 +718,7 @@ func (h *PaymentHandler) validatePaymentRequest(req *MakePaymentRequest) error {
 
 	// Validate payment method
 	validMethods := map[string]bool{
-		"card": true, "token-card": true, "netbanking": true, "upi": true, "wallet": true,
+		"card": true, "token_card": true, "net_banking": true, "upi": true, "wallet": true,
 	}
 	if !validMethods[req.PaymentMethod] {
 		return fmt.Errorf("invalid payment method: %s", req.PaymentMethod)
@@ -746,7 +746,7 @@ func (h *PaymentHandler) validatePaymentRequest(req *MakePaymentRequest) error {
 		if err := h.validateCardDetails(req.CardDetails); err != nil {
 			return fmt.Errorf("card validation failed: %v", err)
 		}
-	case "token-card":
+	case "token_card":
 		if req.TokenDetails == nil {
 			return fmt.Errorf("token_details are required for token card payments")
 		}
@@ -847,7 +847,7 @@ func (h *PaymentHandler) populatePaymentMethodDetails(coreReq *payment.PaymentRe
 				LastFourDigits: httpReq.CardDetails.LastFourDigits,
 			}
 		}
-	case "token-card":
+	case "token_card":
 		if httpReq.TokenDetails != nil {
 			coreReq.TokenCardDetails = &payment.TokenCardDetails{
 				CardID: httpReq.TokenDetails.CardID,

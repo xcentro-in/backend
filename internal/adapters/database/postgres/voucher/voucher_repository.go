@@ -32,6 +32,16 @@ func NewPostgresVoucherRepository(db client.DB, encryptionKey string) voucher.Vo
 	}
 }
 
+// WithTx creates a new repository instance that uses a transaction
+// This enables transactional voucher operations (e.g., finalizing vouchers atomically with payments)
+func (r *PostgresVoucherRepository) WithTx(tx interface{}) voucher.VoucherRepository {
+	return &PostgresVoucherRepository{
+		querier:       tx.(client.Tx),
+		db:            r.db, // Preserve original DB for nested transactions if needed
+		encryptionKey: r.encryptionKey,
+	}
+}
+
 // CreateDraft creates a new voucher in draft status
 func (r *PostgresVoucherRepository) CreateDraft(ctx context.Context, v *voucher.Voucher) error {
 	query := `

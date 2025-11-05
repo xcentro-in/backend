@@ -22,6 +22,7 @@ type PaymentService struct {
 	feeCalculator   business_rules.FeeCalculator
 	txManager       client.TxManager
 	voucherService  interface{} // voucher.VoucherService, using interface{} to avoid circular import (Phase 6)
+	voucherRepo     interface{} // voucher.VoucherRepository, using interface{} to avoid circular import
 	businessService business.BusinessService
 	logger          *logger.Logger
 }
@@ -36,6 +37,7 @@ func NewPaymentService(
 	feeCalculator business_rules.FeeCalculator,
 	txManager client.TxManager,
 	voucherService interface{}, // Phase 6: Voucher service for payment integration
+	voucherRepo interface{}, // voucher.VoucherRepository for transactional operations
 	businessService business.BusinessService,
 	logger *logger.Logger,
 ) *PaymentService {
@@ -48,21 +50,19 @@ func NewPaymentService(
 		feeCalculator:   feeCalculator,
 		txManager:       txManager,
 		voucherService:  voucherService,
+		voucherRepo:     voucherRepo,
 		businessService: businessService,
 		logger:          logger,
 	}
 
-	// Inject voucher service into orchestrator (Phase 6)
-	if voucherService != nil {
-		orchestrator.SetVoucherService(voucherService)
-		logger.Info("Voucher service wired into payment orchestrator")
-	}
+	// NOTE: Voucher finalization now handled directly in service layer within transaction
+	// All payment and voucher operations are wrapped in a single transaction
 
 	return s
 }
 
-// ProcessPayment orchestrates the complete payment flow
-// Creates payment record, calculates fees, calls orchestrator
+// ProcessPayment orchestrates the complete payment flow with transactional atomicity
+// All payment and voucher operations are wrapped in a single database transaction
 func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.PaymentRequest) (*payment.PaymentResponse, error) {
 	s.logger.InfoWith("Starting payment processing",
 		"business_id", req.BusinessID,
@@ -71,7 +71,7 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 		"currency", req.Currency,
 		"payment_method", req.PaymentMethod)
 
-	// Step 1: Calculate fees before creating payment record
+	// Step 1: Calculate fees before transaction (read-only operation)
 	s.logger.DebugWith("Calculating payment fees")
 	feeCalculation, err := s.feeCalculator.CalculateFee(
 		req.Amount,
@@ -90,60 +90,122 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 		"total_amount", feeCalculation.TotalAmount,
 		"currency", feeCalculation.Currency)
 
-	// Step 2: Generate UUID for payment at application level
+	// Step 2: Generate payment ID and callback URL (no DB operations)
 	paymentID := uuid.Must(uuid.NewV7()).String()
 	s.logger.DebugWith("Generated payment ID", "payment_id", paymentID)
 
-	// Step 3: Generate callback URL based on calling device
 	callbackURL := s.generateCallbackURL(req.CallingDevice, paymentID)
 	s.logger.DebugWith("Generated callback URL",
 		"calling_device", req.CallingDevice,
 		"callback_url", callbackURL)
 
-	// Step 4: Create initial payment record with 'pending' status
-	s.logger.DebugWith("Creating initial payment record")
-	p := &payment.Payment{
-		ID:            paymentID,
-		UserID:        req.UserID,
-		BusinessID:    req.BusinessID,
-		Amount:        req.Amount,
-		Currency:      req.Currency,
-		PaymentMethod: req.PaymentMethod,
-		PaymentType:   payment.PaymentTypePayment, // Regular payment
-		Status:        payment.PaymentStatusPending,
-		Description:   req.Description,
-		CallbackURL:   callbackURL,
-		FeeAmount:     feeCalculation.FeeAmount,
-		TotalAmount:   feeCalculation.TotalAmount,
-		Metadata:      req.Metadata,
-	}
+	// Step 3: Wrap all database operations in a transaction
+	// This ensures atomicity: either everything succeeds or everything rolls back
+	var response *payment.PaymentResponse
+	err = s.txManager.WithTx(ctx, func(txCtx context.Context, tx client.Tx) error {
+		s.logger.DebugWith("Starting transactional payment processing", "payment_id", paymentID)
 
-	if err := s.paymentRepo.CreatePayment(ctx, p); err != nil {
-		s.logger.ErrorWith("Failed to create payment record", "error", err)
-		return nil, fmt.Errorf("failed to create payment record: %w", err)
-	}
+		// Create transactional repository instances
+		txPaymentRepo := s.paymentRepo.WithTx(tx)
 
-	s.logger.InfoWith("Payment record created", "payment_id", paymentID)
+		// Sub-step 1: Create payment record within transaction
+		s.logger.DebugWith("Creating payment record within transaction")
+		p := &payment.Payment{
+			ID:            paymentID,
+			UserID:        req.UserID,
+			BusinessID:    req.BusinessID,
+			Amount:        req.Amount,
+			Currency:      req.Currency,
+			PaymentMethod: req.PaymentMethod,
+			PaymentType:   payment.PaymentTypePayment,
+			Status:        payment.PaymentStatusPending,
+			Description:   req.Description,
+			CallbackURL:   callbackURL,
+			FeeAmount:     feeCalculation.FeeAmount,
+			TotalAmount:   feeCalculation.TotalAmount,
+			Metadata:      req.Metadata,
+		}
 
-	// Step 5: Add payment_id to request for orchestrator
-	req.PaymentID = paymentID
+		if err := txPaymentRepo.CreatePayment(txCtx, p); err != nil {
+			s.logger.ErrorWith("Failed to create payment record", "error", err)
+			return fmt.Errorf("failed to create payment record: %w", err)
+		}
+		s.logger.DebugWith("Payment record created", "payment_id", paymentID)
 
-	// Step 6: Call orchestrator to process payment
-	s.logger.DebugWith("Calling payment orchestrator")
-	response, err := s.orchestrator.ProcessPayment(ctx, req)
+		// Sub-step 2: Call orchestrator (gateway communication - may fail)
+		req.PaymentID = paymentID
+		s.logger.DebugWith("Calling payment orchestrator")
+		resp, err := s.orchestrator.ProcessPayment(txCtx, req)
+		if err != nil {
+			// Gateway call failed - transaction will rollback, payment record will not persist
+			s.logger.ErrorWith("Payment orchestrator failed - transaction will rollback", "error", err)
+			return fmt.Errorf("payment processing failed: %w", err)
+		}
+		s.logger.DebugWith("Orchestrator returned successfully", "gateway_used", resp.GatewayUsed)
 
+		// Sub-step 3: Update payment with gateway response
+		s.logger.DebugWith("Updating payment with gateway response")
+		if err := txPaymentRepo.UpdateGatewayPaymentID(txCtx, paymentID, resp.GatewayPaymentID, resp.RedirectURL); err != nil {
+			s.logger.ErrorWith("Failed to update gateway payment ID", "error", err)
+			return fmt.Errorf("failed to update gateway payment ID: %w", err)
+		}
+		s.logger.DebugWith("Payment updated with gateway details")
+
+		// Sub-step 4: Finalize vouchers if provided (within same transaction)
+		if len(req.VoucherIDs) > 0 && s.voucherRepo != nil && s.voucherService != nil {
+			s.logger.InfoWith("Finalizing vouchers within transaction", "count", len(req.VoucherIDs))
+
+			// Type assert to get WithTx method
+			type voucherRepoInterface interface {
+				WithTx(tx interface{}) interface{}
+			}
+			if vr, ok := s.voucherRepo.(voucherRepoInterface); ok {
+				txVoucherRepo := vr.WithTx(tx)
+
+				// Type assert to call FinalizeVoucher method
+				type voucherRepoFinalizer interface {
+					FinalizeVoucher(ctx context.Context, voucherID uuid.UUID, paymentID uuid.UUID) error
+				}
+				if finalizer, ok := txVoucherRepo.(voucherRepoFinalizer); ok {
+					paymentUUID, _ := uuid.Parse(paymentID)
+					for _, voucherIDStr := range req.VoucherIDs {
+						voucherUUID, parseErr := uuid.Parse(voucherIDStr)
+						if parseErr != nil {
+							s.logger.ErrorWith("Invalid voucher ID format", "voucher_id", voucherIDStr, "error", parseErr)
+							return fmt.Errorf("invalid voucher ID: %w", parseErr)
+						}
+
+						if finalizeErr := finalizer.FinalizeVoucher(txCtx, voucherUUID, paymentUUID); finalizeErr != nil {
+							s.logger.ErrorWith("Failed to finalize voucher", "voucher_id", voucherIDStr, "error", finalizeErr)
+							return fmt.Errorf("failed to finalize voucher %s: %w", voucherIDStr, finalizeErr)
+						}
+						s.logger.DebugWith("Voucher finalized", "voucher_id", voucherIDStr)
+					}
+					s.logger.InfoWith("All vouchers finalized successfully", "count", len(req.VoucherIDs))
+				}
+			}
+		}
+
+		// Sub-step 5: Store response for return (transaction successful)
+		response = resp
+		s.logger.InfoWith("Transaction completed successfully", "payment_id", paymentID)
+		return nil // Commit transaction
+	})
+
+	// Check transaction result
 	if err != nil {
-		// Orchestrator already updated status to 'failed'
-		s.logger.ErrorWith("Payment orchestrator failed", "error", err)
-		return nil, fmt.Errorf("payment processing failed: %w", err)
+		// Transaction rolled back - no data persisted
+		s.logger.ErrorWith("Payment processing transaction failed - all changes rolled back", "error", err)
+		return nil, err
 	}
 
+	// Success - all changes committed
 	s.logger.InfoWith("Payment processed successfully",
 		"payment_id", response.PaymentID,
 		"gateway_used", response.GatewayUsed)
 	s.logger.DebugWith("Redirect URL generated", "redirect_url", response.RedirectURL)
 
-	// Update onboarding flag (non-blocking, first-time only)
+	// Update onboarding flag (non-blocking, first-time only, outside transaction)
 	if s.businessService != nil {
 		go func(bizID string) {
 			bgCtx := context.Background()

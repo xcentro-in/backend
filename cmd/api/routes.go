@@ -101,7 +101,7 @@ func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group
 	easebuzzClient := easebuzz.NewEasebuzzClient(cfg.Easebuzz.BaseURL, cfg.Easebuzz.MerchantKey, cfg.Easebuzz.Salt, cfg.Easebuzz.APIKey)
 	jioPayClient := jiopay.NewJioPayClient(cfg.JioPay.BaseURL, cfg.JioPay.TokenizationBaseURL, cfg.JioPay.MerchantID, cfg.JioPay.APIKey, cfg.JioPay.AppID, cfg.JioPay.EncryptionKey)
 
-	orchestrator := corePayment.NewMockPaymentOrchestrator(paymentRepository, storedCardRepository, jioPayClient, easebuzzClient)
+	orchestrator := corePayment.NewMockPaymentOrchestrator(paymentRepository, storedCardRepository, jioPayClient, easebuzzClient, logger.GetDefault())
 	feeCalculator := business_rules.NewMockFeeCalculator()
 	walletService := business_rules.NewMockWalletService(storedCardRepository, bankAccountRepository, clients.txManager, busSvc)
 
@@ -116,7 +116,7 @@ func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group
 	businessPayeeRelationRepo := payeeRepo.NewPgBusinessPayeeRelationRepository(clients.db, cfg.BankAccountEncryption.EncryptionKey)
 	voucherService := voucherSvc.NewVoucherService(voucherRepository, approvalRepository, queueRepository, voucherCoreService, businessPayeeRelationRepo)
 
-	paymentService := payments.NewPaymentService(orchestrator, paymentRepository, storedCardRepository, bankAccountRepository, walletService, feeCalculator, clients.txManager, voucherService, busSvc, logger.GetDefault())
+	paymentService := payments.NewPaymentService(orchestrator, paymentRepository, storedCardRepository, bankAccountRepository, walletService, feeCalculator, clients.txManager, voucherService, voucherRepository, busSvc, logger.GetDefault())
 
 	processPaymentGroup := group.Group("/process_payment")
 	payment.RegisterPaymentRoutes(processPaymentGroup, paymentService, paymentSourceService, authSvc)

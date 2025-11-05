@@ -113,6 +113,10 @@ type VoucherRepository interface {
 	// Cascades to voucher_approvals and erp_sync_queue
 	// Fails if payout_transfer_requests exist (ON DELETE RESTRICT)
 	Delete(ctx context.Context, voucherID uuid.UUID) error
+
+	// WithTx creates a new repository instance that uses a transaction
+	// This enables transactional voucher operations (e.g., finalizing vouchers atomically with payments)
+	WithTx(tx interface{}) VoucherRepository
 }
 
 // VoucherFilters defines filter criteria for listing vouchers
