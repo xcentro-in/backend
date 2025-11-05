@@ -2,6 +2,7 @@ package validator
 
 import (
 	"fmt"
+	"reflect"
 	"regexp"
 	"strings"
 
@@ -31,7 +32,12 @@ func NewCustomValidator() *CustomValidator {
 }
 
 // Validate implements echo.Validator interface
+// Automatically trims all string fields before validation
 func (cv *CustomValidator) Validate(i interface{}) error {
+	// Trim all string fields first
+	TrimStrings(i)
+
+	// Then validate
 	if err := cv.validator.Struct(i); err != nil {
 		// Type assert to validator.ValidationErrors
 		if validationErrors, ok := err.(validator.ValidationErrors); ok {
@@ -106,23 +112,26 @@ func getErrorMessage(err validator.FieldError) string {
 }
 
 // validatePAN validates Indian PAN format: AAAAA9999A
+// Note: Input is already trimmed by TrimStrings() before validation
 func validatePAN(fl validator.FieldLevel) bool {
-	pan := strings.TrimSpace(fl.Field().String())
+	pan := fl.Field().String()
 	panRegex := regexp.MustCompile(`^[A-Z]{5}[0-9]{4}[A-Z]{1}$`)
 	return panRegex.MatchString(pan)
 }
 
 // validateGSTIN validates Indian GSTIN format: 22AAAAA9999A1Z5
+// Note: Input is already trimmed by TrimStrings() before validation
 func validateGSTIN(fl validator.FieldLevel) bool {
-	gstin := strings.TrimSpace(fl.Field().String())
+	gstin := fl.Field().String()
 	gstinRegex := regexp.MustCompile(`^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$`)
 	return gstinRegex.MatchString(gstin)
 }
 
 // validateAadhaar validates Indian Aadhaar format: 2345 6789 0123 (with optional spaces)
 // Must start with 2-9 (not 0 or 1), exactly 12 digits
+// Note: Input is already trimmed by TrimStrings() before validation
 func validateAadhaar(fl validator.FieldLevel) bool {
-	aadhaar := strings.TrimSpace(fl.Field().String())
+	aadhaar := fl.Field().String()
 	// Allow optional spaces: 2345 6789 0123 or 234567890123
 	aadhaarRegex := regexp.MustCompile(`^[2-9]{1}[0-9]{3}\s?[0-9]{4}\s?[0-9]{4}$`)
 	return aadhaarRegex.MatchString(aadhaar)
@@ -130,15 +139,17 @@ func validateAadhaar(fl validator.FieldLevel) bool {
 
 // validateCIN validates Indian Company Identification Number format: L12345KA2010PLC012345
 // Starts with L or U, 21 characters total
+// Note: Input is already trimmed by TrimStrings() before validation
 func validateCIN(fl validator.FieldLevel) bool {
-	cin := strings.TrimSpace(fl.Field().String())
+	cin := fl.Field().String()
 	cinRegex := regexp.MustCompile(`^[LU][0-9]{5}[A-Z]{2}[0-9]{4}[A-Z]{3}[0-9]{6}$`)
 	return cinRegex.MatchString(cin)
 }
 
 // validateIndianPhone validates 10-digit Indian phone number
+// Note: Input is already trimmed by TrimStrings() before validation
 func validateIndianPhone(fl validator.FieldLevel) bool {
-	phone := strings.TrimSpace(fl.Field().String())
+	phone := fl.Field().String()
 	// Must be exactly 10 digits
 	phoneRegex := regexp.MustCompile(`^[0-9]{10}$`)
 	return phoneRegex.MatchString(phone)
@@ -150,7 +161,50 @@ func validateStrongPassword(fl validator.FieldLevel) bool {
 	return security.ValidatePasswordStrength(password) == nil
 }
 
-// BindAndValidate is a helper function to bind and validate request data
+// TrimStrings trims all string fields in a struct (recursively)
+// This modifies the struct in place to remove leading/trailing whitespace
+func TrimStrings(data interface{}) {
+	val := reflect.ValueOf(data)
+
+	// If it's a pointer, get the underlying value
+	if val.Kind() == reflect.Ptr {
+		val = val.Elem()
+	}
+
+	// Only process structs
+	if val.Kind() != reflect.Struct {
+		return
+	}
+
+	// Iterate through all fields
+	for i := 0; i < val.NumField(); i++ {
+		field := val.Field(i)
+
+		// Skip unexported fields
+		if !field.CanSet() {
+			continue
+		}
+
+		switch field.Kind() {
+		case reflect.String:
+			// Trim string fields
+			trimmed := strings.TrimSpace(field.String())
+			field.SetString(trimmed)
+
+		case reflect.Struct:
+			// Recursively trim nested structs
+			TrimStrings(field.Addr().Interface())
+
+		case reflect.Ptr:
+			// Handle pointer to struct
+			if !field.IsNil() && field.Elem().Kind() == reflect.Struct {
+				TrimStrings(field.Interface())
+			}
+		}
+	}
+}
+
+// BindAndValidate is a helper function to bind, trim, and validate request data
 func BindAndValidate(c echo.Context, req interface{}) error {
 	// Bind the request
 	if err := c.Bind(req); err != nil {
@@ -159,6 +213,9 @@ func BindAndValidate(c echo.Context, req interface{}) error {
 			Message: "Invalid request payload",
 		}
 	}
+
+	// Trim all string fields
+	TrimStrings(req)
 
 	// Validate the request
 	if err := c.Validate(req); err != nil {
