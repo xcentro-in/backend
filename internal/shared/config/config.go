@@ -30,6 +30,7 @@ type Config struct {
 	Workers               WorkersConfig               `json:"workers"`
 	Frontend              FrontendConfig              `json:"frontend"`
 	BankAccountEncryption BankAccountEncryptionConfig `json:"bank_account_encryption"`
+	RateLimiter           RateLimiterConfig           `json:"rate_limiter"`
 }
 
 // JWTSecretConfig holds JWT secret configuration.
@@ -214,6 +215,40 @@ type NotificationWorkerConfig struct {
 // BankAccountEncryptionConfig holds bank account encryption configuration for PCI DSS compliance.
 type BankAccountEncryptionConfig struct {
 	EncryptionKey string `json:"-" env:"BANK_ACCOUNT_ENCRYPTION_KEY" env-required:"true"` // AES-256-GCM key (sensitive, 32 bytes recommended)
+}
+
+// RateLimiterConfig holds rate limiter configuration for token-bucket algorithm.
+type RateLimiterConfig struct {
+	Enabled                      bool          `json:"enabled" env:"RATE_LIMITER_ENABLED" env-default:"true"`
+	CookieName                   string        `json:"cookie_name" env:"RATE_LIMITER_COOKIE_NAME" env-default:"device_id"`
+	CookieTTL                    time.Duration `json:"cookie_ttl" env:"RATE_LIMITER_COOKIE_TTL" env-default:"720h"`                 // 30 days
+	DeviceMappingTTL             time.Duration `json:"device_mapping_ttl" env:"RATE_LIMITER_DEVICE_MAPPING_TTL" env-default:"720h"` // 30 days
+	DeviceCreationThrottlePerIP  int           `json:"device_creation_throttle_per_ip" env:"RATE_LIMITER_DEVICE_CREATION_THROTTLE_PER_IP" env-default:"50"`
+	DeviceCreationThrottleWindow time.Duration `json:"device_creation_throttle_window" env:"RATE_LIMITER_DEVICE_CREATION_THROTTLE_WINDOW" env-default:"1h"`
+	TokenKeyTTL                  time.Duration `json:"token_key_ttl" env:"RATE_LIMITER_TOKEN_KEY_TTL" env-default:"2h"`
+	FailOpenByDefault            bool          `json:"fail_open_by_default" env:"RATE_LIMITER_FAIL_OPEN_BY_DEFAULT" env-default:"true"`
+
+	// Default policy for all groups not explicitly configured
+	DefaultCapacity        int64   `json:"default_capacity" env:"RATE_LIMITER_DEFAULT_CAPACITY" env-default:"120"`
+	DefaultRefillPerSec    float64 `json:"default_refill_per_sec" env:"RATE_LIMITER_DEFAULT_REFILL_PER_SEC" env-default:"2.0"` // 120 req/min
+	DefaultRequestedTokens int64   `json:"default_requested_tokens" env:"RATE_LIMITER_DEFAULT_REQUESTED_TOKENS" env-default:"1"`
+
+	// Login group policy
+	LoginCapacity        int64   `json:"login_capacity" env:"RATE_LIMITER_LOGIN_CAPACITY" env-default:"5"`
+	LoginRefillPerSec    float64 `json:"login_refill_per_sec" env:"RATE_LIMITER_LOGIN_REFILL_PER_SEC" env-default:"0.005555"` // 5 per 15 min
+	LoginRequestedTokens int64   `json:"login_requested_tokens" env:"RATE_LIMITER_LOGIN_REQUESTED_TOKENS" env-default:"1"`
+	LoginFailClosed      bool    `json:"login_fail_closed" env:"RATE_LIMITER_LOGIN_FAIL_CLOSED" env-default:"true"`
+
+	// Signup group policy
+	SignupCapacity        int64   `json:"signup_capacity" env:"RATE_LIMITER_SIGNUP_CAPACITY" env-default:"10"`
+	SignupRefillPerSec    float64 `json:"signup_refill_per_sec" env:"RATE_LIMITER_SIGNUP_REFILL_PER_SEC" env-default:"0.002777"` // 10 per hour
+	SignupRequestedTokens int64   `json:"signup_requested_tokens" env:"RATE_LIMITER_SIGNUP_REQUESTED_TOKENS" env-default:"1"`
+	SignupFailClosed      bool    `json:"signup_fail_closed" env:"RATE_LIMITER_SIGNUP_FAIL_CLOSED" env-default:"false"`
+
+	// API High-throughput group policy
+	APIHighCapacity        int64   `json:"api_high_capacity" env:"RATE_LIMITER_API_HIGH_CAPACITY" env-default:"1000"`
+	APIHighRefillPerSec    float64 `json:"api_high_refill_per_sec" env:"RATE_LIMITER_API_HIGH_REFILL_PER_SEC" env-default:"16.6667"` // 1000 per min
+	APIHighRequestedTokens int64   `json:"api_high_requested_tokens" env:"RATE_LIMITER_API_HIGH_REQUESTED_TOKENS" env-default:"1"`
 }
 
 var (
