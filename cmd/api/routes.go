@@ -151,8 +151,8 @@ func registerV1UserRoutes(clients *externalClients, cfg *config.Config, group *e
 		panic("Failed to create verification service: " + err.Error())
 	}
 
-	userRepository, _, _, businessUserRelRepo, userService, _, authSvc := factory.createCoreServices(verificationSvc)
-	userHandler.RegisterUserRoutes(group, userService, authSvc, businessUserRelRepo, clients.rcache, cfg.AuthBridge.Password, userRepository)
+	_, _, _, businessUserRelRepo, userService, _, authSvc := factory.createCoreServices(verificationSvc)
+	userHandler.RegisterUserRoutes(group, userService, authSvc, businessUserRelRepo, clients.rcache)
 }
 
 func registerV1PayeeRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {

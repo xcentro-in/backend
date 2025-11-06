@@ -26,9 +26,9 @@ func NewUserHandler(userService user.UserService, authService auth.AuthService) 
 	}
 }
 
-func RegisterUserRoutes(e *echo.Group, userService user.UserService, authService auth.AuthService, businessUserRelRepo coreBusiness.BusinessUserRelationRepository, rclient *redisClient.RedisClient, authBridgePassword string, userRepo user.UserRepository) {
+func RegisterUserRoutes(e *echo.Group, userService user.UserService, authService auth.AuthService, businessUserRelRepo coreBusiness.BusinessUserRelationRepository, rclient *redisClient.RedisClient) {
 	handler := NewUserHandler(userService, authService)
-	aadhaarHandler := NewAadhaarCallbackHandler(userRepo, authBridgePassword)
+	aadhaarHandler := NewAadhaarCallbackHandler(userService)
 
 	userGroup := e.Group("/user")
 

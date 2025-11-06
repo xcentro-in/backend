@@ -21,6 +21,7 @@ import (
 	"xcentro.in/internal/services/verification"
 	sharedClients "xcentro.in/internal/shared/clients"
 	"xcentro.in/internal/shared/config"
+	"xcentro.in/internal/shared/crypto"
 	"xcentro.in/internal/shared/logger"
 	"xcentro.in/internal/shared/types"
 )
@@ -752,6 +753,173 @@ func (s *UserServiceImpl) generateRandomPassword() (string, error) {
 	}
 
 	return string(password), nil
+}
+
+// ProcessAadhaarRedirectCallback processes the Aadhaar redirect callback with authentication
+// Returns error if verification fails or if KYC is already completed
+func (s *UserServiceImpl) ProcessAadhaarRedirectCallback(ctx context.Context, userID, encryptedResponse string) error {
+	s.logger.Info("Processing Aadhaar redirect callback for user %s", userID)
+
+	// Decrypt the response
+	decryptedResponse, responseData, err := s.decryptAndParseAadhaarResponse(encryptedResponse)
+	if err != nil {
+		return err
+	}
+
+	// Check status first (must be 1 for success)
+	status, ok := responseData["status"].(float64)
+	if !ok || status != 1 {
+		errorMsg := "Verification failed"
+		if msg, exists := responseData["message"].(string); exists {
+			errorMsg = msg
+		}
+		s.logger.Error("Aadhaar verification failed for user %s: status=%v, message=%s", userID, status, errorMsg)
+		return fmt.Errorf("aadhaar verification failed: %s", errorMsg)
+	}
+
+	// Extract ts_trans_id
+	tsTransID, ok := responseData["ts_trans_id"].(string)
+	if !ok || tsTransID == "" {
+		s.logger.Error("Missing ts_trans_id in callback response for user %s", userID)
+		return fmt.Errorf("missing transaction ID in response")
+	}
+
+	// Get user details
+	userObj, err := s.userRepo.GetUserByID(ctx, userID)
+	if err != nil {
+		s.logger.Error("Failed to get user details for user %s: %v", userID, err)
+		return fmt.Errorf("failed to get user details: %w", err)
+	}
+
+	// Check if KYC is already completed or verified
+	if userObj.KycStatus == shared.KYCCompleted || userObj.KycStatus == shared.KYCVerified {
+		s.logger.Info("KYC already completed for user %s, current status: %s", userID, userObj.KycStatus)
+		return fmt.Errorf("kyc_already_completed")
+	}
+
+	// Verify transaction ID matches
+	if err := s.verifyAadhaarTransactionID(ctx, userObj.TaxID, tsTransID); err != nil {
+		s.logger.Error("Transaction ID mismatch for user %s: %v", userID, err)
+		return fmt.Errorf("invalid transaction reference: %w", err)
+	}
+
+	// Update user identity with Aadhaar data
+	if err := s.updateAadhaarVerificationData(ctx, userObj.TaxID, userID, decryptedResponse); err != nil {
+		return err
+	}
+
+	s.logger.Info("Aadhaar verification completed successfully for user %s", userID)
+	return nil
+}
+
+// ProcessAadhaarWebhook processes the Aadhaar webhook without authentication
+// Always returns nil to acknowledge receipt (errors are logged only)
+func (s *UserServiceImpl) ProcessAadhaarWebhook(ctx context.Context, encryptedResponse string) error {
+	s.logger.Info("Processing Aadhaar webhook")
+
+	// Decrypt the response
+	decryptedResponse, responseData, err := s.decryptAndParseAadhaarResponse(encryptedResponse)
+	if err != nil {
+		s.logger.Error("Failed to decrypt/parse webhook response: %v", err)
+		return nil // Return nil to acknowledge receipt
+	}
+
+	// Check status first (must be 1 for success)
+	status, ok := responseData["status"].(float64)
+	if !ok || status != 1 {
+		errorMsg := "Verification failed"
+		if msg, exists := responseData["message"].(string); exists {
+			errorMsg = msg
+		}
+		s.logger.Error("Aadhaar verification failed in webhook: status=%v, message=%s", status, errorMsg)
+		return nil // Return nil to acknowledge receipt
+	}
+
+	// Extract ts_trans_id
+	tsTransID, ok := responseData["ts_trans_id"].(string)
+	if !ok || tsTransID == "" {
+		s.logger.Error("Missing ts_trans_id in webhook response")
+		return nil
+	}
+
+	// Find user identity by transaction ID
+	identity, err := s.userRepo.GetUserIdentityByTxnID(ctx, tsTransID)
+	if err != nil {
+		s.logger.Error("Failed to find user identity by txn_id %s: %v", tsTransID, err)
+		return nil
+	}
+
+	// Get user by tax ID
+	userObj, err := s.userRepo.GetUserByTaxID(ctx, identity.TaxID)
+	if err != nil {
+		s.logger.Error("Failed to get user by tax_id %s: %v", identity.TaxID, err)
+		return nil
+	}
+
+	// Check if KYC is already completed (idempotent)
+	if userObj.KycStatus == shared.KYCCompleted || userObj.KycStatus == shared.KYCVerified {
+		s.logger.Info("KYC already completed for user %s, current status: %s", userObj.Id, userObj.KycStatus)
+		return nil
+	}
+
+	// Update user identity with Aadhaar data
+	if err := s.updateAadhaarVerificationData(ctx, identity.TaxID, userObj.Id, decryptedResponse); err != nil {
+		s.logger.Error("Failed to update Aadhaar verification data in webhook: %v", err)
+		return nil
+	}
+
+	s.logger.Info("Aadhaar verification completed successfully via webhook for user %s", userObj.Id)
+	return nil
+}
+
+// decryptAndParseAadhaarResponse decrypts and parses the AuthBridge response
+func (s *UserServiceImpl) decryptAndParseAadhaarResponse(encryptedResponse string) (string, map[string]interface{}, error) {
+	// Decrypt response
+	decryptedResponse, err := crypto.DecryptAES256CBC(encryptedResponse, s.config.AuthBridge.Password)
+	if err != nil {
+		s.logger.Error("Failed to decrypt Aadhaar response: %v", err)
+		return "", nil, fmt.Errorf("decryption failed: %w", err)
+	}
+
+	// Parse decrypted response
+	var responseData map[string]interface{}
+	if err := json.Unmarshal([]byte(decryptedResponse), &responseData); err != nil {
+		s.logger.Error("Failed to parse decrypted response: %v", err)
+		return "", nil, fmt.Errorf("invalid response format: %w", err)
+	}
+
+	return decryptedResponse, responseData, nil
+}
+
+// verifyAadhaarTransactionID verifies that the transaction ID matches
+func (s *UserServiceImpl) verifyAadhaarTransactionID(ctx context.Context, taxID, tsTransID string) error {
+	identity, err := s.userRepo.GetUserIdentityByTaxID(ctx, taxID)
+	if err != nil {
+		return fmt.Errorf("failed to get user identity: %w", err)
+	}
+
+	if identity.NTxnID != tsTransID {
+		return fmt.Errorf("transaction ID mismatch: expected %s, got %s", identity.NTxnID, tsTransID)
+	}
+
+	return nil
+}
+
+// updateAadhaarVerificationData updates the user identity with Aadhaar verification data and KYC status
+func (s *UserServiceImpl) updateAadhaarVerificationData(ctx context.Context, taxID, userID, responseJSON string) error {
+	// Update national_id_data with full response
+	if err := s.userRepo.UpdateNationalIDData(ctx, taxID, responseJSON); err != nil {
+		s.logger.Error("Failed to update national ID data: %v", err)
+		return fmt.Errorf("failed to save verification data: %w", err)
+	}
+
+	// Update KYC status to verified
+	if err := s.userRepo.UpdateUserKYCStatus(ctx, userID, shared.KYCVerified); err != nil {
+		s.logger.Error("Failed to update KYC status: %v", err)
+		return fmt.Errorf("failed to update verification status: %w", err)
+	}
+
+	return nil
 }
 
 // CreateInvitedUser creates a new user for business invitation

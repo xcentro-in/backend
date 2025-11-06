@@ -32,6 +32,10 @@ type UserService interface {
 	CompleteOnboarding(ctx context.Context, userID, businessID, gstin string, claimedRole shared.UserRole) error
 	GetOnboardingStatus(ctx context.Context, userID string) (*OnboardingStatusDTO, error)
 
+	// Aadhaar verification callback methods
+	ProcessAadhaarRedirectCallback(ctx context.Context, userID, encryptedResponse string) error
+	ProcessAadhaarWebhook(ctx context.Context, encryptedResponse string) error
+
 	// Invited user methods
 	CreateInvitedUser(ctx context.Context, email, name string, kycNeeded bool) (*User, error)
 }

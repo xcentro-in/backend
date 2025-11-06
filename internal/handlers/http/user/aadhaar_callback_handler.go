@@ -1,28 +1,22 @@
 package user
 
 import (
-	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/labstack/echo/v4"
-	"xcentro.in/internal/adapters/providers/authbridge"
-	"xcentro.in/internal/core/shared"
 	"xcentro.in/internal/core/user"
-	"xcentro.in/internal/shared/crypto"
 	"xcentro.in/internal/shared/logger"
 )
 
 type AadhaarCallbackHandler struct {
-	userRepo           user.UserRepository
-	authBridgePassword string
+	userService user.UserService
 }
 
-func NewAadhaarCallbackHandler(userRepo user.UserRepository, authBridgePassword string) *AadhaarCallbackHandler {
+func NewAadhaarCallbackHandler(userService user.UserService) *AadhaarCallbackHandler {
 	return &AadhaarCallbackHandler{
-		userRepo:           userRepo,
-		authBridgePassword: authBridgePassword,
+		userService: userService,
 	}
 }
 
@@ -51,77 +45,27 @@ func (h *AadhaarCallbackHandler) HandleRedirectCallback(c echo.Context) error {
 		return c.HTML(http.StatusBadRequest, generateErrorHTML("Invalid Request", "Unable to process verification data."))
 	}
 
-	// Decrypt response
-	decryptedResponse, err := crypto.DecryptAES256CBC(req.ResponseData, h.authBridgePassword)
+	// Validate input
+	if req.ResponseData == "" {
+		log.Error("Empty response data in callback request")
+		return c.HTML(http.StatusBadRequest, generateErrorHTML("Invalid Request", "Missing verification data."))
+	}
+
+	// Call service method to process the callback
+	err := h.userService.ProcessAadhaarRedirectCallback(ctx, userID, req.ResponseData)
 	if err != nil {
-		log.Errorf("Failed to decrypt callback response: %v", err)
-		return c.HTML(http.StatusInternalServerError, generateErrorHTML("Verification Failed", "Unable to decrypt verification data."))
-	}
-
-	// Parse decrypted response
-	var responseData map[string]interface{}
-	if err := json.Unmarshal([]byte(decryptedResponse), &responseData); err != nil {
-		log.Errorf("Failed to parse decrypted response: %v", err)
-		return c.HTML(http.StatusInternalServerError, generateErrorHTML("Verification Failed", "Invalid verification response format."))
-	}
-
-	// Check status first (must be 1 for success)
-	status, ok := responseData["status"].(float64)
-	if !ok || status != 1 {
-		errorMsg := "Verification failed"
-		if msg, exists := responseData["message"].(string); exists {
-			errorMsg = msg
+		// Check for specific error types
+		if strings.Contains(err.Error(), "kyc_already_completed") {
+			return c.HTML(http.StatusOK, generateAlreadyCompletedHTML())
 		}
-		log.Errorf("Aadhaar verification failed for user %s: status=%v, message=%s", userID, status, errorMsg)
+
+		// Generic error handling
+		errorMsg := "Verification failed. Please try again."
+		if strings.Contains(err.Error(), "aadhaar verification failed") {
+			errorMsg = err.Error()
+		}
 		return c.HTML(http.StatusOK, generateErrorHTML("Verification Failed", errorMsg))
 	}
-
-	// Extract ts_trans_id for user lookup
-	tsTransID, ok := responseData["ts_trans_id"].(string)
-	if !ok || tsTransID == "" {
-		log.Errorf("Missing ts_trans_id in callback response for user %s", userID)
-		return c.HTML(http.StatusInternalServerError, generateErrorHTML("Verification Failed", "Missing transaction ID in response."))
-	}
-
-	// Get user details to check current KYC status
-	userObj, err := h.userRepo.GetUserByID(ctx, userID)
-	if err != nil {
-		log.Errorf("Failed to get user details for user %s: %v", userID, err)
-		return c.HTML(http.StatusInternalServerError, generateErrorHTML("Verification Failed", "Unable to verify user identity."))
-	}
-
-	// Check if KYC is already completed or verified
-	if userObj.KycStatus == shared.KYCCompleted || userObj.KycStatus == shared.KYCVerified {
-		log.Infof("KYC already completed for user %s, current status: %s", userID, userObj.KycStatus)
-		return c.HTML(http.StatusOK, generateAlreadyCompletedHTML())
-	}
-
-	// Verify that the ts_trans_id matches the user's stored transaction ID
-	if err := h.verifyTransactionID(ctx, userObj.TaxID, tsTransID); err != nil {
-		log.Errorf("Transaction ID mismatch for user %s: %v", userID, err)
-		return c.HTML(http.StatusBadRequest, generateErrorHTML("Verification Failed", "Invalid transaction reference."))
-	}
-
-	// Store the full decrypted response as JSON
-	responseJSON, err := json.Marshal(responseData)
-	if err != nil {
-		log.Errorf("Failed to marshal response data for user %s: %v", userID, err)
-		return c.HTML(http.StatusInternalServerError, generateErrorHTML("Verification Failed", "Unable to process verification data."))
-	}
-
-	// Update user identity with Aadhaar verification data
-	if err := h.userRepo.UpdateNationalIDData(ctx, userObj.TaxID, string(responseJSON)); err != nil {
-		log.Errorf("Failed to update national ID data for user %s: %v", userID, err)
-		return c.HTML(http.StatusInternalServerError, generateErrorHTML("Verification Failed", "Unable to save verification data."))
-	}
-
-	// Update KYC status to verified
-	if err := h.userRepo.UpdateUserKYCStatus(ctx, userID, shared.KYCVerified); err != nil {
-		log.Errorf("Failed to update KYC status for user %s: %v", userID, err)
-		return c.HTML(http.StatusInternalServerError, generateErrorHTML("Verification Failed", "Unable to update verification status."))
-	}
-
-	log.Infof("Aadhaar verification completed successfully for user %s", userID)
 
 	// Return success HTML that closes the popup
 	return c.HTML(http.StatusOK, generateSuccessHTML())
@@ -140,95 +84,18 @@ func (h *AadhaarCallbackHandler) HandleWebhook(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request format"})
 	}
 
-	// Decrypt response
-	decryptedResponse, err := crypto.DecryptAES256CBC(req.ResponseData, h.authBridgePassword)
-	if err != nil {
-		log.Errorf("Failed to decrypt webhook response: %v", err)
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Decryption failed"})
+	// Validate input
+	if req.ResponseData == "" {
+		log.Error("Empty response data in webhook request")
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Missing response data"})
 	}
 
-	// Parse decrypted response
-	var responseData map[string]interface{}
-	if err := json.Unmarshal([]byte(decryptedResponse), &responseData); err != nil {
-		log.Errorf("Failed to parse decrypted webhook response: %v", err)
-		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Invalid response format"})
-	}
+	// Call service method to process the webhook
+	// Service always returns nil for webhooks (errors are logged internally)
+	_ = h.userService.ProcessAadhaarWebhook(ctx, req.ResponseData)
 
-	// Check status first (must be 1 for success)
-	status, ok := responseData["status"].(float64)
-	if !ok || status != 1 {
-		errorMsg := "Verification failed"
-		if msg, exists := responseData["message"].(string); exists {
-			errorMsg = msg
-		}
-		log.Errorf("Aadhaar verification failed in webhook: status=%v, message=%s", status, errorMsg)
-		// Return 200 even on failure to prevent retries
-		return c.JSON(http.StatusOK, map[string]string{"status": "acknowledged", "message": "Verification failed"})
-	}
-
-	// Extract ts_trans_id for user lookup
-	tsTransID, ok := responseData["ts_trans_id"].(string)
-	if !ok || tsTransID == "" {
-		log.Errorf("Missing ts_trans_id in webhook response")
-		return c.JSON(http.StatusOK, map[string]string{"status": "acknowledged", "message": "Missing transaction ID"})
-	}
-
-	// Find user by transaction ID
-	identity, err := h.userRepo.GetUserIdentityByTxnID(ctx, tsTransID)
-	if err != nil {
-		log.Errorf("Failed to find user identity by txn_id %s: %v", tsTransID, err)
-		return c.JSON(http.StatusOK, map[string]string{"status": "acknowledged", "message": "User not found"})
-	}
-
-	// Get user details to check current KYC status
-	userObj, err := h.userRepo.GetUserByTaxID(ctx, identity.TaxID)
-	if err != nil {
-		log.Errorf("Failed to get user by tax_id %s: %v", identity.TaxID, err)
-		return c.JSON(http.StatusOK, map[string]string{"status": "acknowledged", "message": "User not found"})
-	}
-
-	// Check if KYC is already completed or verified (idempotent)
-	if userObj.KycStatus == shared.KYCCompleted || userObj.KycStatus == shared.KYCVerified {
-		log.Infof("KYC already completed for user %s, current status: %s", userObj.Id, userObj.KycStatus)
-		return c.JSON(http.StatusOK, map[string]string{"status": "success", "message": "Already verified"})
-	}
-
-	// Store the full decrypted response as JSON
-	responseJSON, err := json.Marshal(responseData)
-	if err != nil {
-		log.Errorf("Failed to marshal webhook response data: %v", err)
-		return c.JSON(http.StatusOK, map[string]string{"status": "acknowledged", "message": "Marshaling failed"})
-	}
-
-	// Update user identity with Aadhaar verification data
-	if err := h.userRepo.UpdateNationalIDData(ctx, identity.TaxID, string(responseJSON)); err != nil {
-		log.Errorf("Failed to update national ID data in webhook: %v", err)
-		return c.JSON(http.StatusOK, map[string]string{"status": "acknowledged", "message": "Database update failed"})
-	}
-
-	// Update KYC status to verified
-	if err := h.userRepo.UpdateUserKYCStatus(ctx, userObj.Id, shared.KYCVerified); err != nil {
-		log.Errorf("Failed to update KYC status in webhook: %v", err)
-		return c.JSON(http.StatusOK, map[string]string{"status": "acknowledged", "message": "Status update failed"})
-	}
-
-	log.Infof("Aadhaar verification completed successfully via webhook for user %s", userObj.Id)
-
+	// Always return success to acknowledge receipt
 	return c.JSON(http.StatusOK, map[string]string{"status": "success"})
-}
-
-// verifyTransactionID checks if the provided transaction ID matches the stored one
-func (h *AadhaarCallbackHandler) verifyTransactionID(ctx context.Context, taxID, tsTransID string) error {
-	identity, err := h.userRepo.GetUserIdentityByTaxID(ctx, taxID)
-	if err != nil {
-		return fmt.Errorf("failed to get user identity: %w", err)
-	}
-
-	if identity.NTxnID != tsTransID {
-		return fmt.Errorf("transaction ID mismatch: expected %s, got %s", identity.NTxnID, tsTransID)
-	}
-
-	return nil
 }
 
 // HTML templates for responses
