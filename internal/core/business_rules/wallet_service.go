@@ -16,10 +16,10 @@ import (
 
 // WalletService defines the interface for business wallet operations
 type WalletService interface {
-	GetBusinessWallet(businessID string) (*payment.BusinessWallet, error)
-	AddPaymentSource(businessID string, source payment.PaymentSource) error
-	RemovePaymentSource(businessID string, sourceID string, sourceType payment.PaymentSourceType) error
-	GetPaymentSource(businessID string, sourceID string, sourceType payment.PaymentSourceType) (payment.PaymentSource, error)
+	GetBusinessWallet(ctx context.Context, businessID string) (*payment.BusinessWallet, error)
+	AddPaymentSource(ctx context.Context, businessID string, source payment.PaymentSource) error
+	RemovePaymentSource(ctx context.Context, businessID string, sourceID string, sourceType payment.PaymentSourceType) error
+	GetPaymentSource(ctx context.Context, businessID string, sourceID string, sourceType payment.PaymentSourceType) (payment.PaymentSource, error)
 }
 
 // WalletServiceImpl provides the implementation for business wallet operations
@@ -60,11 +60,10 @@ func NewWalletService(storedCardRepo payment.StoredCardRepository, bankAccountRe
 // GetBusinessWallet retrieves the complete business wallet with all payment sources
 // Database queries are implemented for cards and bank accounts
 // In-memory storage still maintained temporarily for backwards compatibility
-func (ws *WalletServiceImpl) GetBusinessWallet(businessID string) (*payment.BusinessWallet, error) {
+func (ws *WalletServiceImpl) GetBusinessWallet(ctx context.Context, businessID string) (*payment.BusinessWallet, error) {
 	ws.logger.InfoWith("Fetching business wallet", "business_id", businessID)
 
 	// Fetch stored cards from database
-	ctx := context.Background()
 	dbStoredCards, _ := ws.storedCardRepo.GetStoredCardsByBusinessID(ctx, businessID)
 	realStoredCards := ws.storedCards[businessID]
 	if realStoredCards == nil {
@@ -119,7 +118,7 @@ func (ws *WalletServiceImpl) GetBusinessWallet(businessID string) (*payment.Busi
 }
 
 // AddPaymentSource adds a new payment source to the business wallet
-func (ws *WalletServiceImpl) AddPaymentSource(businessID string, source payment.PaymentSource) error {
+func (ws *WalletServiceImpl) AddPaymentSource(ctx context.Context, businessID string, source payment.PaymentSource) error {
 	ws.logger.InfoWith("Adding payment source to wallet",
 		"business_id", businessID,
 		"source_type", source.GetSourceType(),
@@ -135,7 +134,6 @@ func (ws *WalletServiceImpl) AddPaymentSource(businessID string, source payment.
 			}
 
 			// Store card in database (primary storage)
-			ctx := context.Background()
 			_ = ws.storedCardRepo.CreateStoredCard(ctx, storedCard)
 			// Also update in-memory storage (temporary for backwards compatibility)
 			ws.storedCards[businessID] = append(ws.storedCards[businessID], storedCard)
@@ -187,8 +185,7 @@ func (ws *WalletServiceImpl) AddPaymentSource(businessID string, source payment.
 			// After API response: bankVerificationLogRepo.UpdateVerificationResult(ctx, requestID, response)
 			// - Update: status, verified_account_name, transaction_reference, verification_amount
 
-			// Call verification service (3rd party API call)
-			ctx := context.Background() // TODO-IMPROVEMENT: Use proper context from HTTP request for cancellation
+			// Call verification service (3rd party API call) - uses context from HTTP request for proper cancellation
 			verificationResponse, err := ws.bankVerificationService.VerifyBankAccount(ctx, verificationRequest)
 
 			if err != nil {
@@ -297,7 +294,7 @@ func (ws *WalletServiceImpl) AddPaymentSource(businessID string, source payment.
 }
 
 // RemovePaymentSource removes a payment source from the business wallet
-func (ws *WalletServiceImpl) RemovePaymentSource(businessID string, sourceID string, sourceType payment.PaymentSourceType) error {
+func (ws *WalletServiceImpl) RemovePaymentSource(ctx context.Context, businessID string, sourceID string, sourceType payment.PaymentSourceType) error {
 	fmt.Println("=== WALLET SERVICE: RemovePaymentSource Called ===")
 	fmt.Printf("Business ID: %s\n", businessID)
 	fmt.Printf("Source Type: %s\n", sourceType)
@@ -311,7 +308,7 @@ func (ws *WalletServiceImpl) RemovePaymentSource(businessID string, sourceID str
 }
 
 // GetPaymentSource retrieves a specific payment source
-func (ws *WalletServiceImpl) GetPaymentSource(businessID string, sourceID string, sourceType payment.PaymentSourceType) (payment.PaymentSource, error) {
+func (ws *WalletServiceImpl) GetPaymentSource(ctx context.Context, businessID string, sourceID string, sourceType payment.PaymentSourceType) (payment.PaymentSource, error) {
 	fmt.Println("=== WALLET SERVICE: GetPaymentSource Called ===")
 	fmt.Printf("Business ID: %s\n", businessID)
 	fmt.Printf("Source Type: %s\n", sourceType)

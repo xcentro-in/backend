@@ -75,7 +75,7 @@ func (s *PaymentSourceService) GetPaymentSourcesWithFees(
 	}
 
 	// Fetch business wallet
-	wallet, err := s.walletService.GetBusinessWallet(businessID)
+	wallet, err := s.walletService.GetBusinessWallet(ctx, businessID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get business wallet: %w", err)
 	}

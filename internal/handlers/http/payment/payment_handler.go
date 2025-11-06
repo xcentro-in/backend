@@ -60,7 +60,7 @@ func (h *PaymentHandler) FetchWallet(c echo.Context) error {
 
 	// Call payment service to get business wallet information
 	fmt.Println("🔄 Calling Payment Service...")
-	businessWallet, err := h.paymentService.GetBusinessWallet(businessID)
+	businessWallet, err := h.paymentService.GetBusinessWallet(c.Request().Context(), businessID)
 	if err != nil {
 		fmt.Printf("❌ Wallet service error: %v\n", err)
 		return c.JSON(http.StatusInternalServerError, map[string]any{
@@ -391,8 +391,8 @@ func (h *PaymentHandler) Tokenize(c echo.Context) error {
 		},
 	}
 
-	// Add to business wallet via payment service
-	if err := h.paymentService.AddPaymentSource(coreRequest.BusinessID, storedCard); err != nil {
+	// Add to business wallet via payment service (uses same ctx with 60s timeout)
+	if err := h.paymentService.AddPaymentSource(ctx, coreRequest.BusinessID, storedCard); err != nil {
 		h.logger.ErrorWith("Failed to store card in wallet", "error", err, "card_id", tokenizeResponse.CardID)
 		return c.JSON(http.StatusInternalServerError, map[string]any{
 			"error":   "storage_failed",
@@ -592,8 +592,8 @@ func (h *PaymentHandler) handleBankAccountAddition(ctx context.Context, c echo.C
 
 	fmt.Println("🔄 Calling Payment Service for bank account verification and addition...")
 
-	// Call payment service to add and verify bank account
-	err := h.paymentService.AddPaymentSource(businessID, bankAccount)
+	// Call payment service to add and verify bank account (context enables cancellation of long-running bank verification)
+	err := h.paymentService.AddPaymentSource(ctx, businessID, bankAccount)
 
 	if err != nil {
 		fmt.Printf("❌ Bank account addition failed: %v\n", err)

@@ -225,17 +225,17 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 }
 
 // GetBusinessWallet retrieves wallet for a business
-func (s *PaymentService) GetBusinessWallet(businessID string) (*payment.BusinessWallet, error) {
+func (s *PaymentService) GetBusinessWallet(ctx context.Context, businessID string) (*payment.BusinessWallet, error) {
 	s.logger.DebugWith("Fetching business wallet", "business_id", businessID)
-	return s.walletService.GetBusinessWallet(businessID)
+	return s.walletService.GetBusinessWallet(ctx, businessID)
 }
 
 // AddPaymentSource adds a payment source to business wallet
-func (s *PaymentService) AddPaymentSource(businessID string, source payment.PaymentSource) error {
+func (s *PaymentService) AddPaymentSource(ctx context.Context, businessID string, source payment.PaymentSource) error {
 	s.logger.DebugWith("Adding payment source to wallet",
 		"business_id", businessID,
 		"source_type", source.GetSourceType())
-	return s.walletService.AddPaymentSource(businessID, source)
+	return s.walletService.AddPaymentSource(ctx, businessID, source)
 }
 
 // TokenizeCard tokenizes a card and stores it in the wallet
