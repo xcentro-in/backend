@@ -2,6 +2,7 @@ package ratelimiter
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"sync"
@@ -66,32 +67,11 @@ func Initialize(redisClient *redis.Client, cfg *config.RateLimiterConfig, cookie
 			cookieDomain,
 		)
 
-		// Build policies map from config
-		policies := map[string]Policy{
-			"default": {
-				Capacity:        cfg.DefaultCapacity,
-				RefillPerSecond: cfg.DefaultRefillPerSec,
-				RequestedTokens: cfg.DefaultRequestedTokens,
-				FailClosed:      false,
-			},
-			"login": {
-				Capacity:        cfg.LoginCapacity,
-				RefillPerSecond: cfg.LoginRefillPerSec,
-				RequestedTokens: cfg.LoginRequestedTokens,
-				FailClosed:      cfg.LoginFailClosed,
-			},
-			"signup": {
-				Capacity:        cfg.SignupCapacity,
-				RefillPerSecond: cfg.SignupRefillPerSec,
-				RequestedTokens: cfg.SignupRequestedTokens,
-				FailClosed:      cfg.SignupFailClosed,
-			},
-			"api_high": {
-				Capacity:        cfg.APIHighCapacity,
-				RefillPerSecond: cfg.APIHighRefillPerSec,
-				RequestedTokens: cfg.APIHighRequestedTokens,
-				FailClosed:      false,
-			},
+		// Parse group policies from JSON string
+		policies, err := parsePoliciesFromJSON(cfg.GroupPoliciesJSON, log)
+		if err != nil {
+			log.Warnf("Failed to parse group policies JSON, using defaults: %v", err)
+			policies = DefaultPolicies()
 		}
 
 		instance = &RateLimiter{
@@ -306,4 +286,30 @@ func ParseRetryAfter(retryAfterStr string) int {
 	}
 	// Ceil to next whole second
 	return int(retryAfter) + 1
+}
+
+// parsePoliciesFromJSON parses the group policies from JSON string.
+// If the JSON string is empty or invalid, returns an error.
+func parsePoliciesFromJSON(jsonStr string, log *logger.Logger) (map[string]Policy, error) {
+	// If JSON string is empty, return default policies
+	if jsonStr == "" {
+		log.Info("No group policies JSON configured, using defaults")
+		return DefaultPolicies(), nil
+	}
+
+	// Parse JSON into map
+	var policies map[string]Policy
+	if err := json.Unmarshal([]byte(jsonStr), &policies); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal group policies JSON: %w", err)
+	}
+
+	// Ensure "default" policy exists
+	if _, exists := policies["default"]; !exists {
+		log.Warn("No 'default' policy in JSON, adding built-in default")
+		defaultPolicies := DefaultPolicies()
+		policies["default"] = defaultPolicies["default"]
+	}
+
+	log.Infof("Loaded %d group policies from JSON", len(policies))
+	return policies, nil
 }

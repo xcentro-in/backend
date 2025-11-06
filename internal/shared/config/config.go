@@ -228,27 +228,10 @@ type RateLimiterConfig struct {
 	TokenKeyTTL                  time.Duration `json:"token_key_ttl" env:"RATE_LIMITER_TOKEN_KEY_TTL" env-default:"2h"`
 	FailOpenByDefault            bool          `json:"fail_open_by_default" env:"RATE_LIMITER_FAIL_OPEN_BY_DEFAULT" env-default:"true"`
 
-	// Default policy for all groups not explicitly configured
-	DefaultCapacity        int64   `json:"default_capacity" env:"RATE_LIMITER_DEFAULT_CAPACITY" env-default:"120"`
-	DefaultRefillPerSec    float64 `json:"default_refill_per_sec" env:"RATE_LIMITER_DEFAULT_REFILL_PER_SEC" env-default:"2.0"` // 120 req/min
-	DefaultRequestedTokens int64   `json:"default_requested_tokens" env:"RATE_LIMITER_DEFAULT_REQUESTED_TOKENS" env-default:"1"`
-
-	// Login group policy
-	LoginCapacity        int64   `json:"login_capacity" env:"RATE_LIMITER_LOGIN_CAPACITY" env-default:"5"`
-	LoginRefillPerSec    float64 `json:"login_refill_per_sec" env:"RATE_LIMITER_LOGIN_REFILL_PER_SEC" env-default:"0.005555"` // 5 per 15 min
-	LoginRequestedTokens int64   `json:"login_requested_tokens" env:"RATE_LIMITER_LOGIN_REQUESTED_TOKENS" env-default:"1"`
-	LoginFailClosed      bool    `json:"login_fail_closed" env:"RATE_LIMITER_LOGIN_FAIL_CLOSED" env-default:"true"`
-
-	// Signup group policy
-	SignupCapacity        int64   `json:"signup_capacity" env:"RATE_LIMITER_SIGNUP_CAPACITY" env-default:"10"`
-	SignupRefillPerSec    float64 `json:"signup_refill_per_sec" env:"RATE_LIMITER_SIGNUP_REFILL_PER_SEC" env-default:"0.002777"` // 10 per hour
-	SignupRequestedTokens int64   `json:"signup_requested_tokens" env:"RATE_LIMITER_SIGNUP_REQUESTED_TOKENS" env-default:"1"`
-	SignupFailClosed      bool    `json:"signup_fail_closed" env:"RATE_LIMITER_SIGNUP_FAIL_CLOSED" env-default:"false"`
-
-	// API High-throughput group policy
-	APIHighCapacity        int64   `json:"api_high_capacity" env:"RATE_LIMITER_API_HIGH_CAPACITY" env-default:"1000"`
-	APIHighRefillPerSec    float64 `json:"api_high_refill_per_sec" env:"RATE_LIMITER_API_HIGH_REFILL_PER_SEC" env-default:"16.6667"` // 1000 per min
-	APIHighRequestedTokens int64   `json:"api_high_requested_tokens" env:"RATE_LIMITER_API_HIGH_REQUESTED_TOKENS" env-default:"1"`
+	// GroupPoliciesJSON is a JSON string defining rate limit policies for each group
+	// Format: {"group_name": {"capacity": 100, "refill_per_second": 2.0, "requested_tokens": 1, "fail_closed": false}}
+	// If empty or invalid, uses built-in defaults
+	GroupPoliciesJSON string `json:"group_policies_json" env:"RATE_LIMITER_GROUP_POLICIES_JSON" env-default:""`
 }
 
 var (

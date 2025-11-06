@@ -3,17 +3,17 @@ package ratelimiter
 // Policy represents a token-bucket rate limiting policy.
 type Policy struct {
 	// Capacity is the maximum number of tokens (burst)
-	Capacity int64
+	Capacity int64 `json:"capacity"`
 
 	// RefillPerSecond is the rate at which tokens are added per second
-	RefillPerSecond float64
+	RefillPerSecond float64 `json:"refill_per_second"`
 
 	// RequestedTokens is the number of tokens consumed per request (usually 1)
-	RequestedTokens int64
+	RequestedTokens int64 `json:"requested_tokens"`
 
 	// FailClosed determines whether to fail closed (reject) on Redis errors
 	// If false, fails open (allow) on errors
-	FailClosed bool
+	FailClosed bool `json:"fail_closed"`
 }
 
 // PolicyGroup represents policy configuration for a specific group.
