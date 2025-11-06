@@ -7,16 +7,19 @@ import (
 
 	"github.com/labstack/echo/v4"
 	"xcentro.in/internal/core/user"
+	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/logger"
 )
 
 type AadhaarCallbackHandler struct {
 	userService user.UserService
+	frontendURL string
 }
 
-func NewAadhaarCallbackHandler(userService user.UserService) *AadhaarCallbackHandler {
+func NewAadhaarCallbackHandler(userService user.UserService, cfg *config.Config) *AadhaarCallbackHandler {
 	return &AadhaarCallbackHandler{
 		userService: userService,
+		frontendURL: cfg.Frontend.URL,
 	}
 }
 
@@ -35,20 +38,20 @@ func (h *AadhaarCallbackHandler) HandleRedirectCallback(c echo.Context) error {
 	userID, ok := c.Get("user_id").(string)
 	if !ok || userID == "" {
 		log.Error("User ID not found in JWT context")
-		return c.HTML(http.StatusUnauthorized, generateErrorHTML("Unauthorized", "Please log in to continue."))
+		return c.HTML(http.StatusUnauthorized, generateErrorHTML(h.frontendURL, "Unauthorized", "Please log in to continue."))
 	}
 
 	// Parse encrypted request
 	var req CallbackRequest
 	if err := c.Bind(&req); err != nil {
 		log.Errorf("Failed to parse callback request: %v", err)
-		return c.HTML(http.StatusBadRequest, generateErrorHTML("Invalid Request", "Unable to process verification data."))
+		return c.HTML(http.StatusBadRequest, generateErrorHTML(h.frontendURL, "Invalid Request", "Unable to process verification data."))
 	}
 
 	// Validate input
 	if req.ResponseData == "" {
 		log.Error("Empty response data in callback request")
-		return c.HTML(http.StatusBadRequest, generateErrorHTML("Invalid Request", "Missing verification data."))
+		return c.HTML(http.StatusBadRequest, generateErrorHTML(h.frontendURL, "Invalid Request", "Missing verification data."))
 	}
 
 	// Call service method to process the callback
@@ -56,7 +59,7 @@ func (h *AadhaarCallbackHandler) HandleRedirectCallback(c echo.Context) error {
 	if err != nil {
 		// Check for specific error types
 		if strings.Contains(err.Error(), "kyc_already_completed") {
-			return c.HTML(http.StatusOK, generateAlreadyCompletedHTML())
+			return c.HTML(http.StatusOK, generateAlreadyCompletedHTML(h.frontendURL))
 		}
 
 		// Generic error handling
@@ -64,11 +67,11 @@ func (h *AadhaarCallbackHandler) HandleRedirectCallback(c echo.Context) error {
 		if strings.Contains(err.Error(), "aadhaar verification failed") {
 			errorMsg = err.Error()
 		}
-		return c.HTML(http.StatusOK, generateErrorHTML("Verification Failed", errorMsg))
+		return c.HTML(http.StatusOK, generateErrorHTML(h.frontendURL, "Verification Failed", errorMsg))
 	}
 
-	// Return success HTML that closes the popup
-	return c.HTML(http.StatusOK, generateSuccessHTML())
+	// Return success HTML that closes the iframe via postMessage
+	return c.HTML(http.StatusOK, generateSuccessHTML(h.frontendURL))
 }
 
 // HandleWebhook handles the webhook callback (POST) without authentication
@@ -100,8 +103,8 @@ func (h *AadhaarCallbackHandler) HandleWebhook(c echo.Context) error {
 
 // HTML templates for responses
 
-func generateSuccessHTML() string {
-	return `
+func generateSuccessHTML(frontendURL string) string {
+	return fmt.Sprintf(`
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -192,10 +195,43 @@ func generateSuccessHTML() string {
         }
     </style>
     <script>
-        // Close popup window after 3 seconds
-        setTimeout(function() {
-            window.close();
-        }, 3000);
+        (function() {
+            // Configuration
+            const config = {
+                frontendOrigin: '%s',
+                message: {
+                    type: 'KYC_COMPLETE',
+                    status: 'success',
+                    tx_id: ''
+                }
+            };
+
+            // Send postMessage to parent window (iframe case)
+            function notifyParent() {
+                try {
+                    if (window.parent && window.parent !== window) {
+                        console.log('Sending KYC completion message to parent:', config.message);
+                        window.parent.postMessage(config.message, config.frontendOrigin);
+                        return true;
+                    }
+                    console.warn('No parent window found');
+                    return false;
+                } catch (error) {
+                    console.error('Error sending postMessage:', error);
+                    return false;
+                }
+            }
+
+            // Execute on load
+            window.addEventListener('load', function() {
+                notifyParent();
+            });
+
+            // Also try immediately in case load event already fired
+            if (document.readyState === 'complete') {
+                notifyParent();
+            }
+        })();
     </script>
 </head>
 <body>
@@ -210,7 +246,7 @@ func generateSuccessHTML() string {
         <div class="message">
             <p><strong>✓</strong> Your identity has been verified successfully</p>
         </div>
-        <p>This window will close automatically in a few seconds...</p>
+        <p>Returning to application...</p>
         <div class="footer">
             <p><strong>xcentro</strong><br>
             MerchantBridge Fintech Solutions Pvt Ltd</p>
@@ -218,11 +254,11 @@ func generateSuccessHTML() string {
     </div>
 </body>
 </html>
-`
+`, frontendURL)
 }
 
-func generateAlreadyCompletedHTML() string {
-	return `
+func generateAlreadyCompletedHTML(frontendURL string) string {
+	return fmt.Sprintf(`
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -302,9 +338,43 @@ func generateAlreadyCompletedHTML() string {
         }
     </style>
     <script>
-        setTimeout(function() {
-            window.close();
-        }, 3000);
+        (function() {
+            // Configuration
+            const config = {
+                frontendOrigin: '%s',
+                message: {
+                    type: 'KYC_COMPLETE',
+                    status: 'success',
+                    tx_id: ''
+                }
+            };
+
+            // Send postMessage to parent window (iframe case)
+            function notifyParent() {
+                try {
+                    if (window.parent && window.parent !== window) {
+                        console.log('Sending KYC completion message to parent:', config.message);
+                        window.parent.postMessage(config.message, config.frontendOrigin);
+                        return true;
+                    }
+                    console.warn('No parent window found');
+                    return false;
+                } catch (error) {
+                    console.error('Error sending postMessage:', error);
+                    return false;
+                }
+            }
+
+            // Execute on load
+            window.addEventListener('load', function() {
+                notifyParent();
+            });
+
+            // Also try immediately in case load event already fired
+            if (document.readyState === 'complete') {
+                notifyParent();
+            }
+        })();
     </script>
 </head>
 <body>
@@ -321,7 +391,7 @@ func generateAlreadyCompletedHTML() string {
         <div class="message">
             <p><strong>ℹ</strong> No further action is required</p>
         </div>
-        <p>This window will close automatically in a few seconds...</p>
+        <p>Returning to application...</p>
         <div class="footer">
             <p><strong>xcentro</strong><br>
             MerchantBridge Fintech Solutions Pvt Ltd</p>
@@ -329,10 +399,10 @@ func generateAlreadyCompletedHTML() string {
     </div>
 </body>
 </html>
-`
+`, frontendURL)
 }
 
-func generateErrorHTML(title, message string) string {
+func generateErrorHTML(frontendURL, title, message string) string {
 	return fmt.Sprintf(`
 <!DOCTYPE html>
 <html lang="en">
@@ -413,9 +483,43 @@ func generateErrorHTML(title, message string) string {
         }
     </style>
     <script>
-        setTimeout(function() {
-            window.close();
-        }, 5000);
+        (function() {
+            // Configuration
+            const config = {
+                frontendOrigin: '%s',
+                message: {
+                    type: 'KYC_COMPLETE',
+                    status: 'failed',
+                    tx_id: ''
+                }
+            };
+
+            // Send postMessage to parent window (iframe case)
+            function notifyParent() {
+                try {
+                    if (window.parent && window.parent !== window) {
+                        console.log('Sending KYC completion message to parent:', config.message);
+                        window.parent.postMessage(config.message, config.frontendOrigin);
+                        return true;
+                    }
+                    console.warn('No parent window found');
+                    return false;
+                } catch (error) {
+                    console.error('Error sending postMessage:', error);
+                    return false;
+                }
+            }
+
+            // Execute on load
+            window.addEventListener('load', function() {
+                notifyParent();
+            });
+
+            // Also try immediately in case load event already fired
+            if (document.readyState === 'complete') {
+                notifyParent();
+            }
+        })();
     </script>
 </head>
 <body>
@@ -432,7 +536,7 @@ func generateErrorHTML(title, message string) string {
             <p>%s</p>
         </div>
         <p>Please try again or contact support if the issue persists.</p>
-        <p>This window will close automatically in a few seconds...</p>
+        <p>Returning to application...</p>
         <div class="footer">
             <p><strong>xcentro</strong><br>
             MerchantBridge Fintech Solutions Pvt Ltd</p>
@@ -440,5 +544,5 @@ func generateErrorHTML(title, message string) string {
     </div>
 </body>
 </html>
-`, title, title, message)
+`, title, frontendURL, title, message)
 }

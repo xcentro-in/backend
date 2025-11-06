@@ -7,6 +7,7 @@ import (
 	coreBusiness "xcentro.in/internal/core/business"
 	"xcentro.in/internal/core/user"
 	"xcentro.in/internal/middleware"
+	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/logger"
 	"xcentro.in/internal/shared/types"
 	customValidator "xcentro.in/internal/shared/validator"
@@ -26,9 +27,9 @@ func NewUserHandler(userService user.UserService, authService auth.AuthService) 
 	}
 }
 
-func RegisterUserRoutes(e *echo.Group, userService user.UserService, authService auth.AuthService, businessUserRelRepo coreBusiness.BusinessUserRelationRepository, rclient *redisClient.RedisClient) {
+func RegisterUserRoutes(e *echo.Group, userService user.UserService, authService auth.AuthService, businessUserRelRepo coreBusiness.BusinessUserRelationRepository, rclient *redisClient.RedisClient, cfg *config.Config) {
 	handler := NewUserHandler(userService, authService)
-	aadhaarHandler := NewAadhaarCallbackHandler(userService)
+	aadhaarHandler := NewAadhaarCallbackHandler(userService, cfg)
 
 	userGroup := e.Group("/user")
 
