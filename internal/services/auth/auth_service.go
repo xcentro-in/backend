@@ -18,6 +18,7 @@ import (
 	"xcentro.in/internal/core/user"
 	sharedClients "xcentro.in/internal/shared/clients"
 	"xcentro.in/internal/shared/config"
+	"xcentro.in/internal/shared/email"
 	"xcentro.in/internal/shared/logger"
 	"xcentro.in/internal/shared/security"
 )
@@ -272,7 +273,6 @@ func (s *AuthService) parseAndValidateToken(tokenString string) (*jwt.Registered
 
 	return claims, nil
 }
-
 
 // ChangePassword changes the user's password after verifying the old password.
 func (s *AuthService) ChangePassword(ctx context.Context, userID, oldPassword, newPassword string) error {
@@ -533,16 +533,26 @@ func (s *AuthService) SendPasswordResetEmail(ctx context.Context, email string, 
 	// Create password reset URL with token as query parameter
 	resetURL := fmt.Sprintf("%s/reset-password?token=%s", s.appConfig.Frontend.URL, resetToken)
 
-	// Generate email content based on type
+	// Render email templates using the email renderer
+	renderer := email.GetRenderer()
 	var subject, htmlBody, textBody string
+	var renderErr error
+
 	if emailType == "invite" {
-		subject = "Welcome to Xcentro - Set Your Password"
-		htmlBody = s.generateInvitationEmailHTML(userObj.Name, resetURL)
-		textBody = s.generateInvitationEmailText(userObj.Name, resetURL)
+		subject = "Welcome to xcentro - Set Your Password"
+		htmlBody, textBody, renderErr = renderer.RenderInvitation(userObj.Name, resetURL)
 	} else {
-		subject = "Reset your Xcentro password"
-		htmlBody = s.generatePasswordResetEmailHTML(resetURL)
-		textBody = s.generatePasswordResetEmailText(resetURL)
+		subject = "Reset your xcentro password"
+		htmlBody, textBody, renderErr = renderer.RenderPasswordReset(resetURL)
+	}
+
+	if renderErr != nil {
+		logger.Errorf("Failed to render email templates: %v", renderErr)
+		// Return success to prevent information disclosure (for reset type)
+		if emailType == "reset" {
+			return nil
+		}
+		return fmt.Errorf("failed to render email templates: %w", renderErr)
 	}
 
 	// Create email message
@@ -568,106 +578,6 @@ func (s *AuthService) SendPasswordResetEmail(ctx context.Context, email string, 
 
 	logger.Infof("Email sent successfully to %s, Message ID: %s, Type: %s", userObj.Email, messageID, emailType)
 	return nil
-}
-
-// generatePasswordResetEmailHTML generates HTML content for password reset email
-func (s *AuthService) generatePasswordResetEmailHTML(resetURL string) string {
-	return fmt.Sprintf(`
-		<html>
-		<body>
-			<h2>Password Reset - Xcentro</h2>
-			<p>Hi there,</p>
-			<p>We received a request to reset your password. Please click the link below to reset your password:</p>
-			<p><a href="%s" style="background-color: #007bff; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">Reset Password</a></p>
-			<p>Or copy and paste this link in your browser:</p>
-			<p>%s</p>
-			<p>This link will expire in 1 hour.</p>
-			<p>If you didn't request a password reset, please ignore this email and your password will remain unchanged.</p>
-			<p><strong>Security Note:</strong> Never share this link with anyone. Xcentro staff will never ask for your reset link.</p>
-			<p>Best regards,<br>Xcentro Team</p>
-		</body>
-		</html>
-	`, resetURL, resetURL)
-}
-
-// generatePasswordResetEmailText generates plain text content for password reset email
-func (s *AuthService) generatePasswordResetEmailText(resetURL string) string {
-	return fmt.Sprintf(`
-		Password Reset - Xcentro
-
-		Hi there,
-
-		We received a request to reset your password. Please click the link below to reset your password:
-
-		%s
-
-		This link will expire in 1 hour.
-
-		If you didn't request a password reset, please ignore this email and your password will remain unchanged.
-
-		Security Note: Never share this link with anyone. Xcentro staff will never ask for your reset link.
-
-		Best regards,
-		Xcentro Team
-	`, resetURL)
-}
-
-// generateInvitationEmailHTML generates HTML content for user invitation email
-func (s *AuthService) generateInvitationEmailHTML(name, resetURL string) string {
-	return fmt.Sprintf(`
-		<html>
-		<body>
-			<h2>Welcome to Xcentro!</h2>
-			<p>Hi %s,</p>
-			<p>You have been invited to join a business on the Xcentro platform.</p>
-			<p>To get started, please click the link below to set your password:</p>
-			<p><a href="%s" style="background-color: #28a745; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">Set Your Password</a></p>
-			<p>Or copy and paste this link in your browser:</p>
-			<p>%s</p>
-			<p>This link will expire in 1 hour.</p>
-			<p><strong>What's next?</strong></p>
-			<ul>
-				<li>Set your password using the link above</li>
-				<li>Log in to your Xcentro account</li>
-				<li>Complete your profile and KYC verification</li>
-				<li>Start managing business operations</li>
-			</ul>
-			<p><strong>Security Note:</strong> Never share this link with anyone. Xcentro staff will never ask for your invitation link.</p>
-			<p>If you have any questions, feel free to reach out to our support team.</p>
-			<p>Best regards,<br>Xcentro Team</p>
-		</body>
-		</html>
-	`, name, resetURL, resetURL)
-}
-
-// generateInvitationEmailText generates plain text content for user invitation email
-func (s *AuthService) generateInvitationEmailText(name, resetURL string) string {
-	return fmt.Sprintf(`
-		Welcome to Xcentro!
-
-		Hi %s,
-
-		You have been invited to join a business on the Xcentro platform.
-
-		To get started, please click the link below to set your password:
-
-		%s
-
-		This link will expire in 1 hour.
-
-		What's next?
-		- Set your password using the link above
-		- Log in to your Xcentro account
-		- Complete your profile and KYC verification
-		- Start managing business operations
-
-		Security Note: Never share this link with anyone. Xcentro staff will never ask for your invitation link.
-
-		If you have any questions, feel free to reach out to our support team.
-
-		Best regards,
-		Xcentro Team
-	`, name, resetURL)
 }
 
 // ResetPasswordWithToken resets user's password using verification token
@@ -816,39 +726,13 @@ func (s *AuthService) SendEmailVerification(ctx context.Context, userID string) 
 	// Create verification URL
 	verificationURL := fmt.Sprintf("%s/verify-email?token=%s", s.appConfig.Frontend.URL, verificationToken)
 
-	// Prepare email content
-	htmlBody := fmt.Sprintf(`
-		<html>
-		<body>
-			<h2>Email Verification - Xcentro</h2>
-			<p>Hi there,</p>
-			<p>Thank you for signing up with Xcentro. Please click the link below to verify your email address:</p>
-			<p><a href="%s" style="background-color: #007bff; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">Verify Email</a></p>
-			<p>Or copy and paste this link in your browser:</p>
-			<p>%s</p>
-			<p>This link will expire in 24 hours.</p>
-			<p>If you didn't create an account with us, please ignore this email.</p>
-			<p>Best regards,<br>Xcentro Team</p>
-		</body>
-		</html>
-	`, verificationURL, verificationURL)
-
-	textBody := fmt.Sprintf(`
-		Email Verification - Xcentro
-
-		Hi there,
-
-		Thank you for signing up with Xcentro. Please click the link below to verify your email address:
-
-		%s
-
-		This link will expire in 24 hours.
-
-		If you didn't create an account with us, please ignore this email.
-
-		Best regards,
-		Xcentro Team
-	`, verificationURL)
+	// Render email templates using the email renderer
+	renderer := email.GetRenderer()
+	htmlBody, textBody, err := renderer.RenderEmailVerification(verificationURL)
+	if err != nil {
+		logger.Errorf("Failed to render email verification templates: %v", err)
+		return fmt.Errorf("failed to render email templates: %w", err)
+	}
 
 	// Create email message
 	emailMsg := &mailers.EmailMessage{

@@ -1,0 +1,43 @@
+WELCOME TO XCENTRO - YOU'VE BEEN INVITED!
+==========================================
+
+Hi {{.Name}},
+
+You've been invited to join a business on the xcentro platform. We're excited to have you on board!
+
+GET STARTED IN 3 EASY STEPS:
+1. Set your password using the link below
+2. Log in to your xcentro account
+3. Complete your profile and KYC verification
+
+To get started, please set your password by clicking the link below:
+
+{{.ResetURL}}
+
+IMPORTANT: This invitation link will expire in 1 hour for your security. Please set your password soon!
+
+WHAT'S NEXT?
+
+🔐 Secure Account
+   Set a strong password and enable security features
+
+✅ Complete KYC
+   Verify your identity to unlock all features
+
+🚀 Start Managing
+   Access business operations, payments, and team management tools
+
+SECURITY NOTE:
+Never share this invitation link with anyone. xcentro staff will never ask for your invitation link, password, or personal information.
+
+If you have any questions or need assistance, our support team is here to help.
+
+Welcome to xcentro!
+
+Best regards,
+The xcentro Team
+
+---
+This email was sent by xcentro
+A product of MerchantBridge Fintech Solutions Pvt Ltd
+Visit our website: https://www.xcentro.in
