@@ -455,38 +455,18 @@ func (h *PayeeHandler) GetEmployeesForList(c echo.Context) error {
 	})
 }
 
-// GetRemunerationDocumentUploadURL handles POST /payees/remuneration/upload-url
+// GetRemunerationDocumentUploadURL handles GET /payees/remuneration/upload-url?relation_id=xxx
 // Returns a presigned S3 URL for uploading employee remuneration document
 func (h *PayeeHandler) GetRemunerationDocumentUploadURL(c echo.Context) error {
 	h.logger.InfoWith("GetRemunerationDocumentUploadURL API called")
 
-	// Parse request body
-	var req struct {
-		PayeeID   string `json:"payee_id"`
-		AccountID string `json:"account_id"`
-	}
-
-	if err := c.Bind(&req); err != nil {
-		h.logger.ErrorWith("Error binding request", "error", err)
+	// Get relation_id from query parameter
+	relationID := c.QueryParam("relation_id")
+	if relationID == "" {
+		h.logger.WarnWith("Missing relation_id in query parameter")
 		return c.JSON(http.StatusBadRequest, map[string]any{
 			"error":   "invalid_request",
-			"message": "Invalid request body",
-		})
-	}
-
-	// Validate required fields
-	if req.PayeeID == "" {
-		h.logger.WarnWith("Missing payee_id in request body")
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "invalid_request",
-			"message": "payee_id is required",
-		})
-	}
-	if req.AccountID == "" {
-		h.logger.WarnWith("Missing account_id in request body")
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "invalid_request",
-			"message": "account_id is required",
+			"message": "relation_id query parameter is required",
 		})
 	}
 
@@ -500,11 +480,11 @@ func (h *PayeeHandler) GetRemunerationDocumentUploadURL(c echo.Context) error {
 		})
 	}
 
-	h.logger.DebugWith("Request parameters", "payee_id", req.PayeeID, "account_id", req.AccountID, "business_id", businessID)
+	h.logger.DebugWith("Request parameters", "relation_id", relationID, "business_id", businessID)
 
 	// Call payee service to get presigned upload URL
 	h.logger.DebugWith("Calling payee service")
-	uploadURL, err := h.payeeService.GetRemunerationDocumentUploadURL(c.Request().Context(), businessID, req.PayeeID, req.AccountID)
+	uploadURL, err := h.payeeService.GetRemunerationDocumentUploadURL(c.Request().Context(), businessID, relationID)
 	if err != nil {
 		h.logger.ErrorWith("Failed to get upload URL", "error", err)
 		return c.JSON(http.StatusInternalServerError, map[string]any{
@@ -513,7 +493,7 @@ func (h *PayeeHandler) GetRemunerationDocumentUploadURL(c echo.Context) error {
 		})
 	}
 
-	h.logger.InfoWith("Presigned upload URL generated", "payee_id", req.PayeeID, "account_id", req.AccountID)
+	h.logger.InfoWith("Presigned upload URL generated", "relation_id", relationID)
 
 	return c.JSON(http.StatusOK, map[string]any{
 		"status": "success",
@@ -524,38 +504,18 @@ func (h *PayeeHandler) GetRemunerationDocumentUploadURL(c echo.Context) error {
 	})
 }
 
-// ConfirmRemunerationDocumentUpload handles POST /payees/remuneration/confirm-upload
+// ConfirmRemunerationDocumentUpload handles GET /payees/remuneration/confirm-upload?relation_id=xxx
 // Confirms the S3 upload and updates the database with the document key
 func (h *PayeeHandler) ConfirmRemunerationDocumentUpload(c echo.Context) error {
 	h.logger.InfoWith("ConfirmRemunerationDocumentUpload API called")
 
-	// Parse request body
-	var req struct {
-		PayeeID   string `json:"payee_id"`
-		AccountID string `json:"account_id"`
-	}
-
-	if err := c.Bind(&req); err != nil {
-		h.logger.ErrorWith("Error binding request", "error", err)
+	// Get relation_id from query parameter
+	relationID := c.QueryParam("relation_id")
+	if relationID == "" {
+		h.logger.WarnWith("Missing relation_id in query parameter")
 		return c.JSON(http.StatusBadRequest, map[string]any{
 			"error":   "invalid_request",
-			"message": "Invalid request body",
-		})
-	}
-
-	// Validate required fields
-	if req.PayeeID == "" {
-		h.logger.WarnWith("Missing payee_id in request body")
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "invalid_request",
-			"message": "payee_id is required",
-		})
-	}
-	if req.AccountID == "" {
-		h.logger.WarnWith("Missing account_id in request body")
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "invalid_request",
-			"message": "account_id is required",
+			"message": "relation_id query parameter is required",
 		})
 	}
 
@@ -569,11 +529,11 @@ func (h *PayeeHandler) ConfirmRemunerationDocumentUpload(c echo.Context) error {
 		})
 	}
 
-	h.logger.DebugWith("Request parameters", "payee_id", req.PayeeID, "account_id", req.AccountID, "business_id", businessID)
+	h.logger.DebugWith("Request parameters", "relation_id", relationID, "business_id", businessID)
 
 	// Call payee service to confirm upload and get presigned download URL
 	h.logger.DebugWith("Calling payee service")
-	downloadURL, err := h.payeeService.ConfirmRemunerationDocumentUpload(c.Request().Context(), businessID, req.PayeeID, req.AccountID)
+	downloadURL, err := h.payeeService.ConfirmRemunerationDocumentUpload(c.Request().Context(), businessID, relationID)
 	if err != nil {
 		h.logger.ErrorWith("Failed to confirm upload", "error", err)
 		return c.JSON(http.StatusInternalServerError, map[string]any{
@@ -582,13 +542,71 @@ func (h *PayeeHandler) ConfirmRemunerationDocumentUpload(c echo.Context) error {
 		})
 	}
 
-	h.logger.InfoWith("Remuneration document upload confirmed", "payee_id", req.PayeeID, "account_id", req.AccountID)
+	h.logger.InfoWith("Remuneration document upload confirmed", "relation_id", relationID)
 
 	return c.JSON(http.StatusOK, map[string]any{
 		"status":  "success",
 		"message": "Document upload confirmed successfully",
 		"data": map[string]any{
 			"document_url": downloadURL,
+			"expires_in":   "15 minutes",
+		},
+	})
+}
+
+// GetRemunerationDocumentDownloadURL handles GET /payees/remuneration/download-url?relation_id=xxx
+// Generates a fresh presigned S3 URL for downloading the employee remuneration document
+func (h *PayeeHandler) GetRemunerationDocumentDownloadURL(c echo.Context) error {
+	h.logger.InfoWith("GetRemunerationDocumentDownloadURL API called")
+
+	// Get relation_id from query parameter
+	relationID := c.QueryParam("relation_id")
+	if relationID == "" {
+		h.logger.WarnWith("Missing relation_id in query parameter")
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "invalid_request",
+			"message": "relation_id query parameter is required",
+		})
+	}
+
+	// Extract business_id from X-Business-ID header
+	businessID := c.Request().Header.Get("X-Business-ID")
+	if businessID == "" {
+		h.logger.WarnWith("Missing X-Business-ID header")
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "MISSING_BUSINESS_ID",
+			"message": "X-Business-ID header is required",
+		})
+	}
+
+	h.logger.DebugWith("Request parameters", "relation_id", relationID, "business_id", businessID)
+
+	// Call payee service to get presigned download URL
+	h.logger.DebugWith("Calling payee service")
+	downloadURL, err := h.payeeService.GetRemunerationDocumentDownloadURL(c.Request().Context(), businessID, relationID)
+	if err != nil {
+		// Only return error for actual failures (not missing document)
+		h.logger.ErrorWith("Failed to get download URL", "error", err)
+		return c.JSON(http.StatusInternalServerError, map[string]any{
+			"error":   "download_url_failed",
+			"message": err.Error(),
+		})
+	}
+
+	// Always return 200 with has_document field
+	hasDocument := downloadURL != ""
+
+	if hasDocument {
+		h.logger.InfoWith("Presigned download URL generated", "relation_id", relationID)
+	} else {
+		h.logger.DebugWith("No document uploaded for employee", "relation_id", relationID)
+	}
+
+	return c.JSON(http.StatusOK, map[string]any{
+		"status": "success",
+		"data": map[string]any{
+			"has_document": hasDocument,
+			"download_url": downloadURL,
 			"expires_in":   "15 minutes",
 		},
 	})

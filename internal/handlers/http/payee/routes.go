@@ -22,8 +22,9 @@ func RegisterPayeeRoutes(group *echo.Group, payeeService *payeeSvc.PayeeService,
 	group.DELETE("/:payee_id/accounts/:account_id", handler.DeactivatePayee) // DELETE /payees/:id/accounts/:id (kept for now)
 
 	// Employee remuneration document upload endpoints
-	group.POST("/remuneration/upload-url", handler.GetRemunerationDocumentUploadURL)       // POST /payees/remuneration/upload-url
-	group.POST("/remuneration/confirm-upload", handler.ConfirmRemunerationDocumentUpload) // POST /payees/remuneration/confirm-upload
+	group.GET("/remuneration/upload-url", handler.GetRemunerationDocumentUploadURL)         // GET /payees/remuneration/upload-url?relation_id=xxx
+	group.GET("/remuneration/confirm-upload", handler.ConfirmRemunerationDocumentUpload)   // GET /payees/remuneration/confirm-upload?relation_id=xxx
+	group.GET("/remuneration/download-url", handler.GetRemunerationDocumentDownloadURL)    // GET /payees/remuneration/download-url?relation_id=xxx
 }
 
 // RegisterVendorDropdownRoute registers the lightweight vendor dropdown endpoint

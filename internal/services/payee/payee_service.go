@@ -1617,47 +1617,39 @@ func (s *PayeeService) GetPayeeDetailsByRelation(ctx context.Context, businessID
 
 // GetRemunerationDocumentUploadURL generates a presigned S3 URL for employee remuneration document upload
 // This allows the frontend to upload the document directly to S3 without going through the backend
-func (s *PayeeService) GetRemunerationDocumentUploadURL(ctx context.Context, businessID, payeeID, accountID string) (string, error) {
+func (s *PayeeService) GetRemunerationDocumentUploadURL(ctx context.Context, businessID, relationID string) (string, error) {
 	s.logger.DebugWith("Generating presigned upload URL for remuneration document",
 		"business_id", businessID,
-		"payee_id", payeeID,
-		"account_id", accountID)
+		"relation_id", relationID)
 
 	// Input validation
 	if businessID == "" {
 		return "", fmt.Errorf("business_id is required")
 	}
-	if payeeID == "" {
-		return "", fmt.Errorf("payee_id is required")
-	}
-	if accountID == "" {
-		return "", fmt.Errorf("account_id is required")
+	if relationID == "" {
+		return "", fmt.Errorf("relation_id is required")
 	}
 
 	// Validate UUID formats
 	if _, err := uuid.Parse(businessID); err != nil {
 		return "", fmt.Errorf("invalid business_id format: %w", err)
 	}
-	if _, err := uuid.Parse(payeeID); err != nil {
-		return "", fmt.Errorf("invalid payee_id format: %w", err)
+	if _, err := uuid.Parse(relationID); err != nil {
+		return "", fmt.Errorf("invalid relation_id format: %w", err)
 	}
-	if _, err := uuid.Parse(accountID); err != nil {
-		return "", fmt.Errorf("invalid account_id format: %w", err)
+
+	// Resolve relation_id to payee_id and account_id (validates business ownership)
+	payeeID, accountID, err := s.businessPayeeRelationRepo.ValidateRelationForBusiness(ctx, businessID, relationID)
+	if err != nil {
+		return "", fmt.Errorf("failed to validate relation: %w", err)
 	}
+
+	s.logger.DebugWith("Resolved relation_id", "payee_id", payeeID, "account_id", accountID)
 
 	// Verify that the payee exists and is an employee
 	employee, err := s.payeeEmployeeRepo.FindByID(ctx, payeeID)
 	if err != nil {
 		return "", fmt.Errorf("employee payee not found: %w", err)
-	}
-
-	// Verify that the employee belongs to the business with the specific account
-	relationExists, err := s.businessPayeeRelationRepo.RelationExists(ctx, businessID, payeeID, accountID)
-	if err != nil {
-		return "", fmt.Errorf("failed to verify business-payee relationship: %w", err)
-	}
-	if !relationExists {
-		return "", fmt.Errorf("payee does not belong to the specified business or account not found")
 	}
 
 	s.logger.DebugWith("Employee verified", "full_name", employee.FullName)
@@ -1681,47 +1673,39 @@ func (s *PayeeService) GetRemunerationDocumentUploadURL(ctx context.Context, bus
 
 // ConfirmRemunerationDocumentUpload confirms the S3 upload and updates the database with the document key
 // This is called after the frontend successfully uploads the document to S3
-func (s *PayeeService) ConfirmRemunerationDocumentUpload(ctx context.Context, businessID, payeeID, accountID string) (string, error) {
+func (s *PayeeService) ConfirmRemunerationDocumentUpload(ctx context.Context, businessID, relationID string) (string, error) {
 	s.logger.DebugWith("Confirming remuneration document upload",
 		"business_id", businessID,
-		"payee_id", payeeID,
-		"account_id", accountID)
+		"relation_id", relationID)
 
 	// Input validation
 	if businessID == "" {
 		return "", fmt.Errorf("business_id is required")
 	}
-	if payeeID == "" {
-		return "", fmt.Errorf("payee_id is required")
-	}
-	if accountID == "" {
-		return "", fmt.Errorf("account_id is required")
+	if relationID == "" {
+		return "", fmt.Errorf("relation_id is required")
 	}
 
 	// Validate UUID formats
 	if _, err := uuid.Parse(businessID); err != nil {
 		return "", fmt.Errorf("invalid business_id format: %w", err)
 	}
-	if _, err := uuid.Parse(payeeID); err != nil {
-		return "", fmt.Errorf("invalid payee_id format: %w", err)
+	if _, err := uuid.Parse(relationID); err != nil {
+		return "", fmt.Errorf("invalid relation_id format: %w", err)
 	}
-	if _, err := uuid.Parse(accountID); err != nil {
-		return "", fmt.Errorf("invalid account_id format: %w", err)
+
+	// Resolve relation_id to payee_id and account_id (validates business ownership)
+	payeeID, accountID, err := s.businessPayeeRelationRepo.ValidateRelationForBusiness(ctx, businessID, relationID)
+	if err != nil {
+		return "", fmt.Errorf("failed to validate relation: %w", err)
 	}
+
+	s.logger.DebugWith("Resolved relation_id", "payee_id", payeeID, "account_id", accountID)
 
 	// Verify that the payee exists and is an employee
 	employee, err := s.payeeEmployeeRepo.FindByID(ctx, payeeID)
 	if err != nil {
 		return "", fmt.Errorf("employee payee not found: %w", err)
-	}
-
-	// Verify that the employee belongs to the business with the specific account
-	relationExists, err := s.businessPayeeRelationRepo.RelationExists(ctx, businessID, payeeID, accountID)
-	if err != nil {
-		return "", fmt.Errorf("failed to verify business-payee relationship: %w", err)
-	}
-	if !relationExists {
-		return "", fmt.Errorf("payee does not belong to the specified business or account not found")
 	}
 
 	s.logger.DebugWith("Employee verified", "full_name", employee.FullName)
@@ -1752,6 +1736,72 @@ func (s *PayeeService) ConfirmRemunerationDocumentUpload(ctx context.Context, bu
 		"s3_key", key)
 
 	return fileURL, nil
+}
+
+// GetRemunerationDocumentDownloadURL generates a presigned S3 URL for downloading the employee remuneration document
+// This allows retrieving an already uploaded document by generating a fresh presigned URL
+func (s *PayeeService) GetRemunerationDocumentDownloadURL(ctx context.Context, businessID, relationID string) (string, error) {
+	s.logger.DebugWith("Generating presigned download URL for remuneration document",
+		"business_id", businessID,
+		"relation_id", relationID)
+
+	// Input validation
+	if businessID == "" {
+		return "", fmt.Errorf("business_id is required")
+	}
+	if relationID == "" {
+		return "", fmt.Errorf("relation_id is required")
+	}
+
+	// Validate UUID formats
+	if _, err := uuid.Parse(businessID); err != nil {
+		return "", fmt.Errorf("invalid business_id format: %w", err)
+	}
+	if _, err := uuid.Parse(relationID); err != nil {
+		return "", fmt.Errorf("invalid relation_id format: %w", err)
+	}
+
+	// Resolve relation_id to payee_id and account_id (validates business ownership)
+	payeeID, accountID, err := s.businessPayeeRelationRepo.ValidateRelationForBusiness(ctx, businessID, relationID)
+	if err != nil {
+		return "", fmt.Errorf("failed to validate relation: %w", err)
+	}
+
+	s.logger.DebugWith("Resolved relation_id", "payee_id", payeeID, "account_id", accountID)
+
+	// Verify that the payee exists and is an employee
+	employee, err := s.payeeEmployeeRepo.FindByID(ctx, payeeID)
+	if err != nil {
+		return "", fmt.Errorf("employee payee not found: %w", err)
+	}
+
+	s.logger.DebugWith("Employee verified", "full_name", employee.FullName)
+
+	// Check if remuneration document exists
+	if employee.RemunerationDocURL == "" {
+		s.logger.DebugWith("No document uploaded yet", "payee_id", payeeID)
+		return "", nil // Return empty string, no error
+	}
+
+	s.logger.DebugWith("Document exists", "s3_key", employee.RemunerationDocURL)
+
+	// Create S3 client
+	fileuploader, err := s.createS3Client()
+	if err != nil {
+		return "", fmt.Errorf("failed to create S3 client: %w", err)
+	}
+
+	// Generate presigned download URL
+	downloadURL, err := fileuploader.GetPresignedDownloadURL(ctx, employee.RemunerationDocURL, 15*time.Minute)
+	if err != nil {
+		return "", fmt.Errorf("failed to generate presigned download URL: %w", err)
+	}
+
+	s.logger.InfoWith("Presigned download URL generated successfully",
+		"payee_id", payeeID,
+		"s3_key", employee.RemunerationDocURL)
+
+	return downloadURL, nil
 }
 
 // createS3Client is a helper method to create S3 client from config
