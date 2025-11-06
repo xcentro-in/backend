@@ -472,18 +472,18 @@ func (s *AuthService) Login(ctx context.Context, email, password, userAgent stri
 // SendPasswordResetEmail sends password reset or invitation token to user's email
 // emailType can be "reset" or "invite"
 // SECURITY: Always returns success to prevent email enumeration (for reset type)
-func (s *AuthService) SendPasswordResetEmail(ctx context.Context, email string, emailType string) error {
-	logger.Infof("Password reset/invitation requested for email: %s, type: %s", email, emailType)
+func (s *AuthService) SendPasswordResetEmail(ctx context.Context, emailAddr string, emailType string) error {
+	logger.Infof("Password reset/invitation requested for email: %s, type: %s", emailAddr, emailType)
 
-	if email == "" {
+	if emailAddr == "" {
 		// Still return nil to prevent enumeration
 		return nil
 	}
 
 	// Get user details - if not found, silently return success for reset type
-	userObj, err := s.userRepo.GetUserByEmail(ctx, email)
+	userObj, err := s.userRepo.GetUserByEmail(ctx, emailAddr)
 	if err != nil || userObj == nil {
-		logger.Infof("Password reset/invitation requested for non-existent email: %s", email)
+		logger.Infof("Password reset/invitation requested for non-existent email: %s", emailAddr)
 		// SECURITY: Return success even if user doesn't exist (for reset type only)
 		if emailType == "reset" {
 			return nil

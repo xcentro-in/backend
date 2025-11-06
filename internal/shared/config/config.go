@@ -30,6 +30,7 @@ type Config struct {
 	Workers               WorkersConfig               `json:"workers"`
 	Frontend              FrontendConfig              `json:"frontend"`
 	BankAccountEncryption BankAccountEncryptionConfig `json:"bank_account_encryption"`
+	AuthBridge            AuthBridgeConfig            `json:"authbridge"`
 	RateLimiter           RateLimiterConfig           `json:"rate_limiter"`
 }
 
@@ -215,6 +216,12 @@ type NotificationWorkerConfig struct {
 // BankAccountEncryptionConfig holds bank account encryption configuration for PCI DSS compliance.
 type BankAccountEncryptionConfig struct {
 	EncryptionKey string `json:"-" env:"BANK_ACCOUNT_ENCRYPTION_KEY" env-required:"true"` // AES-256-GCM key (sensitive, 32 bytes recommended)
+}
+
+// AuthBridgeConfig holds AuthBridge/TruthScreen document verification service configuration.
+type AuthBridgeConfig struct {
+	Username string `json:"username" env:"TRUTHSCREEN_USERNAME" env-required:"true"` // AuthBridge/TruthScreen username
+	Password string `json:"-" env:"TRUTHSCREEN_PASSWORD" env-required:"true"`        // AuthBridge/TruthScreen password (sensitive)
 }
 
 // RateLimiterConfig holds rate limiter configuration for token-bucket algorithm.
