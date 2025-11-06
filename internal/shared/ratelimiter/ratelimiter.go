@@ -67,11 +67,19 @@ func Initialize(redisClient *redis.Client, cfg *config.RateLimiterConfig, cookie
 			cookieDomain,
 		)
 
-		// Parse group policies from JSON string
-		policies, err := parsePoliciesFromJSON(cfg.GroupPoliciesJSON, log)
+		// Build default policy from config
+		defaultPolicy := Policy{
+			Capacity:        cfg.DefaultCapacity,
+			RefillPerSecond: cfg.DefaultRefillPerSec,
+			RequestedTokens: cfg.DefaultRequestedTokens,
+			FailClosed:      false, // Default always fails open
+		}
+
+		// Parse custom group policies from JSON
+		policies, err := parsePoliciesFromJSON(cfg.GroupPoliciesJSON, defaultPolicy, log)
 		if err != nil {
-			log.Warnf("Failed to parse group policies JSON, using defaults: %v", err)
-			policies = DefaultPolicies()
+			log.Warnf("Failed to parse group policies JSON, using only default policy: %v", err)
+			policies = map[string]Policy{"default": defaultPolicy}
 		}
 
 		instance = &RateLimiter{
@@ -288,28 +296,34 @@ func ParseRetryAfter(retryAfterStr string) int {
 	return int(retryAfter) + 1
 }
 
-// parsePoliciesFromJSON parses the group policies from JSON string.
-// If the JSON string is empty or invalid, returns an error.
-func parsePoliciesFromJSON(jsonStr string, log *logger.Logger) (map[string]Policy, error) {
-	// If JSON string is empty, return default policies
+// parsePoliciesFromJSON parses the group policies from JSON string and merges with default policy.
+// The defaultPolicy is always included under "default" key unless JSON overrides it.
+func parsePoliciesFromJSON(jsonStr string, defaultPolicy Policy, log *logger.Logger) (map[string]Policy, error) {
+	// Start with default policy
+	policies := map[string]Policy{
+		"default": defaultPolicy,
+	}
+
+	// If JSON string is empty, return just the default
 	if jsonStr == "" {
-		log.Info("No group policies JSON configured, using defaults")
-		return DefaultPolicies(), nil
+		log.Info("No group policies JSON configured, using only default policy from config")
+		return policies, nil
 	}
 
 	// Parse JSON into map
-	var policies map[string]Policy
-	if err := json.Unmarshal([]byte(jsonStr), &policies); err != nil {
+	var customPolicies map[string]Policy
+	if err := json.Unmarshal([]byte(jsonStr), &customPolicies); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal group policies JSON: %w", err)
 	}
 
-	// Ensure "default" policy exists
-	if _, exists := policies["default"]; !exists {
-		log.Warn("No 'default' policy in JSON, adding built-in default")
-		defaultPolicies := DefaultPolicies()
-		policies["default"] = defaultPolicies["default"]
+	// Merge custom policies (including potential "default" override)
+	for group, policy := range customPolicies {
+		policies[group] = policy
+		if group == "default" {
+			log.Info("JSON overrides default policy from config")
+		}
 	}
 
-	log.Infof("Loaded %d group policies from JSON", len(policies))
+	log.Infof("Loaded %d group policies (%d from JSON + default from config)", len(policies), len(customPolicies))
 	return policies, nil
 }
