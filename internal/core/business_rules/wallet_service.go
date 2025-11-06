@@ -24,11 +24,6 @@ type WalletService interface {
 
 // WalletServiceImpl provides the implementation for business wallet operations
 type WalletServiceImpl struct {
-	// In-memory storage maintained temporarily for backwards compatibility
-	// TODO-CLEANUP: Remove in-memory storage maps when migration is complete
-	// Primary storage is now through database repositories
-	storedCards map[string][]*payment.StoredCard // businessID -> cards (temporary)
-	bankAccounts map[string][]*payment.BankAccount // businessID -> bank accounts (temporary)
 	// Bank verification service for penny drop verification
 	bankVerificationService BankVerificationService
 	// Repository dependencies (implemented)
@@ -46,8 +41,6 @@ type WalletServiceImpl struct {
 // TODO-FUTURE: Add bankVerificationLogRepo parameter when audit logging is implemented
 func NewWalletService(storedCardRepo payment.StoredCardRepository, bankAccountRepo payment.BankAccountRepository, txManager client.TxManager, businessService business.BusinessService, logger *logger.Logger) WalletService {
 	return &WalletServiceImpl{
-		storedCards:             make(map[string][]*payment.StoredCard),
-		bankAccounts:            make(map[string][]*payment.BankAccount),
 		bankVerificationService: NewMockBankVerificationService(),
 		storedCardRepo:          storedCardRepo,
 		bankAccountRepo:         bankAccountRepo,
@@ -58,38 +51,29 @@ func NewWalletService(storedCardRepo payment.StoredCardRepository, bankAccountRe
 }
 
 // GetBusinessWallet retrieves the complete business wallet with all payment sources
-// Database queries are implemented for cards and bank accounts
-// In-memory storage still maintained temporarily for backwards compatibility
+// All data is fetched from database repositories
 func (ws *WalletServiceImpl) GetBusinessWallet(ctx context.Context, businessID string) (*payment.BusinessWallet, error) {
 	ws.logger.InfoWith("Fetching business wallet", "business_id", businessID)
 
 	// Fetch stored cards from database
-	dbStoredCards, _ := ws.storedCardRepo.GetStoredCardsByBusinessID(ctx, businessID)
-	realStoredCards := ws.storedCards[businessID]
-	if realStoredCards == nil {
-		realStoredCards = make([]*payment.StoredCard, 0)
+	storedCards, err := ws.storedCardRepo.GetStoredCardsByBusinessID(ctx, businessID)
+	if err != nil {
+		ws.logger.ErrorWith("Failed to fetch stored cards", "error", err, "business_id", businessID)
+		storedCards = make([]*payment.StoredCard, 0) // Return empty slice on error
 	}
-	// Combine database cards with in-memory cards (temporarily for backwards compatibility)
-	if dbStoredCards != nil {
-		realStoredCards = append(realStoredCards, dbStoredCards...)
+	if storedCards == nil {
+		storedCards = make([]*payment.StoredCard, 0)
 	}
-
-	// Use only real stored cards from database
-	storedCards := realStoredCards
 
 	// Fetch bank accounts from database
-	dbBankAccounts, _ := ws.bankAccountRepo.GetBankAccountsByBusinessID(ctx, businessID)
-	realBankAccounts := ws.bankAccounts[businessID]
-	if realBankAccounts == nil {
-		realBankAccounts = make([]*payment.BankAccount, 0)
+	bankAccounts, err := ws.bankAccountRepo.GetBankAccountsByBusinessID(ctx, businessID)
+	if err != nil {
+		ws.logger.ErrorWith("Failed to fetch bank accounts", "error", err, "business_id", businessID)
+		bankAccounts = make([]*payment.BankAccount, 0) // Return empty slice on error
 	}
-	// Combine database accounts with in-memory accounts (temporarily for backwards compatibility)
-	if dbBankAccounts != nil {
-		realBankAccounts = append(realBankAccounts, dbBankAccounts...)
+	if bankAccounts == nil {
+		bankAccounts = make([]*payment.BankAccount, 0)
 	}
-
-	// Use only real bank accounts from database
-	bankAccounts := realBankAccounts
 
 	// TODO-FUTURE: Add repository queries when features implemented
 	// - upiDetailRepo.GetUPIDetailsByBusinessID(ctx, businessID)
@@ -128,15 +112,12 @@ func (ws *WalletServiceImpl) AddPaymentSource(ctx context.Context, businessID st
 	switch source.GetSourceType() {
 	case payment.PaymentSourceCard:
 		if storedCard, ok := source.(*payment.StoredCard); ok {
-			// Initialize the business's card slice if not exists
-			if ws.storedCards[businessID] == nil {
-				ws.storedCards[businessID] = make([]*payment.StoredCard, 0)
+			// Store card in database
+			err := ws.storedCardRepo.CreateStoredCard(ctx, storedCard)
+			if err != nil {
+				ws.logger.ErrorWith("Failed to store card", "error", err, "business_id", businessID)
+				return fmt.Errorf("failed to store card: %w", err)
 			}
-
-			// Store card in database (primary storage)
-			_ = ws.storedCardRepo.CreateStoredCard(ctx, storedCard)
-			// Also update in-memory storage (temporary for backwards compatibility)
-			ws.storedCards[businessID] = append(ws.storedCards[businessID], storedCard)
 
 			ws.logger.InfoWith("Card stored successfully",
 				"business_id", businessID,
@@ -247,18 +228,11 @@ func (ws *WalletServiceImpl) AddPaymentSource(ctx context.Context, businessID st
 				return err
 			}
 
-			// Step 6: Update in-memory storage (temporary for backwards compatibility)
-			if ws.bankAccounts[businessID] == nil {
-				ws.bankAccounts[businessID] = make([]*payment.BankAccount, 0)
-			}
-			ws.bankAccounts[businessID] = append(ws.bankAccounts[businessID], bankAccount)
-
 			ws.logger.InfoWith("Bank account verified and stored successfully",
 				"business_id", businessID,
 				"bank_name", bankAccount.BankName,
 				"account_holder_name", bankAccount.AccountHolderName,
-				"transaction_reference", verificationResponse.TransactionReference,
-				"total_accounts", len(ws.bankAccounts[businessID]))
+				"transaction_reference", verificationResponse.TransactionReference)
 
 		} else {
 			return fmt.Errorf("invalid bank account type")
@@ -275,8 +249,7 @@ func (ws *WalletServiceImpl) AddPaymentSource(ctx context.Context, businessID st
 
 	ws.logger.InfoWith("Payment source added successfully",
 		"business_id", businessID,
-		"source_type", source.GetSourceType(),
-		"total_cards", len(ws.storedCards[businessID]))
+		"source_type", source.GetSourceType())
 
 	// Update onboarding flag (non-blocking, first-time only)
 	if ws.businessService != nil {
@@ -531,25 +504,6 @@ func (ws *WalletServiceImpl) validateBankAccountDetails(bankAccount *payment.Ban
 
 	if strings.TrimSpace(bankAccount.AccountHolderName) == "" {
 		return fmt.Errorf("account holder name cannot be empty")
-	}
-
-	return nil
-}
-
-// checkDuplicateBankAccount checks if the account number already exists for the business
-// NOTE: This function is no longer used - duplicate checking is done via database in AddPaymentSource
-// See AddPaymentSource > bankAccountRepo.CheckDuplicateAccount() for the actual implementation
-// TODO-CLEANUP: Remove this function if confirmed not used anywhere
-func (ws *WalletServiceImpl) checkDuplicateBankAccount(businessID, accountNumber string) error {
-	existingAccounts := ws.bankAccounts[businessID]
-	if existingAccounts == nil {
-		return nil // No existing accounts, so no duplicates
-	}
-
-	for _, account := range existingAccounts {
-		if account.AccountNumber == accountNumber {
-			return fmt.Errorf("bank account already exists: %s", ws.maskAccountNumber(accountNumber))
-		}
 	}
 
 	return nil
