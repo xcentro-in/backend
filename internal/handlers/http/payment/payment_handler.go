@@ -13,19 +13,22 @@ import (
 	"xcentro.in/internal/core/payment"
 	"xcentro.in/internal/middleware"
 	"xcentro.in/internal/services/payments"
+	"xcentro.in/internal/shared/logger"
 )
 
 // PaymentHandler handles payment-related HTTP requests
 type PaymentHandler struct {
 	paymentService       *payments.PaymentService
 	paymentSourceService *payments.PaymentSourceService // Phase 10
+	logger               *logger.Logger
 }
 
 // NewPaymentHandler creates a new payment handler
-func NewPaymentHandler(paymentService *payments.PaymentService, paymentSourceService *payments.PaymentSourceService) *PaymentHandler {
+func NewPaymentHandler(paymentService *payments.PaymentService, paymentSourceService *payments.PaymentSourceService, logger *logger.Logger) *PaymentHandler {
 	return &PaymentHandler{
 		paymentService:       paymentService,
 		paymentSourceService: paymentSourceService,
+		logger:               logger,
 	}
 }
 
@@ -288,45 +291,47 @@ func (h *PaymentHandler) GetFeeRules(c echo.Context) error {
 
 // Tokenize handles POST /process_payment/tokenize
 func (h *PaymentHandler) Tokenize(c echo.Context) error {
-	fmt.Println("=== HANDLER: Tokenize API Called ===")
+	h.logger.Info("Tokenize API called")
 
 	// Extract userId from JWT context (set by JWTMiddleware)
 	userID, ok := c.Get("userId").(string)
 	if !ok || userID == "" {
-		fmt.Println("❌ Missing userId in context")
+		h.logger.Warn("Missing userId in JWT context")
 		return c.JSON(http.StatusUnauthorized, map[string]any{
 			"error":   "MISSING_USER_ID",
 			"message": "User ID not found in token",
 		})
 	}
-	fmt.Printf("🔐 User ID (from JWT): %s\n", userID)
+	h.logger.DebugWith("User authenticated", "user_id", userID)
 
 	// Extract business_id from X-Business-ID header
 	businessID := c.Request().Header.Get("X-Business-ID")
 	if businessID == "" {
-		fmt.Println("❌ Missing X-Business-ID header")
+		h.logger.Warn("Missing X-Business-ID header")
 		return c.JSON(http.StatusBadRequest, map[string]any{
 			"error":   "MISSING_BUSINESS_ID",
 			"message": "X-Business-ID header is required",
 		})
 	}
-	fmt.Printf("🔐 Business ID (from header): %s\n", businessID)
+	h.logger.DebugWith("Business ID extracted", "business_id", businessID)
 
 	// Parse request body
 	var req TokenizeRequest
 	if err := c.Bind(&req); err != nil {
-		fmt.Printf("❌ Error binding request: %v\n", err)
+		h.logger.ErrorWith("Failed to bind request", "error", err)
 		return c.JSON(http.StatusBadRequest, map[string]any{
 			"error":   "invalid_request",
 			"message": "Invalid request body",
 		})
 	}
 
-	fmt.Printf("📥 Request: Card: %s %s\n", req.CardDetails.CardCategory, req.CardDetails.CardType)
+	h.logger.DebugWith("Tokenization request parsed",
+		"card_type", req.CardDetails.CardType,
+		"card_category", req.CardDetails.CardCategory)
 
 	// Validate card details
 	if err := h.validateTokenizeRequest(&req); err != nil {
-		fmt.Printf("❌ Validation error: %v\n", err)
+		h.logger.WarnWith("Tokenization request validation failed", "error", err)
 		return c.JSON(http.StatusBadRequest, map[string]any{
 			"error":   "validation_failed",
 			"message": err.Error(),
@@ -354,17 +359,17 @@ func (h *PaymentHandler) Tokenize(c echo.Context) error {
 	}
 
 	// Call payment service for complete tokenization (blocking call)
-	fmt.Println("🔄 Calling Payment Service for tokenization...")
-	fmt.Println("⏳ This may take up to 60 seconds for JioPay 2-step process...")
+	h.logger.InfoWith("Initiating card tokenization", "business_id", businessID)
+	h.logger.Debug("Tokenization may take up to 60 seconds for gateway 2-step process")
 	tokenizeResponse, err := h.paymentService.TokenizeCard(ctx, coreRequest)
 
 	if err != nil {
-		fmt.Printf("❌ Tokenization failed: %v\n", err)
+		h.logger.ErrorWith("Card tokenization failed", "error", err, "business_id", businessID)
 		return h.handleTokenizationError(err)
 	}
 
 	// Store tokenized card in business wallet immediately
-	fmt.Println("💾 Storing tokenized card in business wallet...")
+	h.logger.Debug("Storing tokenized card in business wallet")
 	storedCard := &payment.StoredCard{
 		CardID:         tokenizeResponse.CardID,
 		BusinessID:     coreRequest.BusinessID,
@@ -388,7 +393,7 @@ func (h *PaymentHandler) Tokenize(c echo.Context) error {
 
 	// Add to business wallet via payment service
 	if err := h.paymentService.AddPaymentSource(coreRequest.BusinessID, storedCard); err != nil {
-		fmt.Printf("❌ Failed to store card in wallet: %v\n", err)
+		h.logger.ErrorWith("Failed to store card in wallet", "error", err, "card_id", tokenizeResponse.CardID)
 		return c.JSON(http.StatusInternalServerError, map[string]any{
 			"error":   "storage_failed",
 			"message": "Card was tokenized but failed to save. Please contact support.",
@@ -410,11 +415,12 @@ func (h *PaymentHandler) Tokenize(c echo.Context) error {
 		},
 	}
 
-	fmt.Printf("✅ Card tokenized and stored successfully: %s\n", tokenizeResponse.CardID)
-	fmt.Printf("💳 Card Info: %s %s ending in %s\n",
-		tokenizeResponse.CardCategory, tokenizeResponse.CardType, tokenizeResponse.LastFourDigits)
-	fmt.Printf("🏦 Gateway Used: %s\n", tokenizeResponse.GatewayUsed)
-	fmt.Println("=== HANDLER: Tokenize Complete ===")
+	h.logger.InfoWith("Card tokenized and stored successfully",
+		"card_id", tokenizeResponse.CardID,
+		"card_type", tokenizeResponse.CardType,
+		"card_category", tokenizeResponse.CardCategory,
+		"last_four_digits", tokenizeResponse.LastFourDigits,
+		"gateway_used", tokenizeResponse.GatewayUsed)
 
 	return c.JSON(http.StatusCreated, response)
 }
@@ -1067,8 +1073,8 @@ func convertPaymentSourcesResponse(serviceResp *payments.GetPaymentSourcesRespon
 }
 
 // RegisterPaymentRoutes registers all payment processing routes
-func RegisterPaymentRoutes(group *echo.Group, paymentService *payments.PaymentService, paymentSourceService *payments.PaymentSourceService, authService auth.AuthService) {
-	handler := NewPaymentHandler(paymentService, paymentSourceService)
+func RegisterPaymentRoutes(group *echo.Group, paymentService *payments.PaymentService, paymentSourceService *payments.PaymentSourceService, authService auth.AuthService, log *logger.Logger) {
+	handler := NewPaymentHandler(paymentService, paymentSourceService, log)
 
 	// Apply JWT middleware to all payment routes
 	group.Use(middleware.JWTMiddleware(authService))
@@ -1086,8 +1092,8 @@ func RegisterPaymentRoutes(group *echo.Group, paymentService *payments.PaymentSe
 }
 
 // RegisterWalletRoutes registers all wallet management routes
-func RegisterWalletRoutes(group *echo.Group, paymentService *payments.PaymentService, paymentSourceService *payments.PaymentSourceService, authService auth.AuthService) {
-	handler := NewPaymentHandler(paymentService, paymentSourceService)
+func RegisterWalletRoutes(group *echo.Group, paymentService *payments.PaymentService, paymentSourceService *payments.PaymentSourceService, authService auth.AuthService, log *logger.Logger) {
+	handler := NewPaymentHandler(paymentService, paymentSourceService, log)
 
 	// Apply JWT middleware to all wallet routes
 	group.Use(middleware.JWTMiddleware(authService))
