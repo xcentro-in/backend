@@ -379,7 +379,7 @@ func (h *PaymentHandler) Tokenize(c echo.Context) error {
 		CardCategory:   tokenizeResponse.CardCategory,
 		ExpiryMonth:    tokenizeResponse.ExpiryMonth,
 		ExpiryYear:     tokenizeResponse.ExpiryYear,
-		IssuerBank:     "Unknown", // TODO: Add bank detection logic, or can omit as well.
+		IssuerBank:     "Unknown", // TODO-OPTIONAL: Add bank detection logic if needed (can be left as Unknown)
 		CardHolderName: coreRequest.CardDetails.HolderName,
 		IsActive:       true,
 		GatewayUsed:    tokenizeResponse.GatewayUsed,
@@ -613,7 +613,7 @@ func (h *PaymentHandler) handleBankAccountAddition(ctx context.Context, c echo.C
 		VerificationStatus: "verified",
 		AccountDetails: &VerifiedAccountDetails{
 			MaskedAccountNumber: h.maskAccountNumber(req.BankAccountDetails.AccountNumber),
-			VerifiedName:        req.BankAccountDetails.AccountHolderName, // TODO: Use verified name from response
+			VerifiedName:        req.BankAccountDetails.AccountHolderName, // TODO-INTEGRATION: Use verified name from bank verification service response when real service is integrated
 			BankName:            req.BankAccountDetails.BankName,
 			BranchName:          req.BankAccountDetails.BranchName,
 			IFSCCode:            req.BankAccountDetails.IFSCCode,
@@ -637,7 +637,7 @@ func (h *PaymentHandler) handleBankAccountAddition(ctx context.Context, c echo.C
 func (h *PaymentHandler) handleUPIAccountAddition(ctx context.Context, c echo.Context, businessID string, req *AddPaymentSourceRequest) error {
 	fmt.Println("📱 Processing UPI account addition...")
 
-	// TODO: Implement UPI verification logic when UPI service is available
+	// TODO-FUTURE: Implement UPI verification logic when UPI service is available
 	return c.JSON(http.StatusNotImplemented, map[string]any{
 		"error":   "not_implemented",
 		"message": "UPI account addition is not yet implemented",
