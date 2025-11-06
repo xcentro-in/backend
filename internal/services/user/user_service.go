@@ -906,17 +906,29 @@ func (s *UserServiceImpl) verifyAadhaarTransactionID(ctx context.Context, taxID,
 }
 
 // updateAadhaarVerificationData updates the user identity with Aadhaar verification data and KYC status
+// Uses transaction to ensure atomicity - both updates must succeed or both fail
 func (s *UserServiceImpl) updateAadhaarVerificationData(ctx context.Context, taxID, userID, responseJSON string) error {
-	// Update national_id_data with full response
-	if err := s.userRepo.UpdateNationalIDData(ctx, taxID, responseJSON); err != nil {
-		s.logger.Error("Failed to update national ID data: %v", err)
-		return fmt.Errorf("failed to save verification data: %w", err)
-	}
+	// Use transaction to ensure both updates are atomic
+	err := s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
+		txUserRepo := s.userRepo.WithTx(tx)
 
-	// Update KYC status to verified
-	if err := s.userRepo.UpdateUserKYCStatus(ctx, userID, shared.KYCVerified); err != nil {
-		s.logger.Error("Failed to update KYC status: %v", err)
-		return fmt.Errorf("failed to update verification status: %w", err)
+		// Update national_id_data with full response
+		if err := txUserRepo.UpdateNationalIDData(ctx, taxID, responseJSON); err != nil {
+			s.logger.Error("Failed to update national ID data: %v", err)
+			return fmt.Errorf("failed to save verification data: %w", err)
+		}
+
+		// Update KYC status to verified
+		if err := txUserRepo.UpdateUserKYCStatus(ctx, userID, shared.KYCVerified); err != nil {
+			s.logger.Error("Failed to update KYC status: %v", err)
+			return fmt.Errorf("failed to update verification status: %w", err)
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return err
 	}
 
 	return nil
