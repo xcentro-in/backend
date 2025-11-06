@@ -26,8 +26,9 @@ func NewUserHandler(userService user.UserService, authService auth.AuthService) 
 	}
 }
 
-func RegisterUserRoutes(e *echo.Group, userService user.UserService, authService auth.AuthService, businessUserRelRepo coreBusiness.BusinessUserRelationRepository, rclient *redisClient.RedisClient) {
+func RegisterUserRoutes(e *echo.Group, userService user.UserService, authService auth.AuthService, businessUserRelRepo coreBusiness.BusinessUserRelationRepository, rclient *redisClient.RedisClient, authBridgePassword string, userRepo user.UserRepository) {
 	handler := NewUserHandler(userService, authService)
+	aadhaarHandler := NewAadhaarCallbackHandler(userRepo, authBridgePassword)
 
 	userGroup := e.Group("/user")
 
@@ -40,12 +41,19 @@ func RegisterUserRoutes(e *echo.Group, userService user.UserService, authService
 	protectedUser.POST("/onboard/complete", handler.CompleteOnboarding)
 	protectedUser.GET("/onboard/status", handler.GetOnboardingStatus)
 
+	// Aadhaar callback (protected, requires JWT)
+	protectedUser.POST("/onboard/aadhaar/callback", aadhaarHandler.HandleRedirectCallback)
+
 	// User profile endpoints
 	protectedUser.GET("/profile", handler.GetProfile)
 	protectedUser.PUT("/profile", handler.UpdateProfile)
 
 	// User roles endpoint (requires both JWT and BusinessRoles middleware)
 	protectedUser.GET("/roles", handler.GetUserRoles, middleware.BusinessRolesMiddleware(businessUserRelRepo, rclient))
+
+	// Public routes (no authentication required)
+	// Aadhaar webhook (public, no auth)
+	userGroup.POST("/onboard/aadhaar/webhook", aadhaarHandler.HandleWebhook)
 }
 
 // InitiateOnboarding initiates user onboarding process (identity verification only)

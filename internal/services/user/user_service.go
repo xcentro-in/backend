@@ -53,11 +53,11 @@ func NewUserService(
 		userRepo:            userRepo,
 		businessRepo:        businessRepo,
 		businessUserRelRepo: businessUserRelRepo,
-		txManager:           clients.GetTxManager(),       // Extract from clients
-		emailService:        clients.GetEmailService(),    // Extract from clients
+		txManager:           clients.GetTxManager(),    // Extract from clients
+		emailService:        clients.GetEmailService(), // Extract from clients
 		verificationService: verificationService,
 		config:              cfg,
-		rclient:             clients.GetRedisClient(),     // Extract from clients
+		rclient:             clients.GetRedisClient(), // Extract from clients
 		logger:              logger.GetDefault(),
 		// When needed: metrics: clients.GetMetrics().(metrics.MetricsProvider),
 	}
@@ -376,8 +376,9 @@ func (s *UserServiceImpl) InitiateOnboarding(
 	}
 
 	aadhaarTxnID := fmt.Sprintf("aadhaar_%s_%d", userID, time.Now().Unix())
-	callbackURL := fmt.Sprintf("%s/v1/callback", s.config.Server.URL)
-	linkRequest := authbridge.NewAadhaarLinkRequest(aadhaarTxnID, "", callbackURL)
+	webhookURL := fmt.Sprintf("%s/v1/user/onboard/aadhaar/webhook", s.config.Server.URL)
+	redirectURL := fmt.Sprintf("%s/v1/user/onboard/aadhaar/callback", s.config.Server.URL)
+	linkRequest := authbridge.NewAadhaarLinkRequest(aadhaarTxnID, webhookURL, redirectURL)
 
 	aadhaarResponse, err := authClient.SearchDocument(linkRequest)
 	if err != nil {
@@ -422,8 +423,8 @@ func (s *UserServiceImpl) InitiateOnboarding(
 			TaxID:          taxID,
 			TaxIDData:      string(taxIDDataJSON),
 			NationalID:     maskedAadhaar, // Store masked Aadhaar
-			NationalIDData: "{}", // Will be populated after Aadhaar verification
-			NTxnID:         "",   // Will be set below
+			NationalIDData: "{}",          // Will be populated after Aadhaar verification
+			NTxnID:         "",            // Will be set below
 		}
 
 		if err := txUserRepo.UpsertUserIdentity(ctx, identity); err != nil {
