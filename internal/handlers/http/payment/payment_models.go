@@ -153,13 +153,11 @@ type CreditLineResponse struct {
 	Nickname       string  `json:"nickname,omitempty"`
 }
 
-// GetFeeRulesResponse represents the response for fee rules
+// GetFeeRulesResponse represents the response for fee rules (simplified)
 type GetFeeRulesResponse struct {
 	PaymentMethod string  `json:"payment_method"`
 	FeePercentage float64 `json:"fee_percentage"`
 	FixedFee      float64 `json:"fixed_fee"`
-	MinFee        float64 `json:"min_fee"`
-	MaxFee        float64 `json:"max_fee"`
 	Currency      string  `json:"currency"`
 }
 

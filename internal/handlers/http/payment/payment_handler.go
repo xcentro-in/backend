@@ -252,8 +252,6 @@ func (h *PaymentHandler) GetFeeRules(c echo.Context) error {
 			PaymentMethod: string(rule.PaymentMethod),
 			FeePercentage: rule.PercentageFee,
 			FixedFee:      float64(rule.FixedFee) / 100, // Convert to rupees
-			MinFee:        float64(rule.MinFee) / 100,
-			MaxFee:        float64(rule.MaxFee) / 100,
 			Currency:      string(rule.Currency),
 		}
 		responseRules = append(responseRules, responseRule)

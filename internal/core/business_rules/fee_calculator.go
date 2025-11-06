@@ -6,7 +6,7 @@ import (
 	"xcentro.in/internal/core/payment"
 )
 
-// FeeRule represents a fee calculation rule
+// FeeRule represents a fee calculation rule (simplified)
 type FeeRule struct {
 	RuleID           string                `json:"rule_id,omitempty"`
 	PaymentMethod    payment.PaymentMethod `json:"payment_method"`
@@ -15,13 +15,10 @@ type FeeRule struct {
 	FeeType          payment.FeeType       `json:"fee_type"`
 	PercentageFee    float64               `json:"percentage_fee"`    // Percentage (e.g., 2.5 for 2.5%)
 	FixedFee         int64                 `json:"fixed_fee"`         // Fixed amount in smallest currency unit
-	MinFee           int64                 `json:"min_fee"`           // Minimum fee
-	MaxFee           int64                 `json:"max_fee"`           // Maximum fee
 	GSTPercentage    float64               `json:"gst_percentage"`    // GST percentage (e.g., 18.0 for 18%)
 	GSTApplicable    bool                  `json:"gst_applicable"`    // Whether GST applies
 	Currency         payment.Currency      `json:"currency"`
 	IsActive         bool                  `json:"is_active"`
-	Priority         int                   `json:"priority"`          // Higher priority rules override lower ones
 }
 
 // FeeCalculator defines the interface for fee calculation
@@ -167,19 +164,6 @@ func (calc *MockFeeCalculator) CalculateFee(amount int64, method payment.Payment
 		fmt.Printf("💰 Percentage + Fixed Fee: %.2f%% (%d) + %d = %d\n", rule.PercentageFee, calculatedPercentageFee, rule.FixedFee, feeAmount)
 	}
 
-	// Apply min/max fee limits
-	if rule.MinFee > 0 && feeAmount < rule.MinFee {
-		fmt.Printf("⬆️  Applying minimum fee: %d → %d\n", feeAmount, rule.MinFee)
-		feeAmount = rule.MinFee
-		breakdown.MinFeeApplied = true
-	}
-
-	if rule.MaxFee > 0 && feeAmount > rule.MaxFee {
-		fmt.Printf("⬇️  Applying maximum fee: %d → %d\n", feeAmount, rule.MaxFee)
-		feeAmount = rule.MaxFee
-		breakdown.MaxFeeApplied = true
-	}
-
 	calculation := &FeeCalculation{
 		BaseAmount:  amount,
 		FeeAmount:   feeAmount,
@@ -208,8 +192,8 @@ func (calc *MockFeeCalculator) GetFeeRules(method payment.PaymentMethod) ([]*Fee
 
 	fmt.Printf("Found %d fee rules for %s\n", len(rules), method)
 	for i, rule := range rules {
-		fmt.Printf("%d. %s fee: %.2f%% + %d (min: %d, max: %d)\n",
-			i+1, rule.FeeType, rule.PercentageFee, rule.FixedFee, rule.MinFee, rule.MaxFee)
+		fmt.Printf("%d. %s fee: %.2f%% + %d\n",
+			i+1, rule.FeeType, rule.PercentageFee, rule.FixedFee)
 	}
 
 	return rules, nil
@@ -230,11 +214,8 @@ func (calc *MockFeeCalculator) GetAllFeeRules() ([]*FeeRule, error) {
 	return activeRules, nil
 }
 
-// findApplicableRule finds the most specific applicable rule
+// findApplicableRule finds the most specific applicable rule (exact match only)
 func (calc *MockFeeCalculator) findApplicableRule(method payment.PaymentMethod, cardType payment.CardType, cardCategory payment.CardCategory) *FeeRule {
-	var bestRule *FeeRule
-	highestPriority := -1
-
 	for _, rule := range calc.rules {
 		if !rule.IsActive {
 			continue
@@ -244,28 +225,21 @@ func (calc *MockFeeCalculator) findApplicableRule(method payment.PaymentMethod, 
 			continue
 		}
 
-		// For card payments, check card-specific rules
+		// For card payments, check exact match on card type and category
 		if method == payment.PaymentMethodCard {
-			// Skip if rule specifies card type/category but doesn't match
-			if rule.CardType != "" && rule.CardType != cardType {
-				continue
-			}
-			if rule.CardCategory != "" && rule.CardCategory != cardCategory {
+			if rule.CardType != cardType || rule.CardCategory != cardCategory {
 				continue
 			}
 		}
 
-		// Select rule with highest priority
-		if rule.Priority > highestPriority {
-			highestPriority = rule.Priority
-			bestRule = rule
-		}
+		// Return first matching rule (exact match)
+		return rule
 	}
 
-	return bestRule
+	return nil
 }
 
-// getMockFeeRules returns hardcoded fee rules for testing
+// getMockFeeRules returns hardcoded fee rules for testing (simplified)
 func getMockFeeRules() []*FeeRule {
 	return []*FeeRule{
 		// Card payment rules
@@ -274,33 +248,24 @@ func getMockFeeRules() []*FeeRule {
 			CardCategory:  payment.CardCategoryCredit,
 			FeeType:       payment.FeeTypePercentage,
 			PercentageFee: 2.5,
-			MinFee:        500,  // ₹5 minimum
-			MaxFee:        10000, // ₹100 maximum
 			Currency:      payment.CurrencyINR,
 			IsActive:      true,
-			Priority:      10,
 		},
 		{
 			PaymentMethod: payment.PaymentMethodCard,
 			CardCategory:  payment.CardCategoryDebit,
 			FeeType:       payment.FeeTypePercentage,
 			PercentageFee: 2.0,
-			MinFee:        300,  // ₹3 minimum
-			MaxFee:        8000, // ₹80 maximum
 			Currency:      payment.CurrencyINR,
 			IsActive:      true,
-			Priority:      10,
 		},
 		{
 			PaymentMethod: payment.PaymentMethodCard,
 			CardCategory:  payment.CardCategoryCorporate,
 			FeeType:       payment.FeeTypePercentage,
 			PercentageFee: 1.8,
-			MinFee:        1000, // ₹10 minimum
-			MaxFee:        15000, // ₹150 maximum
 			Currency:      payment.CurrencyINR,
 			IsActive:      true,
-			Priority:      15, // Higher priority than generic card rules
 		},
 
 		// Net banking rules
@@ -310,7 +275,6 @@ func getMockFeeRules() []*FeeRule {
 			FixedFee:      1500, // ₹15 flat fee
 			Currency:      payment.CurrencyINR,
 			IsActive:      true,
-			Priority:      5,
 		},
 
 		// UPI rules
@@ -320,7 +284,6 @@ func getMockFeeRules() []*FeeRule {
 			FixedFee:      0, // Free UPI
 			Currency:      payment.CurrencyINR,
 			IsActive:      true,
-			Priority:      5,
 		},
 
 		// Wallet rules
@@ -328,11 +291,8 @@ func getMockFeeRules() []*FeeRule {
 			PaymentMethod: payment.PaymentMethodWallet,
 			FeeType:       payment.FeeTypePercentage,
 			PercentageFee: 1.0,
-			MinFee:        200,  // ₹2 minimum
-			MaxFee:        5000, // ₹50 maximum
 			Currency:      payment.CurrencyINR,
 			IsActive:      true,
-			Priority:      5,
 		},
 	}
 }
@@ -392,14 +352,6 @@ func (calc *PostgresDatabaseFeeCalculator) CalculateWithTax(
 
 	default:
 		return nil, fmt.Errorf("unsupported fee type: %s", rule.FeeType)
-	}
-
-	// Apply min/max fee limits
-	if rule.MinFee > 0 && convenienceFee < rule.MinFee {
-		convenienceFee = rule.MinFee
-	}
-	if rule.MaxFee > 0 && convenienceFee > rule.MaxFee {
-		convenienceFee = rule.MaxFee
 	}
 
 	// Calculate GST on convenience fee

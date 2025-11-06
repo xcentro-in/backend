@@ -23,38 +23,32 @@ func NewPostgresFeeRulesRepository(db client.DB) business_rules.FeeRulesReposito
 	}
 }
 
-// GetFeeRule fetches the most specific matching rule for a payment method
-// Priority: exact match (method + card_type + card_category) > partial match > generic match
+// GetFeeRule fetches the fee rule using exact match on all criteria
+// Simplified: No NULL fallback, no priority ordering - just exact match
 func (r *PostgresFeeRulesRepository) GetFeeRule(
 	ctx context.Context,
 	method payment.PaymentMethod,
 	cardType *payment.CardType,
 	cardCategory *payment.CardCategory,
 ) (*business_rules.FeeRule, error) {
+	// Simple exact match query
 	query := `
 		SELECT
 			rule_id, payment_method, card_type, card_category,
-			fee_type, percentage_fee, fixed_fee, min_fee, max_fee,
-			gst_percentage, gst_applicable, priority
+			fee_type, percentage_fee, fixed_fee,
+			gst_percentage, gst_applicable
 		FROM xcentro.payment_fee_rules
 		WHERE payment_method = $1
 			AND is_active = true
-			AND effective_from <= NOW()
-			AND (effective_until IS NULL OR effective_until > NOW())
 			AND (card_type IS NOT DISTINCT FROM $2)
 			AND (card_category IS NOT DISTINCT FROM $3)
-		ORDER BY
-			priority DESC,
-			(card_type IS NOT NULL)::int DESC,          -- Prefer specific card type
-			(card_category IS NOT NULL)::int DESC       -- Prefer specific category
 		LIMIT 1
 	`
 
 	var rule business_rules.FeeRule
-	var ruleID, paymentMethodStr, cardTypeStr, cardCategoryStr, feeTypeStr string
+	var ruleID, paymentMethodStr, feeTypeStr string
 	var cardTypeNullable, cardCategoryNullable *string
 	var percentageFeeNullable *float64
-	var minFeeNullable, maxFeeNullable *int64
 
 	// Convert pointers to interface{} for SQL query (nil or value)
 	var cardTypeParam, cardCategoryParam interface{}
@@ -73,11 +67,8 @@ func (r *PostgresFeeRulesRepository) GetFeeRule(
 		&feeTypeStr,
 		&percentageFeeNullable,
 		&rule.FixedFee,
-		&minFeeNullable,
-		&maxFeeNullable,
 		&rule.GSTPercentage,
 		&rule.GSTApplicable,
-		&rule.Priority,
 	)
 
 	if err != nil {
@@ -93,24 +84,16 @@ func (r *PostgresFeeRulesRepository) GetFeeRule(
 	rule.FeeType = payment.FeeType(feeTypeStr)
 
 	if cardTypeNullable != nil {
-		cardTypeStr = *cardTypeNullable
-		rule.CardType = payment.CardType(cardTypeStr)
+		rule.CardType = payment.CardType(*cardTypeNullable)
 	}
 
 	if cardCategoryNullable != nil {
-		cardCategoryStr = *cardCategoryNullable
-		rule.CardCategory = payment.CardCategory(cardCategoryStr)
+		rule.CardCategory = payment.CardCategory(*cardCategoryNullable)
 	}
 
-	// Handle nullable percentage_fee, min_fee and max_fee
+	// Handle nullable percentage_fee
 	if percentageFeeNullable != nil {
 		rule.PercentageFee = *percentageFeeNullable
-	}
-	if minFeeNullable != nil {
-		rule.MinFee = *minFeeNullable
-	}
-	if maxFeeNullable != nil {
-		rule.MaxFee = *maxFeeNullable
 	}
 
 	rule.IsActive = true
@@ -124,13 +107,11 @@ func (r *PostgresFeeRulesRepository) GetActiveFeeRules(ctx context.Context) ([]*
 	query := `
 		SELECT
 			rule_id, payment_method, card_type, card_category,
-			fee_type, percentage_fee, fixed_fee, min_fee, max_fee,
-			gst_percentage, gst_applicable, priority
+			fee_type, percentage_fee, fixed_fee,
+			gst_percentage, gst_applicable
 		FROM xcentro.payment_fee_rules
 		WHERE is_active = true
-			AND effective_from <= NOW()
-			AND (effective_until IS NULL OR effective_until > NOW())
-		ORDER BY payment_method, priority DESC, card_type, card_category
+		ORDER BY payment_method, card_type, card_category
 	`
 
 	rows, err := r.querier.Query(ctx, query)
@@ -145,6 +126,7 @@ func (r *PostgresFeeRulesRepository) GetActiveFeeRules(ctx context.Context) ([]*
 		var rule business_rules.FeeRule
 		var ruleID, paymentMethodStr, feeTypeStr string
 		var cardTypeNullable, cardCategoryNullable *string
+		var percentageFeeNullable *float64
 
 		err := rows.Scan(
 			&ruleID,
@@ -152,13 +134,10 @@ func (r *PostgresFeeRulesRepository) GetActiveFeeRules(ctx context.Context) ([]*
 			&cardTypeNullable,
 			&cardCategoryNullable,
 			&feeTypeStr,
-			&rule.PercentageFee,
+			&percentageFeeNullable,
 			&rule.FixedFee,
-			&rule.MinFee,
-			&rule.MaxFee,
 			&rule.GSTPercentage,
 			&rule.GSTApplicable,
-			&rule.Priority,
 		)
 
 		if err != nil {
@@ -176,6 +155,10 @@ func (r *PostgresFeeRulesRepository) GetActiveFeeRules(ctx context.Context) ([]*
 
 		if cardCategoryNullable != nil {
 			rule.CardCategory = payment.CardCategory(*cardCategoryNullable)
+		}
+
+		if percentageFeeNullable != nil {
+			rule.PercentageFee = *percentageFeeNullable
 		}
 
 		rule.IsActive = true
@@ -196,14 +179,14 @@ func (r *PostgresFeeRulesRepository) CreateFeeRule(ctx context.Context, rule *bu
 	query := `
 		INSERT INTO xcentro.payment_fee_rules (
 			rule_id, payment_method, card_type, card_category,
-			fee_type, percentage_fee, fixed_fee, min_fee, max_fee,
-			gst_percentage, gst_applicable, priority,
+			fee_type, percentage_fee, fixed_fee,
+			gst_percentage, gst_applicable,
 			is_active
 		) VALUES (
 			$1, $2, $3, $4,
-			$5, $6, $7, $8, $9,
-			$10, $11, $12,
-			$13
+			$5, $6, $7,
+			$8, $9,
+			$10
 		)
 	`
 
@@ -217,11 +200,8 @@ func (r *PostgresFeeRulesRepository) CreateFeeRule(ctx context.Context, rule *bu
 		rule.FeeType,
 		rule.PercentageFee,
 		rule.FixedFee,
-		rule.MinFee,
-		rule.MaxFee,
 		rule.GSTPercentage,
 		rule.GSTApplicable,
-		rule.Priority,
 		rule.IsActive,
 	)
 
@@ -243,11 +223,8 @@ func (r *PostgresFeeRulesRepository) UpdateFeeRule(ctx context.Context, ruleID s
 			fee_type = $5,
 			percentage_fee = $6,
 			fixed_fee = $7,
-			min_fee = $8,
-			max_fee = $9,
-			gst_percentage = $10,
-			gst_applicable = $11,
-			priority = $12,
+			gst_percentage = $8,
+			gst_applicable = $9,
 			updated_at = NOW()
 		WHERE rule_id = $1
 	`
@@ -260,11 +237,8 @@ func (r *PostgresFeeRulesRepository) UpdateFeeRule(ctx context.Context, ruleID s
 		rule.FeeType,
 		rule.PercentageFee,
 		rule.FixedFee,
-		rule.MinFee,
-		rule.MaxFee,
 		rule.GSTPercentage,
 		rule.GSTApplicable,
-		rule.Priority,
 	)
 
 	if err != nil {
