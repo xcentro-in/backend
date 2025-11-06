@@ -22,8 +22,8 @@ type WalletService interface {
 	GetPaymentSource(businessID string, sourceID string, sourceType payment.PaymentSourceType) (payment.PaymentSource, error)
 }
 
-// MockWalletService provides a mock implementation for business wallet operations
-type MockWalletService struct {
+// WalletServiceImpl provides the implementation for business wallet operations
+type WalletServiceImpl struct {
 	// In-memory storage for Phase 3B.1 (replace with database in later phases)
 	// TODO-DB-4.1-CRITICAL: Remove in-memory storage maps
 	// - Delete: storedCards map[string][]*payment.StoredCard
@@ -44,13 +44,12 @@ type MockWalletService struct {
 	logger *logger.Logger
 }
 
-// NewMockWalletService creates a new mock wallet service
+// NewWalletService creates a new wallet service
 // TODO-DB-4.1: Update constructor signature for Phase 4
-// - Rename to NewWalletService()
-// - Add parameters: storedCardRepo, bankAccountRepo, bankVerificationLogRepo
+// - Add parameters: bankVerificationLogRepo
 // - Remove map initialization, initialize repo dependencies instead
-func NewMockWalletService(storedCardRepo payment.StoredCardRepository, bankAccountRepo payment.BankAccountRepository, txManager client.TxManager, businessService business.BusinessService, logger *logger.Logger) WalletService {
-	return &MockWalletService{
+func NewWalletService(storedCardRepo payment.StoredCardRepository, bankAccountRepo payment.BankAccountRepository, txManager client.TxManager, businessService business.BusinessService, logger *logger.Logger) WalletService {
+	return &WalletServiceImpl{
 		storedCards:             make(map[string][]*payment.StoredCard),
 		bankAccounts:            make(map[string][]*payment.BankAccount),
 		bankVerificationService: NewMockBankVerificationService(),
@@ -67,7 +66,7 @@ func NewMockWalletService(storedCardRepo payment.StoredCardRepository, bankAccou
 // - This method combines real stored data with mock data
 // - Phase 4.1: Mark all mock data generation for removal
 // - Phase 4.4: Replace with actual repository calls
-func (ws *MockWalletService) GetBusinessWallet(businessID string) (*payment.BusinessWallet, error) {
+func (ws *WalletServiceImpl) GetBusinessWallet(businessID string) (*payment.BusinessWallet, error) {
 	ws.logger.InfoWith("Fetching business wallet", "business_id", businessID)
 
 	// Get real stored cards (from tokenization) and combine with mock data
@@ -134,7 +133,7 @@ func (ws *MockWalletService) GetBusinessWallet(businessID string) (*payment.Busi
 }
 
 // AddPaymentSource adds a new payment source to the business wallet
-func (ws *MockWalletService) AddPaymentSource(businessID string, source payment.PaymentSource) error {
+func (ws *WalletServiceImpl) AddPaymentSource(businessID string, source payment.PaymentSource) error {
 	ws.logger.InfoWith("Adding payment source to wallet",
 		"business_id", businessID,
 		"source_type", source.GetSourceType(),
@@ -321,7 +320,7 @@ func (ws *MockWalletService) AddPaymentSource(businessID string, source payment.
 }
 
 // RemovePaymentSource removes a payment source from the business wallet
-func (ws *MockWalletService) RemovePaymentSource(businessID string, sourceID string, sourceType payment.PaymentSourceType) error {
+func (ws *WalletServiceImpl) RemovePaymentSource(businessID string, sourceID string, sourceType payment.PaymentSourceType) error {
 	fmt.Println("=== WALLET SERVICE: RemovePaymentSource Called ===")
 	fmt.Printf("Business ID: %s\n", businessID)
 	fmt.Printf("Source Type: %s\n", sourceType)
@@ -335,7 +334,7 @@ func (ws *MockWalletService) RemovePaymentSource(businessID string, sourceID str
 }
 
 // GetPaymentSource retrieves a specific payment source
-func (ws *MockWalletService) GetPaymentSource(businessID string, sourceID string, sourceType payment.PaymentSourceType) (payment.PaymentSource, error) {
+func (ws *WalletServiceImpl) GetPaymentSource(businessID string, sourceID string, sourceType payment.PaymentSourceType) (payment.PaymentSource, error) {
 	fmt.Println("=== WALLET SERVICE: GetPaymentSource Called ===")
 	fmt.Printf("Business ID: %s\n", businessID)
 	fmt.Printf("Source Type: %s\n", sourceType)
@@ -386,7 +385,7 @@ func (ws *MockWalletService) GetPaymentSource(businessID string, sourceID string
 // TODO-DB-4.1-CRITICAL: Mark for deletion in Phase 4.4
 // - generateMockStoredCards() - DELETE in Phase 4.4
 // - This is only for testing, should not be in production code
-func (ws *MockWalletService) generateMockStoredCards(businessID string) []*payment.StoredCard {
+func (ws *WalletServiceImpl) generateMockStoredCards(businessID string) []*payment.StoredCard {
 	fmt.Printf("Mock Stored Cards\n")
 	return []*payment.StoredCard{
 		{
@@ -433,7 +432,7 @@ func (ws *MockWalletService) generateMockStoredCards(businessID string) []*payme
 // TODO-DB-4.1-CRITICAL: Mark for deletion in Phase 4.4
 // - generateMockBankAccounts() - DELETE in Phase 4.4
 // - This is only for testing, should not be in production code
-func (ws *MockWalletService) generateMockBankAccounts(businessID string) []*payment.BankAccount {
+func (ws *WalletServiceImpl) generateMockBankAccounts(businessID string) []*payment.BankAccount {
 	fmt.Printf("Mock bank accs\n")
 
 	return []*payment.BankAccount{
@@ -479,7 +478,7 @@ func (ws *MockWalletService) generateMockBankAccounts(businessID string) []*paym
 // TODO-DB-4.1-CRITICAL: Mark for deletion in Phase 4.4
 // - generateMockUPIDetails() - DELETE in Phase 4.4
 // - This is only for testing, should not be in production code
-func (ws *MockWalletService) generateMockUPIDetails(businessID string) []*payment.UPIDetail {
+func (ws *WalletServiceImpl) generateMockUPIDetails(businessID string) []*payment.UPIDetail {
 	fmt.Printf("Mock UPI Details\n")
 
 	return []*payment.UPIDetail{
@@ -515,7 +514,7 @@ func (ws *MockWalletService) generateMockUPIDetails(businessID string) []*paymen
 // TODO-DB-4.1-CRITICAL: Mark for deletion in Phase 4.4
 // - generateMockCreditLines() - DELETE in Phase 4.4
 // - This is only for testing, should not be in production code
-func (ws *MockWalletService) generateMockCreditLines(businessID string) []*payment.CreditLine {
+func (ws *WalletServiceImpl) generateMockCreditLines(businessID string) []*payment.CreditLine {
 	fmt.Printf("Mock Credit lines\n")
 
 	// For now, return empty slice as credit lines are placeholder
@@ -543,7 +542,7 @@ func (ws *MockWalletService) generateMockCreditLines(businessID string) []*payme
 // Helper methods for bank account verification
 
 // validateBankAccountDetails validates bank account details before verification
-func (ws *MockWalletService) validateBankAccountDetails(bankAccount *payment.BankAccount) error {
+func (ws *WalletServiceImpl) validateBankAccountDetails(bankAccount *payment.BankAccount) error {
 	if bankAccount.AccountNumber == "" {
 		return fmt.Errorf("account number is required")
 	}
@@ -576,7 +575,7 @@ func (ws *MockWalletService) validateBankAccountDetails(bankAccount *payment.Ban
 // - Replace in-memory loop through ws.bankAccounts[businessID]
 // - Call: bankAccountRepo.CheckDuplicateAccount(ctx, businessID, accountNumber)
 // - Use account_number_hash for fast duplicate detection
-func (ws *MockWalletService) checkDuplicateBankAccount(businessID, accountNumber string) error {
+func (ws *WalletServiceImpl) checkDuplicateBankAccount(businessID, accountNumber string) error {
 	existingAccounts := ws.bankAccounts[businessID]
 	if existingAccounts == nil {
 		return nil // No existing accounts, so no duplicates
@@ -592,7 +591,7 @@ func (ws *MockWalletService) checkDuplicateBankAccount(businessID, accountNumber
 }
 
 // maskAccountNumber masks the account number for secure display
-func (ws *MockWalletService) maskAccountNumber(accountNumber string) string {
+func (ws *WalletServiceImpl) maskAccountNumber(accountNumber string) string {
 	if len(accountNumber) <= 4 {
 		return "****"
 	}

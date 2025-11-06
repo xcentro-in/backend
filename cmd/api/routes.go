@@ -102,8 +102,8 @@ func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group
 	jioPayClient := jiopay.NewJioPayClient(cfg.JioPay.BaseURL, cfg.JioPay.TokenizationBaseURL, cfg.JioPay.MerchantID, cfg.JioPay.APIKey, cfg.JioPay.AppID, cfg.JioPay.EncryptionKey)
 
 	orchestrator := corePayment.NewMockPaymentOrchestrator(paymentRepository, storedCardRepository, jioPayClient, easebuzzClient, logger.GetDefault())
-	feeCalculator := business_rules.NewMockFeeCalculator()
-	walletService := business_rules.NewMockWalletService(storedCardRepository, bankAccountRepository, clients.txManager, busSvc, logger.GetDefault())
+	feeCalculator := business_rules.NewFeeCalculator()
+	walletService := business_rules.NewWalletService(storedCardRepository, bankAccountRepository, clients.txManager, busSvc, logger.GetDefault())
 
 	feeRulesRepository := paymentRepo.NewPostgresFeeRulesRepository(clients.db)
 	databaseFeeCalculator := business_rules.NewDatabaseFeeCalculator(feeRulesRepository)
