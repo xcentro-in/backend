@@ -22,7 +22,7 @@ type VoucherListItem struct {
 	TotalAmount    int64             `json:"totalAmount"`    // Net amount in paise
 	Status         BillPaymentStatus `json:"status"`         // paid, open, overdue
 	VoucherStatus  string            `json:"voucherStatus"`  // draft, finalized, posted, synced
-	PaymentDate    *time.Time        `json:"paymentDate"`    // When payment was made (if paid)
+	PaymentStatus  *string           `json:"paymentStatus"`  // Payment transaction status: pending, success, failed, cancelled (null if no payment)
 	ApprovalStatus string            `json:"approvalStatus"` // pending, approved, rejected, request_changes (empty if no approval)
 }
 

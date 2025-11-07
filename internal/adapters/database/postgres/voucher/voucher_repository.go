@@ -1309,8 +1309,8 @@ func (r *PostgresVoucherRepository) GetVoucherListForBusiness(ctx context.Contex
 		// Set invoice due date
 		item.InvoiceDueDate = invoiceDueDateDB
 
-		// Set payment date if paid
-		item.PaymentDate = paymentDate
+		// Set payment status (null if no payment)
+		item.PaymentStatus = paymentStatus
 
 		// Map bill status
 		item.Status = voucher.BillPaymentStatus(billStatus)
