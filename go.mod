@@ -2,6 +2,8 @@ module xcentro.in
 
 go 1.25.1
 
+toolchain go1.24.7
+
 require (
 	github.com/aws/aws-sdk-go-v2/credentials v1.18.17
 	github.com/golang-jwt/jwt/v5 v5.3.0

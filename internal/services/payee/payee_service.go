@@ -309,7 +309,6 @@ func (s *PayeeService) onboardVendor(ctx context.Context, req payee.OnboardPayee
 		// Create PayeeBankAccount entity with Castler beneficiary ID
 		now := time.Now()
 		bankAccount = &payee.PayeeBankAccount{
-			PayeeID:                 payeeID,
 			AccountNumber:           vendor.AccountNumber,
 			AccountNumberHash:       accountHash,
 			IFSCCode:                vendor.IFSCCode,
