@@ -22,6 +22,8 @@ type MockPaymentOrchestrator struct {
 	// Gateway instances for payment processing
 	jioPayGateway   PaymentGateway
 	easebuzzGateway PaymentGateway
+	mockPGGateway   PaymentGateway // Mock PG for testing
+	mockPGEnabled   bool            // Flag to enable mock PG bypass
 	// Repository dependencies - read-only access for gateway communication
 	// NOTE: All database writes are handled by service layer within transactions
 	paymentRepo    PaymentRepository
@@ -37,11 +39,15 @@ func NewMockPaymentOrchestrator(
 	storedCardRepo StoredCardRepository,
 	jioPayClient PaymentGateway, // Real JioPay client injected
 	easebuzzClient PaymentGateway, // Real Easebuzz client injected
+	mockPGClient PaymentGateway, // Mock PG client for testing
+	mockPGEnabled bool, // Enable mock PG bypass
 	log *logger.Logger,
 ) PaymentOrchestrator {
 	return &MockPaymentOrchestrator{
 		jioPayGateway:   jioPayClient,   // ✅ Real JioPay client
 		easebuzzGateway: easebuzzClient, // ✅ Real Easebuzz client
+		mockPGGateway:   mockPGClient,   // ✅ Mock PG client
+		mockPGEnabled:   mockPGEnabled,  // ✅ Mock PG enabled flag
 		paymentRepo:     paymentRepo,
 		storedCardRepo:  storedCardRepo,
 		logger:          log,
@@ -302,10 +308,21 @@ func (o *MockPaymentOrchestrator) ProcessTokenizedPayment(ctx context.Context, r
 		"gateway_used", storedCard.GatewayUsed)
 	o.logger.DebugWith("Card token available", "token_prefix", storedCard.Token[:10])
 
-	// Step 2: Get the specific gateway instance that was used for tokenization
-	selectedGateway := o.getGatewayInstance(storedCard.GatewayUsed)
+	// Step 2: Get the specific gateway instance
+	// If mock PG is enabled, bypass the normal gateway and use mock PG instead
+	var selectedGatewayType GatewayType
+	if o.mockPGEnabled {
+		selectedGatewayType = GatewayMockPG
+		o.logger.InfoWith("Mock PG enabled: bypassing tokenized card gateway routing",
+			"original_gateway", storedCard.GatewayUsed,
+			"override_gateway", GatewayMockPG)
+	} else {
+		selectedGatewayType = storedCard.GatewayUsed
+	}
+
+	selectedGateway := o.getGatewayInstance(selectedGatewayType)
 	if selectedGateway == nil {
-		return nil, fmt.Errorf("gateway instance not found: %s", storedCard.GatewayUsed)
+		return nil, fmt.Errorf("gateway instance not found: %s", selectedGatewayType)
 	}
 
 	// Step 3: Generate fresh cryptogram for this payment
@@ -361,16 +378,16 @@ func (o *MockPaymentOrchestrator) ProcessTokenizedPayment(ctx context.Context, r
 	}
 
 	// Step 7: Process payment with specific gateway
-	o.logger.InfoWith("Processing tokenized payment with gateway", "gateway", storedCard.GatewayUsed)
+	o.logger.InfoWith("Processing tokenized payment with gateway", "gateway", selectedGatewayType)
 	gatewayResponse, err := selectedGateway.InitiatePayment(ctx, gatewayRequest)
 
 	if err != nil {
-		o.logger.ErrorWith("Tokenized gateway payment failed", "gateway", storedCard.GatewayUsed, "error", err)
+		o.logger.ErrorWith("Tokenized gateway payment failed", "gateway", selectedGatewayType, "error", err)
 		// Return error - service layer will handle transaction rollback
 		return nil, fmt.Errorf("gateway payment initiation failed: %w", err)
 	}
 
-	o.logger.InfoWith("Tokenized payment initiated successfully", "gateway", storedCard.GatewayUsed)
+	o.logger.InfoWith("Tokenized payment initiated successfully", "gateway", selectedGatewayType)
 	// NOTE: Service layer will update card last_used_at timestamp within transaction
 
 	// Step 7: Create response
@@ -382,16 +399,18 @@ func (o *MockPaymentOrchestrator) ProcessTokenizedPayment(ctx context.Context, r
 		TotalAmount:      request.Amount + feeAmount,
 		Currency:         request.Currency,
 		PaymentMethod:    PaymentMethodTokenCard, // Return the original method
-		GatewayUsed:      storedCard.GatewayUsed,
+		GatewayUsed:      selectedGatewayType,
 		GatewayPaymentID: gatewayResponse.GatewayPaymentID,
 		RedirectURL:      gatewayResponse.RedirectURL,
-		Message:          fmt.Sprintf("Tokenized payment initiated with %s", storedCard.GatewayUsed),
+		Message:          fmt.Sprintf("Tokenized payment initiated with %s", selectedGatewayType),
 		CreatedAt:        gatewayResponse.CreatedAt,
 		Metadata: map[string]any{
 			"payment_type":      "tokenized",
 			"card_id":           storedCard.CardID,
 			"card_last_four":    storedCard.LastFourDigits,
-			"gateway_used":      string(storedCard.GatewayUsed),
+			"gateway_used":      string(selectedGatewayType),
+			"original_gateway":  string(storedCard.GatewayUsed), // Track the original gateway for reference
+			"mockpg_override":   o.mockPGEnabled,                // Track if mock PG was used
 			"original_metadata": request.Metadata,
 		},
 	}
@@ -517,6 +536,12 @@ func (o *MockPaymentOrchestrator) ValidatePaymentRequest(request PaymentRequest)
 // SelectGateway selects the appropriate gateway based on payment method and card details
 func (o *MockPaymentOrchestrator) SelectGateway(request PaymentRequest) (GatewayType, error) {
 	o.logger.DebugWith("Selecting gateway", "payment_method", request.PaymentMethod)
+
+	// Check if mock PG is enabled - bypass normal gateway selection
+	if o.mockPGEnabled {
+		o.logger.InfoWith("Mock PG enabled: bypassing normal gateway selection", "rule", "mockpg_bypass")
+		return GatewayMockPG, nil
+	}
 
 	switch request.PaymentMethod {
 	case PaymentMethodNetBanking:
@@ -655,6 +680,8 @@ func (o *MockPaymentOrchestrator) getGatewayInstance(gatewayType GatewayType) Pa
 		return o.jioPayGateway
 	case GatewayEasebuzz:
 		return o.easebuzzGateway
+	case GatewayMockPG:
+		return o.mockPGGateway
 	default:
 		return nil
 	}

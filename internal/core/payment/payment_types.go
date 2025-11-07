@@ -67,6 +67,7 @@ type GatewayType string
 const (
 	GatewayJioPay   GatewayType = "jiopay"
 	GatewayEasebuzz GatewayType = "easebuzz"
+	GatewayMockPG   GatewayType = "mockpg" // Mock gateway for testing
 )
 
 // PaymentSourceType represents different types of payment sources

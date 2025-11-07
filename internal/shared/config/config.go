@@ -26,6 +26,7 @@ type Config struct {
 	Castler               CastlerConfig               `json:"castler"`
 	JioPay                JioPayConfig                `json:"jiopay"`
 	Easebuzz              EasebuzzConfig              `json:"easebuzz"`
+	MockPG                MockPGConfig                `json:"mockpg"`
 	CloudWatch            CloudWatchConfig            `json:"cloudwatch"`
 	Workers               WorkersConfig               `json:"workers"`
 	Frontend              FrontendConfig              `json:"frontend"`
@@ -118,6 +119,14 @@ type EasebuzzConfig struct {
 	EncryptionKey string `json:"-" env:"EASEBUZZ_ENCRYPTION_KEY"` // AES encryption key (sensitive, optional)
 	EncryptionIV  string `json:"-" env:"EASEBUZZ_ENCRYPTION_IV"`  // Fixed AES IV in base64 (sensitive, optional)
 	WebhookSecret string `json:"-" env:"EASEBUZZ_WEBHOOK_SECRET"` // Webhook signature verification (sensitive)
+}
+
+// MockPGConfig holds Mock Payment Gateway configuration for testing.
+type MockPGConfig struct {
+	Enabled        bool   `json:"enabled" env:"MOCKPG_ENABLED" env-default:"false"`              // Enable mock PG (bypass real gateways)
+	MerchantID     string `json:"merchant_id" env:"MOCKPG_MERCHANT_ID" env-default:"MOCK_MERCH"` // Mock merchant identifier
+	APIKey         string `json:"-" env:"MOCKPG_API_KEY" env-default:"mock_api_key_123"`         // Mock API key (sensitive)
+	SimulateSuccess bool   `json:"simulate_success" env:"MOCKPG_SIMULATE_SUCCESS" env-default:"true"` // If true, always succeed; if false, simulate random failures
 }
 
 // CloudWatchConfig holds AWS CloudWatch metrics configuration.
@@ -320,5 +329,7 @@ func (c Config) Safe() Config {
 	c.Easebuzz.EncryptionKey = "***REDACTED***"
 	c.Easebuzz.EncryptionIV = "***REDACTED***"
 	c.Easebuzz.WebhookSecret = "***REDACTED***"
+	c.MockPG.APIKey = "***REDACTED***"
+	c.BankAccountEncryption.EncryptionKey = "***REDACTED***"
 	return c
 }
