@@ -18,12 +18,6 @@ type Policy struct {
 	FailClosed bool `json:"fail_closed"`
 }
 
-// PolicyGroup represents policy configuration for a specific group.
-type PolicyGroup struct {
-	Name   string
-	Policy Policy
-}
-
 // DefaultPolicies returns predefined policies for common groups.
 func DefaultPolicies() map[string]Policy {
 	return map[string]Policy{
@@ -110,5 +104,3 @@ func SESPolicies() map[string]Policy {
 		},
 	}
 }
-
-
