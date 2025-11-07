@@ -10,6 +10,7 @@ import (
 	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/httputil"
 	"xcentro.in/internal/shared/logger"
+	"xcentro.in/internal/shared/ratelimiter"
 	customValidator "xcentro.in/internal/shared/validator"
 )
 
@@ -35,6 +36,7 @@ func RegisterAuthRoutes(e *echo.Group, authService auth.AuthService, businessSer
 	authHandler := NewAuthHandler(authService, businessService, cfg)
 
 	authGroup := e.Group("/auth")
+	authGroup.Use(ratelimiter.MiddlewareDefault())
 
 	// Public routes
 	authGroup.POST("/login", authHandler.HandleLogin)

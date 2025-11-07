@@ -9,6 +9,7 @@ import (
 	"xcentro.in/internal/middleware"
 	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/logger"
+	"xcentro.in/internal/shared/ratelimiter"
 	"xcentro.in/internal/shared/types"
 	customValidator "xcentro.in/internal/shared/validator"
 )
@@ -32,6 +33,7 @@ func RegisterUserRoutes(e *echo.Group, userService user.UserService, authService
 	aadhaarHandler := NewAadhaarCallbackHandler(userService, cfg)
 
 	userGroup := e.Group("/user")
+	userGroup.Use(ratelimiter.MiddlewareDefault())
 
 	// Protected routes requiring authentication
 	protectedUser := userGroup.Group("")

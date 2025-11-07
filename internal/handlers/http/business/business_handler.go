@@ -13,6 +13,7 @@ import (
 	"xcentro.in/internal/middleware"
 	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/logger"
+	"xcentro.in/internal/shared/ratelimiter"
 	"xcentro.in/internal/shared/types"
 	customValidator "xcentro.in/internal/shared/validator"
 )
@@ -57,6 +58,7 @@ func RegisterBusinessRoutes(e *echo.Group, businessService business.BusinessServ
 
 	businessGroup := e.Group("/business")
 	// Apply middleware to the business group
+	businessGroup.Use(ratelimiter.MiddlewareDefault())
 	businessGroup.Use(middleware.JWTMiddleware(authService))
 	businessGroup.Use(middleware.BusinessRolesMiddleware(businessUserRelRepo, rclient))
 
