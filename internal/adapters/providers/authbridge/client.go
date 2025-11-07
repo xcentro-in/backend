@@ -36,11 +36,11 @@ func getHTTPClient() *HTTPClient {
 	return httpClientInstance
 }
 
-// Post performs HTTP POST request
-func (c *HTTPClient) Post(url string, headers map[string]string, body []byte) ([]byte, error) {
+// Post performs HTTP POST request and returns status code, response body, and error
+func (c *HTTPClient) Post(url string, headers map[string]string, body []byte) (int, []byte, error) {
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(body))
 	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %v", err)
+		return 0, nil, fmt.Errorf("failed to create request: %v", err)
 	}
 
 	// Set headers
@@ -51,20 +51,16 @@ func (c *HTTPClient) Post(url string, headers map[string]string, body []byte) ([
 
 	resp, err := c.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("request failed: %v", err)
+		return 0, nil, fmt.Errorf("request failed: %v", err)
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %v", err)
+		return resp.StatusCode, nil, fmt.Errorf("failed to read response: %v", err)
 	}
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(respBody))
-	}
-
-	return respBody, nil
+	return resp.StatusCode, respBody, nil
 }
 
 // Singleton instance variables
@@ -169,6 +165,9 @@ func (c *AuthBridgeClient) callRealAPI(req DocumentRequest, docType DocumentType
 		return nil, fmt.Errorf("failed to marshal API request: %v", err)
 	}
 
+	// Log encrypted request
+	fmt.Printf("[AuthBridge] Encrypted Request: %s\n", string(requestBody))
+
 	// Prepare headers
 	headers := map[string]string{
 		"username": c.config.Username,
@@ -177,12 +176,41 @@ func (c *AuthBridgeClient) callRealAPI(req DocumentRequest, docType DocumentType
 	fmt.Printf("Making request to: %s\n", endpoint)
 
 	// Make HTTP request
-	responseBody, err := c.httpClient.Post(endpoint, headers, requestBody)
+	statusCode, responseBody, err := c.httpClient.Post(endpoint, headers, requestBody)
 	if err != nil {
 		return nil, fmt.Errorf("HTTP request failed: %v", err)
 	}
 
-	// Parse response
+	// Log encrypted response
+	fmt.Printf("[AuthBridge] HTTP Status: %d\n", statusCode)
+	fmt.Printf("[AuthBridge] Encrypted Response: %s\n", string(responseBody))
+
+	// Handle non-2xx status codes
+	if statusCode < 200 || statusCode >= 300 {
+		// Try to parse and decrypt error response
+		var apiResp APIResponse
+		if err := json.Unmarshal(responseBody, &apiResp); err != nil {
+			// If can't parse as APIResponse, return raw error
+			return nil, fmt.Errorf("HTTP %d: %s", statusCode, string(responseBody))
+		}
+
+		// Try to decrypt error response
+		if apiResp.ResponseData != "" {
+			decryptedError, err := crypto.DecryptAES256CBC(apiResp.ResponseData, c.config.Password)
+			if err != nil {
+				// If decryption fails, return encrypted error
+				return nil, fmt.Errorf("HTTP %d: failed to decrypt error response: %v (encrypted: %s)", statusCode, err, apiResp.ResponseData)
+			}
+			// Log and return decrypted error
+			fmt.Printf("[AuthBridge] Decrypted Error: %s\n", decryptedError)
+			return nil, fmt.Errorf("HTTP %d: %s", statusCode, decryptedError)
+		}
+
+		// No response_data field, return raw error
+		return nil, fmt.Errorf("HTTP %d: %s", statusCode, string(responseBody))
+	}
+
+	// Parse success response
 	var apiResp APIResponse
 	if err := json.Unmarshal(responseBody, &apiResp); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal API response: %v", err)
@@ -193,6 +221,8 @@ func (c *AuthBridgeClient) callRealAPI(req DocumentRequest, docType DocumentType
 	if err != nil {
 		return nil, fmt.Errorf("decryption failed: %v", err)
 	}
+
+	fmt.Printf("[AuthBridge] Decrypted Response: %s\n", decryptedResponse)
 
 	// Parse decrypted response
 	var result map[string]interface{}
