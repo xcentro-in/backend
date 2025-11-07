@@ -290,16 +290,39 @@ func (s *VoucherServiceImpl) UpdateVoucher(ctx context.Context, req *UpdateVouch
 		return nil, fmt.Errorf("failed to get voucher: %w", err)
 	}
 
-	// 2. Verify voucher is in draft status (only drafts can be updated)
-	// Paid/finalized vouchers cannot be modified for audit and compliance reasons
-	if v.Status != voucher.StatusDraft {
-		return nil, fmt.Errorf("cannot update paid or finalized voucher. Only draft vouchers can be edited (current status: %s)", v.Status)
+	// 2. Check if voucher has been paid - paid vouchers cannot be edited
+	var paymentStatus *string
+	if repo, ok := s.voucherRepo.(interface {
+		GetPaymentStatus(ctx context.Context, voucherID uuid.UUID) (*string, error)
+	}); ok {
+		paymentStatus, err = repo.GetPaymentStatus(ctx, v.VoucherID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to check payment status: %w", err)
+		}
 	}
 
-	// 3. Track updated fields
-	var updatedFields []string
+	// If payment exists and is successful, voucher cannot be edited
+	if paymentStatus != nil && *paymentStatus == "success" {
+		return nil, fmt.Errorf("cannot edit voucher: payment has been completed successfully")
+	}
 
-	// 4. If relation_id is provided, resolve it and update payee/account
+	// 3. If voucher is finalized/posted/synced but not paid, shift it back to draft for editing
+	statusChanged := false
+	if v.Status != voucher.StatusDraft {
+		v.Status = voucher.StatusDraft
+		statusChanged = true
+		s.logger.InfoWith("Voucher status shifted to draft for editing",
+			"voucher_id", v.VoucherID,
+			"previous_status", v.Status)
+	}
+
+	// 4. Track updated fields
+	var updatedFields []string
+	if statusChanged {
+		updatedFields = append(updatedFields, "status")
+	}
+
+	// 5. If relation_id is provided, resolve it and update payee/account
 	if req.RelationID != nil {
 		// Validate and resolve relation_id (validates business ownership)
 		payeeID, accountID, err := s.resolveRelationID(ctx, v.BusinessID, *req.RelationID)
@@ -474,10 +497,20 @@ func (s *VoucherServiceImpl) DeleteVoucher(ctx context.Context, voucherID uuid.U
 		return fmt.Errorf("voucher does not belong to the specified business")
 	}
 
-	// 3. Verify voucher is in draft status (only drafts can be deleted)
-	// Finalized, posted, or synced vouchers cannot be deleted for audit and compliance
-	if v.Status != voucher.StatusDraft {
-		return fmt.Errorf("cannot delete voucher with status '%s'. Only draft vouchers can be deleted", v.Status)
+	// 3. Check if voucher has been paid - paid vouchers cannot be deleted
+	var paymentStatus *string
+	if repo, ok := s.voucherRepo.(interface {
+		GetPaymentStatus(ctx context.Context, voucherID uuid.UUID) (*string, error)
+	}); ok {
+		paymentStatus, err = repo.GetPaymentStatus(ctx, voucherID)
+		if err != nil {
+			return fmt.Errorf("failed to check payment status: %w", err)
+		}
+	}
+
+	// If payment exists and is successful, voucher cannot be deleted
+	if paymentStatus != nil && *paymentStatus == "success" {
+		return fmt.Errorf("cannot delete voucher: payment has been completed successfully")
 	}
 
 	// 4. Delete voucher (repository handles cascade and payout transfer checks)
@@ -522,13 +555,31 @@ func (s *VoucherServiceImpl) GetVoucherDetails(ctx context.Context, voucherID uu
 		}
 	}
 
-	// 4. Determine payment status
-	paymentStatus := "unpaid"
-	if v.PaymentID != nil {
-		paymentStatus = "paid"
+	// 4. Get latest approval status
+	var approvalStatus *string
+	if repo, ok := s.voucherRepo.(interface {
+		GetLatestApprovalStatus(ctx context.Context, voucherID uuid.UUID) (*string, error)
+	}); ok {
+		approvalStatus, err = repo.GetLatestApprovalStatus(ctx, v.VoucherID)
+		if err != nil {
+			// Log error but continue - approval status is optional
+			fmt.Printf("Warning: failed to get approval status: %v\n", err)
+		}
 	}
 
-	// 5. Build response with payee enrichment
+	// 5. Get payment status from payments table
+	var paymentStatus *string
+	if repo, ok := s.voucherRepo.(interface {
+		GetPaymentStatus(ctx context.Context, voucherID uuid.UUID) (*string, error)
+	}); ok {
+		paymentStatus, err = repo.GetPaymentStatus(ctx, v.VoucherID)
+		if err != nil {
+			// Log error but continue - payment status is optional
+			fmt.Printf("Warning: failed to get payment status: %v\n", err)
+		}
+	}
+
+	// 6. Build response with payee enrichment
 	response := &VoucherDetailsResponse{
 		VoucherID:        v.VoucherID,
 		VoucherNumber:    v.VoucherNumber,
@@ -558,6 +609,7 @@ func (s *VoucherServiceImpl) GetVoucherDetails(ctx context.Context, voucherID uu
 		Attachments:      ensureEmptyObject(v.Attachments),
 		ExpenseCategory:  v.ExpenseCategory,
 		Description:      v.Description,
+		ApprovalStatus:   approvalStatus,
 		PaymentStatus:    paymentStatus,
 		ERPSyncStatus:    v.ERPSyncStatus,
 		ERPReferenceID:   v.ERPReferenceID,
@@ -582,12 +634,30 @@ func (s *VoucherServiceImpl) ListVouchersForBusiness(ctx context.Context, busine
 		return nil, fmt.Errorf("failed to list vouchers: %w", err)
 	}
 
-	// 2. Convert to list items
+	// 2. Convert to list items with enriched status information
 	var items []VoucherListItem
 	for _, v := range vouchers {
 		// TODO: Enrich with payee name
 		// payee, _ := s.payeeRepo.GetByID(ctx, v.PayeeID)
 		payeeName := "Unknown" // Placeholder
+
+		// Get latest approval status for this voucher
+		var approvalStatus *string
+		if repo, ok := s.voucherRepo.(interface {
+			GetLatestApprovalStatus(ctx context.Context, voucherID uuid.UUID) (*string, error)
+		}); ok {
+			approvalStatus, _ = repo.GetLatestApprovalStatus(ctx, v.VoucherID)
+			// Ignoring error - approval status is optional
+		}
+
+		// Get payment status from payments table
+		var paymentStatus *string
+		if repo, ok := s.voucherRepo.(interface {
+			GetPaymentStatus(ctx context.Context, voucherID uuid.UUID) (*string, error)
+		}); ok {
+			paymentStatus, _ = repo.GetPaymentStatus(ctx, v.VoucherID)
+			// Ignoring error - payment status is optional
+		}
 
 		items = append(items, VoucherListItem{
 			VoucherID:       v.VoucherID,
@@ -599,6 +669,8 @@ func (s *VoucherServiceImpl) ListVouchersForBusiness(ctx context.Context, busine
 			NetAmount:       v.NetAmount,
 			Currency:        v.Currency,
 			Status:          v.Status,
+			ApprovalStatus:  approvalStatus,
+			PaymentStatus:   paymentStatus,
 			ERPSyncStatus:   v.ERPSyncStatus,
 			ExpenseCategory: v.ExpenseCategory,
 			CreatedAt:       v.CreatedAt,

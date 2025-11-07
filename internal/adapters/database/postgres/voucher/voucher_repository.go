@@ -2187,3 +2187,48 @@ func (r *PostgresVoucherRepository) Delete(ctx context.Context, voucherID uuid.U
 
 	return nil
 }
+
+// GetLatestApprovalStatus retrieves the latest approval status for a voucher
+// Returns nil if no approvals exist
+func (r *PostgresVoucherRepository) GetLatestApprovalStatus(ctx context.Context, voucherID uuid.UUID) (*string, error) {
+	query := `
+		SELECT action
+		FROM xcentro.voucher_approvals
+		WHERE voucher_id = $1
+		ORDER BY created_at DESC
+		LIMIT 1
+	`
+
+	var action string
+	err := r.querier.QueryRow(ctx, query, voucherID).Scan(&action)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil // No approvals exist
+		}
+		return nil, fmt.Errorf("failed to get latest approval status: %w", err)
+	}
+
+	return &action, nil
+}
+
+// GetPaymentStatus retrieves the payment status for a voucher from the payments table
+// Returns nil if voucher has no associated payment
+func (r *PostgresVoucherRepository) GetPaymentStatus(ctx context.Context, voucherID uuid.UUID) (*string, error) {
+	query := `
+		SELECT p.status
+		FROM xcentro.payments p
+		INNER JOIN xcentro.payment_vouchers pv ON p.payment_id = pv.payment_id
+		WHERE pv.voucher_id = $1
+	`
+
+	var status string
+	err := r.querier.QueryRow(ctx, query, voucherID).Scan(&status)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil // No payment associated
+		}
+		return nil, fmt.Errorf("failed to get payment status: %w", err)
+	}
+
+	return &status, nil
+}
