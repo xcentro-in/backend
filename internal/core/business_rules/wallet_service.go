@@ -11,100 +11,71 @@ import (
 	"xcentro.in/internal/adapters/database/postgres/client"
 	"xcentro.in/internal/core/business"
 	"xcentro.in/internal/core/payment"
+	"xcentro.in/internal/shared/logger"
 )
 
 // WalletService defines the interface for business wallet operations
 type WalletService interface {
-	GetBusinessWallet(businessID string) (*payment.BusinessWallet, error)
-	AddPaymentSource(businessID string, source payment.PaymentSource) error
-	RemovePaymentSource(businessID string, sourceID string, sourceType payment.PaymentSourceType) error
-	GetPaymentSource(businessID string, sourceID string, sourceType payment.PaymentSourceType) (payment.PaymentSource, error)
+	GetBusinessWallet(ctx context.Context, businessID string) (*payment.BusinessWallet, error)
+	AddPaymentSource(ctx context.Context, businessID string, source payment.PaymentSource) error
+	RemovePaymentSource(ctx context.Context, businessID string, sourceID string, sourceType payment.PaymentSourceType) error
+	GetPaymentSource(ctx context.Context, businessID string, sourceID string, sourceType payment.PaymentSourceType) (payment.PaymentSource, error)
 }
 
-// MockWalletService provides a mock implementation for business wallet operations
-type MockWalletService struct {
-	// In-memory storage for Phase 3B.1 (replace with database in later phases)
-	// TODO-DB-4.1-CRITICAL: Remove in-memory storage maps
-	// - Delete: storedCards map[string][]*payment.StoredCard
-	// - Delete: bankAccounts map[string][]*payment.BankAccount
-	// - All storage should go through repositories
-	storedCards map[string][]*payment.StoredCard // businessID -> cards
-	bankAccounts map[string][]*payment.BankAccount // businessID -> bank accounts
+// WalletServiceImpl provides the implementation for business wallet operations
+type WalletServiceImpl struct {
 	// Bank verification service for penny drop verification
 	bankVerificationService BankVerificationService
-	// Repository dependencies (Phase 4.2)
+	// Repository dependencies (implemented)
 	storedCardRepo  payment.StoredCardRepository
 	bankAccountRepo payment.BankAccountRepository
-	// Transaction manager (Phase 4.4)
+	// Transaction manager (implemented)
 	txManager client.TxManager
 	// Business service for onboarding flags
 	businessService business.BusinessService
+	// Logger
+	logger *logger.Logger
 }
 
-// NewMockWalletService creates a new mock wallet service
-// TODO-DB-4.1: Update constructor signature for Phase 4
-// - Rename to NewWalletService()
-// - Add parameters: storedCardRepo, bankAccountRepo, bankVerificationLogRepo
-// - Remove map initialization, initialize repo dependencies instead
-func NewMockWalletService(storedCardRepo payment.StoredCardRepository, bankAccountRepo payment.BankAccountRepository, txManager client.TxManager, businessService business.BusinessService) WalletService {
-	return &MockWalletService{
-		storedCards:             make(map[string][]*payment.StoredCard),
-		bankAccounts:            make(map[string][]*payment.BankAccount),
+// NewWalletService creates a new wallet service with database repositories
+// TODO-FUTURE: Add bankVerificationLogRepo parameter when audit logging is implemented
+func NewWalletService(storedCardRepo payment.StoredCardRepository, bankAccountRepo payment.BankAccountRepository, txManager client.TxManager, businessService business.BusinessService, logger *logger.Logger) WalletService {
+	return &WalletServiceImpl{
 		bankVerificationService: NewMockBankVerificationService(),
 		storedCardRepo:          storedCardRepo,
 		bankAccountRepo:         bankAccountRepo,
 		txManager:               txManager,
 		businessService:         businessService,
+		logger:                  logger,
 	}
 }
 
 // GetBusinessWallet retrieves the complete business wallet with all payment sources
-// TODO-DB-4.1-CRITICAL: Replace mock data with database queries
-// - This method combines real stored data with mock data
-// - Phase 4.1: Mark all mock data generation for removal
-// - Phase 4.4: Replace with actual repository calls
-func (ws *MockWalletService) GetBusinessWallet(businessID string) (*payment.BusinessWallet, error) {
-	fmt.Println("=== WALLET SERVICE: GetBusinessWallet Called ===")
-	fmt.Printf("Business ID: %s\n", businessID)
+// All data is fetched from database repositories
+func (ws *WalletServiceImpl) GetBusinessWallet(ctx context.Context, businessID string) (*payment.BusinessWallet, error) {
+	ws.logger.InfoWith("Fetching business wallet", "business_id", businessID)
 
-	// Get real stored cards (from tokenization) and combine with mock data
-	// TODO-DB-4.1-CRITICAL: Fetch stored cards from database
-	// - Replace in-memory map lookup: ws.storedCards[businessID]
-	// - Call: storedCardRepo.GetStoredCardsByBusinessID(ctx, businessID)
-	// - Filter for is_active = true
-	ctx := context.Background()
-	dbStoredCards, _ := ws.storedCardRepo.GetStoredCardsByBusinessID(ctx, businessID)
-	realStoredCards := ws.storedCards[businessID]
-	if realStoredCards == nil {
-		realStoredCards = make([]*payment.StoredCard, 0)
+	// Fetch stored cards from database
+	storedCards, err := ws.storedCardRepo.GetStoredCardsByBusinessID(ctx, businessID)
+	if err != nil {
+		ws.logger.ErrorWith("Failed to fetch stored cards", "error", err, "business_id", businessID)
+		storedCards = make([]*payment.StoredCard, 0) // Return empty slice on error
 	}
-	// Combine database cards with in-memory cards (temporarily until Phase 4.5)
-	if dbStoredCards != nil {
-		realStoredCards = append(realStoredCards, dbStoredCards...)
+	if storedCards == nil {
+		storedCards = make([]*payment.StoredCard, 0)
 	}
 
-	// Use only real stored cards from database
-	storedCards := realStoredCards
-
-	// Get real bank accounts (from verification) and combine with mock data
-	// TODO-DB-4.1-CRITICAL: Fetch bank accounts from database
-	// - Replace in-memory map lookup: ws.bankAccounts[businessID]
-	// - Call: bankAccountRepo.GetBankAccountsByBusinessID(ctx, businessID)
-	// - Filter for is_active = true and is_verified = true
-	dbBankAccounts, _ := ws.bankAccountRepo.GetBankAccountsByBusinessID(ctx, businessID)
-	realBankAccounts := ws.bankAccounts[businessID]
-	if realBankAccounts == nil {
-		realBankAccounts = make([]*payment.BankAccount, 0)
+	// Fetch bank accounts from database
+	bankAccounts, err := ws.bankAccountRepo.GetBankAccountsByBusinessID(ctx, businessID)
+	if err != nil {
+		ws.logger.ErrorWith("Failed to fetch bank accounts", "error", err, "business_id", businessID)
+		bankAccounts = make([]*payment.BankAccount, 0) // Return empty slice on error
 	}
-	// Combine database accounts with in-memory accounts (temporarily until Phase 4.5)
-	if dbBankAccounts != nil {
-		realBankAccounts = append(realBankAccounts, dbBankAccounts...)
+	if bankAccounts == nil {
+		bankAccounts = make([]*payment.BankAccount, 0)
 	}
 
-	// Use only real bank accounts from database
-	bankAccounts := realBankAccounts
-
-	// TODO-DB-4.1-FUTURE: Add repository queries when features implemented
+	// TODO-FUTURE: Add repository queries when features implemented
 	// - upiDetailRepo.GetUPIDetailsByBusinessID(ctx, businessID)
 	// - creditLineRepo.GetCreditLinesByBusinessID(ctx, businessID)
 	// For now, return empty slices until repositories are implemented
@@ -120,63 +91,59 @@ func (ws *MockWalletService) GetBusinessWallet(businessID string) (*payment.Busi
 		LastUpdated:  payment.Now(),
 	}
 
-	fmt.Printf("💳 Found %d stored cards (from database)\n", len(storedCards))
-	fmt.Printf("🏦 Found %d bank accounts (from database)\n", len(bankAccounts))
-	fmt.Printf("📱 Found %d UPI details\n", len(upiDetails))
-	fmt.Printf("💰 Found %d credit lines\n", len(creditLines))
+	ws.logger.InfoWith("Business wallet fetched successfully",
+		"business_id", businessID,
+		"stored_cards", len(storedCards),
+		"bank_accounts", len(bankAccounts),
+		"upi_details", len(upiDetails),
+		"credit_lines", len(creditLines))
 
-	fmt.Println("=== WALLET SERVICE: GetBusinessWallet Complete ===")
 	return wallet, nil
 }
 
 // AddPaymentSource adds a new payment source to the business wallet
-func (ws *MockWalletService) AddPaymentSource(businessID string, source payment.PaymentSource) error {
-	fmt.Println("=== WALLET SERVICE: AddPaymentSource Called ===")
-	fmt.Printf("Business ID: %s\n", businessID)
-	fmt.Printf("Source Type: %s\n", source.GetSourceType())
-	fmt.Printf("Source ID: %s\n", source.GetSourceID())
+func (ws *WalletServiceImpl) AddPaymentSource(ctx context.Context, businessID string, source payment.PaymentSource) error {
+	ws.logger.InfoWith("Adding payment source to wallet",
+		"business_id", businessID,
+		"source_type", source.GetSourceType(),
+		"source_id", source.GetSourceID())
 
 	// Store the payment source based on type
 	switch source.GetSourceType() {
 	case payment.PaymentSourceCard:
 		if storedCard, ok := source.(*payment.StoredCard); ok {
-			// Initialize the business's card slice if not exists
-			if ws.storedCards[businessID] == nil {
-				ws.storedCards[businessID] = make([]*payment.StoredCard, 0)
+			// Store card in database
+			err := ws.storedCardRepo.CreateStoredCard(ctx, storedCard)
+			if err != nil {
+				ws.logger.ErrorWith("Failed to store card", "error", err, "business_id", businessID)
+				return fmt.Errorf("failed to store card: %w", err)
 			}
 
-			// Add the card to storage
-			// TODO-DB-4.1-CRITICAL: Replace in-memory append with repository call
-			// - Remove: ws.storedCards[businessID] = append(...)
-			// - Call: storedCardRepo.CreateStoredCard(ctx, storedCard)
-			// - Repository will generate card_id via database UUID
-			// - Handle duplicate errors if card already exists
-			ctx := context.Background()
-			_ = ws.storedCardRepo.CreateStoredCard(ctx, storedCard)
-			ws.storedCards[businessID] = append(ws.storedCards[businessID], storedCard)
-
-			fmt.Printf("💾 Stored card: %s %s ending in %s\n",
-				storedCard.CardCategory, storedCard.CardType, storedCard.LastFourDigits)
-			fmt.Printf("🎫 Token stored securely (backend only)\n")
+			ws.logger.InfoWith("Card stored successfully",
+				"business_id", businessID,
+				"card_type", storedCard.CardType,
+				"card_category", storedCard.CardCategory,
+				"last_four_digits", storedCard.LastFourDigits)
 		} else {
 			return fmt.Errorf("invalid stored card type")
 		}
 
 	case payment.PaymentSourceBankAccount:
 		if bankAccount, ok := source.(*payment.BankAccount); ok {
-			fmt.Printf("🏦 Processing bank account verification\n")
-			fmt.Printf("📄 Account: %s\n", ws.maskAccountNumber(bankAccount.AccountNumber))
-			fmt.Printf("🏧 IFSC: %s\n", bankAccount.IFSCCode)
-			fmt.Printf("👤 Holder: %s\n", bankAccount.AccountHolderName)
+			ws.logger.InfoWith("Processing bank account verification",
+				"business_id", businessID,
+				"account_masked", ws.maskAccountNumber(bankAccount.AccountNumber),
+				"ifsc_code", bankAccount.IFSCCode,
+				"holder_name", bankAccount.AccountHolderName)
 
 			// Step 1: Validate bank account details
 			if err := ws.validateBankAccountDetails(bankAccount); err != nil {
-				fmt.Printf("❌ Bank account validation failed: %v\n", err)
+				ws.logger.ErrorWith("Bank account validation failed", "error", err)
 				return err
 			}
 
 			// Step 2: Perform penny drop verification (OUTSIDE transaction)
-			fmt.Println("🔄 Initiating penny drop verification...")
+			ws.logger.Info("Initiating penny drop verification")
 			verificationRequest := BankVerificationRequest{
 				BusinessID:        businessID,
 				RequestID:         fmt.Sprintf("verify_%s_%d", businessID[:8], time.Now().Unix()),
@@ -192,30 +159,26 @@ func (ws *MockWalletService) AddPaymentSource(businessID string, source payment.
 				},
 			}
 
-			// TODO-DB-4.1-CRITICAL: Create verification log BEFORE calling API
-			// - Call: bankVerificationLogRepo.CreateVerificationLog(ctx, logEntry)
-			// - logEntry.status = 'pending'
-			// - logEntry.request_id = verificationRequest.RequestID
-			// - logEntry.account_number_masked = maskAccountNumber()
-			// - This creates audit trail even if API call fails
+			// TODO-CRITICAL-PRODUCTION: Implement audit logging for bank verification
+			// Required: bankVerificationLogRepo.CreateVerificationLog(ctx, logEntry) BEFORE API call
+			// - Creates audit trail even if API call fails
+			// - Store: status='pending', request_id, account_number_masked
+			// After API response: bankVerificationLogRepo.UpdateVerificationResult(ctx, requestID, response)
+			// - Update: status, verified_account_name, transaction_reference, verification_amount
 
-			// Call verification service (this simulates 3rd party API call)
-			ctx := context.Background() // TODO-DB-4.1: Use proper context from HTTP request
+			// Call verification service (3rd party API call) - uses context from HTTP request for proper cancellation
 			verificationResponse, err := ws.bankVerificationService.VerifyBankAccount(ctx, verificationRequest)
 
-			// TODO-DB-4.1-CRITICAL: Update verification log with response
-			// - Call: bankVerificationLogRepo.UpdateVerificationResult(ctx, requestID, response)
-			// - Update: status, verified_account_name, transaction_reference, verification_amount
-			// - Store complete response in metadata JSONB for audit
-
 			if err != nil {
-				fmt.Printf("❌ Bank verification failed: %v\n", err)
+				ws.logger.ErrorWith("Bank verification failed", "error", err, "business_id", businessID)
 				return fmt.Errorf("bank account verification failed: %w", err)
 			}
 
 			// Step 3: Process verification results
 			if verificationResponse.Status != BankVerificationStatusSuccess {
-				fmt.Printf("❌ Verification unsuccessful: %s\n", verificationResponse.FailureReason)
+				ws.logger.WarnWith("Bank verification unsuccessful",
+					"business_id", businessID,
+					"failure_reason", verificationResponse.FailureReason)
 				return fmt.Errorf("bank account verification failed: %s", verificationResponse.FailureReason)
 			}
 
@@ -239,7 +202,7 @@ func (ws *MockWalletService) AddPaymentSource(businessID string, source payment.
 			bankAccount.Metadata["provider"] = string(verificationResponse.Provider)
 
 			// Step 5: Atomically check duplicate + create (IN TRANSACTION)
-			fmt.Println("💾 Storing verified bank account in database...")
+			ws.logger.Debug("Storing verified bank account in database")
 			err = ws.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
 				txBankAccountRepo := ws.bankAccountRepo.WithTx(tx)
 
@@ -261,38 +224,32 @@ func (ws *MockWalletService) AddPaymentSource(businessID string, source payment.
 			})
 
 			if err != nil {
-				fmt.Printf("❌ Failed to store bank account: %v\n", err)
+				ws.logger.ErrorWith("Failed to store bank account", "error", err, "business_id", businessID)
 				return err
 			}
 
-			// Step 6: Update in-memory storage (temporary until Phase 4.5 cleanup)
-			if ws.bankAccounts[businessID] == nil {
-				ws.bankAccounts[businessID] = make([]*payment.BankAccount, 0)
-			}
-			ws.bankAccounts[businessID] = append(ws.bankAccounts[businessID], bankAccount)
-
-			fmt.Printf("✅ Bank account verified and stored successfully\n")
-			fmt.Printf("🏦 Verified Bank: %s\n", bankAccount.BankName)
-			fmt.Printf("👤 Verified Name: %s\n", bankAccount.AccountHolderName)
-			fmt.Printf("🔗 Reference: %s\n", verificationResponse.TransactionReference)
-			fmt.Printf("📊 Total bank accounts for business: %d\n", len(ws.bankAccounts[businessID]))
+			ws.logger.InfoWith("Bank account verified and stored successfully",
+				"business_id", businessID,
+				"bank_name", bankAccount.BankName,
+				"account_holder_name", bankAccount.AccountHolderName,
+				"transaction_reference", verificationResponse.TransactionReference)
 
 		} else {
 			return fmt.Errorf("invalid bank account type")
 		}
 
 	case payment.PaymentSourceUPI:
-		// TODO: Implement UPI storage when needed
-		fmt.Printf("📱 UPI storage not implemented yet\n")
+		// TODO-FUTURE: Implement UPI storage when feature is needed
+		ws.logger.Debug("UPI storage not implemented yet")
 
 	case payment.PaymentSourceCreditLine:
-		// TODO: Implement credit line storage when needed
-		fmt.Printf("💰 Credit line storage not implemented yet\n")
+		// TODO-FUTURE: Implement credit line storage when feature is needed
+		ws.logger.Debug("Credit line storage not implemented yet")
 	}
 
-	fmt.Printf("✅ Payment source added successfully\n")
-	fmt.Printf("📋 Source Info: %+v\n", source.GetDisplayInfo())
-	fmt.Printf("📊 Total stored cards for business: %d\n", len(ws.storedCards[businessID]))
+	ws.logger.InfoWith("Payment source added successfully",
+		"business_id", businessID,
+		"source_type", source.GetSourceType())
 
 	// Update onboarding flag (non-blocking, first-time only)
 	if ws.businessService != nil {
@@ -301,17 +258,16 @@ func (ws *MockWalletService) AddPaymentSource(businessID string, source payment.
 			flags, err := ws.businessService.GetBusinessOnboardingFlags(bgCtx, bizID)
 			if err == nil && !flags.HasAddedPaymentMethod {
 				_ = ws.businessService.UpdateOnboardingStatus(bgCtx, bizID, "has_added_payment_method", true)
-				fmt.Printf("🎯 Onboarding flag updated: has_added_payment_method = true for business %s\n", bizID)
+				ws.logger.DebugWith("Onboarding flag updated", "business_id", bizID, "flag", "has_added_payment_method")
 			}
 		}(businessID)
 	}
 
-	fmt.Println("=== WALLET SERVICE: AddPaymentSource Complete ===")
 	return nil
 }
 
 // RemovePaymentSource removes a payment source from the business wallet
-func (ws *MockWalletService) RemovePaymentSource(businessID string, sourceID string, sourceType payment.PaymentSourceType) error {
+func (ws *WalletServiceImpl) RemovePaymentSource(ctx context.Context, businessID string, sourceID string, sourceType payment.PaymentSourceType) error {
 	fmt.Println("=== WALLET SERVICE: RemovePaymentSource Called ===")
 	fmt.Printf("Business ID: %s\n", businessID)
 	fmt.Printf("Source Type: %s\n", sourceType)
@@ -325,7 +281,7 @@ func (ws *MockWalletService) RemovePaymentSource(businessID string, sourceID str
 }
 
 // GetPaymentSource retrieves a specific payment source
-func (ws *MockWalletService) GetPaymentSource(businessID string, sourceID string, sourceType payment.PaymentSourceType) (payment.PaymentSource, error) {
+func (ws *WalletServiceImpl) GetPaymentSource(ctx context.Context, businessID string, sourceID string, sourceType payment.PaymentSourceType) (payment.PaymentSource, error) {
 	fmt.Println("=== WALLET SERVICE: GetPaymentSource Called ===")
 	fmt.Printf("Business ID: %s\n", businessID)
 	fmt.Printf("Source Type: %s\n", sourceType)
@@ -372,11 +328,12 @@ func (ws *MockWalletService) GetPaymentSource(businessID string, sourceID string
 }
 
 // Helper methods to generate mock data
+// NOTE: These functions are kept for development/testing purposes only
+// They are NOT used in production flow as database repositories are primary
 
-// TODO-DB-4.1-CRITICAL: Mark for deletion in Phase 4.4
-// - generateMockStoredCards() - DELETE in Phase 4.4
-// - This is only for testing, should not be in production code
-func (ws *MockWalletService) generateMockStoredCards(businessID string) []*payment.StoredCard {
+// TODO-CLEANUP: Remove mock data generation functions if no longer needed for development
+// Check if any tests or development workflows still rely on these
+func (ws *WalletServiceImpl) generateMockStoredCards(businessID string) []*payment.StoredCard {
 	fmt.Printf("Mock Stored Cards\n")
 	return []*payment.StoredCard{
 		{
@@ -420,10 +377,7 @@ func (ws *MockWalletService) generateMockStoredCards(businessID string) []*payme
 	}
 }
 
-// TODO-DB-4.1-CRITICAL: Mark for deletion in Phase 4.4
-// - generateMockBankAccounts() - DELETE in Phase 4.4
-// - This is only for testing, should not be in production code
-func (ws *MockWalletService) generateMockBankAccounts(businessID string) []*payment.BankAccount {
+func (ws *WalletServiceImpl) generateMockBankAccounts(businessID string) []*payment.BankAccount {
 	fmt.Printf("Mock bank accs\n")
 
 	return []*payment.BankAccount{
@@ -466,10 +420,7 @@ func (ws *MockWalletService) generateMockBankAccounts(businessID string) []*paym
 	}
 }
 
-// TODO-DB-4.1-CRITICAL: Mark for deletion in Phase 4.4
-// - generateMockUPIDetails() - DELETE in Phase 4.4
-// - This is only for testing, should not be in production code
-func (ws *MockWalletService) generateMockUPIDetails(businessID string) []*payment.UPIDetail {
+func (ws *WalletServiceImpl) generateMockUPIDetails(businessID string) []*payment.UPIDetail {
 	fmt.Printf("Mock UPI Details\n")
 
 	return []*payment.UPIDetail{
@@ -502,10 +453,7 @@ func (ws *MockWalletService) generateMockUPIDetails(businessID string) []*paymen
 	}
 }
 
-// TODO-DB-4.1-CRITICAL: Mark for deletion in Phase 4.4
-// - generateMockCreditLines() - DELETE in Phase 4.4
-// - This is only for testing, should not be in production code
-func (ws *MockWalletService) generateMockCreditLines(businessID string) []*payment.CreditLine {
+func (ws *WalletServiceImpl) generateMockCreditLines(businessID string) []*payment.CreditLine {
 	fmt.Printf("Mock Credit lines\n")
 
 	// For now, return empty slice as credit lines are placeholder
@@ -533,7 +481,7 @@ func (ws *MockWalletService) generateMockCreditLines(businessID string) []*payme
 // Helper methods for bank account verification
 
 // validateBankAccountDetails validates bank account details before verification
-func (ws *MockWalletService) validateBankAccountDetails(bankAccount *payment.BankAccount) error {
+func (ws *WalletServiceImpl) validateBankAccountDetails(bankAccount *payment.BankAccount) error {
 	if bankAccount.AccountNumber == "" {
 		return fmt.Errorf("account number is required")
 	}
@@ -561,28 +509,8 @@ func (ws *MockWalletService) validateBankAccountDetails(bankAccount *payment.Ban
 	return nil
 }
 
-// checkDuplicateBankAccount checks if the account number already exists for the business
-// TODO-DB-4.1-CRITICAL: Check duplicates via database query
-// - Replace in-memory loop through ws.bankAccounts[businessID]
-// - Call: bankAccountRepo.CheckDuplicateAccount(ctx, businessID, accountNumber)
-// - Use account_number_hash for fast duplicate detection
-func (ws *MockWalletService) checkDuplicateBankAccount(businessID, accountNumber string) error {
-	existingAccounts := ws.bankAccounts[businessID]
-	if existingAccounts == nil {
-		return nil // No existing accounts, so no duplicates
-	}
-
-	for _, account := range existingAccounts {
-		if account.AccountNumber == accountNumber {
-			return fmt.Errorf("bank account already exists: %s", ws.maskAccountNumber(accountNumber))
-		}
-	}
-
-	return nil
-}
-
 // maskAccountNumber masks the account number for secure display
-func (ws *MockWalletService) maskAccountNumber(accountNumber string) string {
+func (ws *WalletServiceImpl) maskAccountNumber(accountNumber string) string {
 	if len(accountNumber) <= 4 {
 		return "****"
 	}

@@ -88,20 +88,20 @@ type FeeCalculationWithTax struct {
 	AppliedRule *FeeRule `json:"applied_rule"`
 }
 
-// MockFeeCalculator provides a mock implementation with hardcoded rules
-type MockFeeCalculator struct {
+// FeeCalculatorImpl provides the implementation with hardcoded rules
+type FeeCalculatorImpl struct {
 	rules []*FeeRule
 }
 
-// NewMockFeeCalculator creates a new mock fee calculator with hardcoded rules
-func NewMockFeeCalculator() FeeCalculator {
-	return &MockFeeCalculator{
+// NewFeeCalculator creates a new fee calculator with hardcoded rules
+func NewFeeCalculator() FeeCalculator {
+	return &FeeCalculatorImpl{
 		rules: getMockFeeRules(),
 	}
 }
 
 // CalculateFee calculates fee based on hardcoded rules with detailed logging
-func (calc *MockFeeCalculator) CalculateFee(amount int64, method payment.PaymentMethod, cardType payment.CardType, cardCategory payment.CardCategory) (*FeeCalculation, error) {
+func (calc *FeeCalculatorImpl) CalculateFee(amount int64, method payment.PaymentMethod, cardType payment.CardType, cardCategory payment.CardCategory) (*FeeCalculation, error) {
 	fmt.Println("=== FEE CALCULATOR: CalculateFee Called ===")
 	fmt.Printf("Base Amount: %d\n", amount)
 	fmt.Printf("Payment Method: %s\n", method)
@@ -180,7 +180,7 @@ func (calc *MockFeeCalculator) CalculateFee(amount int64, method payment.Payment
 }
 
 // GetFeeRules returns fee rules for a specific payment method
-func (calc *MockFeeCalculator) GetFeeRules(method payment.PaymentMethod) ([]*FeeRule, error) {
+func (calc *FeeCalculatorImpl) GetFeeRules(method payment.PaymentMethod) ([]*FeeRule, error) {
 	fmt.Printf("=== FEE CALCULATOR: GetFeeRules for %s ===\n", method)
 
 	var rules []*FeeRule
@@ -200,7 +200,7 @@ func (calc *MockFeeCalculator) GetFeeRules(method payment.PaymentMethod) ([]*Fee
 }
 
 // GetAllFeeRules returns all active fee rules
-func (calc *MockFeeCalculator) GetAllFeeRules() ([]*FeeRule, error) {
+func (calc *FeeCalculatorImpl) GetAllFeeRules() ([]*FeeRule, error) {
 	fmt.Println("=== FEE CALCULATOR: GetAllFeeRules ===")
 
 	var activeRules []*FeeRule
@@ -215,7 +215,7 @@ func (calc *MockFeeCalculator) GetAllFeeRules() ([]*FeeRule, error) {
 }
 
 // findApplicableRule finds the most specific applicable rule (exact match only)
-func (calc *MockFeeCalculator) findApplicableRule(method payment.PaymentMethod, cardType payment.CardType, cardCategory payment.CardCategory) *FeeRule {
+func (calc *FeeCalculatorImpl) findApplicableRule(method payment.PaymentMethod, cardType payment.CardType, cardCategory payment.CardCategory) *FeeRule {
 	for _, rule := range calc.rules {
 		if !rule.IsActive {
 			continue

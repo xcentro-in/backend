@@ -13,53 +13,56 @@ import (
 	"xcentro.in/internal/core/payment"
 	"xcentro.in/internal/middleware"
 	"xcentro.in/internal/services/payments"
+	"xcentro.in/internal/shared/logger"
 )
 
 // PaymentHandler handles payment-related HTTP requests
 type PaymentHandler struct {
 	paymentService       *payments.PaymentService
 	paymentSourceService *payments.PaymentSourceService // Phase 10
+	logger               *logger.Logger
 }
 
 // NewPaymentHandler creates a new payment handler
-func NewPaymentHandler(paymentService *payments.PaymentService, paymentSourceService *payments.PaymentSourceService) *PaymentHandler {
+func NewPaymentHandler(paymentService *payments.PaymentService, paymentSourceService *payments.PaymentSourceService, logger *logger.Logger) *PaymentHandler {
 	return &PaymentHandler{
 		paymentService:       paymentService,
 		paymentSourceService: paymentSourceService,
+		logger:               logger,
 	}
 }
 
 // FetchWallet handles POST /wallet/fetch
 func (h *PaymentHandler) FetchWallet(c echo.Context) error {
-	fmt.Println("=== HANDLER: FetchWallet API Called ===")
+	h.logger.Info("FetchWallet API called")
 
 	// Extract userId from JWT context (set by JWTMiddleware)
 	userID, ok := c.Get("userId").(string)
 	if !ok || userID == "" {
-		fmt.Println("❌ Missing userId in context")
+		h.logger.Warn("Missing userId in JWT context")
 		return c.JSON(http.StatusUnauthorized, map[string]any{
 			"error":   "MISSING_USER_ID",
 			"message": "User ID not found in token",
 		})
 	}
-	fmt.Printf("🔐 User ID (from JWT): %s\n", userID)
+	h.logger.DebugWith("User authenticated", "user_id", userID)
 
 	// Extract business_id from X-Business-ID header
 	businessID := c.Request().Header.Get("X-Business-ID")
 	if businessID == "" {
-		fmt.Println("❌ Missing X-Business-ID header")
+		h.logger.Warn("Missing X-Business-ID header")
 		return c.JSON(http.StatusBadRequest, map[string]any{
 			"error":   "MISSING_BUSINESS_ID",
 			"message": "X-Business-ID header is required",
 		})
 	}
-	fmt.Printf("🔐 Business ID (from header): %s\n", businessID)
+	h.logger.DebugWith("Business ID extracted", "business_id", businessID)
 
 	// Call payment service to get business wallet information
-	fmt.Println("🔄 Calling Payment Service...")
-	businessWallet, err := h.paymentService.GetBusinessWallet(businessID)
+	h.logger.Debug("Fetching business wallet from service")
+	businessWallet, err := h.paymentService.GetBusinessWallet(c.Request().Context(), businessID)
 	if err != nil {
-		fmt.Printf("❌ Wallet service error: %v\n", err)
+		h.logger.ErrorWith("Wallet service error", "error", err, "business_id", businessID)
 		return c.JSON(http.StatusInternalServerError, map[string]any{
 			"error":   "wallet_service_error",
 			"message": "Failed to retrieve business wallet information",
@@ -76,11 +79,12 @@ func (h *PaymentHandler) FetchWallet(c echo.Context) error {
 		LastUpdated:  businessWallet.LastUpdated.Format("2006-01-02T15:04:05Z"),
 	}
 
-	fmt.Printf("✅ Business wallet fetched successfully: %s\n", businessWallet.BusinessID)
-	fmt.Printf("📊 Summary: %d cards, %d bank accounts, %d UPI details, %d credit lines\n",
-		len(businessWallet.StoredCards), len(businessWallet.BankAccounts),
-		len(businessWallet.UPIDetails), len(businessWallet.CreditLines))
-	fmt.Println("=== HANDLER: FetchWallet Complete ===")
+	h.logger.InfoWith("Business wallet fetched successfully",
+		"business_id", businessWallet.BusinessID,
+		"cards_count", len(businessWallet.StoredCards),
+		"bank_accounts_count", len(businessWallet.BankAccounts),
+		"upi_details_count", len(businessWallet.UPIDetails),
+		"credit_lines_count", len(businessWallet.CreditLines))
 
 	return c.JSON(http.StatusOK, map[string]any{
 		"message":  "Business wallet retrieved successfully",
@@ -189,29 +193,26 @@ func convertCreditLinesToResponse(credits []*payment.CreditLine) []CreditLineRes
 
 // GetFeeRules handles POST /process_payment/get_fee_rules
 func (h *PaymentHandler) GetFeeRules(c echo.Context) error {
-	fmt.Println("=== HANDLER: GetFeeRules API Called ===")
+	h.logger.Info("GetFeeRules API called")
 
 	// Parse request body
 	var req GetFeeRulesRequest
 	if err := c.Bind(&req); err != nil {
-		fmt.Printf("❌ Error binding request: %v\n", err)
+		h.logger.ErrorWith("Failed to bind request", "error", err)
 		return c.JSON(http.StatusBadRequest, map[string]any{
 			"error":   "invalid_request",
 			"message": "Invalid request body",
 		})
 	}
 
-	fmt.Printf("📥 Request: Payment Method: %s", req.PaymentMethod)
-	if req.CardType != "" {
-		fmt.Printf(", Card: %s %s", req.CardCategory, req.CardType)
-	}
-	if req.Amount > 0 {
-		fmt.Printf(", Amount: %d", req.Amount)
-	}
-	fmt.Println()
+	h.logger.DebugWith("Fee rules request parsed",
+		"payment_method", req.PaymentMethod,
+		"card_type", req.CardType,
+		"card_category", req.CardCategory,
+		"amount", req.Amount)
 
 	// Call payment service to get fee rules
-	fmt.Println("🔄 Calling Payment Service...")
+	h.logger.Debug("Fetching fee rules from service")
 
 	var rules []*business_rules.FeeRule
 	var err error
@@ -223,7 +224,7 @@ func (h *PaymentHandler) GetFeeRules(c echo.Context) error {
 	}
 
 	if err != nil {
-		fmt.Printf("❌ Fee calculator error: %v\n", err)
+		h.logger.ErrorWith("Fee calculator error", "error", err)
 		return c.JSON(http.StatusInternalServerError, map[string]any{
 			"error":   "fee_calculator_error",
 			"message": "Failed to retrieve fee rules",
@@ -233,7 +234,7 @@ func (h *PaymentHandler) GetFeeRules(c echo.Context) error {
 	// If amount is provided, calculate the actual fee
 	var feeCalculation *business_rules.FeeCalculation
 	if req.Amount > 0 && req.PaymentMethod != "" {
-		fmt.Println("💰 Calculating fee for provided amount...")
+		h.logger.DebugWith("Calculating fee for provided amount", "amount", req.Amount)
 		feeCalculation, err = h.paymentService.CalculateFee(
 			req.Amount,
 			payment.PaymentMethod(req.PaymentMethod),
@@ -241,7 +242,7 @@ func (h *PaymentHandler) GetFeeRules(c echo.Context) error {
 			payment.CardCategory(req.CardCategory),
 		)
 		if err != nil {
-			fmt.Printf("❌ Fee calculation error: %v\n", err)
+			h.logger.WarnWith("Fee calculation error", "error", err)
 		}
 	}
 
@@ -275,58 +276,61 @@ func (h *PaymentHandler) GetFeeRules(c echo.Context) error {
 			"currency":     string(feeCalculation.Currency),
 			"breakdown":    feeCalculation.Breakdown,
 		}
-		fmt.Printf("💰 Fee calculated: %d + %d = %d %s\n",
-			feeCalculation.BaseAmount, feeCalculation.FeeAmount,
-			feeCalculation.TotalAmount, feeCalculation.Currency)
+		h.logger.InfoWith("Fee calculated",
+			"base_amount", feeCalculation.BaseAmount,
+			"fee_amount", feeCalculation.FeeAmount,
+			"total_amount", feeCalculation.TotalAmount,
+			"currency", feeCalculation.Currency)
 	}
 
-	fmt.Printf("✅ Retrieved %d fee rules\n", len(rules))
-	fmt.Println("=== HANDLER: GetFeeRules Complete ===")
+	h.logger.InfoWith("Fee rules retrieved successfully", "rules_count", len(rules))
 
 	return c.JSON(http.StatusOK, response)
 }
 
 // Tokenize handles POST /process_payment/tokenize
 func (h *PaymentHandler) Tokenize(c echo.Context) error {
-	fmt.Println("=== HANDLER: Tokenize API Called ===")
+	h.logger.Info("Tokenize API called")
 
 	// Extract userId from JWT context (set by JWTMiddleware)
 	userID, ok := c.Get("userId").(string)
 	if !ok || userID == "" {
-		fmt.Println("❌ Missing userId in context")
+		h.logger.Warn("Missing userId in JWT context")
 		return c.JSON(http.StatusUnauthorized, map[string]any{
 			"error":   "MISSING_USER_ID",
 			"message": "User ID not found in token",
 		})
 	}
-	fmt.Printf("🔐 User ID (from JWT): %s\n", userID)
+	h.logger.DebugWith("User authenticated", "user_id", userID)
 
 	// Extract business_id from X-Business-ID header
 	businessID := c.Request().Header.Get("X-Business-ID")
 	if businessID == "" {
-		fmt.Println("❌ Missing X-Business-ID header")
+		h.logger.Warn("Missing X-Business-ID header")
 		return c.JSON(http.StatusBadRequest, map[string]any{
 			"error":   "MISSING_BUSINESS_ID",
 			"message": "X-Business-ID header is required",
 		})
 	}
-	fmt.Printf("🔐 Business ID (from header): %s\n", businessID)
+	h.logger.DebugWith("Business ID extracted", "business_id", businessID)
 
 	// Parse request body
 	var req TokenizeRequest
 	if err := c.Bind(&req); err != nil {
-		fmt.Printf("❌ Error binding request: %v\n", err)
+		h.logger.ErrorWith("Failed to bind request", "error", err)
 		return c.JSON(http.StatusBadRequest, map[string]any{
 			"error":   "invalid_request",
 			"message": "Invalid request body",
 		})
 	}
 
-	fmt.Printf("📥 Request: Card: %s %s\n", req.CardDetails.CardCategory, req.CardDetails.CardType)
+	h.logger.DebugWith("Tokenization request parsed",
+		"card_type", req.CardDetails.CardType,
+		"card_category", req.CardDetails.CardCategory)
 
 	// Validate card details
 	if err := h.validateTokenizeRequest(&req); err != nil {
-		fmt.Printf("❌ Validation error: %v\n", err)
+		h.logger.WarnWith("Tokenization request validation failed", "error", err)
 		return c.JSON(http.StatusBadRequest, map[string]any{
 			"error":   "validation_failed",
 			"message": err.Error(),
@@ -354,17 +358,17 @@ func (h *PaymentHandler) Tokenize(c echo.Context) error {
 	}
 
 	// Call payment service for complete tokenization (blocking call)
-	fmt.Println("🔄 Calling Payment Service for tokenization...")
-	fmt.Println("⏳ This may take up to 60 seconds for JioPay 2-step process...")
+	h.logger.InfoWith("Initiating card tokenization", "business_id", businessID)
+	h.logger.Debug("Tokenization may take up to 60 seconds for gateway 2-step process")
 	tokenizeResponse, err := h.paymentService.TokenizeCard(ctx, coreRequest)
 
 	if err != nil {
-		fmt.Printf("❌ Tokenization failed: %v\n", err)
+		h.logger.ErrorWith("Card tokenization failed", "error", err, "business_id", businessID)
 		return h.handleTokenizationError(err)
 	}
 
 	// Store tokenized card in business wallet immediately
-	fmt.Println("💾 Storing tokenized card in business wallet...")
+	h.logger.Debug("Storing tokenized card in business wallet")
 	storedCard := &payment.StoredCard{
 		CardID:         tokenizeResponse.CardID,
 		BusinessID:     coreRequest.BusinessID,
@@ -374,7 +378,7 @@ func (h *PaymentHandler) Tokenize(c echo.Context) error {
 		CardCategory:   tokenizeResponse.CardCategory,
 		ExpiryMonth:    tokenizeResponse.ExpiryMonth,
 		ExpiryYear:     tokenizeResponse.ExpiryYear,
-		IssuerBank:     "Unknown", // TODO: Add bank detection logic, or can omit as well.
+		IssuerBank:     "Unknown", // TODO-OPTIONAL: Add bank detection logic if needed (can be left as Unknown)
 		CardHolderName: coreRequest.CardDetails.HolderName,
 		IsActive:       true,
 		GatewayUsed:    tokenizeResponse.GatewayUsed,
@@ -386,9 +390,9 @@ func (h *PaymentHandler) Tokenize(c echo.Context) error {
 		},
 	}
 
-	// Add to business wallet via payment service
-	if err := h.paymentService.AddPaymentSource(coreRequest.BusinessID, storedCard); err != nil {
-		fmt.Printf("❌ Failed to store card in wallet: %v\n", err)
+	// Add to business wallet via payment service (uses same ctx with 60s timeout)
+	if err := h.paymentService.AddPaymentSource(ctx, coreRequest.BusinessID, storedCard); err != nil {
+		h.logger.ErrorWith("Failed to store card in wallet", "error", err, "card_id", tokenizeResponse.CardID)
 		return c.JSON(http.StatusInternalServerError, map[string]any{
 			"error":   "storage_failed",
 			"message": "Card was tokenized but failed to save. Please contact support.",
@@ -410,56 +414,60 @@ func (h *PaymentHandler) Tokenize(c echo.Context) error {
 		},
 	}
 
-	fmt.Printf("✅ Card tokenized and stored successfully: %s\n", tokenizeResponse.CardID)
-	fmt.Printf("💳 Card Info: %s %s ending in %s\n",
-		tokenizeResponse.CardCategory, tokenizeResponse.CardType, tokenizeResponse.LastFourDigits)
-	fmt.Printf("🏦 Gateway Used: %s\n", tokenizeResponse.GatewayUsed)
-	fmt.Println("=== HANDLER: Tokenize Complete ===")
+	h.logger.InfoWith("Card tokenized and stored successfully",
+		"card_id", tokenizeResponse.CardID,
+		"card_type", tokenizeResponse.CardType,
+		"card_category", tokenizeResponse.CardCategory,
+		"last_four_digits", tokenizeResponse.LastFourDigits,
+		"gateway_used", tokenizeResponse.GatewayUsed)
 
 	return c.JSON(http.StatusCreated, response)
 }
 
 // MakePayment handles POST /process_payment/make_payment
 func (h *PaymentHandler) MakePayment(c echo.Context) error {
-	fmt.Println("=== HANDLER: MakePayment API Called ===")
+	h.logger.Info("MakePayment API called")
 
 	// Extract userId from JWT context (set by JWTMiddleware)
 	userID, ok := c.Get("userId").(string)
 	if !ok || userID == "" {
-		fmt.Println("❌ Missing userId in context")
+		h.logger.Warn("Missing userId in JWT context")
 		return c.JSON(http.StatusUnauthorized, map[string]any{
 			"error":   "MISSING_USER_ID",
 			"message": "User ID not found in token",
 		})
 	}
-	fmt.Printf("🔐 User ID (from JWT): %s\n", userID)
+	h.logger.DebugWith("User authenticated", "user_id", userID)
 
 	// Extract business_id from X-Business-ID header
 	businessID := c.Request().Header.Get("X-Business-ID")
 	if businessID == "" {
-		fmt.Println("❌ Missing X-Business-ID header")
+		h.logger.Warn("Missing X-Business-ID header")
 		return c.JSON(http.StatusBadRequest, map[string]any{
 			"error":   "MISSING_BUSINESS_ID",
 			"message": "X-Business-ID header is required",
 		})
 	}
-	fmt.Printf("🔐 Business ID (from header): %s\n", businessID)
+	h.logger.DebugWith("Business ID extracted", "business_id", businessID)
 
 	// Parse request body
 	var req MakePaymentRequest
 	if err := c.Bind(&req); err != nil {
-		fmt.Printf("❌ Error binding request: %v\n", err)
+		h.logger.ErrorWith("Failed to bind request", "error", err)
 		return c.JSON(http.StatusBadRequest, map[string]any{
 			"error":   "invalid_request",
 			"message": "Invalid request body",
 		})
 	}
 
-	fmt.Printf("📥 Request: Amount: %d, Currency: %s, Payment Method: %s\n", req.Amount, req.Currency, req.PaymentMethod)
+	h.logger.DebugWith("Payment request parsed",
+		"amount", req.Amount,
+		"currency", req.Currency,
+		"payment_method", req.PaymentMethod)
 
 	// Validate required fields
 	if err := h.validatePaymentRequest(&req); err != nil {
-		fmt.Printf("❌ Validation error: %v\n", err)
+		h.logger.WarnWith("Payment request validation failed", "error", err)
 		return c.JSON(http.StatusBadRequest, map[string]any{
 			"error":   "validation_failed",
 			"message": err.Error(),
@@ -483,11 +491,11 @@ func (h *PaymentHandler) MakePayment(c echo.Context) error {
 	h.populatePaymentMethodDetails(&coreRequest, &req)
 
 	// Call payment service to process payment (creates record, calculates fees, calls orchestrator)
-	fmt.Println("🔄 Calling Payment Service...")
+	h.logger.InfoWith("Initiating payment processing", "business_id", businessID, "amount", req.Amount)
 	paymentResponse, err := h.paymentService.ProcessPayment(c.Request().Context(), coreRequest)
 
 	if err != nil {
-		fmt.Printf("❌ Payment service error: %v\n", err)
+		h.logger.ErrorWith("Payment processing failed", "error", err, "business_id", businessID)
 		return c.JSON(http.StatusInternalServerError, map[string]any{
 			"error":   "payment_processing_failed",
 			"message": "Failed to process payment",
@@ -503,10 +511,10 @@ func (h *PaymentHandler) MakePayment(c echo.Context) error {
 		Message:     paymentResponse.Message,
 	}
 
-	fmt.Printf("✅ Payment initiated successfully: %s\n", paymentResponse.PaymentID)
-	fmt.Printf("🌐 Redirect URL: %s\n", paymentResponse.RedirectURL)
-	fmt.Printf("🏦 Gateway Used: %s\n", paymentResponse.GatewayUsed)
-	fmt.Println("=== HANDLER: MakePayment Complete ===")
+	h.logger.InfoWith("Payment initiated successfully",
+		"payment_id", paymentResponse.PaymentID,
+		"gateway_used", paymentResponse.GatewayUsed,
+		"status", paymentResponse.Status)
 
 	return c.JSON(http.StatusCreated, map[string]any{
 		"message":  "Payment initiated successfully",
@@ -518,12 +526,12 @@ func (h *PaymentHandler) MakePayment(c echo.Context) error {
 
 // AddPaymentSource handles POST /wallet/add_source
 func (h *PaymentHandler) AddPaymentSource(c echo.Context) error {
-	fmt.Println("=== HANDLER: AddPaymentSource API Called ===")
+	h.logger.Info("AddPaymentSource API called")
 
 	// Parse request body
 	var req AddPaymentSourceRequest
 	if err := c.Bind(&req); err != nil {
-		fmt.Printf("❌ Error binding request: %v\n", err)
+		h.logger.ErrorWith("Failed to bind request", "error", err)
 		return c.JSON(http.StatusBadRequest, map[string]any{
 			"error":   "invalid_request",
 			"message": "Invalid request body",
@@ -532,7 +540,7 @@ func (h *PaymentHandler) AddPaymentSource(c echo.Context) error {
 
 	// Validate business_id
 	if req.BusinessID == "" {
-		fmt.Println("❌ business_id is missing")
+		h.logger.Warn("business_id is missing in request")
 		return c.JSON(http.StatusBadRequest, map[string]any{
 			"error":   "missing_business_id",
 			"message": "business_id is required in request body",
@@ -540,11 +548,13 @@ func (h *PaymentHandler) AddPaymentSource(c echo.Context) error {
 	}
 
 	businessID := req.BusinessID
-	fmt.Printf("📥 Request: Business ID: %s, Source Type: %s\n", businessID, req.SourceType)
+	h.logger.DebugWith("Add payment source request parsed",
+		"business_id", businessID,
+		"source_type", req.SourceType)
 
 	// Validate request
 	if err := h.validateAddPaymentSourceRequest(&req); err != nil {
-		fmt.Printf("❌ Validation error: %v\n", err)
+		h.logger.WarnWith("Payment source request validation failed", "error", err)
 		return c.JSON(http.StatusBadRequest, map[string]any{
 			"error":   "validation_failed",
 			"message": err.Error(),
@@ -562,7 +572,7 @@ func (h *PaymentHandler) AddPaymentSource(c echo.Context) error {
 	case "upi":
 		return h.handleUPIAccountAddition(ctx, c, businessID, &req)
 	default:
-		fmt.Printf("❌ Unsupported source type: %s\n", req.SourceType)
+		h.logger.WarnWith("Unsupported source type", "source_type", req.SourceType)
 		return c.JSON(http.StatusBadRequest, map[string]any{
 			"error":   "unsupported_source_type",
 			"message": fmt.Sprintf("Source type '%s' is not supported", req.SourceType),
@@ -572,7 +582,7 @@ func (h *PaymentHandler) AddPaymentSource(c echo.Context) error {
 
 // handleBankAccountAddition handles bank account verification and addition
 func (h *PaymentHandler) handleBankAccountAddition(ctx context.Context, c echo.Context, businessID string, req *AddPaymentSourceRequest) error {
-	fmt.Println("🏦 Processing bank account addition...")
+	h.logger.DebugWith("Processing bank account addition", "business_id", businessID)
 
 	// Convert HTTP request to core domain request
 	bankAccount := &payment.BankAccount{
@@ -584,13 +594,18 @@ func (h *PaymentHandler) handleBankAccountAddition(ctx context.Context, c echo.C
 		AccountType:       payment.BankAccountType(req.BankAccountDetails.AccountType),
 	}
 
-	fmt.Println("🔄 Calling Payment Service for bank account verification and addition...")
+	h.logger.InfoWith("Initiating bank account verification",
+		"business_id", businessID,
+		"bank_name", req.BankAccountDetails.BankName)
 
-	// Call payment service to add and verify bank account
-	err := h.paymentService.AddPaymentSource(businessID, bankAccount)
+	// Call payment service to add and verify bank account (context enables cancellation of long-running bank verification)
+	err := h.paymentService.AddPaymentSource(ctx, businessID, bankAccount)
 
 	if err != nil {
-		fmt.Printf("❌ Bank account addition failed: %v\n", err)
+		h.logger.ErrorWith("Bank account addition failed",
+			"error", err,
+			"business_id", businessID,
+			"bank_name", req.BankAccountDetails.BankName)
 
 		return c.JSON(http.StatusInternalServerError, map[string]any{
 			"error":   "internal_error",
@@ -607,7 +622,7 @@ func (h *PaymentHandler) handleBankAccountAddition(ctx context.Context, c echo.C
 		VerificationStatus: "verified",
 		AccountDetails: &VerifiedAccountDetails{
 			MaskedAccountNumber: h.maskAccountNumber(req.BankAccountDetails.AccountNumber),
-			VerifiedName:        req.BankAccountDetails.AccountHolderName, // TODO: Use verified name from response
+			VerifiedName:        req.BankAccountDetails.AccountHolderName, // TODO-INTEGRATION: Use verified name from bank verification service response when real service is integrated
 			BankName:            req.BankAccountDetails.BankName,
 			BranchName:          req.BankAccountDetails.BranchName,
 			IFSCCode:            req.BankAccountDetails.IFSCCode,
@@ -616,8 +631,10 @@ func (h *PaymentHandler) handleBankAccountAddition(ctx context.Context, c echo.C
 		},
 	}
 
-	fmt.Printf("✅ Bank account added successfully with ID: %s\n", bankAccount.GetSourceID())
-	fmt.Println("=== HANDLER: AddPaymentSource Complete ===")
+	h.logger.InfoWith("Bank account added successfully",
+		"source_id", bankAccount.GetSourceID(),
+		"business_id", businessID,
+		"bank_name", req.BankAccountDetails.BankName)
 
 	return c.JSON(http.StatusCreated, map[string]any{
 		"message":  "Payment source added successfully",
@@ -629,9 +646,9 @@ func (h *PaymentHandler) handleBankAccountAddition(ctx context.Context, c echo.C
 
 // handleUPIAccountAddition handles UPI account verification and addition
 func (h *PaymentHandler) handleUPIAccountAddition(ctx context.Context, c echo.Context, businessID string, req *AddPaymentSourceRequest) error {
-	fmt.Println("📱 Processing UPI account addition...")
+	h.logger.DebugWith("Processing UPI account addition", "business_id", businessID)
 
-	// TODO: Implement UPI verification logic when UPI service is available
+	// TODO-FUTURE: Implement UPI verification logic when UPI service is available
 	return c.JSON(http.StatusNotImplemented, map[string]any{
 		"error":   "not_implemented",
 		"message": "UPI account addition is not yet implemented",
@@ -933,12 +950,12 @@ func (h *PaymentHandler) handleTokenizationError(err error) error {
 
 // GetPaymentSourcesWithFees handles POST /process_payment/get_payment_sources_with_fees (Phase 10)
 func (h *PaymentHandler) GetPaymentSourcesWithFees(c echo.Context) error {
-	fmt.Println("=== HANDLER: GetPaymentSourcesWithFees API Called (Phase 10) ===")
+	h.logger.Info("GetPaymentSourcesWithFees API called (Phase 10)")
 
 	// Parse request body
 	var req GetPaymentSourcesWithFeesRequest
 	if err := c.Bind(&req); err != nil {
-		fmt.Printf("❌ Error binding request: %v\n", err)
+		h.logger.ErrorWith("Failed to bind request", "error", err)
 		return c.JSON(http.StatusBadRequest, map[string]any{
 			"error":   "invalid_request",
 			"message": "Invalid request body",
@@ -947,7 +964,7 @@ func (h *PaymentHandler) GetPaymentSourcesWithFees(c echo.Context) error {
 
 	// Validate business_id
 	if req.BusinessID == "" {
-		fmt.Println("❌ business_id is missing")
+		h.logger.Warn("business_id is missing in request")
 		return c.JSON(http.StatusBadRequest, map[string]any{
 			"error":   "missing_business_id",
 			"message": "business_id is required in request body",
@@ -957,13 +974,15 @@ func (h *PaymentHandler) GetPaymentSourcesWithFees(c echo.Context) error {
 	// Round base amount to nearest integer (paise)
 	baseAmountInt := int64(req.BaseAmount + 0.5) // Round to nearest int64
 
-	fmt.Printf("📥 Request: Business ID: %s, Context: %s, Amount: %.2f (rounded to %d paise)\n",
-		req.BusinessID, req.PaymentContext, req.BaseAmount, baseAmountInt)
+	h.logger.DebugWith("Payment sources request parsed",
+		"business_id", req.BusinessID,
+		"payment_context", req.PaymentContext,
+		"base_amount", baseAmountInt)
 
 	// Validate payment context
 	paymentContext := payment.PaymentContext(req.PaymentContext)
 	if !paymentContext.IsValid() {
-		fmt.Printf("❌ Invalid payment context: %s\n", req.PaymentContext)
+		h.logger.WarnWith("Invalid payment context", "payment_context", req.PaymentContext)
 		return c.JSON(http.StatusBadRequest, map[string]any{
 			"error":   "invalid_payment_context",
 			"message": fmt.Sprintf("Invalid payment context: %s. Valid contexts: vendor_payment, gst_payment, bill_payment, payroll", req.PaymentContext),
@@ -972,7 +991,7 @@ func (h *PaymentHandler) GetPaymentSourcesWithFees(c echo.Context) error {
 
 	// Validate base amount
 	if baseAmountInt <= 0 {
-		fmt.Printf("❌ Invalid base amount: %d\n", baseAmountInt)
+		h.logger.WarnWith("Invalid base amount", "base_amount", baseAmountInt)
 		return c.JSON(http.StatusBadRequest, map[string]any{
 			"error":   "invalid_amount",
 			"message": "Base amount must be greater than 0",
@@ -980,7 +999,7 @@ func (h *PaymentHandler) GetPaymentSourcesWithFees(c echo.Context) error {
 	}
 
 	// Call payment source service
-	fmt.Println("🔄 Calling Payment Source Service...")
+	h.logger.Debug("Fetching payment sources with fees from service")
 	ctx, cancel := context.WithTimeout(c.Request().Context(), 10*time.Second)
 	defer cancel()
 
@@ -991,7 +1010,7 @@ func (h *PaymentHandler) GetPaymentSourcesWithFees(c echo.Context) error {
 		baseAmountInt,
 	)
 	if err != nil {
-		fmt.Printf("❌ Payment source service error: %v\n", err)
+		h.logger.ErrorWith("Payment source service error", "error", err, "business_id", req.BusinessID)
 		return c.JSON(http.StatusInternalServerError, map[string]any{
 			"error":   "service_error",
 			"message": "Failed to retrieve payment sources with fees",
@@ -1001,9 +1020,9 @@ func (h *PaymentHandler) GetPaymentSourcesWithFees(c echo.Context) error {
 	// Convert to API response format
 	apiResponse := convertPaymentSourcesResponse(response)
 
-	fmt.Printf("✅ Payment sources fetched successfully\n")
-	fmt.Printf("📊 Total sources: %d\n", len(response.Sources))
-	fmt.Println("=== HANDLER: GetPaymentSourcesWithFees Complete ===")
+	h.logger.InfoWith("Payment sources with fees retrieved successfully",
+		"business_id", req.BusinessID,
+		"sources_count", len(response.Sources))
 
 	return c.JSON(http.StatusOK, map[string]any{
 		"message":  "Payment sources with fees retrieved successfully",
@@ -1067,8 +1086,8 @@ func convertPaymentSourcesResponse(serviceResp *payments.GetPaymentSourcesRespon
 }
 
 // RegisterPaymentRoutes registers all payment processing routes
-func RegisterPaymentRoutes(group *echo.Group, paymentService *payments.PaymentService, paymentSourceService *payments.PaymentSourceService, authService auth.AuthService) {
-	handler := NewPaymentHandler(paymentService, paymentSourceService)
+func RegisterPaymentRoutes(group *echo.Group, paymentService *payments.PaymentService, paymentSourceService *payments.PaymentSourceService, authService auth.AuthService, log *logger.Logger) {
+	handler := NewPaymentHandler(paymentService, paymentSourceService, log)
 
 	// Apply JWT middleware to all payment routes
 	group.Use(middleware.JWTMiddleware(authService))
@@ -1086,8 +1105,8 @@ func RegisterPaymentRoutes(group *echo.Group, paymentService *payments.PaymentSe
 }
 
 // RegisterWalletRoutes registers all wallet management routes
-func RegisterWalletRoutes(group *echo.Group, paymentService *payments.PaymentService, paymentSourceService *payments.PaymentSourceService, authService auth.AuthService) {
-	handler := NewPaymentHandler(paymentService, paymentSourceService)
+func RegisterWalletRoutes(group *echo.Group, paymentService *payments.PaymentService, paymentSourceService *payments.PaymentSourceService, authService auth.AuthService, log *logger.Logger) {
+	handler := NewPaymentHandler(paymentService, paymentSourceService, log)
 
 	// Apply JWT middleware to all wallet routes
 	group.Use(middleware.JWTMiddleware(authService))
