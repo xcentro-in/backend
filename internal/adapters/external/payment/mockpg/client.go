@@ -205,12 +205,12 @@ func (c *MockPGClient) InitiatePayment(ctx context.Context, request payment.Gate
 	case payment.PaymentMethodUPI:
 		fmt.Println("📱 Processing UPI payment...")
 		if request.UPIDetails != nil {
-			fmt.Printf("📱 UPI ID: %s\n", request.UPIDetails.UPIID)
+			fmt.Printf("📱 VPA: %s\n", request.UPIDetails.VPA)
 		}
 	case payment.PaymentMethodWallet:
 		fmt.Println("👛 Processing wallet payment...")
 		if request.WalletDetails != nil {
-			fmt.Printf("👛 Wallet: %s\n", request.WalletDetails.WalletProvider)
+			fmt.Printf("👛 Wallet ID: %s\n", request.WalletDetails.WalletID)
 		}
 	}
 
