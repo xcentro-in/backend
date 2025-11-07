@@ -198,9 +198,9 @@ type PayeeEmployee struct {
 
 // PayeeBankAccount represents a bank account belonging to a payee
 // Used by Vendor and Employee payee types (NOT by GST or Biller)
+// Bank accounts are globally shared resources, linked to payees via business_payee_relation
 type PayeeBankAccount struct {
 	AccountID string `json:"account_id"` // UUID
-	PayeeID   string `json:"payee_id"`   // FK → payee_master.payee_id
 
 	// Bank details (encrypted at rest)
 	AccountNumber     string                  `json:"account_number"`      // Encrypted

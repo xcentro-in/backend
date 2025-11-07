@@ -141,17 +141,17 @@ type PayeeEmployeeRepository interface {
 
 // PayeeBankAccountRepository manages bank accounts for payees
 // Used by Vendor and Employee payee types (NOT by GST or Biller)
+// Bank accounts are globally shared - multiple payees can reference the same account
 type PayeeBankAccountRepository interface {
 	WithTx(tx client.Tx) PayeeBankAccountRepository
 
 	// CRUD operations
 	CreateBankAccount(ctx context.Context, account *PayeeBankAccount) error
 	FindByID(ctx context.Context, accountID string) (*PayeeBankAccount, error)
-	FindByPayeeID(ctx context.Context, payeeID string) ([]*PayeeBankAccount, error)
 	UpdateBankAccount(ctx context.Context, account *PayeeBankAccount) error
 
-	// Duplicate detection
-	CheckDuplicateAccount(ctx context.Context, payeeID, accountHash string) (bool, error)
+	// Global account lookup (for reusing Castler beneficiary IDs)
+	FindByAccountHash(ctx context.Context, accountHash string) (*PayeeBankAccount, error)
 }
 
 // ############################################################################

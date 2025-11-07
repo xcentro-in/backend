@@ -202,37 +202,24 @@ func (s *PayeeService) onboardVendor(ctx context.Context, req payee.OnboardPayee
 		vendorPayee = existingVendor
 	}
 
-	// Step 4: Check if bank account already exists for this payee (if vendor exists)
-	s.logger.DebugWith("Checking for duplicate bank account")
+	// Step 4: Check if bank account already exists globally (for Castler ID reuse)
+	s.logger.DebugWith("Checking for existing bank account globally")
 	accountHash := s.computeAccountHash(vendor.AccountNumber)
 
-	var isDuplicate bool
-	if !needsVendorCreation {
-		// Only check for duplicate if vendor already exists (has payeeID)
-		isDuplicate, err = s.payeeBankAccountRepo.CheckDuplicateAccount(ctx, payeeID, accountHash)
-		if err != nil {
-			return nil, fmt.Errorf("failed to check duplicate account: %w", err)
-		}
+	// Check globally if this account already exists (regardless of payee)
+	existingAccount, err := s.payeeBankAccountRepo.FindByAccountHash(ctx, accountHash)
+	if err != nil {
+		return nil, fmt.Errorf("failed to check existing account: %w", err)
 	}
 
 	var bankAccount *payee.PayeeBankAccount
 
-	if isDuplicate {
-		s.logger.DebugWith("Bank account already exists, fetching existing account")
-		// Find the existing account
-		accounts, err := s.payeeBankAccountRepo.FindByPayeeID(ctx, payeeID)
-		if err != nil {
-			return nil, fmt.Errorf("failed to fetch existing accounts: %w", err)
-		}
-		for _, acc := range accounts {
-			if acc.AccountNumberHash == accountHash {
-				bankAccount = acc
-				break
-			}
-		}
-		if bankAccount == nil {
-			return nil, fmt.Errorf("duplicate account detected but not found")
-		}
+	if existingAccount != nil {
+		s.logger.InfoWith("Bank account already exists, reusing Castler beneficiary ID",
+			"existing_account_id", existingAccount.AccountID,
+			"castler_beneficiary_id", existingAccount.CastlerBeneficiaryID)
+		// Reuse the existing account (with its Castler beneficiary ID)
+		bankAccount = existingAccount
 	} else {
 		s.logger.InfoWith("Bank account not found, initiating penny drop verification")
 
@@ -322,7 +309,6 @@ func (s *PayeeService) onboardVendor(ctx context.Context, req payee.OnboardPayee
 		// Create PayeeBankAccount entity with Castler beneficiary ID
 		now := time.Now()
 		bankAccount = &payee.PayeeBankAccount{
-			PayeeID:                 payeeID,
 			AccountNumber:           vendor.AccountNumber,
 			AccountNumberHash:       accountHash,
 			IFSCCode:                vendor.IFSCCode,
@@ -407,18 +393,17 @@ func (s *PayeeService) onboardVendor(ctx context.Context, req payee.OnboardPayee
 			s.logger.DebugWith("Created vendor entity", "gstin", vendor.GSTIN)
 		}
 
-		// 2. Create bank account if needed
+		// 2. Create bank account if needed (only if it's new)
 		if bankAccount != nil && bankAccount.AccountID == "" {
-			// Update PayeeID in case it was just created
-			bankAccount.PayeeID = payeeID
-
 			if err := txBankAccountRepo.CreateBankAccount(ctx, bankAccount); err != nil {
 				return fmt.Errorf("failed to create bank account: %w", err)
 			}
 			accountID = bankAccount.AccountID
 			s.logger.DebugWith("Created bank account", "account_id", accountID)
 		} else if bankAccount != nil {
+			// Reusing existing account
 			accountID = bankAccount.AccountID
+			s.logger.DebugWith("Reusing existing bank account", "account_id", accountID)
 		}
 
 		// 3. Create relation
@@ -838,13 +823,18 @@ func (s *PayeeService) onboardEmployee(ctx context.Context, req payee.OnboardPay
 	// Step 2: Always create new employee (employees are business-specific, not global)
 	s.logger.InfoWith("Preparing to create new employee payee")
 
-	// Step 3: Prepare bank account for verification
-	s.logger.DebugWith("Preparing bank account for verification")
+	// Step 3: Check if bank account already exists globally (for Castler ID reuse)
+	s.logger.DebugWith("Checking for existing bank account globally")
 	accountHash := s.computeAccountHash(employee.AccountNumber)
 
-	// Prepare bank account entity for verification
-	// var crossVerifyStatus payee.VerificationStatus
+	// Check globally if this account already exists (regardless of payee)
+	existingAccount, err := s.payeeBankAccountRepo.FindByAccountHash(ctx, accountHash)
+	if err != nil {
+		return nil, fmt.Errorf("failed to check existing account: %w", err)
+	}
+
 	var accountType payment.BankAccountType
+	var bankAccount *payee.PayeeBankAccount
 
 	// Default account_type to "current" if not provided
 	accountType = employee.AccountType
@@ -853,8 +843,15 @@ func (s *PayeeService) onboardEmployee(ctx context.Context, req payee.OnboardPay
 		s.logger.WarnWith("account_type not provided, defaulting to current")
 	}
 
-	// Step 4: Perform penny drop verification
-	s.logger.InfoWith("Initiating bank account verification")
+	if existingAccount != nil {
+		s.logger.InfoWith("Bank account already exists, reusing Castler beneficiary ID",
+			"existing_account_id", existingAccount.AccountID,
+			"castler_beneficiary_id", existingAccount.CastlerBeneficiaryID)
+		// Reuse the existing account (with its Castler beneficiary ID)
+		bankAccount = existingAccount
+	} else {
+		// Step 4: Perform penny drop verification (only for new accounts)
+		s.logger.InfoWith("Bank account not found, initiating bank account verification")
 
 	bankReq := authbridge.NewBankVerificationRequest(
 		"10000",
@@ -924,38 +921,38 @@ func (s *PayeeService) onboardEmployee(ctx context.Context, req payee.OnboardPay
 	s.logger.InfoWith("Castler onboarding successful",
 		"castler_payee_id", castlerPayeeResp.Result)
 
-	// // Step 5: Cross-verification (employee name vs bank account holder name)
-	// s.logger.DebugWith("Cross-verifying employee name with bank account holder name")
-	// // Mock cross-verification for now
-	// crossVerifyStatus = payee.VerificationStatusSuccess
-	// s.logger.InfoWith("Cross-verification completed successfully")
+		// // Step 5: Cross-verification (employee name vs bank account holder name)
+		// s.logger.DebugWith("Cross-verifying employee name with bank account holder name")
+		// // Mock cross-verification for now
+		// crossVerifyStatus = payee.VerificationStatusSuccess
+		// s.logger.InfoWith("Cross-verification completed successfully")
 
-	// // Fail fast: Abort if cross-verification failed
-	// if crossVerifyStatus != payee.VerificationStatusSuccess {
-	// 	s.logger.ErrorWith("Cross-verification failed, aborting onboarding", "status", crossVerifyStatus)
-	// 	return nil, fmt.Errorf("cross-verification failed: employee name does not match bank account holder name")
-	// }
+		// // Fail fast: Abort if cross-verification failed
+		// if crossVerifyStatus != payee.VerificationStatusSuccess {
+		// 	s.logger.ErrorWith("Cross-verification failed, aborting onboarding", "status", crossVerifyStatus)
+		// 	return nil, fmt.Errorf("cross-verification failed: employee name does not match bank account holder name")
+		// }
 
-	// Prepare bank account entity (will be created in transaction)
-	// At this point, all verifications have passed
-	now := time.Now()
-	bankAccount := &payee.PayeeBankAccount{
-		PayeeID:                 payeeID, // Will be updated in transaction
-		AccountNumber:           employee.AccountNumber,
-		AccountNumberHash:       accountHash,
-		IFSCCode:                employee.IFSCCode,
-		AccountHolderName:       employee.AccountHolderName,
-		BankName:                employee.BankName,   // Use bank name from frontend IFSC check
-		BranchName:              employee.BranchName, // Use branch name from frontend IFSC check
-		AccountType:             accountType,
-		AccountLabel:            employee.AccountLabel,
-		IsActive:                true,
-		IsVerified:              true,                    // Always true at this point
-		CastlerBeneficiaryID:    castlerPayeeResp.Result, // Store Castler payee ID
-		BankVerificationStatus:  payee.VerificationStatusSuccess,
-		CrossVerificationStatus: payee.VerificationStatusSuccess,
-		VerifiedAt:              &now,
-		VerificationData:        map[string]any{"test": "test"}, // TODO: Store actual verification data
+		// Prepare bank account entity (will be created in transaction)
+		// At this point, all verifications have passed
+		now := time.Now()
+		bankAccount = &payee.PayeeBankAccount{
+			AccountNumber:           employee.AccountNumber,
+			AccountNumberHash:       accountHash,
+			IFSCCode:                employee.IFSCCode,
+			AccountHolderName:       employee.AccountHolderName,
+			BankName:                employee.BankName,   // Use bank name from frontend IFSC check
+			BranchName:              employee.BranchName, // Use branch name from frontend IFSC check
+			AccountType:             accountType,
+			AccountLabel:            employee.AccountLabel,
+			IsActive:                true,
+			IsVerified:              true,                    // Always true at this point
+			CastlerBeneficiaryID:    castlerPayeeResp.Result, // Store Castler payee ID
+			BankVerificationStatus:  payee.VerificationStatusSuccess,
+			CrossVerificationStatus: payee.VerificationStatusSuccess,
+			VerifiedAt:              &now,
+			VerificationData:        map[string]any{"test": "test"}, // TODO: Store actual verification data
+		}
 	}
 
 	// Step 6: ATOMIC TRANSACTION - Create all entities (master, employee, bank account, relation)
@@ -1001,15 +998,18 @@ func (s *PayeeService) onboardEmployee(ctx context.Context, req payee.OnboardPay
 		}
 		s.logger.DebugWith("Created employee entity", "full_name", employee.FullName)
 
-		// 2. Create bank account
-		// Update PayeeID in bank account
-		bankAccount.PayeeID = payeeID
-
-		if err := txBankAccountRepo.CreateBankAccount(ctx, bankAccount); err != nil {
-			return fmt.Errorf("failed to create bank account: %w", err)
+		// 2. Create bank account if needed (only if it's new)
+		if bankAccount != nil && bankAccount.AccountID == "" {
+			if err := txBankAccountRepo.CreateBankAccount(ctx, bankAccount); err != nil {
+				return fmt.Errorf("failed to create bank account: %w", err)
+			}
+			accountID = bankAccount.AccountID
+			s.logger.DebugWith("Created bank account", "account_id", accountID)
+		} else if bankAccount != nil {
+			// Reusing existing account
+			accountID = bankAccount.AccountID
+			s.logger.DebugWith("Reusing existing bank account", "account_id", accountID)
 		}
-		accountID = bankAccount.AccountID
-		s.logger.DebugWith("Created bank account", "account_id", accountID)
 
 		// 3. Create relation
 		relation := &payee.BusinessPayeeRelation{
