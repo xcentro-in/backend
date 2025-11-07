@@ -154,7 +154,7 @@ type VoucherDetailsResponse struct {
 	FiscalYear       string                `json:"fiscal_year"`
 	AccountingPeriod string                `json:"accounting_period"`
 	VoucherType      voucher.VoucherType   `json:"voucher_type"`
-	Status           voucher.VoucherStatus `json:"status"`
+	Status           voucher.VoucherStatus `json:"voucher_status"` // Voucher lifecycle: draft, finalized, posted, synced
 
 	// Payee information (nested object)
 	Payee *PayeeDetails `json:"payee"`
@@ -185,8 +185,9 @@ type VoucherDetailsResponse struct {
 	ExpenseCategory  string                 `json:"expense_category,omitempty"`
 	Description      string                 `json:"description,omitempty"`
 
-	// Payment status
-	PaymentStatus string `json:"payment_status"` // "paid" if payment_id exists, "unpaid" otherwise
+	// Status fields - Three independent status dimensions
+	ApprovalStatus *string `json:"approval_status"` // Latest approval action: pending, approved, rejected, request_changes (null if no approvals)
+	PaymentStatus  *string `json:"payment_status"`  // Payment status from payments table: pending, success, failed, cancelled (null if no payment)
 
 	// ERP integration
 	ERPSyncStatus   voucher.ERPSyncStatus `json:"erp_sync_status"`
@@ -215,7 +216,9 @@ type VoucherListItem struct {
 	InvoiceNumber   string                `json:"invoice_number"`
 	NetAmount       int64                 `json:"net_amount"`
 	Currency        string                `json:"currency"`
-	Status          voucher.VoucherStatus `json:"status"`
+	Status          voucher.VoucherStatus `json:"voucher_status"` // Voucher lifecycle: draft, finalized, posted, synced
+	ApprovalStatus  *string               `json:"approval_status"` // Latest approval action: pending, approved, rejected, request_changes (null if no approvals)
+	PaymentStatus   *string               `json:"payment_status"`  // Payment status: pending, success, failed, cancelled (null if no payment)
 	ERPSyncStatus   voucher.ERPSyncStatus `json:"erp_sync_status"`
 	ExpenseCategory string                `json:"expense_category,omitempty"`
 	CreatedAt       time.Time             `json:"created_at"`
