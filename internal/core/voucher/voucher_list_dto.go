@@ -75,3 +75,35 @@ type VoucherCountsResponse struct {
 	Open    int `json:"open"`     // Not paid, due date in future
 	Overdue int `json:"overdue"`  // Not paid, due date passed
 }
+
+// CalendarBillItem represents a single bill in the calendar view
+// Used for displaying bills month by month with high-level details
+type CalendarBillItem struct {
+	VoucherID     string     `json:"voucher_id"`
+	VoucherNumber string     `json:"voucher_number"`  // PV-2024-00001
+	InvoiceNumber string     `json:"invoice_number"`  // Vendor's invoice number
+	DueDate       *time.Time `json:"due_date"`        // Invoice due date
+	GrossAmount   int64      `json:"gross_amount"`    // Total amount before deductions (in paise)
+	NetAmount     int64      `json:"net_amount"`      // Net amount after deductions (in paise)
+	PayeeID       string     `json:"payee_id"`        // Payee ID (part of relation composite key)
+	AccountID     string     `json:"account_id"`      // Account ID (part of relation composite key)
+	PayeeName     string     `json:"payee_name"`      // Display name from business_payee_relation
+	Description   string     `json:"description"`     // Bill description
+	VoucherStatus string     `json:"voucher_status"`  // draft, finalized, posted, synced
+	PaymentStatus *string    `json:"payment_status"`  // Payment transaction status (null if no payment)
+}
+
+// CalendarViewRequest represents the request for calendar view
+type CalendarViewRequest struct {
+	BusinessID string `json:"business_id"` // From header
+	Year       int    `json:"year"`        // Year to fetch (e.g., 2024)
+	Month      int    `json:"month"`       // Month to fetch (1-12)
+}
+
+// CalendarViewResponse represents the response for calendar view
+type CalendarViewResponse struct {
+	Year  int                `json:"year"`
+	Month int                `json:"month"`
+	Bills []CalendarBillItem `json:"bills"`
+	Count int                `json:"count"`
+}

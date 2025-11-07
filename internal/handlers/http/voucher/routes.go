@@ -24,6 +24,7 @@ func RegisterVoucherRoutes(group *echo.Group, voucherService voucherSvc.VoucherS
 	group.GET("/list", handler.GetVoucherList)                               // GET /vouchers/list - Get bills with payment status (paid, open, overdue)
 	group.GET("/unpaid", handler.GetUnpaidBills)                             // GET /vouchers/unpaid - Get unpaid bills (role-based: owner sees all, others see approved only)
 	group.GET("/counts", handler.GetVoucherCounts)                           // GET /vouchers/counts - Get voucher counts by payment status (all, paid, open, overdue)
+	group.GET("/calendar", handler.GetCalendarView)                          // GET /vouchers/calendar?year=2024&month=11 - Get bills for calendar view by month
 	group.GET("/approval-inbox/counts", handler.GetApprovalInboxCounts)      // GET /vouchers/approval-inbox/counts - Get approval status counts
 	group.GET("/approval-inbox", handler.GetApprovalInbox)                   // GET /vouchers/approval-inbox?status={status} - Get approval inbox
 	group.GET("/reminders", handler.GetDraftReminders)                       // GET /vouchers/reminders - Get abandoned drafts
