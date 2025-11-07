@@ -311,9 +311,7 @@ func (s *VoucherServiceImpl) UpdateVoucher(ctx context.Context, req *UpdateVouch
 	if v.Status != voucher.StatusDraft {
 		v.Status = voucher.StatusDraft
 		statusChanged = true
-		s.logger.InfoWith("Voucher status shifted to draft for editing",
-			"voucher_id", v.VoucherID,
-			"previous_status", v.Status)
+		// Note: Voucher status automatically shifted to draft for editing
 	}
 
 	// 4. Track updated fields
