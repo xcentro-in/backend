@@ -186,8 +186,8 @@ type VoucherDetailsResponse struct {
 	Description      string                 `json:"description,omitempty"`
 
 	// Status fields - Three independent status dimensions
-	ApprovalStatus *string `json:"approval_status,omitempty"` // Latest approval action: pending, approved, rejected, request_changes (null if no approvals)
-	PaymentStatus  *string `json:"payment_status,omitempty"`  // Payment status from payments table: pending, success, failed, cancelled (null if no payment)
+	ApprovalStatus *string `json:"approval_status"` // Latest approval action: pending, approved, rejected, request_changes (null if no approvals)
+	PaymentStatus  *string `json:"payment_status"`  // Payment status from payments table: pending, success, failed, cancelled (null if no payment)
 
 	// ERP integration
 	ERPSyncStatus   voucher.ERPSyncStatus `json:"erp_sync_status"`
@@ -217,8 +217,8 @@ type VoucherListItem struct {
 	NetAmount       int64                 `json:"net_amount"`
 	Currency        string                `json:"currency"`
 	Status          voucher.VoucherStatus `json:"status"` // Voucher lifecycle: draft, finalized, posted, synced
-	ApprovalStatus  *string               `json:"approval_status,omitempty"` // Latest approval action: pending, approved, rejected, request_changes (null if no approvals)
-	PaymentStatus   *string               `json:"payment_status,omitempty"`  // Payment status: pending, success, failed, cancelled (null if no payment)
+	ApprovalStatus  *string               `json:"approval_status"` // Latest approval action: pending, approved, rejected, request_changes (null if no approvals)
+	PaymentStatus   *string               `json:"payment_status"`  // Payment status: pending, success, failed, cancelled (null if no payment)
 	ERPSyncStatus   voucher.ERPSyncStatus `json:"erp_sync_status"`
 	ExpenseCategory string                `json:"expense_category,omitempty"`
 	CreatedAt       time.Time             `json:"created_at"`
