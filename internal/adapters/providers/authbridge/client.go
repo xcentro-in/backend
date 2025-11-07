@@ -1,16 +1,19 @@
 package authbridge
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"sync"
 	"time"
 
 	"xcentro.in/internal/shared/config"
+	"xcentro.in/internal/shared/crypto"
 )
 
-// COMMENTED OUT - HTTP CLIENT CODE FOR REAL API CALLS
-// Uncomment this section when switching back to real AuthBridge API calls
-/*
+// HTTPClient singleton for making HTTP requests
 var (
 	httpClientInstance *HTTPClient
 	httpClientOnce     sync.Once
@@ -63,7 +66,6 @@ func (c *HTTPClient) Post(url string, headers map[string]string, body []byte) ([
 
 	return respBody, nil
 }
-*/
 
 // Singleton instance variables
 var (
@@ -74,7 +76,9 @@ var (
 
 // AuthBridgeClient is the main client for document verification
 type AuthBridgeClient struct {
-	config *Config
+	config     *Config
+	httpClient *HTTPClient
+	useMock    bool
 }
 
 // Initialize initializes the singleton AuthBridgeClient instance.
@@ -86,6 +90,8 @@ func Initialize(cfg *config.Config) error {
 				Username: cfg.AuthBridge.Username,
 				Password: cfg.AuthBridge.Password,
 			},
+			httpClient: getHTTPClient(),
+			useMock:    cfg.AuthBridge.UseMock,
 		}
 	})
 	return initErr
@@ -125,8 +131,76 @@ func (c *AuthBridgeClient) SearchDocument(req DocumentRequest) (map[string]inter
 
 	fmt.Printf("Document Type: %s (%d)\n", GetDocumentName(docType), docType)
 
-	// TEMPORARY: Return mock responses based on document type
-	return c.getMockResponse(req)
+	// SIMPLE SWITCH: Use mock or real implementation based on config
+	if c.useMock {
+		fmt.Println("Using MOCK AuthBridge responses")
+		return c.getMockResponse(req)
+	}
+
+	fmt.Println("Using REAL AuthBridge API")
+	return c.callRealAPI(req, docType)
+}
+
+// callRealAPI makes actual API call to AuthBridge
+func (c *AuthBridgeClient) callRealAPI(req DocumentRequest, docType DocumentType) (map[string]interface{}, error) {
+	endpoint := GetEndpoint(docType)
+
+	// Convert to JSON using the request's ToJSON method
+	inputJSON, err := req.ToJSON()
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert request to JSON: %v", err)
+	}
+
+	fmt.Printf("Input JSON: %s\n", inputJSON)
+
+	// Encrypt the input (nil IV = random generation for AuthBridge)
+	encryptedInput, err := crypto.EncryptAES256CBC(inputJSON, c.config.Password, nil)
+	if err != nil {
+		return nil, fmt.Errorf("encryption failed: %v", err)
+	}
+
+	// Prepare API request body
+	apiReq := APIRequest{
+		RequestData: encryptedInput,
+	}
+
+	requestBody, err := json.Marshal(apiReq)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal API request: %v", err)
+	}
+
+	// Prepare headers
+	headers := map[string]string{
+		"username": c.config.Username,
+	}
+
+	fmt.Printf("Making request to: %s\n", endpoint)
+
+	// Make HTTP request
+	responseBody, err := c.httpClient.Post(endpoint, headers, requestBody)
+	if err != nil {
+		return nil, fmt.Errorf("HTTP request failed: %v", err)
+	}
+
+	// Parse response
+	var apiResp APIResponse
+	if err := json.Unmarshal(responseBody, &apiResp); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal API response: %v", err)
+	}
+
+	// Decrypt response
+	decryptedResponse, err := crypto.DecryptAES256CBC(apiResp.ResponseData, c.config.Password)
+	if err != nil {
+		return nil, fmt.Errorf("decryption failed: %v", err)
+	}
+
+	// Parse decrypted response
+	var result map[string]interface{}
+	if err := json.Unmarshal([]byte(decryptedResponse), &result); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal decrypted response: %v", err)
+	}
+
+	return result, nil
 }
 
 // getMockResponse returns mock responses for different document types
@@ -223,15 +297,15 @@ func (c *AuthBridgeClient) getMockResponse(req DocumentRequest) (map[string]inte
 			"status":  float64(1),
 			"message": "CIN verification successful",
 			"data": map[string]interface{}{
-				"cin":                "U12345KA2018PTC123456",
-				"company_name":       "ABC Private Limited",
-				"registration_date":  "2018-01-15",
-				"company_status":     "Active",
-				"company_category":   "Company limited by shares",
+				"cin":                  "U12345KA2018PTC123456",
+				"company_name":         "ABC Private Limited",
+				"registration_date":    "2018-01-15",
+				"company_status":       "Active",
+				"company_category":     "Company limited by shares",
 				"company_sub_category": "Non-govt company",
-				"authorized_capital": "10000000",
-				"paid_up_capital":    "5000000",
-				"registered_address": "123 Business Park, Bangalore - 560001",
+				"authorized_capital":   "10000000",
+				"paid_up_capital":      "5000000",
+				"registered_address":   "123 Business Park, Bangalore - 560001",
 			},
 		}, nil
 
@@ -246,23 +320,23 @@ func (c *AuthBridgeClient) getMockResponse(req DocumentRequest) (map[string]inte
 				"is_valid":   true,
 			},
 		}, nil
-	
+
 	case BANK_VERIFY:
 		// Mock Bank Account verification
 		return map[string]interface{}{
-		"msg": map[string]interface{}{
-			"accountType": "SAVINGS",
-			"beneficiaryName": "DARAHAS KOPPARAPU",
-			"clientRefId": "02112025859128",
-			"responseCode": "00",
-			"responseMsg": "SUCCESS",
-			"rrn": "530613010252",
-			"status": "SUCCESS",
-			"transDateTime": "02/11/2025 13:45:04",
-		},
-		"status": float64(1),
-		"transId": "12",
-		"tsTransId": "TS-UXR-307481",
+			"msg": map[string]interface{}{
+				"accountType":       "SAVINGS",
+				"beneficiaryName":   "DARAHAS KOPPARAPU",
+				"clientRefId":       "02112025859128",
+				"responseCode":      "00",
+				"responseMsg":       "SUCCESS",
+				"rrn":               "530613010252",
+				"status":            "SUCCESS",
+				"transDateTime":     "02/11/2025 13:45:04",
+			},
+			"status":    float64(1),
+			"transId":   "12",
+			"tsTransId": "TS-UXR-307481",
 		}, nil
 
 	default:
@@ -284,97 +358,3 @@ func (c *AuthBridgeClient) getMockResponse(req DocumentRequest) (map[string]inte
 
 	return nil, fmt.Errorf("unsupported request type")
 }
-
-/*
-===============================================================================
-REAL API IMPLEMENTATION (COMMENTED OUT)
-===============================================================================
-
-To restore real AuthBridge API calls:
-
-1. Uncomment the HTTP client code at the top of the file (lines 12-64)
-2. Add back these imports:
-   - "bytes"
-   - "encoding/json"
-   - "io"
-   - "net/http"
-   - "sync"
-   - "xcentro.in/internal/shared/crypto"
-
-3. Update AuthBridgeClient struct to include httpClient:
-   type AuthBridgeClient struct {
-       config     *Config
-       httpClient *HTTPClient
-   }
-
-4. Update NewClient to initialize httpClient:
-   return &AuthBridgeClient{
-       config:     config,
-       httpClient: getHTTPClient(),
-   }, nil
-
-5. Replace the getMockResponse call in SearchDocument with this code:
-
-   endpoint := GetEndpoint(docType)
-
-   // Convert to JSON using the request's ToJSON method
-   inputJSON, err := req.ToJSON()
-   if err != nil {
-       return nil, fmt.Errorf("failed to convert request to JSON: %v", err)
-   }
-
-   fmt.Printf("Input JSON: %s\n", inputJSON)
-
-   // Encrypt the input (nil IV = random generation for AuthBridge)
-   encryptedInput, err := crypto.EncryptAES256CBC(inputJSON, c.config.Password, nil)
-   if err != nil {
-       return nil, fmt.Errorf("encryption failed: %v", err)
-   }
-
-   // Prepare API request body
-   apiReq := APIRequest{
-       RequestData: encryptedInput,
-   }
-
-   requestBody, err := json.Marshal(apiReq)
-   if err != nil {
-       return nil, fmt.Errorf("failed to marshal API request: %v", err)
-   }
-
-   // Prepare headers
-   headers := map[string]string{
-       "username": c.config.Username,
-   }
-
-   fmt.Printf("Making request to: %s\n", endpoint)
-
-   // Make HTTP request
-   responseBody, err := c.httpClient.Post(endpoint, headers, requestBody)
-   if err != nil {
-       return nil, fmt.Errorf("HTTP request failed: %v", err)
-   }
-
-   // Parse response
-   var apiResp APIResponse
-   if err := json.Unmarshal(responseBody, &apiResp); err != nil {
-       return nil, fmt.Errorf("failed to unmarshal API response: %v", err)
-   }
-
-   // Decrypt response
-   decryptedResponse, err := crypto.DecryptAES256CBC(apiResp.ResponseData, c.config.Password)
-   if err != nil {
-       return nil, fmt.Errorf("decryption failed: %v", err)
-   }
-
-   // Parse decrypted response
-   var result map[string]interface{}
-   if err := json.Unmarshal([]byte(decryptedResponse), &result); err != nil {
-       return nil, fmt.Errorf("failed to unmarshal decrypted response: %v", err)
-   }
-
-   return result, nil
-
-6. Remove or comment out the getMockResponse function
-
-===============================================================================
-*/

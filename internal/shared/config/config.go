@@ -222,6 +222,7 @@ type BankAccountEncryptionConfig struct {
 type AuthBridgeConfig struct {
 	Username string `json:"username" env:"TRUTHSCREEN_USERNAME" env-required:"true"` // AuthBridge/TruthScreen username
 	Password string `json:"-" env:"TRUTHSCREEN_PASSWORD" env-required:"true"`        // AuthBridge/TruthScreen password (sensitive)
+	UseMock  bool   `json:"use_mock" env:"AUTHBRIDGE_USE_MOCK" env-default:"false"`  // Use mock responses instead of real API calls
 }
 
 // RateLimiterConfig holds rate limiter configuration for token-bucket algorithm.
