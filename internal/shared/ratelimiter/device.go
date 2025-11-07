@@ -2,11 +2,14 @@ package ratelimiter
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/labstack/echo/v4"
@@ -14,19 +17,17 @@ import (
 	"xcentro.in/internal/shared/logger"
 )
 
-// DeviceMetadata stores metadata about a device mapping.
-type DeviceMetadata struct {
-	CreatedAt string `json:"created_at"`
-	IP        string `json:"ip"`
-	UserAgent string `json:"ua"`
-}
+// ErrInvalidDeviceSignature is returned when device cookie signature verification fails.
+// This error indicates suspected tampering or DDoS attack.
+var ErrInvalidDeviceSignature = errors.New("invalid device signature")
 
-// DeviceHandler manages device cookie creation and validation.
+// DeviceHandler manages device cookie creation and HMAC-based validation.
+// Uses HMAC signing instead of Redis device mapping for better performance.
 type DeviceHandler struct {
 	redis                  *redis.Client
+	hmacSecret             []byte
 	cookieName             string
 	cookieTTL              time.Duration
-	deviceMappingTTL       time.Duration
 	creationThrottlePerIP  int
 	creationThrottleWindow time.Duration
 	cookieSecure           bool
@@ -34,12 +35,12 @@ type DeviceHandler struct {
 	log                    *logger.Logger
 }
 
-// NewDeviceHandler creates a new device handler.
+// NewDeviceHandler creates a new device handler with HMAC signing.
 func NewDeviceHandler(
 	redisClient *redis.Client,
+	hmacSecret string,
 	cookieName string,
 	cookieTTL time.Duration,
-	deviceMappingTTL time.Duration,
 	creationThrottlePerIP int,
 	creationThrottleWindow time.Duration,
 	cookieSecure bool,
@@ -47,9 +48,9 @@ func NewDeviceHandler(
 ) *DeviceHandler {
 	return &DeviceHandler{
 		redis:                  redisClient,
+		hmacSecret:             []byte(hmacSecret),
 		cookieName:             cookieName,
 		cookieTTL:              cookieTTL,
-		deviceMappingTTL:       deviceMappingTTL,
 		creationThrottlePerIP:  creationThrottlePerIP,
 		creationThrottleWindow: creationThrottleWindow,
 		cookieSecure:           cookieSecure,
@@ -59,33 +60,31 @@ func NewDeviceHandler(
 }
 
 // EnsureDeviceID ensures a valid device ID exists, creating one if needed.
+// Cookie format: deviceID|hmac_signature
 // Returns deviceID and whether it was newly created.
+// Returns error if signature is invalid (suspected tampering/DDoS).
 func (dh *DeviceHandler) EnsureDeviceID(c echo.Context) (string, bool, error) {
-	ctx := c.Request().Context()
-
 	// Check if device_id cookie exists
 	cookie, err := c.Cookie(dh.cookieName)
 	if err == nil && cookie.Value != "" {
-		deviceID := cookie.Value
-
-		// Validate device mapping exists in Redis
-		exists, err := dh.deviceMappingExists(ctx, deviceID)
-		if err != nil {
-			dh.log.Errorf("Failed to check device mapping existence: %v", err)
-			// On Redis error, accept cookie value (fail-open for device validation)
-			return deviceID, false, nil
+		// Parse cookie value: deviceID|signature
+		parts := strings.Split(cookie.Value, "|")
+		if len(parts) != 2 {
+			dh.log.Warnf("Invalid device cookie format from IP %s: expected 'deviceID|signature'", c.RealIP())
+			return "", false, ErrInvalidDeviceSignature
 		}
 
-		if exists {
-			// Refresh TTL on existing mapping
-			if err := dh.refreshDeviceMappingTTL(ctx, deviceID); err != nil {
-				dh.log.Errorf("Failed to refresh device mapping TTL: %v", err)
-			}
-			return deviceID, false, nil
+		deviceID := parts[0]
+		providedSignature := parts[1]
+
+		// Verify HMAC signature
+		if !dh.verifyDeviceSignature(deviceID, providedSignature) {
+			dh.log.Warnf("Invalid device signature from IP %s, suspected tampering/DDoS", c.RealIP())
+			return "", false, ErrInvalidDeviceSignature
 		}
 
-		// Cookie exists but mapping is gone - treat as stale, create new
-		dh.log.Infof("Stale device cookie detected: %s, creating new device", deviceID)
+		// Signature valid - use this device ID
+		return deviceID, false, nil
 	}
 
 	// No valid cookie - attempt to create device
@@ -95,19 +94,20 @@ func (dh *DeviceHandler) EnsureDeviceID(c echo.Context) (string, bool, error) {
 	}
 
 	if created {
-		// Set cookie
-		dh.setDeviceCookie(c, deviceID)
+		// Sign device ID and set cookie
+		dh.setSignedDeviceCookie(c, deviceID)
 	}
 
 	return deviceID, created, nil
 }
 
-// createDevice attempts to create a new device mapping with throttle check.
+// createDevice attempts to create a new device ID with throttle check.
+// No longer stores device mapping in Redis - uses HMAC signing instead.
 func (dh *DeviceHandler) createDevice(c echo.Context) (string, bool, error) {
 	ctx := c.Request().Context()
 	ip := c.RealIP()
 
-	// Check creation throttle per IP
+	// Check creation throttle per IP (fixed window in Redis)
 	throttled, err := dh.isCreationThrottled(ctx, ip)
 	if err != nil {
 		dh.log.Errorf("Failed to check creation throttle: %v", err)
@@ -126,26 +126,6 @@ func (dh *DeviceHandler) createDevice(c echo.Context) (string, bool, error) {
 		return "", false, fmt.Errorf("failed to generate device ID")
 	}
 
-	// Store device mapping
-	metadata := DeviceMetadata{
-		CreatedAt: time.Now().UTC().Format(time.RFC3339),
-		IP:        ip,
-		UserAgent: c.Request().UserAgent(),
-	}
-
-	metadataJSON, err := json.Marshal(metadata)
-	if err != nil {
-		dh.log.Errorf("Failed to marshal device metadata: %v", err)
-		return "", false, fmt.Errorf("failed to marshal metadata")
-	}
-
-	key := fmt.Sprintf("device:%s", deviceID)
-	err = dh.redis.Set(ctx, key, metadataJSON, dh.deviceMappingTTL).Err()
-	if err != nil {
-		dh.log.Errorf("Failed to store device mapping: %v", err)
-		return "", false, fmt.Errorf("failed to store device mapping")
-	}
-
 	// Increment creation counter for IP
 	if err := dh.incrementCreationCounter(ctx, ip); err != nil {
 		dh.log.Errorf("Failed to increment creation counter: %v", err)
@@ -156,20 +136,17 @@ func (dh *DeviceHandler) createDevice(c echo.Context) (string, bool, error) {
 	return deviceID, true, nil
 }
 
-// deviceMappingExists checks if a device mapping exists in Redis.
-func (dh *DeviceHandler) deviceMappingExists(ctx context.Context, deviceID string) (bool, error) {
-	key := fmt.Sprintf("device:%s", deviceID)
-	exists, err := dh.redis.Exists(ctx, key).Result()
-	if err != nil {
-		return false, err
-	}
-	return exists > 0, nil
+// signDeviceID creates an HMAC-SHA256 signature for a device ID.
+func (dh *DeviceHandler) signDeviceID(deviceID string) string {
+	h := hmac.New(sha256.New, dh.hmacSecret)
+	h.Write([]byte(deviceID))
+	return hex.EncodeToString(h.Sum(nil))
 }
 
-// refreshDeviceMappingTTL refreshes the TTL on an existing device mapping.
-func (dh *DeviceHandler) refreshDeviceMappingTTL(ctx context.Context, deviceID string) error {
-	key := fmt.Sprintf("device:%s", deviceID)
-	return dh.redis.Expire(ctx, key, dh.deviceMappingTTL).Err()
+// verifyDeviceSignature verifies the HMAC signature of a device ID.
+func (dh *DeviceHandler) verifyDeviceSignature(deviceID, providedSignature string) bool {
+	expectedSignature := dh.signDeviceID(deviceID)
+	return hmac.Equal([]byte(expectedSignature), []byte(providedSignature))
 }
 
 // isCreationThrottled checks if device creation is throttled for the given IP.
@@ -195,11 +172,15 @@ func (dh *DeviceHandler) incrementCreationCounter(ctx context.Context, ip string
 	return err
 }
 
-// setDeviceCookie sets the device_id cookie.
-func (dh *DeviceHandler) setDeviceCookie(c echo.Context, deviceID string) {
+// setSignedDeviceCookie sets the device_id cookie with HMAC signature.
+// Cookie format: deviceID|hmac_signature
+func (dh *DeviceHandler) setSignedDeviceCookie(c echo.Context, deviceID string) {
+	signature := dh.signDeviceID(deviceID)
+	signedValue := fmt.Sprintf("%s|%s", deviceID, signature)
+
 	cookie := &http.Cookie{
 		Name:     dh.cookieName,
-		Value:    deviceID,
+		Value:    signedValue,
 		Path:     "/",
 		Expires:  time.Now().Add(dh.cookieTTL),
 		HttpOnly: true,

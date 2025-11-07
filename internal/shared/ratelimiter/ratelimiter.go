@@ -3,6 +3,7 @@ package ratelimiter
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"sync"
@@ -54,12 +55,12 @@ func Initialize(redisClient *redis.Client, cfg *config.RateLimiterConfig, cookie
 			return
 		}
 
-		// Create device handler
+		// Create device handler with HMAC signing
 		deviceHandler := NewDeviceHandler(
 			redisClient,
+			cfg.HMACSecret,
 			cfg.CookieName,
 			cfg.CookieTTL,
-			cfg.DeviceMappingTTL,
 			cfg.DeviceCreationThrottlePerIP,
 			cfg.DeviceCreationThrottleWindow,
 			cookieSecure,
@@ -133,8 +134,20 @@ func (rl *RateLimiter) CheckLimit(c echo.Context, group string) (*LimitResult, e
 	// Determine scope key
 	scopeKey, scopeType, err := rl.determineScopeKey(c, group)
 	if err != nil {
+		// Check for invalid device signature (suspected tampering/DDoS)
+		if errors.Is(err, ErrInvalidDeviceSignature) {
+			rl.log.Errorf("Invalid device signature - rejecting request")
+			return &LimitResult{
+				Allowed:         false,
+				RemainingTokens: "0",
+				RetryAfterSecs:  "3600", // 1 hour penalty for tampering
+				Scope:           "invalid_signature",
+				PolicyGroup:     group,
+			}, nil
+		}
+
+		// Other errors - fail open or closed based on policy
 		rl.log.Errorf("Failed to determine scope key: %v", err)
-		// Fail open or closed based on policy
 		if rl.shouldFailClosed(policy) {
 			return &LimitResult{
 				Allowed:     false,
@@ -216,7 +229,7 @@ func (rl *RateLimiter) determineScopeKey(c echo.Context, group string) (string, 
 		}
 	}
 
-	// Priority 2: Device ID
+	// Priority 2: Device ID (HMAC-signed cookie)
 	deviceID, created, err := rl.deviceHandler.EnsureDeviceID(c)
 	if err == nil && deviceID != "" {
 		if created {
@@ -225,7 +238,14 @@ func (rl *RateLimiter) determineScopeKey(c echo.Context, group string) (string, 
 		return fmt.Sprintf("rl:device:%s|%s", deviceID, group), "device", nil
 	}
 
-	// Log device error but continue to IP fallback
+	// Check for invalid signature error (suspected tampering/DDoS)
+	if err != nil && errors.Is(err, ErrInvalidDeviceSignature) {
+		rl.log.Errorf("Invalid device signature detected from IP %s - rejecting request", c.RealIP())
+		// Return special error that will be treated as rate limit exceeded
+		return "", "invalid_signature", ErrInvalidDeviceSignature
+	}
+
+	// Log other device errors and continue to IP fallback
 	if err != nil {
 		rl.log.Warnf("Device handling failed, falling back to IP: %v", err)
 	}

@@ -227,9 +227,9 @@ type AuthBridgeConfig struct {
 // RateLimiterConfig holds rate limiter configuration for token-bucket algorithm.
 type RateLimiterConfig struct {
 	Enabled                      bool          `json:"enabled" env:"RATE_LIMITER_ENABLED" env-default:"true"`
+	HMACSecret                   string        `json:"-" env:"RATE_LIMITER_HMAC_SECRET" env-required:"true"` // Secret for signing device IDs
 	CookieName                   string        `json:"cookie_name" env:"RATE_LIMITER_COOKIE_NAME" env-default:"device_id"`
-	CookieTTL                    time.Duration `json:"cookie_ttl" env:"RATE_LIMITER_COOKIE_TTL" env-default:"720h"`                 // 30 days
-	DeviceMappingTTL             time.Duration `json:"device_mapping_ttl" env:"RATE_LIMITER_DEVICE_MAPPING_TTL" env-default:"720h"` // 30 days
+	CookieTTL                    time.Duration `json:"cookie_ttl" env:"RATE_LIMITER_COOKIE_TTL" env-default:"720h"` // 30 days
 	DeviceCreationThrottlePerIP  int           `json:"device_creation_throttle_per_ip" env:"RATE_LIMITER_DEVICE_CREATION_THROTTLE_PER_IP" env-default:"50"`
 	DeviceCreationThrottleWindow time.Duration `json:"device_creation_throttle_window" env:"RATE_LIMITER_DEVICE_CREATION_THROTTLE_WINDOW" env-default:"1h"`
 	TokenKeyTTL                  time.Duration `json:"token_key_ttl" env:"RATE_LIMITER_TOKEN_KEY_TTL" env-default:"2h"`
