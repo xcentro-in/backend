@@ -101,35 +101,13 @@ func GetInstance() *AuthBridgeClient {
 }
 
 // NewClient returns the singleton AuthBridge client instance.
-// For backward compatibility - initializes lazily if not already initialized.
+// For backward compatibility - returns the singleton if Initialize() was called.
 // Deprecated: Use Initialize() and GetInstance() instead.
 func NewClient() (*AuthBridgeClient, error) {
-	// Lazy initialization for backward compatibility
-	// If Initialize() was already called, this does nothing
 	if instance == nil {
-		// Try to load from environment variables directly (backward compatible)
-		config, err := loadConfigFromEnv()
-		if err != nil {
-			return nil, err
-		}
-
-		once.Do(func() {
-			instance = &AuthBridgeClient{
-				config: config,
-			}
-		})
+		return nil, fmt.Errorf("AuthBridgeClient not initialized. Call authbridge.Initialize() with config at application startup")
 	}
-
 	return instance, nil
-}
-
-// loadConfigFromEnv loads configuration from environment variables
-// Used for backward compatibility when Initialize() is not called
-func loadConfigFromEnv() (*Config, error) {
-	// For backward compatibility, we can't import cleanenv here anymore
-	// as it would create circular dependency issues
-	// This will be called only if Initialize() wasn't called
-	return nil, fmt.Errorf("AuthBridgeClient not initialized. Call Initialize() with config at startup")
 }
 
 // SearchDocument performs document verification - main function
