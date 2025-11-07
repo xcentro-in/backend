@@ -12,6 +12,7 @@ import (
 	"github.com/labstack/echo/v4/middleware"
 	redis "xcentro.in/internal/adapters/cache/redis/client"
 	"xcentro.in/internal/adapters/database/postgres/client"
+	"xcentro.in/internal/adapters/providers/authbridge"
 	"xcentro.in/internal/adapters/providers/mailers"
 	metricsProvider "xcentro.in/internal/adapters/providers/metrics"
 	"xcentro.in/internal/core/metrics"
@@ -163,6 +164,13 @@ func (s *xcentroServer) registerClients() {
 		s.log.Info("Metrics provider disabled (using no-op)")
 	}
 	s.meta.clients.metrics = metricsClient
+
+	// AuthBridge client (singleton)
+	if err := authbridge.Initialize(&s.meta.config); err != nil {
+		s.log.Errorf("Failed to initialize AuthBridge client: %v", err)
+		panic(err)
+	}
+	s.log.Info("AuthBridge client initialized successfully")
 }
 
 func (s *xcentroServer) registerRouters() {

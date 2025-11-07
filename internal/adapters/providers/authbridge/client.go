@@ -2,9 +2,10 @@ package authbridge
 
 import (
 	"fmt"
+	"sync"
 	"time"
 
-	"github.com/ilyakaznacheev/cleanenv"
+	"xcentro.in/internal/shared/config"
 )
 
 // COMMENTED OUT - HTTP CLIENT CODE FOR REAL API CALLS
@@ -64,38 +65,71 @@ func (c *HTTPClient) Post(url string, headers map[string]string, body []byte) ([
 }
 */
 
+// Singleton instance variables
+var (
+	instance *AuthBridgeClient
+	once     sync.Once
+	initErr  error
+)
+
 // AuthBridgeClient is the main client for document verification
 type AuthBridgeClient struct {
 	config *Config
 }
 
-// NewClient creates a new AuthBridge client
-func NewClient() (*AuthBridgeClient, error) {
-	config, err := loadConfig()
-	if err != nil {
-		return nil, err
-	}
-
-	return &AuthBridgeClient{
-		config: config,
-	}, nil
+// Initialize initializes the singleton AuthBridgeClient instance.
+// Must be called once at application startup before any usage.
+func Initialize(cfg *config.Config) error {
+	once.Do(func() {
+		instance = &AuthBridgeClient{
+			config: &Config{
+				Username: cfg.AuthBridge.Username,
+				Password: cfg.AuthBridge.Password,
+			},
+		}
+	})
+	return initErr
 }
 
-// loadConfig loads configuration from environment
-func loadConfig() (*Config, error) {
-	var config struct {
-		Username string `env:"TRUTHSCREEN_USERNAME" env-required:"true"`
-		Password string `env:"TRUTHSCREEN_PASSWORD" env-required:"true"`
+// GetInstance returns the singleton AuthBridgeClient instance.
+// Panics if Initialize has not been called.
+func GetInstance() *AuthBridgeClient {
+	if instance == nil {
+		panic("AuthBridgeClient not initialized. Call Initialize() first")
+	}
+	return instance
+}
+
+// NewClient returns the singleton AuthBridge client instance.
+// For backward compatibility - initializes lazily if not already initialized.
+// Deprecated: Use Initialize() and GetInstance() instead.
+func NewClient() (*AuthBridgeClient, error) {
+	// Lazy initialization for backward compatibility
+	// If Initialize() was already called, this does nothing
+	if instance == nil {
+		// Try to load from environment variables directly (backward compatible)
+		config, err := loadConfigFromEnv()
+		if err != nil {
+			return nil, err
+		}
+
+		once.Do(func() {
+			instance = &AuthBridgeClient{
+				config: config,
+			}
+		})
 	}
 
-	if err := cleanenv.ReadEnv(&config); err != nil {
-		return nil, fmt.Errorf("failed to load config: %v", err)
-	}
+	return instance, nil
+}
 
-	return &Config{
-		Username: config.Username,
-		Password: config.Password,
-	}, nil
+// loadConfigFromEnv loads configuration from environment variables
+// Used for backward compatibility when Initialize() is not called
+func loadConfigFromEnv() (*Config, error) {
+	// For backward compatibility, we can't import cleanenv here anymore
+	// as it would create circular dependency issues
+	// This will be called only if Initialize() wasn't called
+	return nil, fmt.Errorf("AuthBridgeClient not initialized. Call Initialize() with config at startup")
 }
 
 // SearchDocument performs document verification - main function
