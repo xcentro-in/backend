@@ -67,12 +67,19 @@ func Initialize(redisClient *redis.Client, cfg *config.RateLimiterConfig, cookie
 			cookieDomain,
 		)
 
-		// Build default policy from config
+		// Build default policy from config using new strategies format
 		defaultPolicy := Policy{
-			Capacity:        cfg.DefaultCapacity,
-			RefillPerSecond: cfg.DefaultRefillPerSec,
-			RequestedTokens: cfg.DefaultRequestedTokens,
-			FailClosed:      false, // Default always fails open
+			Strategies: []StrategyConfig{
+				{
+					Type: "token_bucket",
+					Config: map[string]interface{}{
+						"capacity":          float64(cfg.DefaultCapacity),
+						"refill_per_second": cfg.DefaultRefillPerSec,
+						"requested_tokens":  float64(cfg.DefaultRequestedTokens),
+					},
+				},
+			},
+			FailClosed: false, // Default always fails open
 		}
 
 		// Parse custom group policies from JSON
@@ -234,16 +241,13 @@ func (rl *RateLimiter) determineScopeKey(c echo.Context, group string) (string, 
 
 // executeRateLimit executes rate limiting check with support for multiple strategies
 func (rl *RateLimiter) executeRateLimit(ctx context.Context, key string, policy Policy) (*LimitResult, error) {
-	// Get strategy configs (handles both legacy and new format)
-	strategyConfigs := policy.ToStrategyConfigs()
-
-	if len(strategyConfigs) == 0 {
+	if len(policy.Strategies) == 0 {
 		return nil, fmt.Errorf("no strategies configured for policy")
 	}
 
-	// Single strategy - simple case (backward compatible)
-	if len(strategyConfigs) == 1 {
-		return rl.executeStrategy(ctx, key, strategyConfigs[0])
+	// Single strategy - simple case
+	if len(policy.Strategies) == 1 {
+		return rl.executeStrategy(ctx, key, policy.Strategies[0])
 	}
 
 	// Multiple strategies - apply logical operation
@@ -252,7 +256,7 @@ func (rl *RateLimiter) executeRateLimit(ctx context.Context, key string, policy 
 		logicalOp = "and" // Default to AND (strictest)
 	}
 
-	return rl.executeMultipleStrategies(ctx, key, strategyConfigs, logicalOp)
+	return rl.executeMultipleStrategies(ctx, key, policy.Strategies, logicalOp)
 }
 
 // executeStrategy executes a single rate limiting strategy
@@ -369,63 +373,6 @@ func (rl *RateLimiter) combineResultsOR(results []*LimitResult) *LimitResult {
 		RemainingTokens: maxRemaining,
 		RetryAfterSecs:  minRetryAfter,
 	}
-}
-
-// executeTokenBucket executes the Lua token bucket script.
-func (rl *RateLimiter) executeTokenBucket(ctx context.Context, key string, policy Policy) (*LimitResult, error) {
-	now := time.Now().UnixMilli()
-
-	// Execute Lua script
-	result, err := rl.redis.EvalSha(ctx, rl.scriptSHA, []string{key},
-		policy.Capacity,
-		fmt.Sprintf("%f", policy.RefillPerSecond),
-		now,
-		policy.RequestedTokens,
-	).Result()
-
-	if err != nil {
-		// Script not found, reload it
-		if err.Error() == "NOSCRIPT No matching script. Please use EVAL." {
-			rl.log.Warn("Lua script not found, reloading...")
-			sha, loadErr := rl.redis.ScriptLoad(ctx, TokenBucketLuaScript).Result()
-			if loadErr != nil {
-				return nil, fmt.Errorf("failed to reload Lua script: %w", loadErr)
-			}
-			rl.mu.Lock()
-			rl.scriptSHA = sha
-			rl.mu.Unlock()
-
-			// Retry execution
-			result, err = rl.redis.EvalSha(ctx, rl.scriptSHA, []string{key},
-				policy.Capacity,
-				fmt.Sprintf("%f", policy.RefillPerSecond),
-				now,
-				policy.RequestedTokens,
-			).Result()
-
-			if err != nil {
-				return nil, fmt.Errorf("token bucket execution failed after reload: %w", err)
-			}
-		} else {
-			return nil, fmt.Errorf("token bucket execution failed: %w", err)
-		}
-	}
-
-	// Parse Lua result: {allowed, remaining_tokens, retry_after_seconds}
-	resultArray, ok := result.([]interface{})
-	if !ok || len(resultArray) != 3 {
-		return nil, fmt.Errorf("unexpected Lua script result format")
-	}
-
-	allowed := resultArray[0].(int64) == 1
-	remainingTokens := resultArray[1].(string)
-	retryAfterSecs := resultArray[2].(string)
-
-	return &LimitResult{
-		Allowed:         allowed,
-		RemainingTokens: remainingTokens,
-		RetryAfterSecs:  retryAfterSecs,
-	}, nil
 }
 
 // getPolicy returns the policy for a given group, falling back to default.
