@@ -21,15 +21,16 @@ var (
 
 // RateLimiter manages rate limiting with token-bucket algorithm.
 type RateLimiter struct {
-	redis           *redis.Client
-	deviceHandler   *DeviceHandler
-	policies        map[string]Policy
-	defaultPolicy   Policy
-	failOpenDefault bool
-	tokenKeyTTL     int // in seconds
-	scriptSHA       string
-	log             *logger.Logger
-	mu              sync.RWMutex
+	redis                   *redis.Client
+	deviceHandler           *DeviceHandler
+	policies                map[string]Policy
+	defaultPolicy           Policy
+	failOpenDefault         bool
+	tokenKeyTTL             int // in seconds
+	invalidSignaturePenalty int // in seconds
+	scriptSHA               string
+	log                     *logger.Logger
+	mu                      sync.RWMutex
 }
 
 // LimitResult represents the result of a rate limit check.
@@ -100,14 +101,15 @@ func Initialize(redisClient *redis.Client, cfg *config.RateLimiterConfig, cookie
 		}
 
 		instance = &RateLimiter{
-			redis:           redisClient,
-			deviceHandler:   deviceHandler,
-			policies:        policies,
-			defaultPolicy:   policies["default"],
-			failOpenDefault: cfg.FailOpenByDefault,
-			tokenKeyTTL:     int(cfg.TokenKeyTTL.Seconds()),
-			scriptSHA:       sha,
-			log:             log,
+			redis:                   redisClient,
+			deviceHandler:           deviceHandler,
+			policies:                policies,
+			defaultPolicy:           policies["default"],
+			failOpenDefault:         cfg.FailOpenByDefault,
+			tokenKeyTTL:             int(cfg.TokenKeyTTL.Seconds()),
+			invalidSignaturePenalty: int(cfg.InvalidSignaturePenalty.Seconds()),
+			scriptSHA:               sha,
+			log:                     log,
 		}
 
 		log.Info("RateLimiter initialized successfully")
@@ -141,7 +143,7 @@ func (rl *RateLimiter) CheckLimit(c echo.Context, group string) (*LimitResult, e
 			return &LimitResult{
 				Allowed:         false,
 				RemainingTokens: "0",
-				RetryAfterSecs:  "3600", // 1 hour penalty for tampering
+				RetryAfterSecs:  strconv.Itoa(rl.invalidSignaturePenalty),
 				Scope:           "invalid_signature",
 				PolicyGroup:     group,
 			}, nil

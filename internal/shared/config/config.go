@@ -232,6 +232,7 @@ type RateLimiterConfig struct {
 	CookieTTL                    time.Duration `json:"cookie_ttl" env:"RATE_LIMITER_COOKIE_TTL" env-default:"720h"` // 30 days
 	DeviceCreationThrottlePerIP  int           `json:"device_creation_throttle_per_ip" env:"RATE_LIMITER_DEVICE_CREATION_THROTTLE_PER_IP" env-default:"50"`
 	DeviceCreationThrottleWindow time.Duration `json:"device_creation_throttle_window" env:"RATE_LIMITER_DEVICE_CREATION_THROTTLE_WINDOW" env-default:"1h"`
+	InvalidSignaturePenalty      time.Duration `json:"invalid_signature_penalty" env:"RATE_LIMITER_INVALID_SIGNATURE_PENALTY" env-default:"1h"` // Penalty for tampered device signatures
 	TokenKeyTTL                  time.Duration `json:"token_key_ttl" env:"RATE_LIMITER_TOKEN_KEY_TTL" env-default:"2h"`
 	FailOpenByDefault            bool          `json:"fail_open_by_default" env:"RATE_LIMITER_FAIL_OPEN_BY_DEFAULT" env-default:"true"`
 
