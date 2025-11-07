@@ -82,6 +82,15 @@ func Initialize(redisClient *redis.Client, cfg *config.RateLimiterConfig, cookie
 			policies = map[string]Policy{"default": defaultPolicy}
 		}
 
+		// Merge SES policies (for email rate limiting)
+		sesPolicies := SESPolicies()
+		for group, policy := range sesPolicies {
+			if _, exists := policies[group]; !exists {
+				policies[group] = policy
+				log.Infof("Loaded SES policy: %s", group)
+			}
+		}
+
 		instance = &RateLimiter{
 			redis:           redisClient,
 			deviceHandler:   deviceHandler,
@@ -134,10 +143,10 @@ func (rl *RateLimiter) CheckLimit(c echo.Context, group string) (*LimitResult, e
 		}, nil
 	}
 
-	// Execute token bucket check
-	result, err := rl.executeTokenBucket(ctx, scopeKey, policy)
+	// Execute rate limit check (supports both legacy and multi-strategy)
+	result, err := rl.executeRateLimit(ctx, scopeKey, policy)
 	if err != nil {
-		rl.log.Errorf("Token bucket execution failed: %v", err)
+		rl.log.Errorf("Rate limit execution failed: %v", err)
 		// Fail open or closed based on policy
 		if rl.shouldFailClosed(policy) {
 			return &LimitResult{
@@ -158,6 +167,35 @@ func (rl *RateLimiter) CheckLimit(c echo.Context, group string) (*LimitResult, e
 	rl.log.Infof("Rate limit check: scope=%s, group=%s, allowed=%v, remaining=%s",
 		scopeType, group, result.Allowed, result.RemainingTokens)
 
+	return result, nil
+}
+
+// CheckLimitWithKey checks rate limit using a direct Redis key (for non-HTTP usage like SES)
+func (rl *RateLimiter) CheckLimitWithKey(ctx context.Context, key string, group string) (*LimitResult, error) {
+	// Get policy for group
+	policy := rl.getPolicy(group)
+
+	// Execute rate limit check
+	result, err := rl.executeRateLimit(ctx, key, policy)
+	if err != nil {
+		rl.log.Errorf("Rate limit execution failed: %v", err)
+		// Fail open or closed based on policy
+		if rl.shouldFailClosed(policy) {
+			return &LimitResult{
+				Allowed:     false,
+				Scope:       key,
+				PolicyGroup: group,
+			}, nil
+		}
+		return &LimitResult{
+			Allowed:     true,
+			Scope:       key,
+			PolicyGroup: group,
+		}, nil
+	}
+
+	result.Scope = key
+	result.PolicyGroup = group
 	return result, nil
 }
 
@@ -192,6 +230,145 @@ func (rl *RateLimiter) determineScopeKey(c echo.Context, group string) (string, 
 		return "", "", fmt.Errorf("unable to determine client IP")
 	}
 	return fmt.Sprintf("rl:ip:%s|%s", ip, group), "ip", nil
+}
+
+// executeRateLimit executes rate limiting check with support for multiple strategies
+func (rl *RateLimiter) executeRateLimit(ctx context.Context, key string, policy Policy) (*LimitResult, error) {
+	// Get strategy configs (handles both legacy and new format)
+	strategyConfigs := policy.ToStrategyConfigs()
+
+	if len(strategyConfigs) == 0 {
+		return nil, fmt.Errorf("no strategies configured for policy")
+	}
+
+	// Single strategy - simple case (backward compatible)
+	if len(strategyConfigs) == 1 {
+		return rl.executeStrategy(ctx, key, strategyConfigs[0])
+	}
+
+	// Multiple strategies - apply logical operation
+	logicalOp := policy.LogicalOperation
+	if logicalOp == "" {
+		logicalOp = "and" // Default to AND (strictest)
+	}
+
+	return rl.executeMultipleStrategies(ctx, key, strategyConfigs, logicalOp)
+}
+
+// executeStrategy executes a single rate limiting strategy
+func (rl *RateLimiter) executeStrategy(ctx context.Context, key string, config StrategyConfig) (*LimitResult, error) {
+	// Get or create strategy instance
+	if config.strategyInstance == nil {
+		strategy, err := CreateStrategy(config.Type, config.Config)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create strategy %s: %w", config.Type, err)
+		}
+		if strategy == nil {
+			return nil, fmt.Errorf("unknown strategy type: %s", config.Type)
+		}
+		config.strategyInstance = strategy
+	}
+
+	// Execute strategy check
+	result, err := config.strategyInstance.Check(ctx, rl.redis, key)
+	if err != nil {
+		return nil, fmt.Errorf("strategy %s failed: %w", config.Type, err)
+	}
+
+	// Convert StrategyResult to LimitResult
+	return &LimitResult{
+		Allowed:         result.Allowed,
+		RemainingTokens: result.RemainingTokens,
+		RetryAfterSecs:  result.RetryAfterSecs,
+	}, nil
+}
+
+// executeMultipleStrategies executes multiple strategies with AND/OR logic
+func (rl *RateLimiter) executeMultipleStrategies(ctx context.Context, key string, configs []StrategyConfig, logicalOp string) (*LimitResult, error) {
+	results := make([]*LimitResult, len(configs))
+
+	// Execute all strategies
+	for i, config := range configs {
+		result, err := rl.executeStrategy(ctx, key, config)
+		if err != nil {
+			return nil, fmt.Errorf("strategy %d failed: %w", i, err)
+		}
+		results[i] = result
+	}
+
+	// Apply logical operation
+	if logicalOp == "or" {
+		// OR: At least one must allow (most permissive)
+		return rl.combineResultsOR(results), nil
+	}
+
+	// AND: All must allow (strictest) - default
+	return rl.combineResultsAND(results), nil
+}
+
+// combineResultsAND combines results with AND logic - all must allow
+func (rl *RateLimiter) combineResultsAND(results []*LimitResult) *LimitResult {
+	// Find the most restrictive result
+	allowed := true
+	var maxRetryAfter string = "0"
+	var minRemaining string
+
+	for i, result := range results {
+		if !result.Allowed {
+			allowed = false
+		}
+
+		// Track maximum retry time (most restrictive)
+		if result.RetryAfterSecs > maxRetryAfter {
+			maxRetryAfter = result.RetryAfterSecs
+		}
+
+		// Track minimum remaining tokens
+		if i == 0 || result.RemainingTokens < minRemaining {
+			minRemaining = result.RemainingTokens
+		}
+	}
+
+	return &LimitResult{
+		Allowed:         allowed,
+		RemainingTokens: minRemaining,
+		RetryAfterSecs:  maxRetryAfter,
+	}
+}
+
+// combineResultsOR combines results with OR logic - at least one must allow
+func (rl *RateLimiter) combineResultsOR(results []*LimitResult) *LimitResult {
+	// Find the most permissive result
+	allowed := false
+	var minRetryAfter string
+	var maxRemaining string = "0"
+
+	for i, result := range results {
+		if result.Allowed {
+			allowed = true
+		}
+
+		// Track minimum retry time (most permissive)
+		if i == 0 || result.RetryAfterSecs < minRetryAfter {
+			minRetryAfter = result.RetryAfterSecs
+		}
+
+		// Track maximum remaining tokens
+		if result.RemainingTokens > maxRemaining {
+			maxRemaining = result.RemainingTokens
+		}
+	}
+
+	// If any strategy allows, use its retry time; otherwise use minimum
+	if allowed {
+		minRetryAfter = "0"
+	}
+
+	return &LimitResult{
+		Allowed:         allowed,
+		RemainingTokens: maxRemaining,
+		RetryAfterSecs:  minRetryAfter,
+	}
 }
 
 // executeTokenBucket executes the Lua token bucket script.
