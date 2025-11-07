@@ -18,6 +18,7 @@ import (
 	"xcentro.in/internal/core/metrics"
 	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/logger"
+	"xcentro.in/internal/shared/ratelimiter"
 	customValidator "xcentro.in/internal/shared/validator"
 )
 
@@ -143,7 +144,19 @@ func (s *xcentroServer) registerClients() {
 	s.log.Info("Redis client created successfully")
 	s.meta.clients.rcache = redisClient
 
-	// Email service (SES)
+	// Rate limiter (depends on Redis)
+	if err := ratelimiter.Initialize(
+		redisClient.Client,
+		&s.meta.config.RateLimiter,
+		s.meta.config.Cookie.Secure,
+		s.meta.config.Cookie.Domain,
+	); err != nil {
+		s.log.Errorf("Failed to initialize rate limiter: %v", err)
+		panic(err)
+	}
+	s.log.Info("Rate limiter initialized successfully")
+
+	// Email service (SES) - depends on rate limiter
 	emailService, err := mailers.NewSESClientFromConfig(s.meta.config.SES)
 	if err != nil {
 		s.log.Errorf("Failed to create email service: %v", err)

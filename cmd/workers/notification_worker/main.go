@@ -18,6 +18,7 @@ import (
 	notificationService "xcentro.in/internal/services/notification"
 	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/logger"
+	"xcentro.in/internal/shared/ratelimiter"
 	"xcentro.in/internal/workers"
 )
 
@@ -50,7 +51,17 @@ func main() {
 	}
 	defer redisClient.Close()
 
-	// Initialize SES client
+	// Initialize rate limiter (depends on Redis)
+	if err := ratelimiter.Initialize(
+		redisClient,
+		&cfg.RateLimiter,
+		cfg.Cookie.Secure,
+		cfg.Cookie.Domain,
+	); err != nil {
+		log.Fatalf("Failed to initialize rate limiter: %v", err)
+	}
+
+	// Initialize SES client (depends on rate limiter)
 	emailClient, err := mailers.NewSESClientFromConfig(cfg.SES)
 	if err != nil {
 		log.Fatalf("Failed to initialize SES client: %v", err)
