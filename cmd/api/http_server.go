@@ -149,6 +149,7 @@ func (s *xcentroServer) registerClients() {
 		redisClient.Client,
 		&s.meta.config.RateLimiter,
 		s.meta.config.Cookie.Secure,
+		s.meta.config.Cookie.SameSite,
 		s.meta.config.Cookie.Domain,
 	); err != nil {
 		s.log.Errorf("Failed to initialize rate limiter: %v", err)

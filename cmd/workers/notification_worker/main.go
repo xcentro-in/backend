@@ -56,6 +56,7 @@ func main() {
 		redisClient,
 		&cfg.RateLimiter,
 		cfg.Cookie.Secure,
+		cfg.Cookie.SameSite,
 		cfg.Cookie.Domain,
 	); err != nil {
 		log.Fatalf("Failed to initialize rate limiter: %v", err)

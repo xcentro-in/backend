@@ -43,7 +43,7 @@ type LimitResult struct {
 
 // Initialize initializes the singleton RateLimiter instance.
 // Must be called once at application startup before any middleware usage.
-func Initialize(redisClient *redis.Client, cfg *config.RateLimiterConfig, cookieSecure bool, cookieDomain string) error {
+func Initialize(redisClient *redis.Client, cfg *config.RateLimiterConfig, cookieSecure bool, cookieSameSite string, cookieDomain string) error {
 	var initErr error
 	once.Do(func() {
 		log := logger.GetDefault()
@@ -64,6 +64,7 @@ func Initialize(redisClient *redis.Client, cfg *config.RateLimiterConfig, cookie
 			cfg.DeviceCreationThrottlePerIP,
 			cfg.DeviceCreationThrottleWindow,
 			cookieSecure,
+			cookieSameSite,
 			cookieDomain,
 		)
 

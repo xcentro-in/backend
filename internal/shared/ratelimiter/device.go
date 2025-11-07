@@ -31,8 +31,23 @@ type DeviceHandler struct {
 	creationThrottlePerIP  int
 	creationThrottleWindow time.Duration
 	cookieSecure           bool
+	cookieSameSite         http.SameSite
 	cookieDomain           string
 	log                    *logger.Logger
+}
+
+// getSameSiteMode converts config string to http.SameSite enum.
+func getSameSiteMode(sameSite string) http.SameSite {
+	switch sameSite {
+	case "Strict":
+		return http.SameSiteStrictMode
+	case "Lax":
+		return http.SameSiteLaxMode
+	case "None":
+		return http.SameSiteNoneMode
+	default:
+		return http.SameSiteLaxMode
+	}
 }
 
 // NewDeviceHandler creates a new device handler with HMAC signing.
@@ -44,6 +59,7 @@ func NewDeviceHandler(
 	creationThrottlePerIP int,
 	creationThrottleWindow time.Duration,
 	cookieSecure bool,
+	cookieSameSite string,
 	cookieDomain string,
 ) *DeviceHandler {
 	return &DeviceHandler{
@@ -54,6 +70,7 @@ func NewDeviceHandler(
 		creationThrottlePerIP:  creationThrottlePerIP,
 		creationThrottleWindow: creationThrottleWindow,
 		cookieSecure:           cookieSecure,
+		cookieSameSite:         getSameSiteMode(cookieSameSite),
 		cookieDomain:           cookieDomain,
 		log:                    logger.GetDefault(),
 	}
@@ -185,7 +202,7 @@ func (dh *DeviceHandler) setSignedDeviceCookie(c echo.Context, deviceID string) 
 		Expires:  time.Now().Add(dh.cookieTTL),
 		HttpOnly: true,
 		Secure:   dh.cookieSecure,
-		SameSite: http.SameSiteLaxMode,
+		SameSite: dh.cookieSameSite,
 	}
 	if dh.cookieDomain != "" {
 		cookie.Domain = dh.cookieDomain
