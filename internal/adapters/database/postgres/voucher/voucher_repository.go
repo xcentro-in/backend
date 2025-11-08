@@ -1361,6 +1361,29 @@ func (r *PostgresVoucherRepository) CreateOrUpdateApproval(ctx context.Context, 
 		return nil, fmt.Errorf("invalid approver_user_id: %w", err)
 	}
 
+	// Determine the actual requester based on action
+	// For "pending" - current user is the requester (creating new approval request)
+	// For "approved/rejected/request_changes" - fetch original requester from existing approval
+	var actualRequesterUserID uuid.UUID
+
+	if req.Action == voucher.ApprovalActionPending {
+		// New approval request - current user is the requester
+		actualRequesterUserID = requesterUserID
+	} else {
+		// Response to existing approval - get original requester from most recent approval record
+		fetchQuery := `
+			SELECT requester_user_id
+			FROM xcentro.voucher_approvals
+			WHERE voucher_id = $1
+			ORDER BY created_at DESC
+			LIMIT 1
+		`
+		err := r.querier.QueryRow(ctx, fetchQuery, voucherID).Scan(&actualRequesterUserID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get original requester for voucher: %w", err)
+		}
+	}
+
 	// Always INSERT a new row for each approval action (audit trail)
 	approvalID := uuid.Must(uuid.NewV7())
 	now := time.Now()
@@ -1377,7 +1400,7 @@ func (r *PostgresVoucherRepository) CreateOrUpdateApproval(ctx context.Context, 
 	err = r.querier.QueryRow(ctx, query,
 		approvalID,
 		voucherID,
-		requesterUserID,
+		actualRequesterUserID, // Use the actual requester (original requester for responses)
 		approverUserID,
 		req.Action,
 		req.Remarks,
@@ -1407,7 +1430,7 @@ func (r *PostgresVoucherRepository) CreateOrUpdateApproval(ctx context.Context, 
 		ApprovalID:      approvalID.String(),
 		VoucherID:       req.VoucherID,
 		Action:          req.Action,
-		RequesterUserID: req.RequesterUserID,
+		RequesterUserID: actualRequesterUserID.String(), // Return the actual requester for notifications
 		CreatedAt:       createdAt,
 	}, nil
 }
