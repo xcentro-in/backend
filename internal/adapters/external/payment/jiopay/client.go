@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
 	"xcentro.in/internal/core/business"
+	"xcentro.in/internal/core/metrics"
 	"xcentro.in/internal/core/payment"
 	"xcentro.in/internal/shared/logger"
 )
@@ -28,6 +30,7 @@ type JioPayClient struct {
 	hashGenerator       *SecureHashGenerator       // Hash generator for request/response signatures
 	businessOwnerSvc    business.BusinessService   // Business service for fetching owner mobile (JioPay externalId requirement)
 	logger              *logger.Logger             // Logger for debugging and monitoring
+	metrics             metrics.MetricsProvider
 }
 
 // NewJioPayClient creates a new JioPay payment gateway client
@@ -54,7 +57,12 @@ type JioPayClient struct {
 //	    cfg.JioPay.IsAggregatorModel,
 //	    businessOwnerService,
 //	)
-func NewJioPayClient(baseURL, tokenizationBaseURL, merchantID, apiKey, appID, encryptionKey string, isAggregatorModel bool, businessOwnerSvc business.BusinessService) payment.PaymentGateway {
+func NewJioPayClient(baseURL, tokenizationBaseURL, merchantID, apiKey, appID, encryptionKey string, isAggregatorModel bool, businessOwnerSvc business.BusinessService, metricsProvider metrics.MetricsProvider) payment.PaymentGateway {
+	// Use no-op metrics if not provided
+	if metricsProvider == nil {
+		metricsProvider = metrics.NewNoOpMetricsProvider()
+	}
+
 	return &JioPayClient{
 		baseURL:             baseURL,
 		tokenizationBaseURL: tokenizationBaseURL,
@@ -69,6 +77,7 @@ func NewJioPayClient(baseURL, tokenizationBaseURL, merchantID, apiKey, appID, en
 		},
 		hashGenerator: NewSecureHashGenerator(apiKey),
 		logger:        logger.GetDefault(),
+		metrics:       metricsProvider,
 	}
 }
 
@@ -180,18 +189,56 @@ func (c *JioPayClient) TokenizeCard(ctx context.Context, request payment.Gateway
 	req.Header.Set("x-app-token", xAppToken)
 
 
+	// Track gateway request
+	_ = c.metrics.Counter(ctx, "gateway.request", 1, metrics.MetricLabels{
+		"gateway":   "jiopay",
+		"operation": "tokenize",
+	})
+
+	startTime := time.Now()
 	resp, err := c.httpClient.Do(req)
+	duration := time.Since(startTime)
+
 	if err != nil {
+		// Track error
+		_ = c.metrics.Counter(ctx, "gateway.error", 1, metrics.MetricLabels{
+			"gateway":    "jiopay",
+			"operation":  "tokenize",
+			"error_type": "network_error",
+		})
+		_ = c.metrics.Timer(ctx, "gateway.response_time", duration, metrics.MetricLabels{
+			"gateway":   "jiopay",
+			"operation": "tokenize",
+			"status":    "error",
+		})
 		return nil, fmt.Errorf("HTTP request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
+		_ = c.metrics.Counter(ctx, "gateway.error", 1, metrics.MetricLabels{
+			"gateway":    "jiopay",
+			"operation":  "tokenize",
+			"error_type": "read_error",
+		})
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 
+	// Track response time
+	_ = c.metrics.Timer(ctx, "gateway.response_time", duration, metrics.MetricLabels{
+		"gateway":     "jiopay",
+		"operation":   "tokenize",
+		"status_code": strconv.Itoa(resp.StatusCode),
+	})
+
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		_ = c.metrics.Counter(ctx, "gateway.error", 1, metrics.MetricLabels{
+			"gateway":     "jiopay",
+			"operation":   "tokenize",
+			"error_type":  "http_error",
+			"status_code": strconv.Itoa(resp.StatusCode),
+		})
 		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
 	}
 
@@ -312,18 +359,55 @@ func (c *JioPayClient) GenerateCryptogram(ctx context.Context, request payment.C
 	req.Header.Set("x-app-token", xAppToken)
 
 
+	// Track gateway request
+	_ = c.metrics.Counter(ctx, "gateway.request", 1, metrics.MetricLabels{
+		"gateway":   "jiopay",
+		"operation": "cryptogram",
+	})
+
+	startTime := time.Now()
 	resp, err := c.httpClient.Do(req)
+	duration := time.Since(startTime)
+
 	if err != nil {
+		_ = c.metrics.Counter(ctx, "gateway.error", 1, metrics.MetricLabels{
+			"gateway":    "jiopay",
+			"operation":  "cryptogram",
+			"error_type": "network_error",
+		})
+		_ = c.metrics.Timer(ctx, "gateway.response_time", duration, metrics.MetricLabels{
+			"gateway":   "jiopay",
+			"operation": "cryptogram",
+			"status":    "error",
+		})
 		return nil, fmt.Errorf("HTTP request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
+		_ = c.metrics.Counter(ctx, "gateway.error", 1, metrics.MetricLabels{
+			"gateway":    "jiopay",
+			"operation":  "cryptogram",
+			"error_type": "read_error",
+		})
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 
+	// Track response time
+	_ = c.metrics.Timer(ctx, "gateway.response_time", duration, metrics.MetricLabels{
+		"gateway":     "jiopay",
+		"operation":   "cryptogram",
+		"status_code": strconv.Itoa(resp.StatusCode),
+	})
+
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		_ = c.metrics.Counter(ctx, "gateway.error", 1, metrics.MetricLabels{
+			"gateway":     "jiopay",
+			"operation":   "cryptogram",
+			"error_type":  "http_error",
+			"status_code": strconv.Itoa(resp.StatusCode),
+		})
 		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
 	}
 
