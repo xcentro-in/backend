@@ -1,8 +1,11 @@
 package mockpg
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/google/uuid"
@@ -15,8 +18,9 @@ type MockPGClient struct {
 	merchantID string
 	apiKey     string
 	// Configuration for simulating different scenarios
-	simulateSuccess bool // If true, always return success; if false, simulate failures
-	delayMs         int  // Artificial delay in milliseconds to simulate network latency
+	simulateSuccess bool          // If true, always return success; if false, simulate failures
+	delayMs         int           // Artificial delay in milliseconds to simulate network latency
+	webhookDelay    time.Duration // Delay before sending webhook (default: 2 minutes)
 }
 
 // NewMockPGClient creates a new mock payment gateway client
@@ -38,7 +42,8 @@ func NewMockPGClient(merchantID, apiKey string, simulateSuccess bool) payment.Pa
 		merchantID:      merchantID,
 		apiKey:          apiKey,
 		simulateSuccess: simulateSuccess,
-		delayMs:         100, // Simulate 100ms network delay
+		delayMs:         100,           // Simulate 100ms network delay
+		webhookDelay:    2 * time.Minute, // Send webhook after 2 minutes
 	}
 }
 
@@ -214,18 +219,29 @@ func (c *MockPGClient) InitiatePayment(ctx context.Context, request payment.Gate
 		}
 	}
 
-	fmt.Printf("✅ Payment initiated successfully\n")
+	fmt.Printf("✅ Payment request accepted (PENDING - awaiting user authentication)\n")
 	fmt.Printf("🌐 Redirect URL: %s\n", redirectURL)
 	fmt.Printf("🔑 Gateway Payment ID: %s\n", mockGatewayPaymentID)
 
-	// Create response
+	// Schedule webhook to be sent after delay (simulates payment completion after OTP/3DS)
+	c.sendWebhookAfterDelay(
+		request.CallbackURL,
+		request.TransactionID,
+		mockGatewayPaymentID,
+		request.Amount,
+		string(request.Currency),
+		string(request.PaymentMethod),
+	)
+
+	// Create response - returns PENDING status (payment not complete yet)
+	// Real payment gateways return PENDING here and send final status via webhook
 	response := &payment.GatewayPaymentResponse{
 		PaymentID:        request.TransactionID,
 		GatewayPaymentID: mockGatewayPaymentID,
 		TransactionID:    request.TransactionID,
-		Status:           status,
-		Message:          "Payment initiated successfully via Mock PG",
-		RedirectURL:      redirectURL,
+		Status:           status, // PENDING - waiting for user to complete OTP/3DS
+		Message:          "Payment initiated - redirect user for authentication",
+		RedirectURL:      redirectURL, // User should be redirected here for OTP/3DS
 		Amount:           request.Amount,
 		Currency:         request.Currency,
 		CreatedAt:        time.Now(),
@@ -236,9 +252,11 @@ func (c *MockPGClient) InitiatePayment(ctx context.Context, request payment.Gate
 			"tokenized":        request.Token != "",
 			"merchant_id":      c.merchantID,
 			"simulate_success": c.simulateSuccess,
+			"webhook_delay":    c.webhookDelay.String(),
 		},
 	}
 
+	fmt.Printf("📌 Note: Webhook will be sent to %s after %v\n", request.CallbackURL, c.webhookDelay)
 	fmt.Println("=== MOCK PG GATEWAY: InitiatePayment Complete ===")
 	return response, nil
 }
@@ -300,4 +318,81 @@ func getMockBankName(cardType payment.CardType) string {
 	default:
 		return "Mock Bank"
 	}
+}
+
+// === WEBHOOK SIMULATION ===
+
+// MockPGWebhookPayload represents the webhook payload sent by Mock PG
+// This simulates the payment completion notification sent after user completes OTP/3DS
+type MockPGWebhookPayload struct {
+	MerchantID       string `json:"merchant_id"`        // Mock merchant ID
+	TransactionID    string `json:"transaction_id"`     // Our payment ID
+	GatewayPaymentID string `json:"gateway_payment_id"` // Mock gateway payment ID
+	Status           string `json:"status"`             // "success" or "failed"
+	Amount           int64  `json:"amount"`             // Amount in smallest unit
+	Currency         string `json:"currency"`           // Currency code
+	PaymentMethod    string `json:"payment_method"`     // Payment method used
+	ProcessedAt      string `json:"processed_at"`       // ISO 8601 timestamp
+	Signature        string `json:"signature"`          // Mock signature
+}
+
+// sendWebhookAfterDelay simulates the async webhook sent by payment gateways
+// This runs in a background goroutine and sends the webhook after the configured delay
+func (c *MockPGClient) sendWebhookAfterDelay(callbackURL, transactionID, gatewayPaymentID string, amount int64, currency, paymentMethod string) {
+	go func() {
+		fmt.Printf("⏰ Mock PG: Webhook scheduled for transaction %s (will fire in %v)\n", transactionID, c.webhookDelay)
+
+		// Wait for the configured delay
+		time.Sleep(c.webhookDelay)
+
+		// Determine webhook status based on simulateSuccess
+		webhookStatus := "success"
+		if !c.simulateSuccess {
+			// 10% failure rate for webhook
+			if time.Now().UnixNano()%10 == 0 {
+				webhookStatus = "failed"
+			}
+		}
+
+		// Build webhook payload
+		payload := MockPGWebhookPayload{
+			MerchantID:       c.merchantID,
+			TransactionID:    transactionID,
+			GatewayPaymentID: gatewayPaymentID,
+			Status:           webhookStatus,
+			Amount:           amount,
+			Currency:         currency,
+			PaymentMethod:    paymentMethod,
+			ProcessedAt:      time.Now().UTC().Format(time.RFC3339),
+			Signature:        fmt.Sprintf("MOCK_SIG_%s", uuid.Must(uuid.NewV7()).String()[:16]),
+		}
+
+		// Marshal to JSON
+		payloadBytes, err := json.Marshal(payload)
+		if err != nil {
+			fmt.Printf("❌ Mock PG: Failed to marshal webhook payload: %v\n", err)
+			return
+		}
+
+		fmt.Printf("📤 Mock PG: Sending webhook to %s\n", callbackURL)
+		fmt.Printf("📦 Webhook payload: %s\n", string(payloadBytes))
+
+		// Send POST request to callback URL
+		client := &http.Client{
+			Timeout: 30 * time.Second,
+		}
+
+		resp, err := client.Post(callbackURL, "application/json", bytes.NewReader(payloadBytes))
+		if err != nil {
+			fmt.Printf("❌ Mock PG: Failed to send webhook: %v\n", err)
+			return
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			fmt.Printf("✅ Mock PG: Webhook delivered successfully (status: %d, payment: %s)\n", resp.StatusCode, webhookStatus)
+		} else {
+			fmt.Printf("⚠️  Mock PG: Webhook delivery got status %d\n", resp.StatusCode)
+		}
+	}()
 }
