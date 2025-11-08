@@ -320,6 +320,73 @@ func (r *PgUserRepository) GetUserKYCStatus(ctx context.Context, userID string) 
 	return &u, userIdentity, nil
 }
 
+// GetUserIdentityByTaxID retrieves user identity by tax ID (alias for GetUserIdentity)
+func (r *PgUserRepository) GetUserIdentityByTaxID(ctx context.Context, taxID string) (*user.UserIdentity, error) {
+	return r.GetUserIdentity(ctx, taxID)
+}
+
+// GetUserIdentityByTxnID retrieves user identity by Aadhaar transaction ID
+func (r *PgUserRepository) GetUserIdentityByTxnID(ctx context.Context, txnID string) (*user.UserIdentity, error) {
+	query := `
+		SELECT tax_id, tax_id_data, national_id, national_id_data, n_txn_id
+		FROM xcentro.user_identity
+		WHERE n_txn_id = $1
+	`
+
+	var identity user.UserIdentity
+	var nationalID, taxIDData, nationalIDData, nTxnID sql.NullString
+
+	err := r.querier.QueryRow(ctx, query, txnID).Scan(
+		&identity.TaxID, &taxIDData, &nationalID, &nationalIDData, &nTxnID,
+	)
+
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("user identity not found for transaction ID: %s", txnID)
+		}
+		return nil, fmt.Errorf("failed to get user identity by txn_id: %w", err)
+	}
+
+	identity.TaxIDData = taxIDData.String
+	identity.NationalID = nationalID.String
+	identity.NationalIDData = nationalIDData.String
+	identity.NTxnID = nTxnID.String
+
+	return &identity, nil
+}
+
+// GetUserByTaxID retrieves user by tax ID
+func (r *PgUserRepository) GetUserByTaxID(ctx context.Context, taxID string) (*user.User, error) {
+	query := `
+		SELECT id, email, mobile, name, dob, tax_id, kyc_status, email_verified, mobile_verified
+		FROM xcentro.user_table
+		WHERE tax_id = $1
+	`
+
+	var u user.User
+	var userMobile, userTaxID, userName, userDOB sql.NullString
+	var kycStatusStr string
+
+	err := r.querier.QueryRow(ctx, query, taxID).Scan(
+		&u.Id, &u.Email, &userMobile, &userName, &userDOB, &userTaxID, &kycStatusStr, &u.EmailVerified, &u.MobileVerified,
+	)
+
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("user not found for tax_id: %s", taxID)
+		}
+		return nil, fmt.Errorf("failed to get user by tax_id: %w", err)
+	}
+
+	u.Mobile = userMobile.String
+	u.TaxID = userTaxID.String
+	u.Name = userName.String
+	u.DOB = userDOB.String
+	u.KycStatus = parseKYCStatus(kycStatusStr)
+
+	return &u, nil
+}
+
 // CreateVerificationCode creates a new verification code
 func (r *PgUserRepository) CreateVerificationCode(ctx context.Context, code *user.UserVerificationCodes) error {
 	query := `

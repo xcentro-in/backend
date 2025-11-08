@@ -20,6 +20,7 @@ type BusinessRepository interface {
 	// New onboarding-specific methods
 	UpdateGSTData(ctx context.Context, bid string, gstDataJSON string) error
 	GetBusinessWithKYBData(ctx context.Context, bid string) (*Business, *BusinessKYBData, error)
+	GetKYBDataByPAN(ctx context.Context, pan string) (*BusinessKYBData, error)
 	UpdateOnboardingFlag(ctx context.Context, bid string, flagName string, value bool) error
 }
 

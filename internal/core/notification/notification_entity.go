@@ -182,6 +182,11 @@ type UpdatePreferencesRequest struct {
 	CategoryPreferences map[string]interface{} `json:"category_preferences,omitempty"`
 }
 
+// MarkMultipleAsReadRequest represents the request to mark multiple notifications as read
+type MarkMultipleAsReadRequest struct {
+	NotificationIDs []int64 `json:"notification_ids" validate:"required,min=1,dive,gt=0"`
+}
+
 // #############################################################################
 // # MAIN ENTITIES (Level 3 - Database tables, depends on composite types)
 // #############################################################################

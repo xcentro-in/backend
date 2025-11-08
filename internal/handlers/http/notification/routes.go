@@ -5,6 +5,7 @@ import (
 	"xcentro.in/internal/core/auth"
 	"xcentro.in/internal/core/notification"
 	"xcentro.in/internal/middleware"
+	"xcentro.in/internal/shared/ratelimiter"
 )
 
 // RegisterNotificationRoutes registers all notification endpoints
@@ -14,6 +15,9 @@ func RegisterNotificationRoutes(group *echo.Group, notifService notification.Not
 
 	// Create notification group
 	notifGroup := group.Group("/notifications")
+
+	// Apply rate limiting to all notification routes
+	notifGroup.Use(ratelimiter.MiddlewareDefault())
 
 	// Apply JWT middleware to all notification routes
 	notifGroup.Use(middleware.JWTMiddleware(authService))

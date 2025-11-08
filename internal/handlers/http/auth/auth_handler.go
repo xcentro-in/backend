@@ -10,6 +10,8 @@ import (
 	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/httputil"
 	"xcentro.in/internal/shared/logger"
+	"xcentro.in/internal/shared/ratelimiter"
+	customValidator "xcentro.in/internal/shared/validator"
 )
 
 func placeHolderFn(c echo.Context) error { return c.String(200, "Not Implemented") }
@@ -34,6 +36,7 @@ func RegisterAuthRoutes(e *echo.Group, authService auth.AuthService, businessSer
 	authHandler := NewAuthHandler(authService, businessService, cfg)
 
 	authGroup := e.Group("/auth")
+	authGroup.Use(ratelimiter.MiddlewareDefault())
 
 	// Public routes
 	authGroup.POST("/login", authHandler.HandleLogin)
@@ -64,14 +67,19 @@ func RegisterAuthRoutes(e *echo.Group, authService auth.AuthService, businessSer
 func (ah AuthHandler) HandleSignup(c echo.Context) error {
 	var signupReq auth.AuthPayload
 
-	// Bind and validate input
+	// Bind input
 	if err := c.Bind(&signupReq); err != nil {
 		logger.Errorf("Invalid input: %v", err)
 		return c.JSON(400, map[string]any{"message": "Invalid input provided", "data": nil})
 	}
 
-	if signupReq.Email == "" || signupReq.Password == "" {
-		return c.JSON(400, map[string]any{"message": "Email and password are required", "data": nil})
+	// Validate input
+	if err := c.Validate(&signupReq); err != nil {
+		logger.Errorf("Validation failed: %v", err)
+		if ve, ok := err.(*customValidator.ValidationError); ok {
+			return c.JSON(400, map[string]any{"message": "Validation failed", "errors": ve.Errors, "data": nil})
+		}
+		return c.JSON(400, map[string]any{"message": "Validation failed", "data": nil})
 	}
 
 	// Delegate to service
@@ -103,14 +111,19 @@ func (ah AuthHandler) HandleSignup(c echo.Context) error {
 func (ah AuthHandler) HandleLogin(c echo.Context) error {
 	var loginReq auth.AuthPayload
 
-	// Bind and validate input
+	// Bind input
 	if err := c.Bind(&loginReq); err != nil {
 		logger.Errorf("Invalid input: %v", err)
 		return c.JSON(400, map[string]any{"message": "Invalid input provided", "data": nil})
 	}
 
-	if loginReq.Email == "" || loginReq.Password == "" {
-		return c.JSON(400, map[string]any{"message": "Email and password are required", "data": nil})
+	// Validate input
+	if err := c.Validate(&loginReq); err != nil {
+		logger.Errorf("Validation failed: %v", err)
+		if ve, ok := err.(*customValidator.ValidationError); ok {
+			return c.JSON(400, map[string]any{"message": "Validation failed", "errors": ve.Errors, "data": nil})
+		}
+		return c.JSON(400, map[string]any{"message": "Validation failed", "data": nil})
 	}
 
 	// Get user agent from request
@@ -183,14 +196,19 @@ func (ah AuthHandler) HandleRevokeToken(c echo.Context) error {
 
 	var req auth.RevokeTokenRequest
 
-	// Bind and validate input
+	// Bind input
 	if err := c.Bind(&req); err != nil {
 		logger.Errorf("Invalid input: %v", err)
 		return c.JSON(400, map[string]any{"message": "Invalid input provided", "data": nil})
 	}
 
-	if req.RefreshToken == "" {
-		return c.JSON(400, map[string]any{"message": "Refresh token is required", "data": nil})
+	// Validate input
+	if err := c.Validate(&req); err != nil {
+		logger.Errorf("Validation failed: %v", err)
+		if ve, ok := err.(*customValidator.ValidationError); ok {
+			return c.JSON(400, map[string]any{"message": "Validation failed", "errors": ve.Errors, "data": nil})
+		}
+		return c.JSON(400, map[string]any{"message": "Validation failed", "data": nil})
 	}
 
 	// Delegate to service
@@ -297,19 +315,21 @@ func (ah AuthHandler) HandleForgotPassword(c echo.Context) error {
 
 // HandleResetPassword processes password reset with token
 func (ah AuthHandler) HandleResetPassword(c echo.Context) error {
-	var req struct {
-		Token       string `json:"token"`
-		NewPassword string `json:"newPassword"`
-	}
+	var req auth.ResetPasswordRequest
 
-	// Bind and validate input
+	// Bind input
 	if err := c.Bind(&req); err != nil {
 		logger.Errorf("Invalid input: %v", err)
 		return c.JSON(400, map[string]any{"message": "Invalid input provided", "data": nil})
 	}
 
-	if req.Token == "" || req.NewPassword == "" {
-		return c.JSON(400, map[string]any{"message": "Token and new password are required", "data": nil})
+	// Validate input
+	if err := c.Validate(&req); err != nil {
+		logger.Errorf("Validation failed: %v", err)
+		if ve, ok := err.(*customValidator.ValidationError); ok {
+			return c.JSON(400, map[string]any{"message": "Validation failed", "errors": ve.Errors, "data": nil})
+		}
+		return c.JSON(400, map[string]any{"message": "Validation failed", "data": nil})
 	}
 
 	// Delegate to service
@@ -332,19 +352,21 @@ func (ah AuthHandler) HandleChangePassword(c echo.Context) error {
 		return c.JSON(401, map[string]any{"message": "Unauthorized", "data": nil})
 	}
 
-	var req struct {
-		OldPassword string `json:"oldPassword"`
-		NewPassword string `json:"newPassword"`
-	}
+	var req auth.ChangePasswordRequest
 
-	// Bind and validate input
+	// Bind input
 	if err := c.Bind(&req); err != nil {
 		logger.Errorf("Invalid input: %v", err)
 		return c.JSON(400, map[string]any{"message": "Invalid input provided", "data": nil})
 	}
 
-	if req.OldPassword == "" || req.NewPassword == "" {
-		return c.JSON(400, map[string]any{"message": "Old and new passwords are required", "data": nil})
+	// Validate input
+	if err := c.Validate(&req); err != nil {
+		logger.Errorf("Validation failed: %v", err)
+		if ve, ok := err.(*customValidator.ValidationError); ok {
+			return c.JSON(400, map[string]any{"message": "Validation failed", "errors": ve.Errors, "data": nil})
+		}
+		return c.JSON(400, map[string]any{"message": "Validation failed", "data": nil})
 	}
 
 	// Delegate to service
@@ -395,18 +417,21 @@ func (ah AuthHandler) HandleGetBusinessOnboardingFlags(c echo.Context) error {
 
 // HandleVerifyEmail verifies user's email using verification token
 func (ah AuthHandler) HandleVerifyEmail(c echo.Context) error {
-	// Parse request body
-	type VerifyEmailRequest struct {
-		Token string `json:"token"`
-	}
+	var req auth.VerifyEmailRequest
 
-	var req VerifyEmailRequest
+	// Bind input
 	if err := c.Bind(&req); err != nil {
-		return c.JSON(400, map[string]string{"message": "Invalid request payload"})
+		logger.Errorf("Invalid input: %v", err)
+		return c.JSON(400, map[string]any{"message": "Invalid request payload", "data": nil})
 	}
 
-	if req.Token == "" {
-		return c.JSON(400, map[string]string{"message": "Verification token is required"})
+	// Validate input
+	if err := c.Validate(&req); err != nil {
+		logger.Errorf("Validation failed: %v", err)
+		if ve, ok := err.(*customValidator.ValidationError); ok {
+			return c.JSON(400, map[string]any{"message": "Validation failed", "errors": ve.Errors, "data": nil})
+		}
+		return c.JSON(400, map[string]any{"message": "Validation failed", "data": nil})
 	}
 
 	if err := ah.authService.VerifyEmailWithToken(c.Request().Context(), req.Token); err != nil {
@@ -433,15 +458,21 @@ func (ah AuthHandler) HandleVerifyEmail(c echo.Context) error {
 
 // HandleResendEmailVerification resends email verification token
 func (ah AuthHandler) HandleResendEmailVerification(c echo.Context) error {
-	var req struct {
-		Email string `json:"email"`
-	}
+	var req auth.ResendVerificationRequest
+
+	// Bind input
 	if err := c.Bind(&req); err != nil {
-		return c.JSON(400, map[string]string{"message": "Invalid request payload"})
+		logger.Errorf("Invalid input: %v", err)
+		return c.JSON(400, map[string]any{"message": "Invalid request payload", "data": nil})
 	}
 
-	if req.Email == "" {
-		return c.JSON(400, map[string]string{"message": "Email is required"})
+	// Validate input
+	if err := c.Validate(&req); err != nil {
+		logger.Errorf("Validation failed: %v", err)
+		if ve, ok := err.(*customValidator.ValidationError); ok {
+			return c.JSON(400, map[string]any{"message": "Validation failed", "errors": ve.Errors, "data": nil})
+		}
+		return c.JSON(400, map[string]any{"message": "Validation failed", "data": nil})
 	}
 
 	if err := ah.authService.ResendEmailVerification(c.Request().Context(), req.Email); err != nil {

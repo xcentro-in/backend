@@ -21,7 +21,10 @@ type UserRepository interface {
 	// KYC Identity management
 	UpsertUserIdentity(ctx context.Context, identity *UserIdentity) error
 	GetUserIdentity(ctx context.Context, taxID string) (*UserIdentity, error)
+	GetUserIdentityByTaxID(ctx context.Context, taxID string) (*UserIdentity, error)
+	GetUserIdentityByTxnID(ctx context.Context, txnID string) (*UserIdentity, error)
 	GetUserKYCStatus(ctx context.Context, userID string) (*User, *UserIdentity, error)
+	GetUserByTaxID(ctx context.Context, taxID string) (*User, error)
 
 	// Email and Mobile verification methods
 	CreateVerificationCode(ctx context.Context, code *UserVerificationCodes) error

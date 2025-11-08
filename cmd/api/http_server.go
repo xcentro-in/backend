@@ -12,11 +12,14 @@ import (
 	"github.com/labstack/echo/v4/middleware"
 	redis "xcentro.in/internal/adapters/cache/redis/client"
 	"xcentro.in/internal/adapters/database/postgres/client"
+	"xcentro.in/internal/adapters/providers/authbridge"
 	"xcentro.in/internal/adapters/providers/mailers"
 	metricsProvider "xcentro.in/internal/adapters/providers/metrics"
 	"xcentro.in/internal/core/metrics"
 	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/logger"
+	"xcentro.in/internal/shared/ratelimiter"
+	customValidator "xcentro.in/internal/shared/validator"
 )
 
 type externalClients struct {
@@ -66,6 +69,7 @@ func NewXcentroServer() *xcentroServer {
 	}
 
 	server.loadConfig()
+	server.registerValidator()
 	server.registerGlobalMiddleware()
 	server.registerClients()
 	server.registerRouters()
@@ -115,6 +119,11 @@ func (s *xcentroServer) loadConfig() {
 	s.meta.config = cfg
 }
 
+func (s *xcentroServer) registerValidator() {
+	s.echo.Validator = customValidator.NewCustomValidator()
+	s.log.Info("Custom validator registered successfully")
+}
+
 func (s *xcentroServer) registerClients() {
 	// Postgres client
 	pgxclient, err := client.NewPgxDB(context.Background(), s.meta.config.Database.ToDBConfig())
@@ -135,7 +144,20 @@ func (s *xcentroServer) registerClients() {
 	s.log.Info("Redis client created successfully")
 	s.meta.clients.rcache = redisClient
 
-	// Email service (SES)
+	// Rate limiter (depends on Redis)
+	if err := ratelimiter.Initialize(
+		redisClient.Client,
+		&s.meta.config.RateLimiter,
+		s.meta.config.Cookie.Secure,
+		s.meta.config.Cookie.SameSite,
+		s.meta.config.Cookie.Domain,
+	); err != nil {
+		s.log.Errorf("Failed to initialize rate limiter: %v", err)
+		panic(err)
+	}
+	s.log.Info("Rate limiter initialized successfully")
+
+	// Email service (SES) - depends on rate limiter
 	emailService, err := mailers.NewSESClientFromConfig(s.meta.config.SES)
 	if err != nil {
 		s.log.Errorf("Failed to create email service: %v", err)
@@ -156,6 +178,13 @@ func (s *xcentroServer) registerClients() {
 		s.log.Info("Metrics provider disabled (using no-op)")
 	}
 	s.meta.clients.metrics = metricsClient
+
+	// AuthBridge client (singleton)
+	if err := authbridge.Initialize(&s.meta.config); err != nil {
+		s.log.Errorf("Failed to initialize AuthBridge client: %v", err)
+		panic(err)
+	}
+	s.log.Info("AuthBridge client initialized successfully")
 }
 
 func (s *xcentroServer) registerRouters() {

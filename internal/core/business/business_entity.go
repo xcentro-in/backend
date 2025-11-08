@@ -81,10 +81,10 @@ type OnboardingInitResponse struct {
 }
 
 type CompleteKYBRequest struct {
-	BID          string              `json:"bid"`
-	BusinessType shared.BusinessType `json:"businessType"`
-	ITID         string              `json:"itid"`          // Income Tax ID (PAN)
-	CID          string              `json:"cid,omitempty"` // Company ID (CIN) - required for certain business types
+	BID          string              `json:"bid" validate:"required"`
+	BusinessType shared.BusinessType `json:"businessType" validate:"required"`
+	ITID         string              `json:"itid" validate:"required,pan"`      // Income Tax ID (PAN)
+	CID          string              `json:"cid,omitempty" validate:"omitempty,cin"` // Company ID (CIN) - required for certain business types
 }
 
 type CompleteKYBResponse struct {
@@ -143,4 +143,28 @@ type BusinessOnboardingStatusDTO struct {
 	HasAddedPaymentMethod  bool `json:"hasAddedPaymentMethod"`
 	HasAddedVendor         bool `json:"hasAddedVendor"`
 	HasCreatedFirstPayment bool `json:"hasCreatedFirstPayment"`
+}
+
+// InitiateOnboardingRequest represents the request to initiate business onboarding
+type InitiateOnboardingRequest struct {
+	Name  string `json:"name" validate:"required"`
+	GSTIN string `json:"gstin" validate:"required,gstin"`
+}
+
+// InviteUserRequest represents the request to invite a user to a business
+type InviteUserRequest struct {
+	Email string          `json:"email" validate:"required,email"`
+	Name  string          `json:"name" validate:"required"`
+	Role  shared.UserRole `json:"role" validate:"required"`
+}
+
+// UpdateBusinessUserRequest represents the request to update a business user's role
+type UpdateBusinessUserRequest struct {
+	UserID  string          `json:"userId" validate:"required"`
+	NewRole shared.UserRole `json:"newRole" validate:"required"`
+}
+
+// RemoveBusinessUserRequest represents the request to remove a user from a business
+type RemoveBusinessUserRequest struct {
+	UserID string `json:"userId" validate:"required"`
 }

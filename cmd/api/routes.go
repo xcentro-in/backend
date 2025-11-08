@@ -21,7 +21,6 @@ import (
 	corePayment "xcentro.in/internal/core/payment"
 	coreUser "xcentro.in/internal/core/user"
 	coreVoucher "xcentro.in/internal/core/voucher"
-	"xcentro.in/internal/middleware"
 	"xcentro.in/internal/handlers/http/auth"
 	batchPaymentHandler "xcentro.in/internal/handlers/http/batch_payment"
 	businessHandler "xcentro.in/internal/handlers/http/business"
@@ -31,6 +30,7 @@ import (
 	payoutHandler "xcentro.in/internal/handlers/http/payout"
 	userHandler "xcentro.in/internal/handlers/http/user"
 	voucherHandler "xcentro.in/internal/handlers/http/voucher"
+	"xcentro.in/internal/middleware"
 	authservice "xcentro.in/internal/services/auth"
 	batchPaymentSvc "xcentro.in/internal/services/batch_payment"
 	businessSvc "xcentro.in/internal/services/business"
@@ -152,7 +152,7 @@ func registerV1UserRoutes(clients *externalClients, cfg *config.Config, group *e
 	}
 
 	_, _, _, businessUserRelRepo, userService, _, authSvc := factory.createCoreServices(verificationSvc)
-	userHandler.RegisterUserRoutes(group, userService, authSvc, businessUserRelRepo, clients.rcache)
+	userHandler.RegisterUserRoutes(group, userService, authSvc, businessUserRelRepo, clients.rcache, cfg)
 }
 
 func registerV1PayeeRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
@@ -263,15 +263,6 @@ func registerV1Routes(s *xcentroServer) {
 
 	v1.GET("/health", func(c echo.Context) error {
 		return c.JSON(200, map[string]string{"status": "ok"})
-	})
-
-	v1.POST("/callback", func(c echo.Context) error {
-		headers := c.Request().Header
-		body := make([]byte, c.Request().ContentLength)
-		c.Request().Body.Read(body)
-		s.log.Infof("Headers: %v", headers)
-		s.log.Infof("Body: %s", string(body))
-		return c.JSON(200, map[string]string{"status": "received"})
 	})
 
 	clients := &s.meta.clients
