@@ -211,6 +211,55 @@ Use AWS SDK to fetch metrics programmatically in your code.
 
 ---
 
+### 4. Webhook Metrics
+
+**Location**: `/internal/handlers/http/payment/webhook_handler.go`
+
+| Metric Name | Type | Labels | Description |
+|------------|------|--------|-------------|
+| `webhook.received` | Counter | gateway, type | Webhook requests received from gateway |
+| `webhook.signature_failed` | Counter | gateway, type | Webhook signature verification failures |
+| `webhook.duplicate` | Counter | gateway, type | Duplicate webhooks (idempotency check) |
+| `webhook.processing_duration` | Timer | gateway, type, status | Time to process webhook |
+
+**Webhook Types**:
+- `payment_status` - Payment status update webhooks
+- `settlement` - Settlement/payout webhooks
+
+**Why This Matters**:
+- Webhooks are how gateways notify you of payment status changes
+- Webhook failures = missed payment updates = reconciliation issues
+- High duplicate rate = gateway retry issues
+
+**How to Query in CloudWatch Console**:
+
+1. **Webhook Success Rate**:
+   - Metric m1: `webhook.received` (Statistic: Sum, Dimension: gateway=jiopay, type=payment_status)
+   - Metric m2: `webhook.signature_failed` (Statistic: Sum, same dimensions)
+   - Math expression: `((m1-m2)/m1)*100`
+   - Label: "Webhook Success Rate (%)"
+
+2. **Duplicate Webhook Rate**:
+   - Metric m1: `webhook.received` (Statistic: Sum)
+   - Metric m2: `webhook.duplicate` (Statistic: Sum)
+   - Math expression: `(m2/m1)*100`
+   - Label: "Duplicate Rate (%)"
+   - Note: Some duplicates are normal (gateway retries)
+
+3. **Webhook Processing Time**:
+   - Metric: `webhook.processing_duration`
+   - Dimensions: gateway=jiopay, type=payment_status
+   - Statistic: p95
+   - Target: < 1000ms (1 second)
+
+4. **Signature Failures** (Critical - indicates security issue):
+   - Metric: `webhook.signature_failed` (Statistic: Sum)
+   - Group by: gateway
+   - Alert: > 5 failures in 10 minutes
+   - Action: Investigate immediately (could be attack or config issue)
+
+---
+
 ## Key Performance Indicators (KPIs)
 
 ### 1. Payment Success Rate (CRITICAL)

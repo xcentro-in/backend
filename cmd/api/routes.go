@@ -178,9 +178,12 @@ func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group
 
 	processPaymentGroup := group.Group("/process_payment")
 
+	walletGroup := group.Group("/wallet")
+	payment.RegisterWalletRoutes(walletGroup, paymentService, paymentSourceService, authSvc, logger.GetDefault())
+
 	// Register public routes FIRST (no JWT required) - these are called by external systems
 	// 1. Webhooks (called by payment gateways)
-	webhookHandler := payment.NewWebhookHandler(paymentRepository, jioPayClient, easebuzzClient, mockPGClient, cfg.MockPG.Enabled, stateChangeRepository, logger.GetDefault())
+	webhookHandler := payment.NewWebhookHandler(paymentRepository, jioPayClient, easebuzzClient, mockPGClient, cfg.MockPG.Enabled, stateChangeRepository, logger.GetDefault(), clients.metrics)
 	webhookGroup := processPaymentGroup.Group("/webhooks")
 	webhookGroup.POST("/payment_status", webhookHandler.HandlePaymentStatusWebhook)
 	webhookGroup.POST("/settlement_status", webhookHandler.HandleSettlementStatusWebhook)
