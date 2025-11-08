@@ -10,6 +10,7 @@ import (
 	"xcentro.in/internal/core/notification"
 	"xcentro.in/internal/core/shared"
 	"xcentro.in/internal/core/voucher"
+	"xcentro.in/internal/shared/logger"
 	"xcentro.in/internal/shared/types"
 )
 
@@ -101,6 +102,7 @@ type VoucherServiceImpl struct {
 	businessPayeeRepo     interface{}            // payee.BusinessPayeeRelationRepository, using interface{} to avoid circular import
 	notificationEventRepo notification.NotificationEventRepository
 	businessUserRelRepo   business.BusinessUserRelationRepository
+	logger                *logger.Logger
 }
 
 // NewVoucherService creates a new instance of VoucherService
@@ -112,6 +114,7 @@ func NewVoucherService(
 	businessPayeeRepo interface{}, // Repository to resolve relation_id
 	notificationEventRepo notification.NotificationEventRepository,
 	businessUserRelRepo business.BusinessUserRelationRepository,
+	logger *logger.Logger,
 ) VoucherService {
 	return &VoucherServiceImpl{
 		voucherRepo:           voucherRepo,
@@ -121,6 +124,7 @@ func NewVoucherService(
 		businessPayeeRepo:     businessPayeeRepo,
 		notificationEventRepo: notificationEventRepo,
 		businessUserRelRepo:   businessUserRelRepo,
+		logger:                logger,
 	}
 }
 
@@ -1139,13 +1143,22 @@ func (s *VoucherServiceImpl) RequestApproval(ctx context.Context, req *voucher.V
 		// When requesting approval, notify the owner
 		if err := s.triggerApprovalRequestNotification(ctx, req); err != nil {
 			// Log error but don't fail the approval request
-			fmt.Printf("Warning: failed to trigger approval request notification: %v\n", err)
+			s.logger.WarnWith("Failed to trigger approval request notification",
+				"voucher_id", req.VoucherID,
+				"business_id", req.BusinessID,
+				"error", err.Error(),
+			)
 		}
 	case voucher.ApprovalActionApproved, voucher.ApprovalActionRejected, voucher.ApprovalActionRequestChanges:
 		// When approved/rejected/request_changes, notify the requester
 		if err := s.triggerApprovalResponseNotification(ctx, req); err != nil {
 			// Log error but don't fail the approval action
-			fmt.Printf("Warning: failed to trigger approval response notification: %v\n", err)
+			s.logger.WarnWith("Failed to trigger approval response notification",
+				"voucher_id", req.VoucherID,
+				"business_id", req.BusinessID,
+				"action", string(req.Action),
+				"error", err.Error(),
+			)
 		}
 	}
 
@@ -1445,6 +1458,14 @@ func (s *VoucherServiceImpl) triggerApprovalRequestNotification(ctx context.Cont
 		return fmt.Errorf("failed to create notification event: %w", err)
 	}
 
+	s.logger.InfoWith("Voucher approval request notification sent",
+		"voucher_id", req.VoucherID,
+		"voucher_number", v.VoucherNumber,
+		"business_id", req.BusinessID,
+		"owner_user_id", ownerUserID,
+		"amount", amountInRupees,
+	)
+
 	return nil
 }
 
@@ -1528,6 +1549,15 @@ func (s *VoucherServiceImpl) triggerApprovalResponseNotification(ctx context.Con
 	if err := s.notificationEventRepo.CreateEvent(ctx, event); err != nil {
 		return fmt.Errorf("failed to create notification event: %w", err)
 	}
+
+	s.logger.InfoWith("Voucher approval response notification sent",
+		"voucher_id", req.VoucherID,
+		"voucher_number", v.VoucherNumber,
+		"business_id", req.BusinessID,
+		"requester_user_id", req.RequesterUserID,
+		"action", string(req.Action),
+		"amount", amountInRupees,
+	)
 
 	return nil
 }
