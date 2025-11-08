@@ -393,7 +393,21 @@ func (o *paymentOrchestratorImpl) ProcessTokenizedPayment(ctx context.Context, r
 	o.logger.InfoWith("Tokenized payment initiated successfully", "gateway", selectedGatewayType)
 	// NOTE: Service layer will update card last_used_at timestamp within transaction
 
-	// Step 7: Create response
+	// Step 7: Create response metadata
+	metadata := map[string]any{
+		"payment_type":      "tokenized",
+		"card_id":           storedCard.CardID,
+		"card_last_four":    storedCard.LastFourDigits,
+		"gateway_used":      string(selectedGatewayType),
+		"original_metadata": request.Metadata,
+	}
+
+	// Only add mock-related fields when mock PG is enabled
+	if o.mockPGEnabled {
+		metadata["original_gateway"] = string(storedCard.GatewayUsed) // Show which gateway the card was originally tokenized with
+		metadata["mockpg_override"] = true                             // Indicate this payment used mock PG instead of real gateway
+	}
+
 	response := &PaymentResponse{
 		PaymentID:        paymentID,
 		Status:           gatewayResponse.Status,
@@ -407,15 +421,7 @@ func (o *paymentOrchestratorImpl) ProcessTokenizedPayment(ctx context.Context, r
 		RedirectURL:      gatewayResponse.RedirectURL,
 		Message:          fmt.Sprintf("Tokenized payment initiated with %s", selectedGatewayType),
 		CreatedAt:        gatewayResponse.CreatedAt,
-		Metadata: map[string]any{
-			"payment_type":      "tokenized",
-			"card_id":           storedCard.CardID,
-			"card_last_four":    storedCard.LastFourDigits,
-			"gateway_used":      string(selectedGatewayType),
-			"original_gateway":  string(storedCard.GatewayUsed), // Track the original gateway for reference
-			"mockpg_override":   o.mockPGEnabled,                // Track if mock PG was used
-			"original_metadata": request.Metadata,
-		},
+		Metadata:         metadata,
 	}
 
 	o.logger.InfoWith("Tokenized payment response prepared",
