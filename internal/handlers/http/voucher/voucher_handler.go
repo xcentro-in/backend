@@ -89,6 +89,15 @@ func (h *VoucherHandler) CreateDraftVoucher(c echo.Context) error {
 	req.BusinessID = businessID
 	req.UserID = userID
 
+	// Validate request
+	if err := c.Validate(&req); err != nil {
+		h.logger.WarnWith("Voucher validation failed", "error", err)
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "validation_failed",
+			"message": "Validation failed. Please check your input.",
+		})
+	}
+
 	h.logger.DebugWith("Draft voucher request",
 		"relation_id", req.RelationID,
 		"invoice_number", req.InvoiceNumber,
@@ -404,6 +413,15 @@ func (h *VoucherHandler) CreateMultiVouchers(c echo.Context) error {
 	// Set businessID and userID from context
 	req.BusinessID = businessID
 	req.UserID = userID
+
+	// Validate request
+	if err := c.Validate(&req); err != nil {
+		h.logger.WarnWith("Multi voucher validation failed", "error", err)
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "validation_failed",
+			"message": "Validation failed. Please check your input.",
+		})
+	}
 
 	h.logger.DebugWith("Multi voucher request", "bill_count", len(req.Vouchers))
 

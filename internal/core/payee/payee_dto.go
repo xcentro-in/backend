@@ -13,15 +13,15 @@ import (
 // OnboardPayeeRequest represents a polymorphic request to onboard a new payee
 // The PayeeType field determines which type-specific fields are required
 type OnboardPayeeRequest struct {
-	BusinessID string    `json:"-"` // Our customer (extracted from X-Business-ID header)
-	AddedBy    string    `json:"-"` // User who is adding this payee (extracted from JWT context)
-	PayeeType  PayeeType `json:"payee_type"` // Type discriminator: vendor, gst_payment, biller, employee
+	BusinessID string    `json:"-"`                                                                       // Our customer (extracted from X-Business-ID header)
+	AddedBy    string    `json:"-"`                                                                       // User who is adding this payee (extracted from JWT context)
+	PayeeType  PayeeType `json:"payee_type" validate:"required,oneof=vendor employee biller gst_payment"` // Type discriminator: vendor, gst_payment, biller, employee
 
 	// Customer-specific metadata (common to all types)
-	DisplayName  string `json:"display_name"`            // How customer refers to this payee
-	ContactEmail string `json:"contact_email,omitempty"` // Customer's contact point
-	ContactPhone string `json:"contact_phone,omitempty"` // Customer's contact point
-	Notes        string `json:"notes,omitempty"`         // Private notes
+	DisplayName  string `json:"display_name" validate:"required,min=2,max=100"`             // How customer refers to this payee
+	ContactEmail string `json:"contact_email,omitempty" validate:"omitempty,email,max=100"` // Customer's contact point
+	ContactPhone string `json:"contact_phone,omitempty" validate:"omitempty,phone_in"`      // Customer's contact point
+	Notes        string `json:"notes,omitempty" validate:"omitempty,max=500"`               // Private notes
 
 	// Type-specific fields (only populate based on PayeeType)
 	Vendor   *OnboardVendorData   `json:"vendor,omitempty"`
@@ -32,16 +32,16 @@ type OnboardPayeeRequest struct {
 
 // OnboardVendorData contains vendor-specific onboarding data (GSTIN + bank account)
 type OnboardVendorData struct {
-	GSTIN string `json:"gstin"` // 15-character GST identification number
+	GSTIN string `json:"gstin" validate:"required,gstin"` // 15-character GST identification number
 
 	// Bank account details
-	AccountNumber     string                  `json:"account_number"`
-	IFSCCode          string                  `json:"ifsc_code"`
-	AccountHolderName string                  `json:"account_holder_name"`
-	BankName          string                  `json:"bank_name"`        // Required - fetched from IFSC check at frontend
-	BranchName        string                  `json:"branch_name"`      // Required - fetched from IFSC check at frontend
-	AccountType       payment.BankAccountType `json:"account_type,omitempty"` // Optional - defaults to "current"
-	AccountLabel      string                  `json:"account_label,omitempty"`
+	AccountNumber     string                  `json:"account_number" validate:"required,account_number"`
+	IFSCCode          string                  `json:"ifsc_code" validate:"required,ifsc"`
+	AccountHolderName string                  `json:"account_holder_name" validate:"required,min=2,max=100"`
+	BankName          string                  `json:"bank_name" validate:"required,min=2,max=100"`                       // Required - fetched from IFSC check at frontend
+	BranchName        string                  `json:"branch_name" validate:"required,min=2,max=100"`                     // Required - fetched from IFSC check at frontend
+	AccountType       payment.BankAccountType `json:"account_type,omitempty" validate:"omitempty,oneof=savings current"` // Optional - defaults to "current"
+	AccountLabel      string                  `json:"account_label,omitempty" validate:"omitempty,max=50"`
 }
 
 // OnboardGSTData contains GST payment onboarding data (virtual account from challan)
@@ -67,23 +67,23 @@ type OnboardBillerData struct {
 
 // OnboardEmployeeData contains employee payee onboarding data (bank account + employment details)
 type OnboardEmployeeData struct {
-	EmployeeCode string  `json:"employee_code,omitempty"`
-	FullName     string  `json:"full_name"`
-	Email        string  `json:"email,omitempty"`
-	Phone        string  `json:"phone,omitempty"`
-	Designation  string  `json:"designation,omitempty"`
-	Department   string  `json:"department,omitempty"`
-	DateOfJoining *time.Time `json:"date_of_joining,omitempty"`
-	EmploymentType string `json:"employment_type,omitempty"` // full-time, contract, etc.
+	EmployeeCode   string     `json:"employee_code,omitempty" validate:"omitempty,max=50"`
+	FullName       string     `json:"full_name" validate:"required,min=2,max=100"`
+	Email          string     `json:"email,omitempty" validate:"omitempty,email,max=100"`
+	Phone          string     `json:"phone,omitempty" validate:"omitempty,phone_in"`
+	Designation    string     `json:"designation,omitempty" validate:"omitempty,max=50"`
+	Department     string     `json:"department,omitempty" validate:"omitempty,max=50"`
+	DateOfJoining  *time.Time `json:"date_of_joining,omitempty"`
+	EmploymentType string     `json:"employment_type,omitempty" validate:"omitempty,max=50"` // full-time, contract, etc.
 
 	// Bank account details
-	AccountNumber     string                  `json:"account_number"`
-	IFSCCode          string                  `json:"ifsc_code"`
-	AccountHolderName string                  `json:"account_holder_name"`
-	BankName          string                  `json:"bank_name"`        // Required - fetched from IFSC check at frontend
-	BranchName        string                  `json:"branch_name"`      // Required - fetched from IFSC check at frontend
-	AccountType       payment.BankAccountType `json:"account_type,omitempty"` // Optional - defaults to "current"
-	AccountLabel      string                  `json:"account_label,omitempty"`
+	AccountNumber     string                  `json:"account_number" validate:"required,account_number"`
+	IFSCCode          string                  `json:"ifsc_code" validate:"required,ifsc"`
+	AccountHolderName string                  `json:"account_holder_name" validate:"required,min=2,max=100"`
+	BankName          string                  `json:"bank_name" validate:"required,min=2,max=100"`                       // Required - fetched from IFSC check at frontend
+	BranchName        string                  `json:"branch_name" validate:"required,min=2,max=100"`                     // Required - fetched from IFSC check at frontend
+	AccountType       payment.BankAccountType `json:"account_type,omitempty" validate:"omitempty,oneof=savings current"` // Optional - defaults to "current"
+	AccountLabel      string                  `json:"account_label,omitempty" validate:"omitempty,max=50"`
 
 	// Note: Remuneration document is uploaded separately via dedicated upload endpoints
 	// after employee creation, not during onboarding
@@ -182,28 +182,28 @@ type GSTDetailsData struct {
 
 // BillerDetailsData contains biller payment-specific details
 type BillerDetailsData struct {
-	BillerID             string         `json:"biller_id"`
-	BillerName           string         `json:"biller_name"`
-	BillerCategory       string         `json:"biller_category"`
-	MobileNumber         string         `json:"mobile_number"`
-	CustomerParams       map[string]any `json:"customer_params"`
-	AutoFetchEnabled     bool           `json:"auto_fetch_enabled"`
-	LastBillAmount       int64          `json:"last_bill_amount,omitempty"`
-	LastBillDueDate      *time.Time     `json:"last_bill_due_date,omitempty"`
-	LastBillFetchedAt    *time.Time     `json:"last_bill_fetched_at,omitempty"`
+	BillerID          string         `json:"biller_id"`
+	BillerName        string         `json:"biller_name"`
+	BillerCategory    string         `json:"biller_category"`
+	MobileNumber      string         `json:"mobile_number"`
+	CustomerParams    map[string]any `json:"customer_params"`
+	AutoFetchEnabled  bool           `json:"auto_fetch_enabled"`
+	LastBillAmount    int64          `json:"last_bill_amount,omitempty"`
+	LastBillDueDate   *time.Time     `json:"last_bill_due_date,omitempty"`
+	LastBillFetchedAt *time.Time     `json:"last_bill_fetched_at,omitempty"`
 }
 
 // EmployeeDetailsData contains employee payee-specific details
 type EmployeeDetailsData struct {
-	EmployeeCode          string     `json:"employee_code,omitempty"`
-	FullName              string     `json:"full_name"`
-	Email                 string     `json:"email,omitempty"`
-	Phone                 string     `json:"phone,omitempty"`
-	Designation           string     `json:"designation,omitempty"`
-	Department            string     `json:"department,omitempty"`
-	EmploymentType        string     `json:"employment_type,omitempty"`
-	BankVerificationStatus string    `json:"bank_verification_status"`
-	CrossVerificationStatus string   `json:"cross_verification_status"`
+	EmployeeCode            string `json:"employee_code,omitempty"`
+	FullName                string `json:"full_name"`
+	Email                   string `json:"email,omitempty"`
+	Phone                   string `json:"phone,omitempty"`
+	Designation             string `json:"designation,omitempty"`
+	Department              string `json:"department,omitempty"`
+	EmploymentType          string `json:"employment_type,omitempty"`
+	BankVerificationStatus  string `json:"bank_verification_status"`
+	CrossVerificationStatus string `json:"cross_verification_status"`
 }
 
 // PayeeListResponse represents a paginated list of payees for a business
@@ -216,9 +216,9 @@ type PayeeListResponse struct {
 
 // PayeeSummary represents a summary of payee information for list views (polymorphic)
 type PayeeSummary struct {
-	PayeeID       string     `json:"payee_id"`
-	PayeeType     PayeeType  `json:"payee_type"` // Type discriminator
-	DisplayName   string     `json:"display_name"`
+	PayeeID     string    `json:"payee_id"`
+	PayeeType   PayeeType `json:"payee_type"` // Type discriminator
+	DisplayName string    `json:"display_name"`
 
 	// Type-specific identifiers (only one will be populated)
 	LegalName    string `json:"legal_name,omitempty"`    // Vendor
@@ -301,11 +301,11 @@ type PayeeFullDetails struct {
 	IsFavorite   bool     `json:"is_favorite"`
 
 	// Vendor-specific fields
-	GSTIN      string `json:"gstin,omitempty"`       // Vendor only
-	LegalName  string `json:"legal_name,omitempty"`  // Vendor only
-	GSTStatus  string `json:"gst_status,omitempty"`  // Vendor only
-	City       string `json:"city,omitempty"`        // Vendor only
-	State      string `json:"state,omitempty"`       // Vendor only
+	GSTIN     string `json:"gstin,omitempty"`      // Vendor only
+	LegalName string `json:"legal_name,omitempty"` // Vendor only
+	GSTStatus string `json:"gst_status,omitempty"` // Vendor only
+	City      string `json:"city,omitempty"`       // Vendor only
+	State     string `json:"state,omitempty"`      // Vendor only
 
 	// Employee-specific fields
 	FullName       string `json:"full_name,omitempty"`       // Employee only
@@ -315,11 +315,11 @@ type PayeeFullDetails struct {
 	EmploymentType string `json:"employment_type,omitempty"` // Employee only
 
 	// Biller-specific fields
-	BillerName        string  `json:"biller_name,omitempty"`         // Biller only
-	BillerCategory    string  `json:"biller_category,omitempty"`     // Biller only
-	MobileNumber      string  `json:"mobile_number,omitempty"`       // Biller only
-	LastBillAmount    float64 `json:"last_bill_amount,omitempty"`    // Biller only (in rupees)
-	LastBillDueDate   string  `json:"last_bill_due_date,omitempty"`  // Biller only
+	BillerName      string  `json:"biller_name,omitempty"`        // Biller only
+	BillerCategory  string  `json:"biller_category,omitempty"`    // Biller only
+	MobileNumber    string  `json:"mobile_number,omitempty"`      // Biller only
+	LastBillAmount  float64 `json:"last_bill_amount,omitempty"`   // Biller only (in rupees)
+	LastBillDueDate string  `json:"last_bill_due_date,omitempty"` // Biller only
 
 	// Bank details (for vendor and employee only, not for biller)
 	BankDetails *PayeeBankDetails `json:"bank_details,omitempty"`

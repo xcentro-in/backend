@@ -20,13 +20,23 @@ type CustomValidator struct {
 func NewCustomValidator() *CustomValidator {
 	v := validator.New()
 
-	// Register custom validators
+	// Register custom validators for KYC/KYB
 	v.RegisterValidation("pan", validatePAN)
 	v.RegisterValidation("gstin", validateGSTIN)
 	v.RegisterValidation("aadhaar", validateAadhaar)
 	v.RegisterValidation("cin", validateCIN)
 	v.RegisterValidation("phone_in", validateIndianPhone)
 	v.RegisterValidation("strong_password", validateStrongPassword)
+
+	// Register custom validators for payment/financial fields
+	v.RegisterValidation("ifsc", validateIFSC)
+	v.RegisterValidation("account_number", validateAccountNumber)
+	v.RegisterValidation("upi_address", validateUPIAddress)
+	v.RegisterValidation("card_number", validateCardNumber)
+	v.RegisterValidation("card_expiry_month", validateCardExpiryMonth)
+	v.RegisterValidation("card_expiry_year", validateCardExpiryYear)
+	v.RegisterValidation("cvv", validateCVV)
+	v.RegisterValidation("amount_positive", validateAmountPositive)
 
 	return &CustomValidator{validator: v}
 }
@@ -96,6 +106,22 @@ func getErrorMessage(err validator.FieldError) string {
 		return fmt.Sprintf("%s must be a valid 10-digit Indian phone number", field)
 	case "strong_password":
 		return "password must be at least 8 characters long and contain at least one uppercase letter, one lowercase letter, one number, and one special character"
+	case "ifsc":
+		return fmt.Sprintf("%s must be a valid IFSC code (format: ABCD0123456)", field)
+	case "account_number":
+		return fmt.Sprintf("%s must be a valid bank account number (9-18 digits)", field)
+	case "upi_address":
+		return fmt.Sprintf("%s must be a valid UPI address (format: user@provider)", field)
+	case "card_number":
+		return fmt.Sprintf("%s must be a valid card number", field)
+	case "card_expiry_month":
+		return fmt.Sprintf("%s must be a valid month (01-12)", field)
+	case "card_expiry_year":
+		return fmt.Sprintf("%s must be a valid year (YY or YYYY format)", field)
+	case "cvv":
+		return fmt.Sprintf("%s must be a valid CVV (3 or 4 digits)", field)
+	case "amount_positive":
+		return fmt.Sprintf("%s must be a positive number", field)
 	case "oneof":
 		return fmt.Sprintf("%s must be one of: %s", field, err.Param())
 	case "gte":
@@ -159,6 +185,107 @@ func validateIndianPhone(fl validator.FieldLevel) bool {
 func validateStrongPassword(fl validator.FieldLevel) bool {
 	password := fl.Field().String()
 	return security.ValidatePasswordStrength(password) == nil
+}
+
+// validateIFSC validates Indian IFSC code format: ABCD0123456 (4 letters, 7 digits with 5th char as 0)
+// Note: Input is already trimmed by TrimStrings() before validation
+func validateIFSC(fl validator.FieldLevel) bool {
+	ifsc := fl.Field().String()
+	// IFSC format: 4 bank code letters + 1 zero + 6 branch code alphanumeric
+	ifscRegex := regexp.MustCompile(`^[A-Z]{4}0[A-Z0-9]{6}$`)
+	return ifscRegex.MatchString(ifsc)
+}
+
+// validateAccountNumber validates bank account number (9-18 digits)
+// Note: Input is already trimmed by TrimStrings() before validation
+func validateAccountNumber(fl validator.FieldLevel) bool {
+	accountNumber := fl.Field().String()
+	// Most Indian bank accounts are 9-18 digits
+	accountRegex := regexp.MustCompile(`^[0-9]{9,18}$`)
+	return accountRegex.MatchString(accountNumber)
+}
+
+// validateUPIAddress validates UPI address format: user@provider
+// Note: Input is already trimmed by TrimStrings() before validation
+func validateUPIAddress(fl validator.FieldLevel) bool {
+	upi := fl.Field().String()
+	// UPI format: alphanumeric@alphanumeric (simplified)
+	// Examples: user@paytm, 9876543210@ybl, name.surname@okaxis
+	upiRegex := regexp.MustCompile(`^[a-zA-Z0-9._-]+@[a-zA-Z0-9]+$`)
+	return upiRegex.MatchString(upi)
+}
+
+// validateCardNumber validates credit/debit card number using Luhn algorithm
+// Note: Input is already trimmed by TrimStrings() before validation
+func validateCardNumber(fl validator.FieldLevel) bool {
+	cardNumber := fl.Field().String()
+
+	// Remove spaces and hyphens
+	cardNumber = regexp.MustCompile(`[\s-]`).ReplaceAllString(cardNumber, "")
+
+	// Must be 13-19 digits (standard card number length)
+	if !regexp.MustCompile(`^[0-9]{13,19}$`).MatchString(cardNumber) {
+		return false
+	}
+
+	// Luhn algorithm validation
+	return luhnCheck(cardNumber)
+}
+
+// luhnCheck implements the Luhn algorithm for card number validation
+func luhnCheck(cardNumber string) bool {
+	var sum int
+	var alternate bool
+
+	// Process from right to left
+	for i := len(cardNumber) - 1; i >= 0; i-- {
+		digit := int(cardNumber[i] - '0')
+
+		if alternate {
+			digit *= 2
+			if digit > 9 {
+				digit -= 9
+			}
+		}
+
+		sum += digit
+		alternate = !alternate
+	}
+
+	return sum%10 == 0
+}
+
+// validateCardExpiryMonth validates card expiry month (01-12)
+// Note: Input is already trimmed by TrimStrings() before validation
+func validateCardExpiryMonth(fl validator.FieldLevel) bool {
+	month := fl.Field().String()
+	// Must be 01-12 (with leading zero)
+	monthRegex := regexp.MustCompile(`^(0[1-9]|1[0-2])$`)
+	return monthRegex.MatchString(month)
+}
+
+// validateCardExpiryYear validates card expiry year (YY or YYYY format)
+// Note: Input is already trimmed by TrimStrings() before validation
+func validateCardExpiryYear(fl validator.FieldLevel) bool {
+	year := fl.Field().String()
+	// Accept both YY and YYYY formats (e.g., "25" or "2025")
+	yearRegex := regexp.MustCompile(`^([0-9]{2}|[0-9]{4})$`)
+	return yearRegex.MatchString(year)
+}
+
+// validateCVV validates card CVV (3 or 4 digits)
+// Note: Input is already trimmed by TrimStrings() before validation
+func validateCVV(fl validator.FieldLevel) bool {
+	cvv := fl.Field().String()
+	// CVV is 3 digits for most cards, 4 for Amex
+	cvvRegex := regexp.MustCompile(`^[0-9]{3,4}$`)
+	return cvvRegex.MatchString(cvv)
+}
+
+// validateAmountPositive validates that an int64 amount is positive
+func validateAmountPositive(fl validator.FieldLevel) bool {
+	amount := fl.Field().Int()
+	return amount > 0
 }
 
 // TrimStrings trims all string fields in a struct (recursively)
