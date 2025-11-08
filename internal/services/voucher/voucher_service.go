@@ -1403,7 +1403,7 @@ func (s *VoucherServiceImpl) triggerApprovalRequestNotification(ctx context.Cont
 	// Format amount for display (convert paise to rupees)
 	amountInRupees := float64(v.NetAmount) / 100.0
 
-	// Use broadcast targeting with MinimumRole=Owner (more efficient than DB lookup)
+	// Use multicast targeting with MinimumRole=Owner (more efficient than DB lookup)
 	ownerRole := notification.RoleOwner
 
 	// Build notification payload
@@ -1412,8 +1412,8 @@ func (s *VoucherServiceImpl) triggerApprovalRequestNotification(ctx context.Cont
 		EventType: notification.EventVoucherApprovalRequested,
 		Target: notification.TargetInfo{
 			BusinessID:  req.BusinessID,
-			Type:        notification.TargetBroadcast,
-			MinimumRole: &ownerRole, // Broadcast to all users with Owner role
+			Type:        notification.TargetMulticast,
+			MinimumRole: &ownerRole, // Multicast to all users with Owner role
 		},
 		Entities: notification.EntityReferences{
 			BusinessID: &req.BusinessID,
@@ -1477,6 +1477,26 @@ func (s *VoucherServiceImpl) triggerApprovalResponseNotification(ctx context.Con
 		return fmt.Errorf("failed to get voucher details: %w", err)
 	}
 
+	// Get original requester from approval history
+	// The current req.RequesterUserID is the approver, not the original requester
+	approvals, err := s.approvalRepo.GetApprovalsByVoucher(ctx, voucherUUID)
+	if err != nil {
+		return fmt.Errorf("failed to get approval history: %w", err)
+	}
+
+	// Find the original requester (the one who submitted for approval with action="pending")
+	var originalRequesterUserID string
+	for _, approval := range approvals {
+		if approval.Action == "pending" {
+			originalRequesterUserID = approval.RequesterUserID.String()
+			break
+		}
+	}
+
+	if originalRequesterUserID == "" {
+		return fmt.Errorf("no approval request found for voucher %s", req.VoucherID)
+	}
+
 	// Format amount for display (convert paise to rupees)
 	amountInRupees := float64(v.NetAmount) / 100.0
 
@@ -1515,7 +1535,7 @@ func (s *VoucherServiceImpl) triggerApprovalResponseNotification(ctx context.Con
 		Target: notification.TargetInfo{
 			BusinessID: req.BusinessID,
 			Type:       notification.TargetUnicast,
-			IDs:        []string{req.RequesterUserID}, // Send to the requester
+			IDs:        []string{originalRequesterUserID}, // Send to the original requester
 		},
 		Entities: notification.EntityReferences{
 			BusinessID: &req.BusinessID,
@@ -1549,7 +1569,7 @@ func (s *VoucherServiceImpl) triggerApprovalResponseNotification(ctx context.Con
 		"voucher_id", req.VoucherID,
 		"voucher_number", v.VoucherNumber,
 		"business_id", req.BusinessID,
-		"requester_user_id", req.RequesterUserID,
+		"original_requester_user_id", originalRequesterUserID,
 		"action", string(req.Action),
 		"amount", amountInRupees,
 	)

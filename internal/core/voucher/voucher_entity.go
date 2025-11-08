@@ -176,10 +176,9 @@ type Voucher struct {
 type VoucherApproval struct {
 	ApprovalID      uuid.UUID  `json:"approval_id"`
 	VoucherID       uuid.UUID  `json:"voucher_id"`
-	ApprovalLevel   int        `json:"approval_level"` // 1, 2, 3 for multi-level
+	RequesterUserID uuid.UUID  `json:"requester_user_id"` // User who initiated the payment requiring approval
 	ApproverUserID  uuid.UUID  `json:"approver_user_id"`
-	ApproverRole    string     `json:"approver_role,omitempty"` // Manager, Finance Head, etc.
-	Action          string     `json:"action"`                  // pending, approved, rejected
+	Action          string     `json:"action"`              // pending, approved, rejected, request_changes
 	ActionTimestamp *time.Time `json:"action_timestamp,omitempty"`
 	Remarks         string     `json:"remarks,omitempty"`
 	CreatedAt       time.Time  `json:"created_at"`

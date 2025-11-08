@@ -27,8 +27,8 @@ func NewPostgresApprovalRepository(db client.DB) voucher.ApprovalRepository {
 func (r *PostgresApprovalRepository) CreateApproval(ctx context.Context, approval *voucher.VoucherApproval) error {
 	query := `
 		INSERT INTO xcentro.voucher_approvals (
-			approval_id, voucher_id, approval_level, approver_user_id,
-			approver_role, action, created_at
+			approval_id, voucher_id, requester_user_id, approver_user_id,
+			action, remarks, created_at
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7
 		)
@@ -37,17 +37,17 @@ func (r *PostgresApprovalRepository) CreateApproval(ctx context.Context, approva
 	_, err := r.querier.Exec(ctx, query,
 		approval.ApprovalID,
 		approval.VoucherID,
-		approval.ApprovalLevel,
+		approval.RequesterUserID,
 		approval.ApproverUserID,
-		approval.ApproverRole,
 		approval.Action,
+		approval.Remarks,
 		approval.CreatedAt,
 	)
 
 	if err != nil {
-		// Check for unique constraint violation (approval already exists for this voucher + level)
+		// Check for unique constraint violation (only one pending approval per voucher)
 		if strings.Contains(err.Error(), "unique") || strings.Contains(err.Error(), "duplicate") {
-			return fmt.Errorf("approval already exists for voucher at level %d", approval.ApprovalLevel)
+			return fmt.Errorf("a pending approval already exists for this voucher")
 		}
 		// Check for foreign key violation
 		if strings.Contains(err.Error(), "foreign key") {
@@ -67,11 +67,11 @@ func (r *PostgresApprovalRepository) CreateApproval(ctx context.Context, approva
 // GetApprovalsByVoucher retrieves all approvals for a voucher
 func (r *PostgresApprovalRepository) GetApprovalsByVoucher(ctx context.Context, voucherID uuid.UUID) ([]*voucher.VoucherApproval, error) {
 	query := `
-		SELECT approval_id, voucher_id, approval_level, approver_user_id,
-		       approver_role, action, action_timestamp, remarks, created_at
+		SELECT approval_id, voucher_id, requester_user_id, approver_user_id,
+		       action, action_timestamp, remarks, created_at
 		FROM xcentro.voucher_approvals
 		WHERE voucher_id = $1
-		ORDER BY approval_level
+		ORDER BY created_at
 	`
 
 	rows, err := r.querier.Query(ctx, query, voucherID)
@@ -136,8 +136,8 @@ func (r *PostgresApprovalRepository) UpdateApprovalAction(ctx context.Context, a
 // GetPendingApprovals retrieves pending approvals for a user
 func (r *PostgresApprovalRepository) GetPendingApprovals(ctx context.Context, userID uuid.UUID) ([]*voucher.VoucherApproval, error) {
 	query := `
-		SELECT a.approval_id, a.voucher_id, a.approval_level, a.approver_user_id,
-		       a.approver_role, a.action, a.action_timestamp, a.remarks, a.created_at
+		SELECT a.approval_id, a.voucher_id, a.requester_user_id, a.approver_user_id,
+		       a.action, a.action_timestamp, a.remarks, a.created_at
 		FROM xcentro.voucher_approvals a
 		JOIN xcentro.payment_vouchers v ON a.voucher_id = v.voucher_id
 		WHERE a.approver_user_id = $1
@@ -176,9 +176,8 @@ func (r *PostgresApprovalRepository) scanApproval(row pgx.Row) (*voucher.Voucher
 	err := row.Scan(
 		&a.ApprovalID,
 		&a.VoucherID,
-		&a.ApprovalLevel,
+		&a.RequesterUserID,
 		&a.ApproverUserID,
-		&a.ApproverRole,
 		&a.Action,
 		&a.ActionTimestamp,
 		&a.Remarks,
@@ -198,9 +197,8 @@ func (r *PostgresApprovalRepository) scanApprovalRow(rows pgx.Rows) (*voucher.Vo
 	err := rows.Scan(
 		&a.ApprovalID,
 		&a.VoucherID,
-		&a.ApprovalLevel,
+		&a.RequesterUserID,
 		&a.ApproverUserID,
-		&a.ApproverRole,
 		&a.Action,
 		&a.ActionTimestamp,
 		&a.Remarks,
