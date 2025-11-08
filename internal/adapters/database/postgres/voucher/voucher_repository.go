@@ -1402,12 +1402,13 @@ func (r *PostgresVoucherRepository) CreateOrUpdateApproval(ctx context.Context, 
 	}
 
 	return &voucher.VoucherApprovalResponse{
-		Success:    true,
-		Message:    message,
-		ApprovalID: approvalID.String(),
-		VoucherID:  req.VoucherID,
-		Action:     req.Action,
-		CreatedAt:  createdAt,
+		Success:         true,
+		Message:         message,
+		ApprovalID:      approvalID.String(),
+		VoucherID:       req.VoucherID,
+		Action:          req.Action,
+		RequesterUserID: req.RequesterUserID,
+		CreatedAt:       createdAt,
 	}, nil
 }
 

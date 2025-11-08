@@ -1149,7 +1149,8 @@ func (s *VoucherServiceImpl) RequestApproval(ctx context.Context, req *voucher.V
 		}
 	case voucher.ApprovalActionApproved, voucher.ApprovalActionRejected, voucher.ApprovalActionRequestChanges:
 		// When approved/rejected/request_changes, notify the requester
-		if err := s.triggerApprovalResponseNotification(ctx, req); err != nil {
+		// Use requester_user_id from response (avoids extra DB call)
+		if err := s.triggerApprovalResponseNotification(ctx, req, response.RequesterUserID); err != nil {
 			// Log error but don't fail the approval action
 			s.logger.WarnWith("Failed to trigger approval response notification",
 				"voucher_id", req.VoucherID,
@@ -1465,7 +1466,7 @@ func (s *VoucherServiceImpl) triggerApprovalRequestNotification(ctx context.Cont
 }
 
 // triggerApprovalResponseNotification sends notification to requester when approval is responded to
-func (s *VoucherServiceImpl) triggerApprovalResponseNotification(ctx context.Context, req *voucher.VoucherApprovalRequest) error {
+func (s *VoucherServiceImpl) triggerApprovalResponseNotification(ctx context.Context, req *voucher.VoucherApprovalRequest, requesterUserID string) error {
 	// Get voucher details to build meaningful notification message
 	voucherUUID, err := uuid.Parse(req.VoucherID)
 	if err != nil {
@@ -1476,22 +1477,6 @@ func (s *VoucherServiceImpl) triggerApprovalResponseNotification(ctx context.Con
 	if err != nil {
 		return fmt.Errorf("failed to get voucher details: %w", err)
 	}
-
-	// Get original requester from approval history
-	// The current req.RequesterUserID is the approver, not the original requester
-	approvals, err := s.approvalRepo.GetApprovalsByVoucher(ctx, voucherUUID)
-	if err != nil {
-		return fmt.Errorf("failed to get approval history: %w", err)
-	}
-
-	// Get the most recent approval (the one that was just acted upon)
-	// GetApprovalsByVoucher returns results ordered by created_at ASC, so last element is most recent
-	if len(approvals) == 0 {
-		return fmt.Errorf("no approval records found for voucher %s", req.VoucherID)
-	}
-
-	mostRecentApproval := approvals[len(approvals)-1]
-	originalRequesterUserID := mostRecentApproval.RequesterUserID.String()
 
 	// Format amount for display (convert paise to rupees)
 	amountInRupees := float64(v.NetAmount) / 100.0
@@ -1531,7 +1516,7 @@ func (s *VoucherServiceImpl) triggerApprovalResponseNotification(ctx context.Con
 		Target: notification.TargetInfo{
 			BusinessID: req.BusinessID,
 			Type:       notification.TargetUnicast,
-			IDs:        []string{originalRequesterUserID}, // Send to the original requester
+			IDs:        []string{requesterUserID}, // Send to the original requester
 		},
 		Entities: notification.EntityReferences{
 			BusinessID: &req.BusinessID,
@@ -1565,7 +1550,7 @@ func (s *VoucherServiceImpl) triggerApprovalResponseNotification(ctx context.Con
 		"voucher_id", req.VoucherID,
 		"voucher_number", v.VoucherNumber,
 		"business_id", req.BusinessID,
-		"original_requester_user_id", originalRequesterUserID,
+		"requester_user_id", requesterUserID,
 		"action", string(req.Action),
 		"amount", amountInRupees,
 	)
