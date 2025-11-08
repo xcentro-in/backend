@@ -63,6 +63,15 @@ func (h *PayeeHandler) OnboardPayee(c echo.Context) error {
 	req.AddedBy = userID // Set the user who is adding this payee
 	h.logger.DebugWith("Business context set", "business_id", businessID)
 
+	// Validate request
+	if err := c.Validate(&req); err != nil {
+		h.logger.WarnWith("Payee validation failed", "error", err)
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "validation_failed",
+			"message": "Validation failed. Please check your input.",
+		})
+	}
+
 	// Default to vendor if not specified (backward compatibility)
 	if req.PayeeType == "" {
 		req.PayeeType = payee.PayeeTypeVendor

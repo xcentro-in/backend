@@ -15,42 +15,42 @@ type CreateDraftVoucherRequest struct {
 	UserID     uuid.UUID `json:"-"` // Populated from JWT token (created_by)
 
 	// Payee reference (simplified with surrogate key)
-	RelationID uuid.UUID `json:"relation_id"` // Single identifier for business-payee-account relationship
+	RelationID uuid.UUID `json:"relation_id" validate:"required"`
 
 	// Invoice details
-	InvoiceNumber  string      `json:"invoice_number"`
+	InvoiceNumber  string      `json:"invoice_number" validate:"required,min=1,max=50"`
 	InvoiceDate    *types.Date `json:"invoice_date,omitempty"`
 	InvoiceDueDate *types.Date `json:"invoice_due_date,omitempty"`
 
 	// Amounts (all in paise)
-	GrossAmount    int64   `json:"gross_amount"`
-	NetAmount      int64   `json:"net_amount"`
-	Currency       string  `json:"currency"` // Default: INR
-	GSTAmount      int64   `json:"gst_amount"`
-	GSTRate        float64 `json:"gst_rate,omitempty"`
-	CGSTAmount     int64   `json:"cgst_amount,omitempty"`
-	SGSTAmount     int64   `json:"sgst_amount,omitempty"`
-	IGSTAmount     int64   `json:"igst_amount,omitempty"`
-	TDSAmount      int64   `json:"tds_amount"`
-	TDSRate        float64 `json:"tds_rate,omitempty"`
-	TDSSection     string  `json:"tds_section,omitempty"`
-	FeeAmount      int64   `json:"fee_amount,omitempty"`
-	DiscountAmount int64   `json:"discount_amount,omitempty"`
+	GrossAmount    int64   `json:"gross_amount" validate:"required,amount_positive"`
+	NetAmount      int64   `json:"net_amount" validate:"required,amount_positive"`
+	Currency       string  `json:"currency" validate:"required,oneof=INR USD"` // Default: INR
+	GSTAmount      int64   `json:"gst_amount" validate:"gte=0"`
+	GSTRate        float64 `json:"gst_rate,omitempty" validate:"omitempty,gte=0,lte=100"`
+	CGSTAmount     int64   `json:"cgst_amount,omitempty" validate:"omitempty,gte=0"`
+	SGSTAmount     int64   `json:"sgst_amount,omitempty" validate:"omitempty,gte=0"`
+	IGSTAmount     int64   `json:"igst_amount,omitempty" validate:"omitempty,gte=0"`
+	TDSAmount      int64   `json:"tds_amount" validate:"gte=0"`
+	TDSRate        float64 `json:"tds_rate,omitempty" validate:"omitempty,gte=0,lte=100"`
+	TDSSection     string  `json:"tds_section,omitempty" validate:"omitempty,max=20"`
+	FeeAmount      int64   `json:"fee_amount,omitempty" validate:"omitempty,gte=0"`
+	DiscountAmount int64   `json:"discount_amount,omitempty" validate:"omitempty,gte=0"`
 
 	// Additional details
 	FinancialDetails map[string]interface{} `json:"financial_details,omitempty"`
 	Attachments      map[string]interface{} `json:"attachments,omitempty"`
-	ExpenseCategory  string                 `json:"expense_category,omitempty"`
-	Description      string                 `json:"description,omitempty"`
+	ExpenseCategory  string                 `json:"expense_category,omitempty" validate:"omitempty,max=50"`
+	Description      string                 `json:"description,omitempty" validate:"omitempty,max=500"`
 
 	// General ledger codes
-	GLExpenseAccount string `json:"gl_expense_account,omitempty"`
-	GLBankAccount    string `json:"gl_bank_account,omitempty"`
-	CostCenter       string `json:"cost_center,omitempty"`
+	GLExpenseAccount string `json:"gl_expense_account,omitempty" validate:"omitempty,max=50"`
+	GLBankAccount    string `json:"gl_bank_account,omitempty" validate:"omitempty,max=50"`
+	CostCenter       string `json:"cost_center,omitempty" validate:"omitempty,max=50"`
 
 	// Payment terms and vendor reference
-	PaymentTerms          string `json:"payment_terms,omitempty"`
-	VendorReferenceNumber string `json:"vendor_reference_number,omitempty"`
+	PaymentTerms          string `json:"payment_terms,omitempty" validate:"omitempty,max=100"`
+	VendorReferenceNumber string `json:"vendor_reference_number,omitempty" validate:"omitempty,max=50"`
 
 	// Metadata
 	Metadata map[string]interface{} `json:"metadata,omitempty"`
@@ -216,7 +216,7 @@ type VoucherListItem struct {
 	InvoiceNumber   string                `json:"invoice_number"`
 	NetAmount       int64                 `json:"net_amount"`
 	Currency        string                `json:"currency"`
-	Status          voucher.VoucherStatus `json:"voucher_status"` // Voucher lifecycle: draft, finalized, posted, synced
+	Status          voucher.VoucherStatus `json:"voucher_status"`  // Voucher lifecycle: draft, finalized, posted, synced
 	ApprovalStatus  *string               `json:"approval_status"` // Latest approval action: pending, approved, rejected, request_changes (null if no approvals)
 	PaymentStatus   *string               `json:"payment_status"`  // Payment status: pending, success, failed, cancelled (null if no payment)
 	ERPSyncStatus   voucher.ERPSyncStatus `json:"erp_sync_status"`

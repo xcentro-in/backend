@@ -324,18 +324,18 @@ func (h *PaymentHandler) Tokenize(c echo.Context) error {
 		})
 	}
 
-	h.logger.DebugWith("Tokenization request parsed",
-		"card_type", req.CardDetails.CardType,
-		"card_category", req.CardDetails.CardCategory)
-
-	// Validate card details
-	if err := h.validateTokenizeRequest(&req); err != nil {
+	// Validate request
+	if err := c.Validate(&req); err != nil {
 		h.logger.WarnWith("Tokenization request validation failed", "error", err)
 		return c.JSON(http.StatusBadRequest, map[string]any{
 			"error":   "validation_failed",
-			"message": err.Error(),
+			"message": "Validation failed. Please check your input.",
 		})
 	}
+
+	h.logger.DebugWith("Tokenization request parsed",
+		"card_type", req.CardDetails.CardType,
+		"card_category", req.CardDetails.CardCategory)
 
 	// Create context with timeout for blocking tokenization
 	ctx, cancel := context.WithTimeout(c.Request().Context(), 60*time.Second)
@@ -460,19 +460,19 @@ func (h *PaymentHandler) MakePayment(c echo.Context) error {
 		})
 	}
 
+	// Validate request
+	if err := c.Validate(&req); err != nil {
+		h.logger.WarnWith("Payment request validation failed", "error", err)
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "validation_failed",
+			"message": "Validation failed. Please check your input.",
+		})
+	}
+
 	h.logger.DebugWith("Payment request parsed",
 		"amount", req.Amount,
 		"currency", req.Currency,
 		"payment_method", req.PaymentMethod)
-
-	// Validate required fields
-	if err := h.validatePaymentRequest(&req); err != nil {
-		h.logger.WarnWith("Payment request validation failed", "error", err)
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "validation_failed",
-			"message": err.Error(),
-		})
-	}
 
 	// Convert HTTP request to core domain request
 	coreRequest := payment.PaymentRequest{
@@ -538,12 +538,12 @@ func (h *PaymentHandler) AddPaymentSource(c echo.Context) error {
 		})
 	}
 
-	// Validate business_id
-	if req.BusinessID == "" {
-		h.logger.Warn("business_id is missing in request")
+	// Validate request
+	if err := c.Validate(&req); err != nil {
+		h.logger.WarnWith("Payment source request validation failed", "error", err)
 		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "missing_business_id",
-			"message": "business_id is required in request body",
+			"error":   "validation_failed",
+			"message": "Validation failed. Please check your input.",
 		})
 	}
 
@@ -551,15 +551,6 @@ func (h *PaymentHandler) AddPaymentSource(c echo.Context) error {
 	h.logger.DebugWith("Add payment source request parsed",
 		"business_id", businessID,
 		"source_type", req.SourceType)
-
-	// Validate request
-	if err := h.validateAddPaymentSourceRequest(&req); err != nil {
-		h.logger.WarnWith("Payment source request validation failed", "error", err)
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "validation_failed",
-			"message": err.Error(),
-		})
-	}
 
 	// Create context with timeout
 	ctx, cancel := context.WithTimeout(c.Request().Context(), 30*time.Second)
@@ -962,12 +953,12 @@ func (h *PaymentHandler) GetPaymentSourcesWithFees(c echo.Context) error {
 		})
 	}
 
-	// Validate business_id
-	if req.BusinessID == "" {
-		h.logger.Warn("business_id is missing in request")
+	// Validate request
+	if err := c.Validate(&req); err != nil {
+		h.logger.WarnWith("Payment sources request validation failed", "error", err)
 		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "missing_business_id",
-			"message": "business_id is required in request body",
+			"error":   "validation_failed",
+			"message": "Validation failed. Please check your input.",
 		})
 	}
 
@@ -986,15 +977,6 @@ func (h *PaymentHandler) GetPaymentSourcesWithFees(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, map[string]any{
 			"error":   "invalid_payment_context",
 			"message": fmt.Sprintf("Invalid payment context: %s. Valid contexts: vendor_payment, gst_payment, bill_payment, payroll", req.PaymentContext),
-		})
-	}
-
-	// Validate base amount
-	if baseAmountInt <= 0 {
-		h.logger.WarnWith("Invalid base amount", "base_amount", baseAmountInt)
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "invalid_amount",
-			"message": "Base amount must be greater than 0",
 		})
 	}
 
