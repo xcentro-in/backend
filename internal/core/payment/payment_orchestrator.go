@@ -17,8 +17,9 @@ type PaymentOrchestrator interface {
 	SelectGateway(request PaymentRequest) (GatewayType, error)
 }
 
-// MockPaymentOrchestrator provides a mock implementation with detailed logging
-type MockPaymentOrchestrator struct {
+// paymentOrchestratorImpl is the standard implementation of PaymentOrchestrator
+// It handles gateway selection, routing, and communication with payment gateways
+type paymentOrchestratorImpl struct {
 	// Gateway instances for payment processing
 	jioPayGateway   PaymentGateway
 	easebuzzGateway PaymentGateway
@@ -32,22 +33,24 @@ type MockPaymentOrchestrator struct {
 	logger *logger.Logger
 }
 
-// NewMockPaymentOrchestrator creates a new mock payment orchestrator
-// TODO: Rename to NewPaymentOrchestrator when moving to production
-func NewMockPaymentOrchestrator(
+// NewPaymentOrchestrator creates a new payment orchestrator
+//
+// The orchestrator itself is always "real" - it handles actual gateway selection and routing.
+// The gateway clients (jioPayClient, easebuzzClient, mockPGClient) can be real or mock implementations.
+func NewPaymentOrchestrator(
 	paymentRepo PaymentRepository,
 	storedCardRepo StoredCardRepository,
-	jioPayClient PaymentGateway, // Real JioPay client injected
-	easebuzzClient PaymentGateway, // Real Easebuzz client injected
+	jioPayClient PaymentGateway, // JioPay gateway client
+	easebuzzClient PaymentGateway, // Easebuzz gateway client
 	mockPGClient PaymentGateway, // Mock PG client for testing
 	mockPGEnabled bool, // Enable mock PG bypass
 	log *logger.Logger,
 ) PaymentOrchestrator {
-	return &MockPaymentOrchestrator{
-		jioPayGateway:   jioPayClient,   // ✅ Real JioPay client
-		easebuzzGateway: easebuzzClient, // ✅ Real Easebuzz client
-		mockPGGateway:   mockPGClient,   // ✅ Mock PG client
-		mockPGEnabled:   mockPGEnabled,  // ✅ Mock PG enabled flag
+	return &paymentOrchestratorImpl{
+		jioPayGateway:   jioPayClient,
+		easebuzzGateway: easebuzzClient,
+		mockPGGateway:   mockPGClient,
+		mockPGEnabled:   mockPGEnabled,
 		paymentRepo:     paymentRepo,
 		storedCardRepo:  storedCardRepo,
 		logger:          log,
@@ -55,7 +58,7 @@ func NewMockPaymentOrchestrator(
 }
 
 // ProcessPayment processes a payment request with detailed logging
-func (o *MockPaymentOrchestrator) ProcessPayment(ctx context.Context, request PaymentRequest) (*PaymentResponse, error) {
+func (o *paymentOrchestratorImpl) ProcessPayment(ctx context.Context, request PaymentRequest) (*PaymentResponse, error) {
 	o.logger.InfoWith("Orchestrator: ProcessPayment called",
 		"business_id", request.BusinessID,
 		"amount", request.Amount,
@@ -173,7 +176,7 @@ func (o *MockPaymentOrchestrator) ProcessPayment(ctx context.Context, request Pa
 }
 
 // TokenizeCard tokenizes a card with detailed logging
-func (o *MockPaymentOrchestrator) TokenizeCard(ctx context.Context, request TokenizeRequest) (*TokenizeResponse, error) {
+func (o *paymentOrchestratorImpl) TokenizeCard(ctx context.Context, request TokenizeRequest) (*TokenizeResponse, error) {
 	o.logger.InfoWith("Orchestrator: TokenizeCard called",
 		"business_id", request.BusinessID,
 		"card_type", request.CardDetails.CardType,
@@ -259,7 +262,7 @@ func (o *MockPaymentOrchestrator) TokenizeCard(ctx context.Context, request Toke
 }
 
 // ProcessTokenizedPayment handles payments using tokenized cards
-func (o *MockPaymentOrchestrator) ProcessTokenizedPayment(ctx context.Context, request PaymentRequest) (*PaymentResponse, error) {
+func (o *paymentOrchestratorImpl) ProcessTokenizedPayment(ctx context.Context, request PaymentRequest) (*PaymentResponse, error) {
 	o.logger.InfoWith("Orchestrator: ProcessTokenizedPayment called")
 
 	// Validate token card details
@@ -426,7 +429,7 @@ func (o *MockPaymentOrchestrator) ProcessTokenizedPayment(ctx context.Context, r
 }
 
 // getStoredCardByID retrieves a stored card by its ID from the database
-func (o *MockPaymentOrchestrator) getStoredCardByID(businessID, cardID string) (*StoredCard, error) {
+func (o *paymentOrchestratorImpl) getStoredCardByID(businessID, cardID string) (*StoredCard, error) {
 	o.logger.DebugWith("Searching for stored card in database",
 		"business_id", businessID,
 		"card_id", cardID)
@@ -474,7 +477,7 @@ func (o *MockPaymentOrchestrator) getStoredCardByID(businessID, cardID string) (
 }
 
 // ValidatePaymentRequest validates a payment request
-func (o *MockPaymentOrchestrator) ValidatePaymentRequest(request PaymentRequest) error {
+func (o *paymentOrchestratorImpl) ValidatePaymentRequest(request PaymentRequest) error {
 	o.logger.DebugWith("Validating payment request")
 
 	if request.BusinessID == "" {
@@ -534,7 +537,7 @@ func (o *MockPaymentOrchestrator) ValidatePaymentRequest(request PaymentRequest)
 }
 
 // SelectGateway selects the appropriate gateway based on payment method and card details
-func (o *MockPaymentOrchestrator) SelectGateway(request PaymentRequest) (GatewayType, error) {
+func (o *paymentOrchestratorImpl) SelectGateway(request PaymentRequest) (GatewayType, error) {
 	o.logger.DebugWith("Selecting gateway", "payment_method", request.PaymentMethod)
 
 	// Check if mock PG is enabled - bypass normal gateway selection
@@ -566,7 +569,7 @@ func (o *MockPaymentOrchestrator) SelectGateway(request PaymentRequest) (Gateway
 }
 
 // selectGatewayForCard implements the exact card routing business rules
-func (o *MockPaymentOrchestrator) selectGatewayForCard(card *Card, amount int64) (GatewayType, error) {
+func (o *paymentOrchestratorImpl) selectGatewayForCard(card *Card, amount int64) (GatewayType, error) {
 	if card == nil {
 		o.logger.ErrorWith("Card details missing for card payment")
 		return "", fmt.Errorf("card details are required for card payments")
@@ -658,7 +661,7 @@ func (o *MockPaymentOrchestrator) selectGatewayForCard(card *Card, amount int64)
 }
 
 // calculateMockFee calculates a mock fee based on payment method
-func (o *MockPaymentOrchestrator) calculateMockFee(amount int64, method PaymentMethod) int64 {
+func (o *paymentOrchestratorImpl) calculateMockFee(amount int64, method PaymentMethod) int64 {
 	switch method {
 	case PaymentMethodCard:
 		return amount * 25 / 1000 // 2.5%
@@ -674,7 +677,7 @@ func (o *MockPaymentOrchestrator) calculateMockFee(amount int64, method PaymentM
 }
 
 // getGatewayInstance returns the appropriate gateway instance
-func (o *MockPaymentOrchestrator) getGatewayInstance(gatewayType GatewayType) PaymentGateway {
+func (o *paymentOrchestratorImpl) getGatewayInstance(gatewayType GatewayType) PaymentGateway {
 	switch gatewayType {
 	case GatewayJioPay:
 		return o.jioPayGateway

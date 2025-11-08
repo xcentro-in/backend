@@ -75,7 +75,7 @@ The orchestrator now includes:
 
 **Gateway Selection Bypass:**
 ```go
-func (o *MockPaymentOrchestrator) SelectGateway(request PaymentRequest) (GatewayType, error) {
+func (o *PaymentOrchestrator) SelectGateway(request PaymentRequest) (GatewayType, error) {
     // Check if mock PG is enabled - bypass normal gateway selection
     if o.mockPGEnabled {
         o.logger.InfoWith("Mock PG enabled: bypassing normal gateway selection")
@@ -112,7 +112,7 @@ mockPGClient := mockpg.NewMockPGClient(
     cfg.MockPG.SimulateSuccess,
 )
 
-orchestrator := corePayment.NewMockPaymentOrchestrator(
+orchestrator := corePayment.NewPaymentOrchestrator(
     paymentRepository,
     storedCardRepository,
     jioPayClient,

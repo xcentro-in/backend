@@ -668,7 +668,7 @@ go test ./internal/adapters/external/payment/jiopay/... -v
 
 ### Mock Testing
 All payment services have mock implementations for testing:
-- `MockPaymentOrchestrator`
+- `PaymentOrchestrator`
 - `MockFeeCalculator`
 - `MockWalletService`
 - `MockBankVerificationService`
