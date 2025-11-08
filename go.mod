@@ -2,6 +2,8 @@ module xcentro.in
 
 go 1.25.1
 
+toolchain go1.24.7
+
 require (
 	github.com/aws/aws-sdk-go-v2/credentials v1.18.21
 	github.com/go-playground/validator/v10 v10.28.0
