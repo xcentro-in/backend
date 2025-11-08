@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"xcentro.in/internal/core/notification"
 	"xcentro.in/internal/core/voucher"
 	"xcentro.in/internal/shared/types"
 )
@@ -91,11 +92,12 @@ func ensureEmptyObject(m map[string]interface{}) map[string]interface{} {
 
 // VoucherServiceImpl implements the VoucherService interface
 type VoucherServiceImpl struct {
-	voucherRepo       voucher.VoucherRepository
-	approvalRepo      voucher.ApprovalRepository
-	queueRepo         voucher.ERPSyncQueueRepository
-	voucherCore       voucher.VoucherService // Domain service for business logic
-	businessPayeeRepo interface{}            // payee.BusinessPayeeRelationRepository, using interface{} to avoid circular import
+	voucherRepo           voucher.VoucherRepository
+	approvalRepo          voucher.ApprovalRepository
+	queueRepo             voucher.ERPSyncQueueRepository
+	voucherCore           voucher.VoucherService // Domain service for business logic
+	businessPayeeRepo     interface{}            // payee.BusinessPayeeRelationRepository, using interface{} to avoid circular import
+	notificationEventRepo notification.NotificationEventRepository
 }
 
 // NewVoucherService creates a new instance of VoucherService
@@ -105,13 +107,15 @@ func NewVoucherService(
 	queueRepo voucher.ERPSyncQueueRepository,
 	voucherCore voucher.VoucherService,
 	businessPayeeRepo interface{}, // Repository to resolve relation_id
+	notificationEventRepo notification.NotificationEventRepository,
 ) VoucherService {
 	return &VoucherServiceImpl{
-		voucherRepo:       voucherRepo,
-		approvalRepo:      approvalRepo,
-		queueRepo:         queueRepo,
-		voucherCore:       voucherCore,
-		businessPayeeRepo: businessPayeeRepo,
+		voucherRepo:           voucherRepo,
+		approvalRepo:          approvalRepo,
+		queueRepo:             queueRepo,
+		voucherCore:           voucherCore,
+		businessPayeeRepo:     businessPayeeRepo,
+		notificationEventRepo: notificationEventRepo,
 	}
 }
 
@@ -1124,6 +1128,14 @@ func (s *VoucherServiceImpl) RequestApproval(ctx context.Context, req *voucher.V
 		return nil, fmt.Errorf("failed to process approval request: %w", err)
 	}
 
+	// Trigger notification only when action is "pending" (i.e., requesting approval)
+	if req.Action == voucher.ApprovalActionPending {
+		if err := s.triggerApprovalNotification(ctx, req); err != nil {
+			// Log error but don't fail the approval request
+			fmt.Printf("Warning: failed to trigger approval notification: %v\n", err)
+		}
+	}
+
 	return response, nil
 }
 
@@ -1349,4 +1361,70 @@ func (s *VoucherServiceImpl) GetVoucherPaymentDetails(ctx context.Context, vouch
 	}
 
 	return response, nil
+}
+
+// triggerApprovalNotification creates a notification event when a voucher approval is requested
+func (s *VoucherServiceImpl) triggerApprovalNotification(ctx context.Context, req *voucher.VoucherApprovalRequest) error {
+	// Get voucher details to build meaningful notification message
+	voucherUUID, err := uuid.Parse(req.VoucherID)
+	if err != nil {
+		return fmt.Errorf("invalid voucher_id: %w", err)
+	}
+
+	v, err := s.voucherRepo.GetByID(ctx, voucherUUID)
+	if err != nil {
+		return fmt.Errorf("failed to get voucher details: %w", err)
+	}
+
+	// Format amount for display (convert paise to rupees)
+	amountInRupees := float64(v.NetAmount) / 100.0
+
+	// Build notification payload
+	payload := notification.NotificationEventPayload{
+		Timestamp: time.Now().Format(time.RFC3339),
+		EventType: notification.EventVoucherApprovalRequested,
+		Target: notification.TargetInfo{
+			BusinessID: req.BusinessID,
+			Type:       notification.TargetUnicast,
+			IDs:        []string{req.ApproverUserID}, // Send to the approver
+		},
+		Entities: notification.EntityReferences{
+			BusinessID: &req.BusinessID,
+			VoucherID:  &req.VoucherID,
+		},
+		Message: notification.MessageContent{
+			Title: "Voucher Approval Request",
+			Body:  fmt.Sprintf("Voucher %s for ₹%.2f requires your approval. Invoice: %s", v.VoucherNumber, amountInRupees, v.InvoiceNumber),
+		},
+		Actions: []notification.ActionButton{
+			{
+				Type: notification.ButtonTypePositive,
+				Text: "Approve",
+				Href: fmt.Sprintf("/vouchers/%s/approve", req.VoucherID),
+			},
+			{
+				Type: notification.ButtonTypeNegative,
+				Text: "Reject",
+				Href: fmt.Sprintf("/vouchers/%s/reject", req.VoucherID),
+			},
+			{
+				Type: notification.ButtonTypeNeutral,
+				Text: "View Details",
+				Href: fmt.Sprintf("/vouchers/%s", req.VoucherID),
+			},
+		},
+	}
+
+	// Create notification event
+	event := &notification.NotificationEvent{
+		EventType: notification.EventVoucherApprovalRequested,
+		Payload:   payload,
+	}
+
+	// Create event (non-blocking - just inserts into notification_events table)
+	if err := s.notificationEventRepo.CreateEvent(ctx, event); err != nil {
+		return fmt.Errorf("failed to create notification event: %w", err)
+	}
+
+	return nil
 }

@@ -39,6 +39,11 @@ const (
 	// Security category (security)
 	EventUserInvited     = "security.user.invited"
 	EventUserRoleChanged = "security.user.role.changed"
+
+	// Approvals category (approvals)
+	EventVoucherApprovalRequested = "approvals.voucher.requested"
+	EventVoucherApprovalApproved  = "approvals.voucher.approved"
+	EventVoucherApprovalRejected  = "approvals.voucher.rejected"
 )
 
 // Notification channels
@@ -217,9 +222,9 @@ type UserNotification struct {
 	UserID     string                 `db:"user_id" json:"user_id"`
 	BusinessID *string                `db:"business_id" json:"business_id,omitempty"`
 	EventID    int64                  `db:"event_id" json:"event_id"`
-	Channel    string                 `db:"channel" json:"channel"`     // "email", "push", "web"
-	Status     string                 `db:"status" json:"status"`       // "pending", "processing", "sent", "failed", "read"
-	Content    map[string]interface{} `db:"content" json:"content"`     // JSONB: rendered message
+	Channel    string                 `db:"channel" json:"channel"`         // "email", "push", "web"
+	Status     string                 `db:"status" json:"status"`           // "pending", "processing", "sent", "failed", "read"
+	Content    map[string]interface{} `db:"content" json:"content"`         // JSONB: rendered message
 	RetryCount int                    `db:"retry_count" json:"retry_count"` // Number of retry attempts
 	CreatedAt  time.Time              `db:"created_at" json:"created_at"`
 	SentAt     *time.Time             `db:"sent_at" json:"sent_at,omitempty"`
