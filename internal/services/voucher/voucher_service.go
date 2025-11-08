@@ -6,7 +6,9 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"xcentro.in/internal/core/business"
 	"xcentro.in/internal/core/notification"
+	"xcentro.in/internal/core/shared"
 	"xcentro.in/internal/core/voucher"
 	"xcentro.in/internal/shared/types"
 )
@@ -98,6 +100,7 @@ type VoucherServiceImpl struct {
 	voucherCore           voucher.VoucherService // Domain service for business logic
 	businessPayeeRepo     interface{}            // payee.BusinessPayeeRelationRepository, using interface{} to avoid circular import
 	notificationEventRepo notification.NotificationEventRepository
+	businessUserRelRepo   business.BusinessUserRelationRepository
 }
 
 // NewVoucherService creates a new instance of VoucherService
@@ -108,6 +111,7 @@ func NewVoucherService(
 	voucherCore voucher.VoucherService,
 	businessPayeeRepo interface{}, // Repository to resolve relation_id
 	notificationEventRepo notification.NotificationEventRepository,
+	businessUserRelRepo business.BusinessUserRelationRepository,
 ) VoucherService {
 	return &VoucherServiceImpl{
 		voucherRepo:           voucherRepo,
@@ -116,6 +120,7 @@ func NewVoucherService(
 		voucherCore:           voucherCore,
 		businessPayeeRepo:     businessPayeeRepo,
 		notificationEventRepo: notificationEventRepo,
+		businessUserRelRepo:   businessUserRelRepo,
 	}
 }
 
@@ -1128,11 +1133,19 @@ func (s *VoucherServiceImpl) RequestApproval(ctx context.Context, req *voucher.V
 		return nil, fmt.Errorf("failed to process approval request: %w", err)
 	}
 
-	// Trigger notification only when action is "pending" (i.e., requesting approval)
-	if req.Action == voucher.ApprovalActionPending {
-		if err := s.triggerApprovalNotification(ctx, req); err != nil {
+	// Trigger notification based on action
+	switch req.Action {
+	case voucher.ApprovalActionPending:
+		// When requesting approval, notify the owner
+		if err := s.triggerApprovalRequestNotification(ctx, req); err != nil {
 			// Log error but don't fail the approval request
-			fmt.Printf("Warning: failed to trigger approval notification: %v\n", err)
+			fmt.Printf("Warning: failed to trigger approval request notification: %v\n", err)
+		}
+	case voucher.ApprovalActionApproved, voucher.ApprovalActionRejected, voucher.ApprovalActionRequestChanges:
+		// When approved/rejected/request_changes, notify the requester
+		if err := s.triggerApprovalResponseNotification(ctx, req); err != nil {
+			// Log error but don't fail the approval action
+			fmt.Printf("Warning: failed to trigger approval response notification: %v\n", err)
 		}
 	}
 
@@ -1363,8 +1376,8 @@ func (s *VoucherServiceImpl) GetVoucherPaymentDetails(ctx context.Context, vouch
 	return response, nil
 }
 
-// triggerApprovalNotification creates a notification event when a voucher approval is requested
-func (s *VoucherServiceImpl) triggerApprovalNotification(ctx context.Context, req *voucher.VoucherApprovalRequest) error {
+// triggerApprovalRequestNotification sends notification to business owner when approval is requested
+func (s *VoucherServiceImpl) triggerApprovalRequestNotification(ctx context.Context, req *voucher.VoucherApprovalRequest) error {
 	// Get voucher details to build meaningful notification message
 	voucherUUID, err := uuid.Parse(req.VoucherID)
 	if err != nil {
@@ -1374,6 +1387,12 @@ func (s *VoucherServiceImpl) triggerApprovalNotification(ctx context.Context, re
 	v, err := s.voucherRepo.GetByID(ctx, voucherUUID)
 	if err != nil {
 		return fmt.Errorf("failed to get voucher details: %w", err)
+	}
+
+	// Get business owner's user ID
+	ownerUserID, err := s.getBusinessOwnerUserID(ctx, req.BusinessID)
+	if err != nil {
+		return fmt.Errorf("failed to get business owner: %w", err)
 	}
 
 	// Format amount for display (convert paise to rupees)
@@ -1386,7 +1405,7 @@ func (s *VoucherServiceImpl) triggerApprovalNotification(ctx context.Context, re
 		Target: notification.TargetInfo{
 			BusinessID: req.BusinessID,
 			Type:       notification.TargetUnicast,
-			IDs:        []string{req.ApproverUserID}, // Send to the approver
+			IDs:        []string{ownerUserID}, // Send to the owner
 		},
 		Entities: notification.EntityReferences{
 			BusinessID: &req.BusinessID,
@@ -1427,4 +1446,106 @@ func (s *VoucherServiceImpl) triggerApprovalNotification(ctx context.Context, re
 	}
 
 	return nil
+}
+
+// triggerApprovalResponseNotification sends notification to requester when approval is responded to
+func (s *VoucherServiceImpl) triggerApprovalResponseNotification(ctx context.Context, req *voucher.VoucherApprovalRequest) error {
+	// Get voucher details to build meaningful notification message
+	voucherUUID, err := uuid.Parse(req.VoucherID)
+	if err != nil {
+		return fmt.Errorf("invalid voucher_id: %w", err)
+	}
+
+	v, err := s.voucherRepo.GetByID(ctx, voucherUUID)
+	if err != nil {
+		return fmt.Errorf("failed to get voucher details: %w", err)
+	}
+
+	// Format amount for display (convert paise to rupees)
+	amountInRupees := float64(v.NetAmount) / 100.0
+
+	// Determine event type and message based on action
+	var eventType string
+	var title string
+	var body string
+
+	switch req.Action {
+	case voucher.ApprovalActionApproved:
+		eventType = notification.EventVoucherApprovalApproved
+		title = "Voucher Approved"
+		body = fmt.Sprintf("Your voucher %s for ₹%.2f has been approved. Invoice: %s", v.VoucherNumber, amountInRupees, v.InvoiceNumber)
+	case voucher.ApprovalActionRejected:
+		eventType = notification.EventVoucherApprovalRejected
+		title = "Voucher Rejected"
+		body = fmt.Sprintf("Your voucher %s for ₹%.2f has been rejected. Invoice: %s", v.VoucherNumber, amountInRupees, v.InvoiceNumber)
+		if req.Remarks != "" {
+			body += fmt.Sprintf(". Reason: %s", req.Remarks)
+		}
+	case voucher.ApprovalActionRequestChanges:
+		eventType = notification.EventVoucherApprovalRejected // Using rejected event for request_changes
+		title = "Changes Requested for Voucher"
+		body = fmt.Sprintf("Changes requested for your voucher %s for ₹%.2f. Invoice: %s", v.VoucherNumber, amountInRupees, v.InvoiceNumber)
+		if req.Remarks != "" {
+			body += fmt.Sprintf(". Details: %s", req.Remarks)
+		}
+	default:
+		return fmt.Errorf("unsupported action: %s", req.Action)
+	}
+
+	// Build notification payload
+	payload := notification.NotificationEventPayload{
+		Timestamp: time.Now().Format(time.RFC3339),
+		EventType: eventType,
+		Target: notification.TargetInfo{
+			BusinessID: req.BusinessID,
+			Type:       notification.TargetUnicast,
+			IDs:        []string{req.RequesterUserID}, // Send to the requester
+		},
+		Entities: notification.EntityReferences{
+			BusinessID: &req.BusinessID,
+			VoucherID:  &req.VoucherID,
+		},
+		Message: notification.MessageContent{
+			Title: title,
+			Body:  body,
+		},
+		Actions: []notification.ActionButton{
+			{
+				Type: notification.ButtonTypeNeutral,
+				Text: "View Details",
+				Href: fmt.Sprintf("/vouchers/%s", req.VoucherID),
+			},
+		},
+	}
+
+	// Create notification event
+	event := &notification.NotificationEvent{
+		EventType: eventType,
+		Payload:   payload,
+	}
+
+	// Create event (non-blocking - just inserts into notification_events table)
+	if err := s.notificationEventRepo.CreateEvent(ctx, event); err != nil {
+		return fmt.Errorf("failed to create notification event: %w", err)
+	}
+
+	return nil
+}
+
+// getBusinessOwnerUserID retrieves the user ID of the business owner
+func (s *VoucherServiceImpl) getBusinessOwnerUserID(ctx context.Context, businessID string) (string, error) {
+	// Get all users for the business
+	users, err := s.businessUserRelRepo.GetBusinessUsersWithDetails(ctx, businessID)
+	if err != nil {
+		return "", fmt.Errorf("failed to get business users: %w", err)
+	}
+
+	// Find the owner
+	for _, user := range users {
+		if user.Role == shared.Owner {
+			return user.UserID, nil
+		}
+	}
+
+	return "", fmt.Errorf("no owner found for business %s", businessID)
 }
