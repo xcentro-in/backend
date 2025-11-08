@@ -1484,18 +1484,14 @@ func (s *VoucherServiceImpl) triggerApprovalResponseNotification(ctx context.Con
 		return fmt.Errorf("failed to get approval history: %w", err)
 	}
 
-	// Find the original requester (the one who submitted for approval with action="pending")
-	var originalRequesterUserID string
-	for _, approval := range approvals {
-		if approval.Action == "pending" {
-			originalRequesterUserID = approval.RequesterUserID.String()
-			break
-		}
+	// Get the most recent approval (the one that was just acted upon)
+	// GetApprovalsByVoucher returns results ordered by created_at ASC, so last element is most recent
+	if len(approvals) == 0 {
+		return fmt.Errorf("no approval records found for voucher %s", req.VoucherID)
 	}
 
-	if originalRequesterUserID == "" {
-		return fmt.Errorf("no approval request found for voucher %s", req.VoucherID)
-	}
+	mostRecentApproval := approvals[len(approvals)-1]
+	originalRequesterUserID := mostRecentApproval.RequesterUserID.String()
 
 	// Format amount for display (convert paise to rupees)
 	amountInRupees := float64(v.NetAmount) / 100.0
