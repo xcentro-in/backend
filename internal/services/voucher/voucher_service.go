@@ -1359,7 +1359,7 @@ func (s *VoucherServiceImpl) GetVoucherPaymentDetails(ctx context.Context, vouch
 func (s *VoucherServiceImpl) GetCalendarView(ctx context.Context, req *voucher.CalendarViewRequest) (*voucher.CalendarViewResponse, error) {
 	// Validate input
 	if req.BusinessID == "" {
-		return nil, types.ErrInvalidBusinessID
+		return nil, fmt.Errorf("business_id is required")
 	}
 	if req.Year < 2000 || req.Year > 2100 {
 		return nil, fmt.Errorf("invalid year: must be between 2000 and 2100")
