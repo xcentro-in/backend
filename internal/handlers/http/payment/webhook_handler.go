@@ -13,6 +13,7 @@ import (
 	"github.com/labstack/echo/v4"
 	"xcentro.in/internal/adapters/external/payment/easebuzz"
 	"xcentro.in/internal/adapters/external/payment/jiopay"
+	"xcentro.in/internal/adapters/external/payment/mockpg"
 	"xcentro.in/internal/core/payment"
 )
 
@@ -22,6 +23,8 @@ type WebhookHandler struct {
 	paymentRepo     payment.PaymentRepository
 	jioPayGateway   payment.PaymentGateway
 	easebuzzGateway payment.PaymentGateway
+	mockPGGateway   payment.PaymentGateway
+	mockPGEnabled   bool // Flag to check if mock PG is enabled
 }
 
 // NewWebhookHandler creates a new webhook handler
@@ -29,17 +32,21 @@ func NewWebhookHandler(
 	paymentRepo payment.PaymentRepository,
 	jioPayGateway payment.PaymentGateway,
 	easebuzzGateway payment.PaymentGateway,
+	mockPGGateway payment.PaymentGateway,
+	mockPGEnabled bool,
 ) *WebhookHandler {
 	return &WebhookHandler{
 		paymentRepo:     paymentRepo,
 		jioPayGateway:   jioPayGateway,
 		easebuzzGateway: easebuzzGateway,
+		mockPGGateway:   mockPGGateway,
+		mockPGEnabled:   mockPGEnabled,
 	}
 }
 
 // HandlePaymentStatusWebhook routes payment status webhooks to appropriate gateway handler
 // Endpoint: POST /webhooks/payment_status?type=<gateway>
-// Supports: type=jiopay, type=easebuzz
+// Supports: type=jiopay, type=easebuzz, type=mockpg (testing only)
 func (h *WebhookHandler) HandlePaymentStatusWebhook(c echo.Context) error {
 	gatewayType := c.QueryParam("type")
 
@@ -48,10 +55,19 @@ func (h *WebhookHandler) HandlePaymentStatusWebhook(c echo.Context) error {
 		return h.handleJioPayPaymentWebhook(c)
 	case "easebuzz":
 		return h.handleEasebuzzPaymentWebhook(c)
+	case "mockpg":
+		// Only allow mock PG webhooks if mock PG is enabled
+		if !h.mockPGEnabled {
+			return c.JSON(http.StatusForbidden, map[string]string{
+				"status":  "error",
+				"message": "Mock PG is not enabled",
+			})
+		}
+		return h.handleMockPGPaymentWebhook(c)
 	default:
 		return c.JSON(http.StatusBadRequest, map[string]string{
 			"status":  "error",
-			"message": "Invalid or missing gateway type parameter. Supported: jiopay, easebuzz",
+			"message": "Invalid or missing gateway type parameter. Supported: jiopay, easebuzz, mockpg",
 		})
 	}
 }
@@ -318,6 +334,133 @@ func (h *WebhookHandler) handleEasebuzzPaymentWebhook(c echo.Context) error {
 	// Create webhook_logs table to log all webhook attempts
 
 	fmt.Println("=== EASEBUZZ WEBHOOK: Processing complete ===")
+
+	return c.JSON(http.StatusOK, map[string]string{
+		"status":  "success",
+		"message": "Webhook processed successfully",
+	})
+}
+
+// handleMockPGPaymentWebhook handles payment status webhooks from Mock PG (testing only)
+// This simulates the async webhook that real gateways send after payment completion
+func (h *WebhookHandler) handleMockPGPaymentWebhook(c echo.Context) error {
+	ctx := c.Request().Context()
+
+	fmt.Println("=== MOCK PG WEBHOOK: Async notification received ===")
+
+	// Step 1: Read request body
+	bodyBytes, err := io.ReadAll(c.Request().Body)
+	if err != nil {
+		fmt.Printf("❌ Failed to read webhook body: %v\n", err)
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "invalid_request",
+		})
+	}
+
+	fmt.Printf("📥 Webhook payload size: %d bytes\n", len(bodyBytes))
+
+	// Step 2: Parse webhook payload
+	var webhook mockpg.MockPGWebhookPayload
+	if err := json.Unmarshal(bodyBytes, &webhook); err != nil {
+		fmt.Printf("❌ Failed to parse webhook payload: %v\n", err)
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "invalid_payload",
+		})
+	}
+
+	fmt.Printf("📋 TransactionID: %s\n", webhook.TransactionID)
+	fmt.Printf("📋 GatewayPaymentID: %s\n", webhook.GatewayPaymentID)
+	fmt.Printf("📋 Status: %s\n", webhook.Status)
+	fmt.Printf("📋 Amount: %d %s\n", webhook.Amount, webhook.Currency)
+	fmt.Printf("📋 ProcessedAt: %s\n", webhook.ProcessedAt)
+
+	// Step 3: Verify signature (mock validation)
+	if err := h.mockPGGateway.ValidateWebhook(bodyBytes, webhook.Signature); err != nil {
+		fmt.Printf("❌ Webhook signature verification failed: %v\n", err)
+		// Return 200 OK to avoid gateway retries, but log the failure
+		return c.JSON(http.StatusOK, map[string]string{
+			"status":  "error",
+			"message": "Signature verification failed",
+		})
+	}
+
+	fmt.Println("✅ Webhook signature verified")
+
+	// Step 4: Query payment by transaction ID
+	pmt, err := h.paymentRepo.GetPaymentByID(ctx, webhook.TransactionID)
+	if err != nil || pmt == nil {
+		fmt.Printf("❌ Payment not found: %s, error: %v\n", webhook.TransactionID, err)
+		// Return 200 OK to avoid gateway retries
+		return c.JSON(http.StatusOK, map[string]string{
+			"status":  "error",
+			"message": "Payment not found",
+		})
+	}
+
+	fmt.Printf("✅ Payment found: %s (current status: %s)\n", pmt.ID, pmt.Status)
+
+	// Step 5: Map status
+	var newStatus payment.PaymentStatus
+	if webhook.Status == "success" {
+		newStatus = payment.PaymentStatusSuccess
+	} else {
+		newStatus = payment.PaymentStatusFailed
+	}
+
+	fmt.Printf("📊 Status mapping: %s → %s\n", webhook.Status, newStatus)
+
+	// Step 6: Update payment (idempotency check)
+	if !isTerminalStatus(pmt.Status) {
+		fmt.Println("🔄 Updating payment status from webhook...")
+
+		metadata := map[string]any{
+			"webhook_received_at":   time.Now().Format(time.RFC3339),
+			"webhook_type":          "payment_status",
+			"gateway":               "mockpg",
+			"mock_gateway_payment_id": webhook.GatewayPaymentID,
+			"payment_method":        webhook.PaymentMethod,
+			"processed_at":          webhook.ProcessedAt,
+			"merchant_id":           webhook.MerchantID,
+			"mock_simulation":       true,
+		}
+
+		if err := h.paymentRepo.UpdatePaymentStatus(ctx, pmt.ID, newStatus, metadata); err != nil {
+			fmt.Printf("❌ Failed to update payment: %v\n", err)
+			// Return 200 OK to avoid gateway retries
+			return c.JSON(http.StatusOK, map[string]string{
+				"status":  "error",
+				"message": "Failed to update payment",
+			})
+		}
+
+		fmt.Printf("✅ Payment status updated to: %s\n", newStatus)
+
+		// Initialize settlement status for successful payments
+		if newStatus == payment.PaymentStatusSuccess {
+			settlementMetadata := map[string]any{
+				"settlement_initiated_at": time.Now().Format(time.RFC3339),
+				"settlement_gateway":      "mockpg",
+			}
+			if err := h.paymentRepo.UpdateSettlementStatus(ctx, pmt.ID, payment.SettlementStatusPending, settlementMetadata); err != nil {
+				fmt.Printf("⚠️  Failed to initialize settlement status: %v\n", err)
+			} else {
+				fmt.Println("✅ Settlement status initialized to pending")
+			}
+		}
+
+		// Update gateway payment ID if not set
+		if pmt.GatewayPaymentID == "" || pmt.GatewayPaymentID != webhook.GatewayPaymentID {
+			if err := h.paymentRepo.UpdateGatewayPaymentID(ctx, pmt.ID, webhook.GatewayPaymentID, ""); err != nil {
+				fmt.Printf("⚠️  Failed to update gateway payment ID: %v\n", err)
+			} else {
+				fmt.Printf("✅ Gateway payment ID updated to: %s\n", webhook.GatewayPaymentID)
+			}
+		}
+	} else {
+		fmt.Printf("⚠️  Payment already in terminal state: %s (idempotency - no update)\n", pmt.Status)
+	}
+
+	fmt.Println("=== MOCK PG WEBHOOK: Processing complete ===")
 
 	return c.JSON(http.StatusOK, map[string]string{
 		"status":  "success",

@@ -131,7 +131,7 @@ func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group
 	callbackHandler := payment.NewCallbackHandler(paymentRepository, jioPayClient, easebuzzClient)
 	processPaymentGroup.POST("/callback", callbackHandler.HandleCallback)
 
-	webhookHandler := payment.NewWebhookHandler(paymentRepository, jioPayClient, easebuzzClient)
+	webhookHandler := payment.NewWebhookHandler(paymentRepository, jioPayClient, easebuzzClient, mockPGClient, cfg.MockPG.Enabled)
 	webhookGroup := processPaymentGroup.Group("/webhooks")
 	webhookGroup.POST("/payment_status", webhookHandler.HandlePaymentStatusWebhook)
 	webhookGroup.POST("/settlement_status", webhookHandler.HandleSettlementStatusWebhook)
