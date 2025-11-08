@@ -6,6 +6,7 @@ import (
 	batchPaymentRepo "xcentro.in/internal/adapters/database/postgres/batch_payment"
 	"xcentro.in/internal/adapters/database/postgres/business"
 	"xcentro.in/internal/adapters/database/postgres/client"
+	featureFlagsRepo "xcentro.in/internal/adapters/database/postgres/feature_flags"
 	notificationRepo "xcentro.in/internal/adapters/database/postgres/notification"
 	payeeRepo "xcentro.in/internal/adapters/database/postgres/payee"
 	paymentRepo "xcentro.in/internal/adapters/database/postgres/payment"
@@ -24,6 +25,7 @@ import (
 	"xcentro.in/internal/handlers/http/auth"
 	batchPaymentHandler "xcentro.in/internal/handlers/http/batch_payment"
 	businessHandler "xcentro.in/internal/handlers/http/business"
+	featureFlagsHandler "xcentro.in/internal/handlers/http/feature_flags"
 	notificationHandler "xcentro.in/internal/handlers/http/notification"
 	"xcentro.in/internal/handlers/http/payee"
 	"xcentro.in/internal/handlers/http/payment"
@@ -34,6 +36,7 @@ import (
 	authservice "xcentro.in/internal/services/auth"
 	batchPaymentSvc "xcentro.in/internal/services/batch_payment"
 	businessSvc "xcentro.in/internal/services/business"
+	featureFlagsSvc "xcentro.in/internal/services/feature_flags"
 	notificationService "xcentro.in/internal/services/notification"
 	payeeSvc "xcentro.in/internal/services/payee"
 	"xcentro.in/internal/services/payments"
@@ -87,6 +90,14 @@ func registerV1AuthRoutes(clients *externalClients, cfg *config.Config, group *e
 
 	_, _, _, _, _, busSvc, authSvc := factory.createCoreServices(verificationSvc)
 	auth.RegisterAuthRoutes(group, authSvc, busSvc, cfg)
+
+	// Feature Flags
+	featureFlagsRepository := featureFlagsRepo.NewPgFeatureFlagsRepository(clients.db, clients.rcache)
+	featureFlagsService := featureFlagsSvc.NewFeatureFlagsService(featureFlagsRepository)
+	featureFlagsHandlerInstance := featureFlagsHandler.NewFeatureFlagsHandler(featureFlagsService)
+
+	authGroup := group.Group("/auth")
+	authGroup.GET("/feature-flags", featureFlagsHandlerInstance.GetFeatureFlags)
 }
 
 func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {

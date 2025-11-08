@@ -14,6 +14,7 @@ const (
 	// Business-related TTLs
 	TTLBusinessDetails = 10 * time.Minute // Business details
 	TTLUserRoles       = 5 * time.Minute  // User-business relations
+	TTLFeatureFlags    = 15 * time.Minute // Feature flags (longer TTL as they change infrequently)
 )
 
 // Key prefix for all XCentro cache keys
@@ -51,6 +52,17 @@ func (businessKeys) UserRoles(userID string) string {
 // Pattern: xcentro:business:{businessId}:onboarding
 func (businessKeys) OnboardingStatus(businessID string) string {
 	return fmt.Sprintf("%s:business:%s:onboarding", keyPrefix, businessID)
+}
+
+// FeatureFlags provides feature flags cache key builders
+var FeatureFlags = featureFlagsKeys{}
+
+type featureFlagsKeys struct{}
+
+// Global returns cache key for global feature flags
+// Pattern: xcentro:feature_flags
+func (featureFlagsKeys) Global() string {
+	return fmt.Sprintf("%s:feature_flags", keyPrefix)
 }
 
 // RevokedTokens returns cache key for user's revoked refresh tokens (Redis hash)
