@@ -80,6 +80,9 @@ type VoucherService interface {
 
 	// GetVoucherPaymentDetails retrieves complete payment details for a voucher
 	GetVoucherPaymentDetails(ctx context.Context, voucherID string) (*VoucherPaymentDetailsResponse, error)
+
+	// GetCalendarView retrieves bills for a specific month and year for calendar view
+	GetCalendarView(ctx context.Context, req *voucher.CalendarViewRequest) (*voucher.CalendarViewResponse, error)
 }
 
 // ensureEmptyObject ensures that a map is never nil - returns empty map if nil
@@ -1552,4 +1555,35 @@ func (s *VoucherServiceImpl) triggerApprovalResponseNotification(ctx context.Con
 	)
 
 	return nil
+}
+
+// GetCalendarView retrieves bills for a specific month and year based on invoice_due_date
+// Used for calendar view to show bills month by month with high-level details
+func (s *VoucherServiceImpl) GetCalendarView(ctx context.Context, req *voucher.CalendarViewRequest) (*voucher.CalendarViewResponse, error) {
+	// Validate input
+	if req.BusinessID == "" {
+		return nil, fmt.Errorf("business_id is required")
+	}
+	if req.Year < 2000 || req.Year > 2100 {
+		return nil, fmt.Errorf("invalid year: must be between 2000 and 2100")
+	}
+	if req.Month < 1 || req.Month > 12 {
+		return nil, fmt.Errorf("invalid month: must be between 1 and 12")
+	}
+
+	// Fetch bills from repository
+	bills, err := s.voucherRepo.GetCalendarViewBills(ctx, req.BusinessID, req.Year, req.Month)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get calendar view bills: %w", err)
+	}
+
+	// Build response
+	response := &voucher.CalendarViewResponse{
+		Year:  req.Year,
+		Month: req.Month,
+		Bills: bills,
+		Count: len(bills),
+	}
+
+	return response, nil
 }

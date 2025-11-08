@@ -97,6 +97,10 @@ type VoucherRepository interface {
 	// Returns counts for: all, paid, open, overdue
 	GetVoucherCounts(ctx context.Context, businessID string) (*VoucherCountsResponse, error)
 
+	// GetCalendarViewBills retrieves bills for a specific month and year
+	// Returns bills filtered by invoice_due_date for calendar view
+	GetCalendarViewBills(ctx context.Context, businessID string, year, month int) ([]CalendarBillItem, error)
+
 	// GetVoucherActivity retrieves complete activity history for a voucher
 	// Returns chronologically sorted list of activities including:
 	// - Voucher creation
