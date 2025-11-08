@@ -42,6 +42,35 @@ CLOUDWATCH_SECRET_KEY=your_secret_key
 
 **IMPORTANT**: CloudWatch does NOT support native histograms like Prometheus. Instead, send individual values and CloudWatch automatically calculates percentiles.
 
+### How to Access CloudWatch Metrics
+
+**⚠️ Important**: CloudWatch Metrics does NOT support SQL queries. Use these methods instead:
+
+#### 1. **CloudWatch Console** (Recommended for Visualization)
+```
+AWS Console → CloudWatch → Metrics → All metrics → XCentro/Backend
+```
+- Browse metrics by dimension (gateway, payment_method, etc.)
+- Create graphs with multiple metrics
+- Use **Metric Math** for calculations like `(m1/m2)*100`
+- Build dashboards with widgets
+
+#### 2. **AWS CLI** (For Programmatic Access)
+```bash
+aws cloudwatch get-metric-statistics \
+  --namespace "XCentro/Backend" \
+  --metric-name "payment.success" \
+  --start-time 2025-11-08T00:00:00Z \
+  --end-time 2025-11-08T23:59:59Z \
+  --period 300 \
+  --statistics Sum
+```
+
+#### 3. **CloudWatch API** (For Custom Integrations)
+Use AWS SDK to fetch metrics programmatically in your code.
+
+**Note**: CloudWatch **Logs** Insights (different service) does support SQL-like queries, but not CloudWatch **Metrics**.
+
 ---
 
 ## Implemented Metrics
@@ -59,17 +88,24 @@ CLOUDWATCH_SECRET_KEY=your_secret_key
 | `http.request.size` | Counter (value) | method, path | Request body size in bytes |
 | `http.response.size` | Counter (value) | method, path | Response body size in bytes |
 
-**CloudWatch Queries**:
-```
-# Average response time
-SELECT AVG(http.request.duration) FROM "XCentro/Backend" WHERE method='POST' AND path='/v1/process_payment'
+**How to Query in CloudWatch Console**:
 
-# P95 latency
-SELECT p95(http.request.duration) FROM "XCentro/Backend"
+1. **Average Response Time**:
+   - Go to: AWS Console → CloudWatch → Metrics → All metrics
+   - Select: `XCentro/Backend` → `http.request.duration`
+   - Dimensions: method=POST, path=/v1/process_payment
+   - Statistic: Average
 
-# Error rate
-SELECT SUM(http.errors.5xx) / SUM(http.request) * 100 FROM "XCentro/Backend"
-```
+2. **P95 Latency**:
+   - Select metric: `http.request.duration`
+   - Statistic: p95 (from dropdown)
+   - Period: 5 minutes
+
+3. **Error Rate** (using Metric Math):
+   - Metric m1: `http.errors.5xx` (Statistic: Sum)
+   - Metric m2: `http.request` (Statistic: Sum)
+   - Math expression: `(m1/m2)*100`
+   - Label: "Error Rate (%)"
 
 ---
 
@@ -96,20 +132,30 @@ SELECT SUM(http.errors.5xx) / SUM(http.request) * 100 FROM "XCentro/Backend"
 | `payment.tokenization.failed` | Counter | card_type, card_category, business_id | Failed tokenizations |
 | `payment.tokenization.duration` | Timer | gateway, status | Tokenization processing time |
 
-**CloudWatch Queries**:
-```
-# Payment success rate
-SELECT SUM(payment.success) / SUM(payment.initiated) * 100 FROM "XCentro/Backend"
+**How to Query in CloudWatch Console**:
 
-# Average payment amount (convert paise to rupees)
-SELECT AVG(payment.amount.value) / 100 FROM "XCentro/Backend" WHERE payment_method='card'
+1. **Payment Success Rate**:
+   - Metric m1: `payment.success` (Statistic: Sum)
+   - Metric m2: `payment.initiated` (Statistic: Sum)
+   - Math expression: `(m1/m2)*100`
+   - Label: "Success Rate (%)"
 
-# P95 payment processing time
-SELECT p95(payment.duration) FROM "XCentro/Backend" WHERE status='success'
+2. **Average Payment Amount** (in rupees):
+   - Metric: `payment.amount.value` (Statistic: Average)
+   - Dimensions: payment_method=card
+   - Math expression: `m1/100` (convert paise to rupees)
+   - Label: "Avg Amount (₹)"
 
-# Failure rate by reason
-SELECT SUM(payment.failed) FROM "XCentro/Backend" GROUP BY reason
-```
+3. **P95 Payment Processing Time**:
+   - Metric: `payment.duration`
+   - Dimensions: status=success
+   - Statistic: p95
+   - Period: 5 minutes
+
+4. **Failures by Reason**:
+   - Metric: `payment.failed` (Statistic: Sum)
+   - Group by: reason dimension
+   - View as: Pie chart or Stacked bar
 
 ---
 
@@ -135,24 +181,33 @@ SELECT SUM(payment.failed) FROM "XCentro/Backend" GROUP BY reason
 - `read_error` - Response reading errors
 - `http_error` - HTTP 4xx/5xx errors
 
-**CloudWatch Queries**:
-```
-# Gateway success rate
-SELECT (SUM(gateway.request) - SUM(gateway.error)) / SUM(gateway.request) * 100
-FROM "XCentro/Backend" WHERE gateway='jiopay'
+**How to Query in CloudWatch Console**:
 
-# Gateway P95 response time
-SELECT p95(gateway.response_time) FROM "XCentro/Backend"
-WHERE gateway='jiopay' AND operation='tokenize'
+1. **Gateway Success Rate**:
+   - Metric m1: `gateway.request` (Statistic: Sum, Dimension: gateway=jiopay)
+   - Metric m2: `gateway.error` (Statistic: Sum, Dimension: gateway=jiopay)
+   - Math expression: `((m1-m2)/m1)*100`
+   - Label: "Success Rate (%)"
 
-# Gateway errors by type
-SELECT SUM(gateway.error) FROM "XCentro/Backend"
-WHERE gateway='easebuzz' GROUP BY error_type
+2. **Gateway P95 Response Time**:
+   - Metric: `gateway.response_time`
+   - Dimensions: gateway=jiopay, operation=tokenize
+   - Statistic: p95
+   - Period: 5 minutes
 
-# Timeout detection (response time > 30s)
-SELECT COUNT(*) FROM "XCentro/Backend"
-WHERE gateway.response_time > 30000 AND gateway='jiopay'
-```
+3. **Gateway Errors by Type**:
+   - Metric: `gateway.error` (Statistic: Sum)
+   - Dimensions: gateway=easebuzz
+   - Group by: error_type
+   - View as: Stacked bar or Pie chart
+
+4. **Timeout Detection** (response time > 30 seconds):
+   - Create CloudWatch Alarm:
+   - Metric: `gateway.response_time`
+   - Dimension: gateway=jiopay
+   - Statistic: Maximum
+   - Threshold: > 30000 (milliseconds)
+   - Period: 5 minutes
 
 ---
 
