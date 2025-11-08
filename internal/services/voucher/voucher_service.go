@@ -7,6 +7,8 @@ import (
 
 	"github.com/google/uuid"
 	"xcentro.in/internal/core/voucher"
+	"xcentro.in/internal/core/notification"
+	"xcentro.in/internal/shared/logger"
 	"xcentro.in/internal/shared/types"
 )
 
@@ -95,26 +97,29 @@ func ensureEmptyObject(m map[string]interface{}) map[string]interface{} {
 // VoucherServiceImpl implements the VoucherService interface
 type VoucherServiceImpl struct {
 	voucherRepo       voucher.VoucherRepository
-	approvalRepo      voucher.ApprovalRepository
 	queueRepo         voucher.ERPSyncQueueRepository
 	voucherCore       voucher.VoucherService // Domain service for business logic
 	businessPayeeRepo interface{}            // payee.BusinessPayeeRelationRepository, using interface{} to avoid circular import
+	notificationEventRepo notification.NotificationEventRepository
+	logger                *logger.Logger
 }
 
 // NewVoucherService creates a new instance of VoucherService
 func NewVoucherService(
 	voucherRepo voucher.VoucherRepository,
-	approvalRepo voucher.ApprovalRepository,
 	queueRepo voucher.ERPSyncQueueRepository,
 	voucherCore voucher.VoucherService,
 	businessPayeeRepo interface{}, // Repository to resolve relation_id
+	notificationEventRepo notification.NotificationEventRepository,
+	logger *logger.Logger,
 ) VoucherService {
 	return &VoucherServiceImpl{
 		voucherRepo:       voucherRepo,
-		approvalRepo:      approvalRepo,
 		queueRepo:         queueRepo,
 		voucherCore:       voucherCore,
 		businessPayeeRepo: businessPayeeRepo,
+		notificationEventRepo: notificationEventRepo,
+		logger:                logger,
 	}
 }
 
@@ -1127,6 +1132,32 @@ func (s *VoucherServiceImpl) RequestApproval(ctx context.Context, req *voucher.V
 		return nil, fmt.Errorf("failed to process approval request: %w", err)
 	}
 
+	// Trigger notification based on action
+	switch req.Action {
+	case voucher.ApprovalActionPending:
+		// When requesting approval, notify the owner
+		if err := s.triggerApprovalRequestNotification(ctx, req); err != nil {
+			// Log error but don't fail the approval request
+			s.logger.WarnWith("Failed to trigger approval request notification",
+				"voucher_id", req.VoucherID,
+				"business_id", req.BusinessID,
+				"error", err.Error(),
+			)
+		}
+	case voucher.ApprovalActionApproved, voucher.ApprovalActionRejected, voucher.ApprovalActionRequestChanges:
+		// When approved/rejected/request_changes, notify the requester
+		// Use requester_user_id from response (avoids extra DB call)
+		if err := s.triggerApprovalResponseNotification(ctx, req, response.PreviousApproverID); err != nil {
+			// Log error but don't fail the approval action
+			s.logger.WarnWith("Failed to trigger approval response notification",
+				"voucher_id", req.VoucherID,
+				"business_id", req.BusinessID,
+				"action", string(req.Action),
+				"error", err.Error(),
+			)
+		}
+	}
+
 	return response, nil
 }
 
@@ -1383,4 +1414,164 @@ func (s *VoucherServiceImpl) GetCalendarView(ctx context.Context, req *voucher.C
 	}
 
 	return response, nil
+}
+
+// triggerApprovalRequestNotification sends notification to business owner when approval is requested
+func (s *VoucherServiceImpl) triggerApprovalRequestNotification(ctx context.Context, req *voucher.VoucherApprovalRequest) error {
+	// Get voucher details to build meaningful notification message
+	voucherUUID, err := uuid.Parse(req.VoucherID)
+	if err != nil {
+		return fmt.Errorf("invalid voucher_id: %w", err)
+	}
+
+	v, err := s.voucherRepo.GetByID(ctx, voucherUUID)
+	if err != nil {
+		return fmt.Errorf("failed to get voucher details: %w", err)
+	}
+
+	// Format amount for display (convert paise to rupees)
+	amountInRupees := float64(v.NetAmount) / 100.0
+
+	// Use multicast targeting with MinimumRole=Owner (more efficient than DB lookup)
+	ownerRole := notification.RoleOwner
+
+	// Build notification payload
+	payload := notification.NotificationEventPayload{
+		Timestamp: time.Now().Format(time.RFC3339),
+		EventType: notification.EventVoucherApprovalRequested,
+		Target: notification.TargetInfo{
+			BusinessID:  req.BusinessID,
+			Type:        notification.TargetMulticast,
+			MinimumRole: &ownerRole, // Multicast to all users with Owner role
+		},
+		Entities: notification.EntityReferences{
+			BusinessID: &req.BusinessID,
+			VoucherID:  &req.VoucherID,
+		},
+		Message: notification.MessageContent{
+			Title: "Voucher Approval Request",
+			Body:  fmt.Sprintf("Voucher %s for ₹%.2f requires your approval. Invoice: %s", v.VoucherNumber, amountInRupees, v.InvoiceNumber),
+		},
+		Actions: []notification.ActionButton{
+			{
+				Type: notification.ButtonTypePositive,
+				Text: "Go to Approvals",
+				Href: "/approvals",
+			},
+		},
+	}
+
+	// Create notification event
+	event := &notification.NotificationEvent{
+		EventType: notification.EventVoucherApprovalRequested,
+		Payload:   payload,
+	}
+
+	// Create event (non-blocking - just inserts into notification_events table)
+	if err := s.notificationEventRepo.CreateEvent(ctx, event); err != nil {
+		return fmt.Errorf("failed to create notification event: %w", err)
+	}
+
+	s.logger.InfoWith("Voucher approval request notification sent",
+		"voucher_id", req.VoucherID,
+		"voucher_number", v.VoucherNumber,
+		"business_id", req.BusinessID,
+		"target_role", "owner",
+		"amount", amountInRupees,
+	)
+
+	return nil
+}
+
+// triggerApprovalResponseNotification sends notification to requester when approval is responded to
+func (s *VoucherServiceImpl) triggerApprovalResponseNotification(ctx context.Context, req *voucher.VoucherApprovalRequest, requesterUserID string) error {
+	// Get voucher details to build meaningful notification message
+	voucherUUID, err := uuid.Parse(req.VoucherID)
+	if err != nil {
+		return fmt.Errorf("invalid voucher_id: %w", err)
+	}
+
+	v, err := s.voucherRepo.GetByID(ctx, voucherUUID)
+	if err != nil {
+		return fmt.Errorf("failed to get voucher details: %w", err)
+	}
+
+	// Format amount for display (convert paise to rupees)
+	amountInRupees := float64(v.NetAmount) / 100.0
+
+	// Determine event type and message based on action
+	var eventType string
+	var title string
+	var body string
+
+	switch req.Action {
+	case voucher.ApprovalActionApproved:
+		eventType = notification.EventVoucherApprovalApproved
+		title = "Voucher Approved"
+		body = fmt.Sprintf("Your voucher %s for ₹%.2f has been approved. Invoice: %s", v.VoucherNumber, amountInRupees, v.InvoiceNumber)
+	case voucher.ApprovalActionRejected:
+		eventType = notification.EventVoucherApprovalRejected
+		title = "Voucher Rejected"
+		body = fmt.Sprintf("Your voucher %s for ₹%.2f has been rejected. Invoice: %s", v.VoucherNumber, amountInRupees, v.InvoiceNumber)
+		if req.Remarks != "" {
+			body += fmt.Sprintf(". Reason: %s", req.Remarks)
+		}
+	case voucher.ApprovalActionRequestChanges:
+		eventType = notification.EventVoucherApprovalRejected // Using rejected event for request_changes
+		title = "Changes Requested for Voucher"
+		body = fmt.Sprintf("Changes requested for your voucher %s for ₹%.2f. Invoice: %s", v.VoucherNumber, amountInRupees, v.InvoiceNumber)
+		if req.Remarks != "" {
+			body += fmt.Sprintf(". Details: %s", req.Remarks)
+		}
+	default:
+		return fmt.Errorf("unsupported action: %s", req.Action)
+	}
+
+	// Build notification payload
+	payload := notification.NotificationEventPayload{
+		Timestamp: time.Now().Format(time.RFC3339),
+		EventType: eventType,
+		Target: notification.TargetInfo{
+			BusinessID: req.BusinessID,
+			Type:       notification.TargetUnicast,
+			IDs:        []string{requesterUserID}, // Send to the original requester
+		},
+		Entities: notification.EntityReferences{
+			BusinessID: &req.BusinessID,
+			VoucherID:  &req.VoucherID,
+		},
+		Message: notification.MessageContent{
+			Title: title,
+			Body:  body,
+		},
+		Actions: []notification.ActionButton{
+			{
+				Type: notification.ButtonTypeNeutral,
+				Text: "View Details",
+				Href: fmt.Sprintf("/bills/%s", req.VoucherID),
+			},
+		},
+	}
+
+	// Create notification event
+	event := &notification.NotificationEvent{
+		EventType: eventType,
+		Payload:   payload,
+	}
+
+	// Create event (non-blocking - just inserts into notification_events table)
+	if err := s.notificationEventRepo.CreateEvent(ctx, event); err != nil {
+		return fmt.Errorf("failed to create notification event: %w", err)
+	}
+
+	s.logger.InfoWith("Voucher approval response notification sent",
+		"voucher_id", req.VoucherID,
+		"voucher_number", v.VoucherNumber,
+		"business_id", req.BusinessID,
+		"requester_user_id", requesterUserID,
+		"action", string(req.Action),
+		"amount", amountInRupees,
+	)
+
+	return nil
 }

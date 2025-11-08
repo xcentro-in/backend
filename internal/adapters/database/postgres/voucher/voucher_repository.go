@@ -1361,6 +1361,27 @@ func (r *PostgresVoucherRepository) CreateOrUpdateApproval(ctx context.Context, 
 		return nil, fmt.Errorf("invalid approver_user_id: %w", err)
 	}
 
+	// Fetch the most recent approval state BEFORE creating the new one
+	var previousApprovalState voucher.ApprovalAction
+	var previousApproverID string
+
+	previousApprovalQuery := `
+		SELECT action, approver_user_id
+		FROM xcentro.voucher_approvals
+		WHERE voucher_id = $1
+		ORDER BY created_at DESC
+		LIMIT 1
+	`
+
+	var prevApproverUUID uuid.UUID
+	err = r.querier.QueryRow(ctx, previousApprovalQuery, voucherID).Scan(&previousApprovalState, &prevApproverUUID)
+	if err == nil {
+		// Previous approval found - populate the approver ID
+		previousApproverID = prevApproverUUID.String()
+	}
+	// If err == pgx.ErrNoRows, it means this is a fresh voucher (no previous approvals)
+	// previousApprovalState and previousApproverID remain empty (zero values)
+
 	// Always INSERT a new row for each approval action (audit trail)
 	approvalID := uuid.Must(uuid.NewV7())
 	now := time.Now()
@@ -1402,12 +1423,14 @@ func (r *PostgresVoucherRepository) CreateOrUpdateApproval(ctx context.Context, 
 	}
 
 	return &voucher.VoucherApprovalResponse{
-		Success:    true,
-		Message:    message,
-		ApprovalID: approvalID.String(),
-		VoucherID:  req.VoucherID,
-		Action:     req.Action,
-		CreatedAt:  createdAt,
+		Success:               true,
+		Message:               message,
+		ApprovalID:            approvalID.String(),
+		VoucherID:             req.VoucherID,
+		Action:                req.Action,
+		CreatedAt:             createdAt,
+		PreviousApprovalState: previousApprovalState,
+		PreviousApproverID:    previousApproverID,
 	}, nil
 }
 

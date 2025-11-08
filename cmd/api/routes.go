@@ -110,11 +110,11 @@ func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group
 	paymentSourceService := payments.NewPaymentSourceService(walletService, databaseFeeCalculator)
 
 	voucherRepository := voucherRepo.NewPostgresVoucherRepository(clients.db, cfg.BankAccountEncryption.EncryptionKey)
-	approvalRepository := voucherRepo.NewPostgresApprovalRepository(clients.db)
 	queueRepository := voucherRepo.NewPostgresERPSyncQueueRepository(clients.db)
 	voucherCoreService := coreVoucher.NewVoucherService(voucherRepository)
 	businessPayeeRelationRepo := payeeRepo.NewPgBusinessPayeeRelationRepository(clients.db, cfg.BankAccountEncryption.EncryptionKey)
-	voucherService := voucherSvc.NewVoucherService(voucherRepository, approvalRepository, queueRepository, voucherCoreService, businessPayeeRelationRepo)
+	notificationEventRepo := notificationRepo.NewPgNotificationEventRepository(clients.db)
+	voucherService := voucherSvc.NewVoucherService(voucherRepository, queueRepository, voucherCoreService, businessPayeeRelationRepo, notificationEventRepo, logger.GetDefault())
 
 	paymentService := payments.NewPaymentService(orchestrator, paymentRepository, storedCardRepository, bankAccountRepository, walletService, feeCalculator, clients.txManager, voucherService, voucherRepository, busSvc, logger.GetDefault())
 
@@ -173,11 +173,11 @@ func registerV1VoucherRoutes(clients *externalClients, cfg *config.Config, group
 	_, _, _, businessUserRelRepo, _, _, authSvc := factory.createCoreServices(nil)
 
 	voucherRepository := voucherRepo.NewPostgresVoucherRepository(clients.db, cfg.BankAccountEncryption.EncryptionKey)
-	approvalRepository := voucherRepo.NewPostgresApprovalRepository(clients.db)
 	queueRepository := voucherRepo.NewPostgresERPSyncQueueRepository(clients.db)
 	voucherCoreService := coreVoucher.NewVoucherService(voucherRepository)
 	businessPayeeRelationRepo := payeeRepo.NewPgBusinessPayeeRelationRepository(clients.db, cfg.BankAccountEncryption.EncryptionKey)
-	voucherService := voucherSvc.NewVoucherService(voucherRepository, approvalRepository, queueRepository, voucherCoreService, businessPayeeRelationRepo)
+	notificationEventRepo := notificationRepo.NewPgNotificationEventRepository(clients.db)
+	voucherService := voucherSvc.NewVoucherService(voucherRepository, queueRepository, voucherCoreService, businessPayeeRelationRepo, notificationEventRepo, logger.GetDefault())
 
 	voucherGroup := group.Group("/vouchers")
 	voucherHandler.RegisterVoucherRoutes(voucherGroup, voucherService, authSvc, businessUserRelRepo, clients.rcache)
@@ -221,10 +221,10 @@ func registerV1BatchPaymentRoutes(clients *externalClients, cfg *config.Config, 
 
 	// Voucher service dependencies
 	voucherRepository := voucherRepo.NewPostgresVoucherRepository(clients.db, cfg.BankAccountEncryption.EncryptionKey)
-	approvalRepository := voucherRepo.NewPostgresApprovalRepository(clients.db)
 	queueRepository := voucherRepo.NewPostgresERPSyncQueueRepository(clients.db)
 	voucherCoreService := coreVoucher.NewVoucherService(voucherRepository)
-	voucherService := voucherSvc.NewVoucherService(voucherRepository, approvalRepository, queueRepository, voucherCoreService, businessPayeeRelationRepo)
+	notificationEventRepo := notificationRepo.NewPgNotificationEventRepository(clients.db)
+	voucherService := voucherSvc.NewVoucherService(voucherRepository, queueRepository, voucherCoreService, businessPayeeRelationRepo, notificationEventRepo, logger.GetDefault())
 
 	// Batch payment service
 	batchPaymentService := batchPaymentSvc.NewBatchPaymentService(

@@ -39,6 +39,11 @@ const (
 	// Security category (security)
 	EventUserInvited     = "security.user.invited"
 	EventUserRoleChanged = "security.user.role.changed"
+
+	// Approvals category (approvals)
+	EventVoucherApprovalRequested = "approvals.voucher.requested"
+	EventVoucherApprovalApproved  = "approvals.voucher.approved"
+	EventVoucherApprovalRejected  = "approvals.voucher.rejected"
 )
 
 // Notification channels

@@ -151,21 +151,6 @@ type PaginationResult struct {
 	TotalPages int   `json:"total_pages"`
 }
 
-// ApprovalRepository defines the interface for voucher approval operations
-type ApprovalRepository interface {
-	// CreateApproval creates a new approval record
-	CreateApproval(ctx context.Context, approval *VoucherApproval) error
-
-	// GetApprovalsByVoucher retrieves all approvals for a voucher
-	GetApprovalsByVoucher(ctx context.Context, voucherID uuid.UUID) ([]*VoucherApproval, error)
-
-	// UpdateApprovalAction updates the approval action (approve/reject)
-	UpdateApprovalAction(ctx context.Context, approvalID uuid.UUID, action string, remarks string) error
-
-	// GetPendingApprovals retrieves pending approvals for a user
-	GetPendingApprovals(ctx context.Context, userID uuid.UUID) ([]*VoucherApproval, error)
-}
-
 // ERPSyncQueueRepository defines the interface for ERP sync queue operations
 type ERPSyncQueueRepository interface {
 	// Enqueue adds a voucher to the ERP sync queue

@@ -172,19 +172,6 @@ type Voucher struct {
 	Metadata    map[string]interface{} `json:"metadata,omitempty"`
 }
 
-// VoucherApproval represents an approval record for a voucher
-type VoucherApproval struct {
-	ApprovalID      uuid.UUID  `json:"approval_id"`
-	VoucherID       uuid.UUID  `json:"voucher_id"`
-	ApprovalLevel   int        `json:"approval_level"` // 1, 2, 3 for multi-level
-	ApproverUserID  uuid.UUID  `json:"approver_user_id"`
-	ApproverRole    string     `json:"approver_role,omitempty"` // Manager, Finance Head, etc.
-	Action          string     `json:"action"`                  // pending, approved, rejected
-	ActionTimestamp *time.Time `json:"action_timestamp,omitempty"`
-	Remarks         string     `json:"remarks,omitempty"`
-	CreatedAt       time.Time  `json:"created_at"`
-}
-
 // ERPSyncQueue represents a queue entry for ERP synchronization
 type ERPSyncQueue struct {
 	QueueID         uuid.UUID              `json:"queue_id"`
