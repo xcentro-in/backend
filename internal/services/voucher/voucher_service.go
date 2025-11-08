@@ -6,9 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"xcentro.in/internal/core/business"
 	"xcentro.in/internal/core/notification"
-	"xcentro.in/internal/core/shared"
 	"xcentro.in/internal/core/voucher"
 	"xcentro.in/internal/shared/logger"
 	"xcentro.in/internal/shared/types"
@@ -101,7 +99,6 @@ type VoucherServiceImpl struct {
 	voucherCore           voucher.VoucherService // Domain service for business logic
 	businessPayeeRepo     interface{}            // payee.BusinessPayeeRelationRepository, using interface{} to avoid circular import
 	notificationEventRepo notification.NotificationEventRepository
-	businessUserRelRepo   business.BusinessUserRelationRepository
 	logger                *logger.Logger
 }
 
@@ -113,7 +110,6 @@ func NewVoucherService(
 	voucherCore voucher.VoucherService,
 	businessPayeeRepo interface{}, // Repository to resolve relation_id
 	notificationEventRepo notification.NotificationEventRepository,
-	businessUserRelRepo business.BusinessUserRelationRepository,
 	logger *logger.Logger,
 ) VoucherService {
 	return &VoucherServiceImpl{
@@ -123,7 +119,6 @@ func NewVoucherService(
 		voucherCore:           voucherCore,
 		businessPayeeRepo:     businessPayeeRepo,
 		notificationEventRepo: notificationEventRepo,
-		businessUserRelRepo:   businessUserRelRepo,
 		logger:                logger,
 	}
 }
@@ -1402,23 +1397,20 @@ func (s *VoucherServiceImpl) triggerApprovalRequestNotification(ctx context.Cont
 		return fmt.Errorf("failed to get voucher details: %w", err)
 	}
 
-	// Get business owner's user ID
-	ownerUserID, err := s.getBusinessOwnerUserID(ctx, req.BusinessID)
-	if err != nil {
-		return fmt.Errorf("failed to get business owner: %w", err)
-	}
-
 	// Format amount for display (convert paise to rupees)
 	amountInRupees := float64(v.NetAmount) / 100.0
+
+	// Use broadcast targeting with MinimumRole=Owner (more efficient than DB lookup)
+	ownerRole := notification.RoleOwner
 
 	// Build notification payload
 	payload := notification.NotificationEventPayload{
 		Timestamp: time.Now().Format(time.RFC3339),
 		EventType: notification.EventVoucherApprovalRequested,
 		Target: notification.TargetInfo{
-			BusinessID: req.BusinessID,
-			Type:       notification.TargetUnicast,
-			IDs:        []string{ownerUserID}, // Send to the owner
+			BusinessID:  req.BusinessID,
+			Type:        notification.TargetBroadcast,
+			MinimumRole: &ownerRole, // Broadcast to all users with Owner role
 		},
 		Entities: notification.EntityReferences{
 			BusinessID: &req.BusinessID,
@@ -1462,7 +1454,7 @@ func (s *VoucherServiceImpl) triggerApprovalRequestNotification(ctx context.Cont
 		"voucher_id", req.VoucherID,
 		"voucher_number", v.VoucherNumber,
 		"business_id", req.BusinessID,
-		"owner_user_id", ownerUserID,
+		"target_role", "owner",
 		"amount", amountInRupees,
 	)
 
@@ -1560,22 +1552,4 @@ func (s *VoucherServiceImpl) triggerApprovalResponseNotification(ctx context.Con
 	)
 
 	return nil
-}
-
-// getBusinessOwnerUserID retrieves the user ID of the business owner
-func (s *VoucherServiceImpl) getBusinessOwnerUserID(ctx context.Context, businessID string) (string, error) {
-	// Get all users for the business
-	users, err := s.businessUserRelRepo.GetBusinessUsersWithDetails(ctx, businessID)
-	if err != nil {
-		return "", fmt.Errorf("failed to get business users: %w", err)
-	}
-
-	// Find the owner
-	for _, user := range users {
-		if user.Role == shared.Owner {
-			return user.UserID, nil
-		}
-	}
-
-	return "", fmt.Errorf("no owner found for business %s", businessID)
 }
