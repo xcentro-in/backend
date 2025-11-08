@@ -119,7 +119,7 @@ func generateSuccessHTML(frontendURL string) string {
         }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-            background: linear-gradient(135deg, #34a853 0%, #1a73e8 100%);
+            background: linear-gradient(135deg, #34a853 0%%, #1a73e8 100%%);
             display: flex;
             justify-content: center;
             align-items: center;
@@ -131,7 +131,7 @@ func generateSuccessHTML(frontendURL string) string {
             border-radius: 16px;
             padding: 48px 32px;
             max-width: 480px;
-            width: 100%;
+            width: 100%%;
             text-align: center;
             box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15);
         }
@@ -140,7 +140,7 @@ func generateSuccessHTML(frontendURL string) string {
             height: 80px;
             margin: 0 auto 24px;
             background: #34a853;
-            border-radius: 50%;
+            border-radius: 50%%;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -273,7 +273,7 @@ func generateAlreadyCompletedHTML(frontendURL string) string {
         }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-            background: linear-gradient(135deg, #1a73e8 0%, #34a853 100%);
+            background: linear-gradient(135deg, #1a73e8 0%%, #34a853 100%%);
             display: flex;
             justify-content: center;
             align-items: center;
@@ -285,7 +285,7 @@ func generateAlreadyCompletedHTML(frontendURL string) string {
             border-radius: 16px;
             padding: 48px 32px;
             max-width: 480px;
-            width: 100%;
+            width: 100%%;
             text-align: center;
             box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15);
         }
@@ -294,7 +294,7 @@ func generateAlreadyCompletedHTML(frontendURL string) string {
             height: 80px;
             margin: 0 auto 24px;
             background: #1a73e8;
-            border-radius: 50%;
+            border-radius: 50%%;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -418,7 +418,7 @@ func generateErrorHTML(frontendURL, title, message string) string {
         }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-            background: linear-gradient(135deg, #ea4335 0%, #fbbc04 100%);
+            background: linear-gradient(135deg, #ea4335 0%%, #fbbc04 100%%);
             display: flex;
             justify-content: center;
             align-items: center;
@@ -430,7 +430,7 @@ func generateErrorHTML(frontendURL, title, message string) string {
             border-radius: 16px;
             padding: 48px 32px;
             max-width: 480px;
-            width: 100%;
+            width: 100%%;
             text-align: center;
             box-shadow: 0 20px 60px rgba(0, 0, 0, 0.15);
         }
@@ -439,7 +439,7 @@ func generateErrorHTML(frontendURL, title, message string) string {
             height: 80px;
             margin: 0 auto 24px;
             background: #ea4335;
-            border-radius: 50%;
+            border-radius: 50%%;
             display: flex;
             align-items: center;
             justify-content: center;
