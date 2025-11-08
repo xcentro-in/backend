@@ -25,7 +25,6 @@ type RateLimiter struct {
 	deviceHandler           *DeviceHandler
 	policies                map[string]Policy
 	defaultPolicy           Policy
-	failOpenDefault         bool
 	invalidSignaturePenalty int // in seconds
 	log                     *logger.Logger
 	mu                      sync.RWMutex
@@ -60,35 +59,20 @@ func Initialize(redisClient *redis.Client, cfg *config.RateLimiterConfig, cookie
 			cookieDomain,
 		)
 
-		// Build default policy from config using new strategies format
-		defaultPolicy := Policy{
-			Strategies: []StrategyConfig{
-				{
-					Type: "token_bucket",
-					Config: map[string]interface{}{
-						"capacity":          float64(cfg.DefaultCapacity),
-						"refill_per_second": cfg.DefaultRefillPerSec,
-						"requested_tokens":  float64(cfg.DefaultRequestedTokens),
-					},
-				},
-			},
-			FailClosed: false, // Default always fails open
-		}
+		// Get built-in policies (includes default, login, signup, api_high, SES, etc.)
+		// Default policy uses values from config (environment variables)
+		builtInPolicies := GetBuiltInPolicies(
+			cfg.DefaultCapacity,
+			cfg.DefaultRefillPerSec,
+			cfg.DefaultRequestedTokens,
+			cfg.FailOpenByDefault,
+		)
 
-		// Parse custom group policies from JSON
-		policies, err := parsePoliciesFromJSON(cfg.GroupPoliciesJSON, defaultPolicy, log)
+		// Parse custom group policies from JSON (can override built-in policies)
+		policies, err := parsePoliciesFromJSON(cfg.GroupPoliciesJSON, builtInPolicies, log)
 		if err != nil {
-			log.Warnf("Failed to parse group policies JSON, using only default policy: %v", err)
-			policies = map[string]Policy{"default": defaultPolicy}
-		}
-
-		// Merge SES policies (for email rate limiting)
-		sesPolicies := SESPolicies()
-		for group, policy := range sesPolicies {
-			if _, exists := policies[group]; !exists {
-				policies[group] = policy
-				log.Infof("Loaded SES policy: %s", group)
-			}
+			log.Warnf("Failed to parse group policies JSON, using only built-in policies: %v", err)
+			policies = builtInPolicies
 		}
 
 		instance = &RateLimiter{
@@ -96,7 +80,6 @@ func Initialize(redisClient *redis.Client, cfg *config.RateLimiterConfig, cookie
 			deviceHandler:           deviceHandler,
 			policies:                policies,
 			defaultPolicy:           policies["default"],
-			failOpenDefault:         cfg.FailOpenByDefault,
 			invalidSignaturePenalty: int(cfg.InvalidSignaturePenalty.Seconds()),
 			log:                     log,
 		}
@@ -272,16 +255,9 @@ func (rl *RateLimiter) executeRateLimit(ctx context.Context, key string, policy 
 
 // executeStrategy executes a single rate limiting strategy
 func (rl *RateLimiter) executeStrategy(ctx context.Context, key string, config StrategyConfig) (*LimitResult, error) {
-	// Get or create strategy instance
+	// Strategy instance should have been initialized during policy parsing
 	if config.strategyInstance == nil {
-		strategy, err := CreateStrategy(config.Type, config.Config)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create strategy %s: %w", config.Type, err)
-		}
-		if strategy == nil {
-			return nil, fmt.Errorf("unknown strategy type: %s", config.Type)
-		}
-		config.strategyInstance = strategy
+		return nil, fmt.Errorf("strategy instance not initialized for type: %s", config.Type)
 	}
 
 	// Execute strategy check
@@ -399,26 +375,7 @@ func (rl *RateLimiter) getPolicy(group string) Policy {
 
 // shouldFailClosed determines if rate limiter should fail closed on errors.
 func (rl *RateLimiter) shouldFailClosed(policy Policy) bool {
-	if policy.FailClosed {
-		return true
-	}
-	return !rl.failOpenDefault
-}
-
-// AddPolicy adds or updates a policy for a specific group.
-func (rl *RateLimiter) AddPolicy(group string, policy Policy) {
-	rl.mu.Lock()
-	defer rl.mu.Unlock()
-	rl.policies[group] = policy
-	rl.log.Infof("Added/updated policy for group: %s", group)
-}
-
-// RemovePolicy removes a policy for a specific group.
-func (rl *RateLimiter) RemovePolicy(group string) {
-	rl.mu.Lock()
-	defer rl.mu.Unlock()
-	delete(rl.policies, group)
-	rl.log.Infof("Removed policy for group: %s", group)
+	return policy.FailClosed
 }
 
 // ParseRetryAfter converts retry_after string to integer seconds for header.
@@ -431,17 +388,32 @@ func ParseRetryAfter(retryAfterStr string) int {
 	return int(retryAfter) + 1
 }
 
-// parsePoliciesFromJSON parses the group policies from JSON string and merges with default policy.
-// The defaultPolicy is always included under "default" key unless JSON overrides it.
-func parsePoliciesFromJSON(jsonStr string, defaultPolicy Policy, log *logger.Logger) (map[string]Policy, error) {
-	// Start with default policy
-	policies := map[string]Policy{
-		"default": defaultPolicy,
+// parsePoliciesFromJSON parses the group policies from JSON string and merges with built-in policies.
+// Built-in policies can be overridden by JSON configuration.
+func parsePoliciesFromJSON(jsonStr string, builtInPolicies map[string]Policy, log *logger.Logger) (map[string]Policy, error) {
+	// Start with built-in policies (includes default, login, signup, api_high, SES, etc.)
+	policies := make(map[string]Policy, len(builtInPolicies))
+	for group, policy := range builtInPolicies {
+		policies[group] = policy
 	}
 
-	// If JSON string is empty, return just the default
+	// If JSON string is empty, return built-in policies
 	if jsonStr == "" {
-		log.Info("No group policies JSON configured, using only default policy from config")
+		log.Infof("No group policies JSON configured, using %d built-in policies", len(builtInPolicies))
+		// Initialize all strategy instances
+		for group, policy := range policies {
+			for i := range policy.Strategies {
+				strategy, err := CreateStrategy(policy.Strategies[i].Type, policy.Strategies[i].Config)
+				if err != nil {
+					return nil, fmt.Errorf("failed to create strategy %s for group %s: %w", policy.Strategies[i].Type, group, err)
+				}
+				if strategy == nil {
+					return nil, fmt.Errorf("unknown strategy type %s for group %s", policy.Strategies[i].Type, group)
+				}
+				policy.Strategies[i].strategyInstance = strategy
+			}
+			policies[group] = policy
+		}
 		return policies, nil
 	}
 
@@ -451,14 +423,30 @@ func parsePoliciesFromJSON(jsonStr string, defaultPolicy Policy, log *logger.Log
 		return nil, fmt.Errorf("failed to unmarshal group policies JSON: %w", err)
 	}
 
-	// Merge custom policies (including potential "default" override)
+	// Merge custom policies (can override built-in policies)
 	for group, policy := range customPolicies {
-		policies[group] = policy
-		if group == "default" {
-			log.Info("JSON overrides default policy from config")
+		if _, wasBuiltIn := builtInPolicies[group]; wasBuiltIn {
+			log.Infof("JSON overrides built-in policy: %s", group)
 		}
+		policies[group] = policy
 	}
 
-	log.Infof("Loaded %d group policies (%d from JSON + default from config)", len(policies), len(customPolicies))
+	// Initialize all strategy instances to avoid race conditions
+	for group, policy := range policies {
+		for i := range policy.Strategies {
+			strategy, err := CreateStrategy(policy.Strategies[i].Type, policy.Strategies[i].Config)
+			if err != nil {
+				return nil, fmt.Errorf("failed to create strategy %s for group %s: %w", policy.Strategies[i].Type, group, err)
+			}
+			if strategy == nil {
+				return nil, fmt.Errorf("unknown strategy type %s for group %s", policy.Strategies[i].Type, group)
+			}
+			policy.Strategies[i].strategyInstance = strategy
+		}
+		// Update policy in map with initialized strategies
+		policies[group] = policy
+	}
+
+	log.Infof("Loaded %d group policies (%d built-in + %d from JSON)", len(policies), len(builtInPolicies), len(customPolicies))
 	return policies, nil
 }

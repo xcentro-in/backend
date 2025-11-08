@@ -15,9 +15,10 @@ func init() {
 
 // TokenBucketStrategy implements the token bucket rate limiting algorithm
 type TokenBucketStrategy struct {
-	capacity        int64   // Maximum number of tokens in the bucket
-	refillPerSecond float64 // Rate at which tokens are added to the bucket
-	requestedTokens int64   // Number of tokens to consume per request
+	capacity        int64          // Maximum number of tokens in the bucket
+	refillPerSecond float64        // Rate at which tokens are added to the bucket
+	requestedTokens int64          // Number of tokens to consume per request
+	script          *redis.Script  // Cached Lua script instance
 }
 
 // NewTokenBucketStrategy creates a new token bucket strategy from config
@@ -41,6 +42,7 @@ func NewTokenBucketStrategy(config map[string]interface{}) (Strategy, error) {
 		capacity:        int64(capacity),
 		refillPerSecond: refillPerSecond,
 		requestedTokens: int64(requestedTokens),
+		script:          redis.NewScript(TokenBucketLuaScript), // Create once, reuse
 	}, nil
 }
 
@@ -48,10 +50,8 @@ func NewTokenBucketStrategy(config map[string]interface{}) (Strategy, error) {
 func (s *TokenBucketStrategy) Check(ctx context.Context, redisClient *redis.Client, key string) (*StrategyResult, error) {
 	now := time.Now().UnixMilli()
 
-	// Use Lua script for atomic token bucket operations
-	script := redis.NewScript(TokenBucketLuaScript)
-
-	result, err := script.Run(
+	// Use cached Lua script for atomic token bucket operations
+	result, err := s.script.Run(
 		ctx,
 		redisClient,
 		[]string{key},

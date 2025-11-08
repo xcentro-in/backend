@@ -18,22 +18,28 @@ type Policy struct {
 	FailClosed bool `json:"fail_closed"`
 }
 
-// DefaultPolicies returns predefined policies for common groups.
-func DefaultPolicies() map[string]Policy {
+// GetBuiltInPolicies returns all built-in rate limiting policies (default + SES).
+// These can be overridden by custom JSON configuration.
+// The "default" policy uses config values from environment variables.
+func GetBuiltInPolicies(defaultCapacity int64, defaultRefillPerSec float64, defaultRequestedTokens int64, failOpenByDefault bool) map[string]Policy {
 	return map[string]Policy{
+		// Default policy - used as fallback for any unspecified group
+		// Values come from RATE_LIMITER_DEFAULT_* environment variables
 		"default": {
 			Strategies: []StrategyConfig{
 				{
 					Type: "token_bucket",
 					Config: map[string]interface{}{
-						"capacity":          120.0,
-						"refill_per_second": 2.0, // 120 req/min
-						"requested_tokens":  1.0,
+						"capacity":          float64(defaultCapacity),
+						"refill_per_second": defaultRefillPerSec,
+						"requested_tokens":  float64(defaultRequestedTokens),
 					},
 				},
 			},
-			FailClosed: false,
+			FailClosed: !failOpenByDefault, // Inverted: true = fail open, false = fail closed
 		},
+
+		// Login policy - strict rate limiting for authentication
 		"login": {
 			Strategies: []StrategyConfig{
 				{
@@ -45,8 +51,10 @@ func DefaultPolicies() map[string]Policy {
 					},
 				},
 			},
-			FailClosed: true, // Sensitive, fail closed
+			FailClosed: true, // Fail closed for security
 		},
+
+		// Signup policy - prevent spam registrations
 		"signup": {
 			Strategies: []StrategyConfig{
 				{
@@ -58,8 +66,10 @@ func DefaultPolicies() map[string]Policy {
 					},
 				},
 			},
-			FailClosed: false,
+			FailClosed: false, // Fail open for user experience
 		},
+
+		// High-volume API policy
 		"api_high": {
 			Strategies: []StrategyConfig{
 				{
@@ -71,17 +81,13 @@ func DefaultPolicies() map[string]Policy {
 					},
 				},
 			},
-			FailClosed: false,
+			FailClosed: false, // Fail open for availability
 		},
-	}
-}
 
-// SESPolicies returns rate limiting policies for AWS SES
-// Combines per-second and daily limits
-func SESPolicies() map[string]Policy {
-	return map[string]Policy{
+		// AWS SES policy for ap-south-1 region
+		// Combines per-second burst and daily quota limits
 		"ses:ap-south-1": {
-			LogicalOperation: "and", // Both must pass
+			LogicalOperation: "and", // Both strategies must allow
 			Strategies: []StrategyConfig{
 				{
 					Type: "token_bucket",
@@ -100,7 +106,7 @@ func SESPolicies() map[string]Policy {
 					},
 				},
 			},
-			FailClosed: true, // Fail closed for SES (critical)
+			FailClosed: true, // Fail closed to prevent SES quota violations
 		},
 	}
 }

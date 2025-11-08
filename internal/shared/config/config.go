@@ -236,6 +236,7 @@ type RateLimiterConfig struct {
 	DeviceCreationThrottleWindow time.Duration `json:"device_creation_throttle_window" env:"RATE_LIMITER_DEVICE_CREATION_THROTTLE_WINDOW" env-default:"1h"`
 	InvalidSignaturePenalty      time.Duration `json:"invalid_signature_penalty" env:"RATE_LIMITER_INVALID_SIGNATURE_PENALTY" env-default:"1h"` // Penalty for tampered device signatures
 	FailOpenByDefault            bool          `json:"fail_open_by_default" env:"RATE_LIMITER_FAIL_OPEN_BY_DEFAULT" env-default:"true"`
+	// Note: FailOpenByDefault only affects the "default" policy. Other built-in policies (login, signup, etc.) have their own hardcoded FailClosed settings
 	// Note: Token bucket TTL is hardcoded to 30 minutes in Lua script (lua_script.go line 48)
 	// Note: Fixed window TTL is automatically set to window_seconds in the strategy
 

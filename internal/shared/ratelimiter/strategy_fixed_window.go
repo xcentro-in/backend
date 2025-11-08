@@ -17,9 +17,10 @@ func init() {
 // FixedWindowStrategy implements the fixed window rate limiting algorithm
 // Useful for limits like "X requests per day" or "Y emails per hour"
 type FixedWindowStrategy struct {
-	limit         int64 // Maximum requests allowed in the window
-	windowSeconds int64 // Window duration in seconds (e.g., 86400 for daily)
-	tokens        int64 // Number of tokens to consume per request
+	limit         int64         // Maximum requests allowed in the window
+	windowSeconds int64         // Window duration in seconds (e.g., 86400 for daily)
+	tokens        int64         // Number of tokens to consume per request
+	script        *redis.Script // Cached Lua script instance
 }
 
 // NewFixedWindowStrategy creates a new fixed window strategy from config
@@ -43,6 +44,7 @@ func NewFixedWindowStrategy(config map[string]interface{}) (Strategy, error) {
 		limit:         int64(limit),
 		windowSeconds: int64(windowSeconds),
 		tokens:        int64(tokens),
+		script:        redis.NewScript(FixedWindowLuaScript), // Create once, reuse
 	}, nil
 }
 
@@ -56,10 +58,8 @@ func (s *FixedWindowStrategy) Check(ctx context.Context, redisClient *redis.Clie
 	// Key includes window start time to create fixed windows
 	windowKey := fmt.Sprintf("%s:fw:%d", key, windowStart)
 
-	// Use Lua script for atomic increment and check
-	script := redis.NewScript(FixedWindowLuaScript)
-
-	result, err := script.Run(
+	// Use cached Lua script for atomic increment and check
+	result, err := s.script.Run(
 		ctx,
 		redisClient,
 		[]string{windowKey},
