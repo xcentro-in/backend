@@ -106,7 +106,39 @@ func (s *xcentroServer) registerGlobalMiddleware() {
 		},
 		MaxAge: s.meta.config.CORS.MaxAge,
 	}))
-	s.echo.Use(middleware.Secure())
+
+	// Configure secure middleware based on environment
+	s.echo.Use(middleware.SecureWithConfig(buildSecureConfig(s.meta.config.Environment, s.meta.config.Frontend.URL)))
+}
+
+// buildSecureConfig returns security middleware configuration based on environment
+func buildSecureConfig(env, frontendURL string) middleware.SecureConfig {
+	if env == "production" {
+		return middleware.SecureConfig{
+			XSSProtection:         "",       // Modern browsers ignore this header, rely on CSP
+			ContentTypeNosniff:    "nosniff", // Prevent MIME type sniffing
+			XFrameOptions:         "DENY",   // Prevent clickjacking
+			HSTSMaxAge:            31536000, // 1 year
+			HSTSExcludeSubdomains: false,
+			HSTSPreloadEnabled:    false,
+			ContentSecurityPolicy: "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; script-src 'self'; style-src 'self';",
+			CSPReportOnly:         false,
+			ReferrerPolicy:        "strict-origin-when-cross-origin",
+		}
+	}
+
+	// dev environment
+	return middleware.SecureConfig{
+		XSSProtection:         "",        // Modern browsers ignore this header
+		ContentTypeNosniff:    "nosniff", // Prevent MIME type sniffing
+		XFrameOptions:         "",        // Let CSP handle frame-ancestors
+		HSTSMaxAge:            0,         // Disable HSTS in dev
+		HSTSExcludeSubdomains: true,
+		HSTSPreloadEnabled:    false,
+		ContentSecurityPolicy: fmt.Sprintf("default-src 'self' %s; base-uri 'self'; object-src 'none'; frame-ancestors 'self' %s; form-action 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' %s; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline';", frontendURL, frontendURL, frontendURL),
+		CSPReportOnly:         true, // Report-only in dev to avoid breaking things
+		ReferrerPolicy:        "no-referrer-when-downgrade",
+	}
 }
 
 func (s *xcentroServer) loadConfig() {

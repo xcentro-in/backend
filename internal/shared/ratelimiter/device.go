@@ -168,7 +168,7 @@ func (dh *DeviceHandler) verifyDeviceSignature(deviceID, providedSignature strin
 
 // isCreationThrottled checks if device creation is throttled for the given IP.
 func (dh *DeviceHandler) isCreationThrottled(ctx context.Context, ip string) (bool, error) {
-	key := fmt.Sprintf("device:create:ip:%s", ip)
+	key := fmt.Sprintf("xcentro:device:create:ip:%s", ip)
 	count, err := dh.redis.Get(ctx, key).Int()
 	if err == redis.Nil {
 		return false, nil
@@ -181,7 +181,7 @@ func (dh *DeviceHandler) isCreationThrottled(ctx context.Context, ip string) (bo
 
 // incrementCreationCounter increments the creation counter for an IP.
 func (dh *DeviceHandler) incrementCreationCounter(ctx context.Context, ip string) error {
-	key := fmt.Sprintf("device:create:ip:%s", ip)
+	key := fmt.Sprintf("xcentro:device:create:ip:%s", ip)
 	pipe := dh.redis.Pipeline()
 	pipe.Incr(ctx, key)
 	pipe.Expire(ctx, key, dh.creationThrottleWindow)

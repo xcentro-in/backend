@@ -33,19 +33,16 @@ func RegisterUserRoutes(e *echo.Group, userService user.UserService, authService
 	aadhaarHandler := NewAadhaarCallbackHandler(userService, cfg)
 
 	userGroup := e.Group("/user")
-	userGroup.Use(ratelimiter.MiddlewareDefault())
 
-	// Protected routes requiring authentication
+	// Protected routes (JWT middleware first, then rate limiter can use user ID)
 	protectedUser := userGroup.Group("")
 	protectedUser.Use(middleware.JWTMiddleware(authService))
+	protectedUser.Use(ratelimiter.MiddlewareDefault())
 
 	// User onboarding endpoints
 	protectedUser.POST("/onboard/init", handler.InitiateOnboarding)
 	protectedUser.POST("/onboard/complete", handler.CompleteOnboarding)
 	protectedUser.GET("/onboard/status", handler.GetOnboardingStatus)
-
-	// Aadhaar callback (protected, requires JWT)
-	protectedUser.POST("/onboard/aadhaar/callback", aadhaarHandler.HandleRedirectCallback)
 
 	// User profile endpoints
 	protectedUser.GET("/profile", handler.GetProfile)
@@ -54,9 +51,12 @@ func RegisterUserRoutes(e *echo.Group, userService user.UserService, authService
 	// User roles endpoint (requires both JWT and BusinessRoles middleware)
 	protectedUser.GET("/roles", handler.GetUserRoles, middleware.BusinessRolesMiddleware(businessUserRelRepo, rclient))
 
-	// Public routes (no authentication required)
-	// Aadhaar webhook (public, no auth)
-	userGroup.POST("/onboard/aadhaar/webhook", aadhaarHandler.HandleWebhook)
+	// Public routes (rate limiter first since no JWT)
+	publicUser := userGroup.Group("")
+	publicUser.Use(ratelimiter.MiddlewareDefault())
+	// Aadhaar callback and webhook (public, no auth - for debugging)
+	publicUser.GET("/onboard/aadhaar/callback", aadhaarHandler.HandleRedirectCallback)
+	publicUser.POST("/onboard/aadhaar/webhook", aadhaarHandler.HandleWebhook)
 }
 
 // InitiateOnboarding initiates user onboarding process (identity verification only)
@@ -224,6 +224,13 @@ func (h *UserHandler) GetProfile(c echo.Context) error {
 	profile, err := h.userService.GetUserProfile(c.Request().Context(), userID)
 	if err != nil {
 		h.logger.Errorf("Error getting profile for user %s: %v", userID, err)
+		// Check if error is "user not found" - return 404 instead of 500
+		if err.Error() == "user not found" || err.Error() == "failed to get user profile: user not found" {
+			return c.JSON(404, map[string]string{
+				"error":   "USER_NOT_FOUND",
+				"message": "User not found - your session may have expired, please login again",
+			})
+		}
 		return c.JSON(500, map[string]string{"message": "Failed to get user profile"})
 	}
 

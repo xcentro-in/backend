@@ -2,7 +2,6 @@ package user
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -707,52 +706,6 @@ func (s *UserServiceImpl) GetOnboardingStatus(ctx context.Context, userID string
 	}
 
 	return response, nil
-}
-
-// generateRandomPassword generates a cryptographically secure random password
-func (s *UserServiceImpl) generateRandomPassword() (string, error) {
-	const (
-		length      = 16
-		lowerChars  = "abcdefghijklmnopqrstuvwxyz"
-		upperChars  = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-		digitChars  = "0123456789"
-		symbolChars = "!@#$%^&*"
-		allChars    = lowerChars + upperChars + digitChars + symbolChars
-	)
-
-	password := make([]byte, length)
-
-	// Ensure at least one character from each category
-	categories := []string{lowerChars, upperChars, digitChars, symbolChars}
-	for i := 0; i < 4; i++ {
-		category := categories[i]
-		randomIndex := make([]byte, 1)
-		if _, err := rand.Read(randomIndex); err != nil {
-			return "", fmt.Errorf("failed to generate random byte: %w", err)
-		}
-		password[i] = category[int(randomIndex[0])%len(category)]
-	}
-
-	// Fill remaining characters randomly from all characters
-	for i := 4; i < length; i++ {
-		randomIndex := make([]byte, 1)
-		if _, err := rand.Read(randomIndex); err != nil {
-			return "", fmt.Errorf("failed to generate random byte: %w", err)
-		}
-		password[i] = allChars[int(randomIndex[0])%len(allChars)]
-	}
-
-	// Shuffle the password to randomize character positions
-	for i := length - 1; i > 0; i-- {
-		randomIndex := make([]byte, 1)
-		if _, err := rand.Read(randomIndex); err != nil {
-			return "", fmt.Errorf("failed to generate random byte: %w", err)
-		}
-		j := int(randomIndex[0]) % (i + 1)
-		password[i], password[j] = password[j], password[i]
-	}
-
-	return string(password), nil
 }
 
 // ProcessAadhaarRedirectCallback processes the Aadhaar redirect callback with authentication

@@ -44,8 +44,8 @@ tokens = math.min(capacity, tokens + added)
 if tokens >= req then
   -- Allow request: consume tokens
   tokens = tokens - req
-  redis.call("HMSET", key, "tokens", tostring(tokens), "last", tostring(now))
-  redis.call("EXPIRE", key, 7200) -- 2 hours TTL
+  redis.call("HSET", key, "tokens", tostring(tokens), "last", tostring(now))
+  redis.call("EXPIRE", key, 1800) -- 30 minutes TTL
   return {1, tostring(tokens), "0"}
 else
   -- Deny request: calculate retry time
@@ -57,5 +57,48 @@ else
      wait = 9999999 -- Effectively infinite if no refill
   end
   return {0, tostring(tokens), tostring(wait)}
+end
+`
+
+// FixedWindowLuaScript is the atomic fixed-window implementation in Lua.
+// Uses DECRBY to decrement remaining quota - simpler than counting up.
+//
+// KEYS[1] = window key (e.g., "rl:user:123|login:fw:1672531200")
+// ARGV[1] = limit (int64, maximum requests allowed in the window)
+// ARGV[2] = ttl (int64, window duration in seconds)
+// ARGV[3] = tokens (int64, number of tokens to consume)
+//
+// Returns: {allowed (1|0), remaining_tokens (string), retry_after_seconds (string)}
+const FixedWindowLuaScript = `
+-- Parse arguments
+local key = KEYS[1]
+local limit = tonumber(ARGV[1])
+local ttl = tonumber(ARGV[2])
+local tokens = tonumber(ARGV[3])
+
+-- Get current remaining quota
+local remaining = redis.call('GET', key)
+
+-- If key doesn't exist, initialize with full limit
+if remaining == false then
+  redis.call('SET', key, limit)
+  redis.call('EXPIRE', key, ttl)
+  remaining = limit
+else
+  remaining = tonumber(remaining)
+end
+
+-- Check if we have enough quota
+if remaining >= tokens then
+  -- Allow: decrement quota
+  local new_remaining = redis.call('DECRBY', key, tokens)
+  return {1, tostring(new_remaining), "0"}
+else
+  -- Deny: not enough quota, get TTL for retry_after
+  local remaining_ttl = redis.call('TTL', key)
+  if remaining_ttl < 0 then
+    remaining_ttl = 0
+  end
+  return {0, tostring(remaining), tostring(remaining_ttl)}
 end
 `

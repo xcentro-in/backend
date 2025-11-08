@@ -26,9 +26,7 @@ type RateLimiter struct {
 	policies                map[string]Policy
 	defaultPolicy           Policy
 	failOpenDefault         bool
-	tokenKeyTTL             int // in seconds
 	invalidSignaturePenalty int // in seconds
-	scriptSHA               string
 	log                     *logger.Logger
 	mu                      sync.RWMutex
 }
@@ -48,13 +46,6 @@ func Initialize(redisClient *redis.Client, cfg *config.RateLimiterConfig, cookie
 	var initErr error
 	once.Do(func() {
 		log := logger.GetDefault()
-
-		// Load Lua script
-		sha, err := redisClient.ScriptLoad(context.Background(), TokenBucketLuaScript).Result()
-		if err != nil {
-			initErr = fmt.Errorf("failed to load Lua script: %w", err)
-			return
-		}
 
 		// Create device handler with HMAC signing
 		deviceHandler := NewDeviceHandler(
@@ -106,9 +97,7 @@ func Initialize(redisClient *redis.Client, cfg *config.RateLimiterConfig, cookie
 			policies:                policies,
 			defaultPolicy:           policies["default"],
 			failOpenDefault:         cfg.FailOpenByDefault,
-			tokenKeyTTL:             int(cfg.TokenKeyTTL.Seconds()),
 			invalidSignaturePenalty: int(cfg.InvalidSignaturePenalty.Seconds()),
-			scriptSHA:               sha,
 			log:                     log,
 		}
 
@@ -224,11 +213,11 @@ func (rl *RateLimiter) CheckLimitWithKey(ctx context.Context, key string, group 
 // determineScopeKey determines the rate limit scope key based on priority: user > device > IP.
 func (rl *RateLimiter) determineScopeKey(c echo.Context, group string) (string, string, error) {
 	// Priority 1: Authenticated user
-	userID := c.Get("user_id")
+	userID := c.Get("userId")
 	if userID != nil {
 		userIDStr, ok := userID.(string)
 		if ok && userIDStr != "" {
-			return fmt.Sprintf("rl:user:%s|%s", userIDStr, group), "user", nil
+			return fmt.Sprintf("xcentro:rl:user:%s|%s", userIDStr, group), "user", nil
 		}
 	}
 
@@ -238,7 +227,7 @@ func (rl *RateLimiter) determineScopeKey(c echo.Context, group string) (string, 
 		if created {
 			rl.log.Infof("Created new device for rate limiting: %s", deviceID)
 		}
-		return fmt.Sprintf("rl:device:%s|%s", deviceID, group), "device", nil
+		return fmt.Sprintf("xcentro:rl:device:%s|%s", deviceID, group), "device", nil
 	}
 
 	// Check for invalid signature error (suspected tampering/DDoS)
@@ -258,7 +247,7 @@ func (rl *RateLimiter) determineScopeKey(c echo.Context, group string) (string, 
 	if ip == "" {
 		return "", "", fmt.Errorf("unable to determine client IP")
 	}
-	return fmt.Sprintf("rl:ip:%s|%s", ip, group), "ip", nil
+	return fmt.Sprintf("xcentro:rl:ip:%s|%s", ip, group), "ip", nil
 }
 
 // executeRateLimit executes rate limiting check with support for multiple strategies

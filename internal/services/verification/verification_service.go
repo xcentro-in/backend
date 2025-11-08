@@ -168,17 +168,15 @@ func (s *DocumentVerificationService) VerifyCIN(ctx context.Context, cin string,
 func (s *DocumentVerificationService) VerifyPANAadhaar(ctx context.Context, pan string, aadhaar string, transID string) (map[string]interface{}, error) {
 	s.logger.Infof("Verifying PAN-Aadhaar link: PAN=%s, Aadhaar=%s, transID=%s", pan, aadhaar, transID)
 
-	// req := authbridge.NewPANAadhaarRequest(pan, aadhaar, transID)
-	// result, err := s.authBridgeClient.SearchDocument(req)
-	// if err != nil {
-	// 	s.logger.Errorf("PAN-Aadhaar link verification failed: %v", err)
-	// 	return nil, fmt.Errorf("PAN-Aadhaar link verification failed: %w", err)
-	// }
+	req := authbridge.NewPANAadhaarRequest(pan, aadhaar, transID)
+	result, err := s.authBridgeClient.SearchDocument(req)
+	if err != nil {
+		s.logger.Errorf("PAN-Aadhaar link verification failed: %v", err)
+		return nil, fmt.Errorf("PAN-Aadhaar link verification failed: %w", err)
+	}
 
 	s.logger.Infof("PAN-Aadhaar link verification successful for PAN: %s", pan)
-	return map[string]interface{}{
-		"Status": "Verified",
-	}, nil
+	return result, nil
 }
 
 // ToJSON converts verification data to JSON string for database storage

@@ -13,6 +13,7 @@ import (
 // Config holds the application configuration.
 // Sensitive fields (like Password) are excluded from JSON marshalling.
 type Config struct {
+	Environment           string                      `json:"environment" env:"ENVIRONMENT" env-default:"dev"` // dev or production
 	Database              DatabaseConfig              `json:"database"`
 	MigrationDatabase     MigrationDatabaseConfig     `json:"migration_database"`
 	Server                ServerConfig                `json:"server"`
@@ -234,8 +235,9 @@ type RateLimiterConfig struct {
 	DeviceCreationThrottlePerIP  int           `json:"device_creation_throttle_per_ip" env:"RATE_LIMITER_DEVICE_CREATION_THROTTLE_PER_IP" env-default:"50"`
 	DeviceCreationThrottleWindow time.Duration `json:"device_creation_throttle_window" env:"RATE_LIMITER_DEVICE_CREATION_THROTTLE_WINDOW" env-default:"1h"`
 	InvalidSignaturePenalty      time.Duration `json:"invalid_signature_penalty" env:"RATE_LIMITER_INVALID_SIGNATURE_PENALTY" env-default:"1h"` // Penalty for tampered device signatures
-	TokenKeyTTL                  time.Duration `json:"token_key_ttl" env:"RATE_LIMITER_TOKEN_KEY_TTL" env-default:"2h"`
 	FailOpenByDefault            bool          `json:"fail_open_by_default" env:"RATE_LIMITER_FAIL_OPEN_BY_DEFAULT" env-default:"true"`
+	// Note: Token bucket TTL is hardcoded to 30 minutes in Lua script (lua_script.go line 48)
+	// Note: Fixed window TTL is automatically set to window_seconds in the strategy
 
 	// Default policy (used as fallback for any group not in JSON)
 	DefaultCapacity        int64   `json:"default_capacity" env:"RATE_LIMITER_DEFAULT_CAPACITY" env-default:"120"`

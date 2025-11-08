@@ -18,7 +18,7 @@ func (rl *RateLimiter) AllowSES(ctx context.Context, region string, emailCount i
 	group := fmt.Sprintf("ses:%s", region)
 
 	// Build Redis key for SES
-	key := fmt.Sprintf("rl:ses:%s", region)
+	key := fmt.Sprintf("xcentro:rl:ses:%s", region)
 
 	// Check rate limit using the SES policy
 	return rl.CheckLimitWithKey(ctx, key, group)

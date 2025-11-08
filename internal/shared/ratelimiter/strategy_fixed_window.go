@@ -57,34 +57,7 @@ func (s *FixedWindowStrategy) Check(ctx context.Context, redisClient *redis.Clie
 	windowKey := fmt.Sprintf("%s:fw:%d", key, windowStart)
 
 	// Use Lua script for atomic increment and check
-	script := redis.NewScript(`
-		local key = KEYS[1]
-		local limit = tonumber(ARGV[1])
-		local ttl = tonumber(ARGV[2])
-		local tokens = tonumber(ARGV[3])
-
-		local current = redis.call('GET', key)
-		if current == false then
-			current = 0
-		else
-			current = tonumber(current)
-		end
-
-		if current + tokens <= limit then
-			-- Allow: increment counter
-			redis.call('INCRBY', key, tokens)
-			redis.call('EXPIRE', key, ttl)
-			local remaining = limit - (current + tokens)
-			return {1, tostring(remaining), "0"}
-		else
-			-- Deny: calculate retry after (time until window resets)
-			local retry_after = ttl - (redis.call('TTL', key) or 0)
-			if retry_after < 0 then
-				retry_after = 0
-			end
-			return {0, tostring(limit - current), tostring(retry_after)}
-		end
-	`)
+	script := redis.NewScript(FixedWindowLuaScript)
 
 	result, err := script.Run(
 		ctx,

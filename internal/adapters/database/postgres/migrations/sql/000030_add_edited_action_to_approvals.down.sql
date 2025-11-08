@@ -22,8 +22,16 @@ CREATE TYPE xcentro.approval_action_enum AS ENUM (
     'request_changes'
 );
 
+-- Drop the default before altering column type
+ALTER TABLE xcentro.voucher_approvals
+    ALTER COLUMN action DROP DEFAULT;
+
 ALTER TABLE xcentro.voucher_approvals
     ALTER COLUMN action TYPE xcentro.approval_action_enum
     USING action::text::xcentro.approval_action_enum;
+
+-- Restore the default with the new enum type
+ALTER TABLE xcentro.voucher_approvals
+    ALTER COLUMN action SET DEFAULT 'pending'::xcentro.approval_action_enum;
 
 DROP TYPE xcentro.approval_action_enum_old;

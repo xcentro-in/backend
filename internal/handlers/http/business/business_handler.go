@@ -57,9 +57,9 @@ func RegisterBusinessRoutes(e *echo.Group, businessService business.BusinessServ
 	handler := NewBusinessHandler(businessService, authService, userService, s3Config)
 
 	businessGroup := e.Group("/business")
-	// Apply middleware to the business group
-	businessGroup.Use(ratelimiter.MiddlewareDefault())
+	// Apply middleware to the business group (JWT first, then rate limiter, then business roles)
 	businessGroup.Use(middleware.JWTMiddleware(authService))
+	businessGroup.Use(ratelimiter.MiddlewareDefault())
 	businessGroup.Use(middleware.BusinessRolesMiddleware(businessUserRelRepo, rclient))
 
 	// Business details route
@@ -209,7 +209,48 @@ func (h *BusinessHandler) CompleteOnboarding(c echo.Context) error {
 		})
 	}
 
-	// Validate input
+	// Get user ID from context
+	userIDRaw := c.Get("userId")
+	if userIDRaw == nil {
+		return c.JSON(401, map[string]interface{}{
+			"error":   "UNAUTHORIZED",
+			"message": "User not authenticated",
+		})
+	}
+	userID := userIDRaw.(string)
+
+	// Get businessID from header and set it BEFORE validation
+	businessID := c.Request().Header.Get("X-Business-ID")
+	if businessID == "" {
+		return c.JSON(400, map[string]interface{}{
+			"error":   "MISSING_BUSINESS_ID",
+			"message": "X-Business-ID header is required",
+		})
+	}
+	req.BID = businessID
+
+	// Auto-populate ITID from business data if not provided
+	if req.ITID == "" {
+		businessData, err := h.businessService.GetBusiness(c.Request().Context(), businessID)
+		if err != nil {
+			h.logger.Errorf("Failed to fetch business data: %v", err)
+			return c.JSON(400, map[string]interface{}{
+				"error":   "BUSINESS_NOT_FOUND",
+				"message": "Business not found or not accessible",
+			})
+		}
+		if businessData.ITID == "" {
+			h.logger.Errorf("Business %s has no ITID - initiate onboarding first", businessID)
+			return c.JSON(400, map[string]interface{}{
+				"error":   "INCOMPLETE_ONBOARDING",
+				"message": "Business onboarding not initiated - please call initiate endpoint first",
+			})
+		}
+		req.ITID = businessData.ITID
+		h.logger.Infof("Auto-populated ITID %s from business data for BID %s", req.ITID, businessID)
+	}
+
+	// Validate input (after BID and ITID are set)
 	if err := c.Validate(&req); err != nil {
 		h.logger.Errorf("Validation failed: %v", err)
 		if ve, ok := err.(*customValidator.ValidationError); ok {
@@ -224,26 +265,6 @@ func (h *BusinessHandler) CompleteOnboarding(c echo.Context) error {
 			"message": "Validation failed",
 		})
 	}
-
-	// Get user ID from context
-	userIDRaw := c.Get("userId")
-	if userIDRaw == nil {
-		return c.JSON(401, map[string]interface{}{
-			"error":   "UNAUTHORIZED",
-			"message": "User not authenticated",
-		})
-	}
-	userID := userIDRaw.(string)
-
-	// Get businessID from header
-	businessID := c.Request().Header.Get("X-Business-ID")
-	if businessID == "" {
-		return c.JSON(400, map[string]interface{}{
-			"error":   "MISSING_BUSINESS_ID",
-			"message": "X-Business-ID header is required",
-		})
-	}
-	req.BID = businessID
 
 	// Get user roles from middleware context
 	ur := c.Get("userRoles")

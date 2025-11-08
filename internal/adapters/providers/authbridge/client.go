@@ -242,12 +242,17 @@ func (c *AuthBridgeClient) getMockResponse(req DocumentRequest) (map[string]inte
 		// Check if this is LINK or STATUS action
 		if linkReq, ok := req.(*AadhaarLinkRequest); ok && linkReq.Action == "LINK" {
 			// Mock Aadhaar LINK response (DigiLocker URL generation)
+			// Use the redirect URL provided in the request for mock testing
+			mockURL := linkReq.RedirectURL
+			if mockURL == "" {
+				mockURL = "http://localhost:8888/v1/user/onboard/aadhaar/callback"
+			}
 			return map[string]interface{}{
 				"status":      float64(1),
 				"message":     "Aadhaar verification link generated successfully",
 				"ts_trans_id": "TS_" + linkReq.TransID + "_MOCK",
 				"data": map[string]interface{}{
-					"url":        "http://localhost:8888/v1/health",
+					"url":        mockURL,
 					"expires_at": time.Now().Add(24 * time.Hour).Format(time.RFC3339),
 				},
 			}, nil

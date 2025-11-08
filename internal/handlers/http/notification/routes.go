@@ -16,11 +16,9 @@ func RegisterNotificationRoutes(group *echo.Group, notifService notification.Not
 	// Create notification group
 	notifGroup := group.Group("/notifications")
 
-	// Apply rate limiting to all notification routes
-	notifGroup.Use(ratelimiter.MiddlewareDefault())
-
-	// Apply JWT middleware to all notification routes
+	// Apply JWT middleware first, then rate limiter (so rate limiter can use user ID)
 	notifGroup.Use(middleware.JWTMiddleware(authService))
+	notifGroup.Use(ratelimiter.MiddlewareDefault())
 
 	// Get user notifications (paginated)
 	notifGroup.GET("", notifHandler.GetUserNotifications)

@@ -881,6 +881,20 @@ func (s *BusinessServiceImpl) GetBusinessDetails(ctx context.Context, bid string
 	return response, nil
 }
 
+// GetBusiness retrieves basic business information
+func (s *BusinessServiceImpl) GetBusiness(ctx context.Context, bid string) (*business.Business, error) {
+	businessData, _, err := s.businessRepo.GetBusinessWithKYBData(ctx, bid)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch business: %w", err)
+	}
+
+	if businessData == nil {
+		return nil, fmt.Errorf("business not found: %s", bid)
+	}
+
+	return businessData, nil
+}
+
 // GetBusinessKYBData retrieves the KYB data for a business including company director information
 // This is used for money rotation checks during payee onboarding
 func (s *BusinessServiceImpl) GetBusinessKYBData(ctx context.Context, bid string) (*business.BusinessKYBData, error) {
