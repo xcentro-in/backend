@@ -961,13 +961,12 @@ func (s *BusinessServiceImpl) UpdateOnboardingStatus(ctx context.Context, bid st
 	}
 
 	// Invalidate the cache asynchronously
-	go func() {
-		bgCtx := context.Background()
-		invalidationKey := keys.Business.OnboardingStatus(bid)
-		if err := s.rclient.Delete(bgCtx, invalidationKey); err != nil {
-			s.logger.Warnf("Failed to invalidate business onboarding status cache for BID %s: %v", bid, err)
-		}
-	}()
+	
+	invalidationKey := keys.Business.OnboardingStatus(bid)
+	if err := s.rclient.Delete(ctx, invalidationKey); err != nil {
+		s.logger.Warnf("Failed to invalidate business onboarding status cache for BID %s: %v", bid, err)
+	}
+	
 
 	return nil
 }

@@ -440,16 +440,13 @@ func (s *PayeeService) onboardVendor(ctx context.Context, req payee.OnboardPayee
 
 	// Update onboarding flag (non-blocking, first-time only)
 	if s.businessService != nil {
-		go func(bizID string) {
-			bgCtx := context.Background()
-			flags, err := s.businessService.GetBusinessOnboardingFlags(bgCtx, bizID)
-			if err == nil && !flags.HasAddedVendor {
-				_ = s.businessService.UpdateOnboardingStatus(bgCtx, bizID, "has_added_vendor", true)
-				s.logger.DebugWith("Onboarding flag updated",
-					"business_id", bizID,
-					"flag", "has_added_vendor")
-			}
-		}(req.BusinessID)
+		flags, err := s.businessService.GetBusinessOnboardingFlags(ctx, req.BusinessID)
+		if err == nil && !flags.HasAddedVendor {
+			_ = s.businessService.UpdateOnboardingStatus(ctx, req.BusinessID, "has_added_vendor", true)
+			s.logger.DebugWith("Onboarding flag updated",
+				"business_id", req.BusinessID,
+				"flag", "has_added_vendor")
+		}
 	}
 
 	// Step 12: Return response
