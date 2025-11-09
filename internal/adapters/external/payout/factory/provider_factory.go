@@ -6,13 +6,15 @@ import (
 	"xcentro.in/internal/adapters/external/payout/castler"
 	"xcentro.in/internal/core/payout"
 	"xcentro.in/internal/shared/config"
+	"xcentro.in/internal/shared/logger"
 )
 
 // PayoutProviderFactory creates payout provider instances based on provider type
 type PayoutProviderFactory struct {
 	config *config.Config
 	// Cache provider instances (singleton pattern)
-	castlerClient *castler.CastlerClient
+	castlerClient     *castler.CastlerClient
+	mockCastlerClient *castler.MockCastlerClient
 	// Add other providers here in future (e.g., razorpayClient)
 }
 
@@ -39,7 +41,18 @@ func (f *PayoutProviderFactory) GetProvider(providerType payout.ProviderType) (p
 }
 
 // getCastlerClient returns cached Castler client or creates new one
-func (f *PayoutProviderFactory) getCastlerClient() *castler.CastlerClient {
+// If CASTLER_MOCK_ENABLED=true, returns mock client instead
+func (f *PayoutProviderFactory) getCastlerClient() payout.PayoutProvider {
+	// Check if mock mode is enabled
+	if f.config.Castler.MockEnabled {
+		logger.Info("🎭 Castler Mock Mode ENABLED - Using mock client")
+		if f.mockCastlerClient == nil {
+			f.mockCastlerClient = castler.NewMockCastlerClient()
+		}
+		return f.mockCastlerClient
+	}
+
+	// Use real Castler client
 	if f.castlerClient == nil {
 		// Get Castler configuration from app config
 		baseURL := f.config.Castler.BaseURL
