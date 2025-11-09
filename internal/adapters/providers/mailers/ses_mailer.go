@@ -2,6 +2,7 @@ package mailers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ses/types"
 	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/logger"
+	"xcentro.in/internal/shared/ratelimiter"
 )
 
 // EmailMessage represents an email to be sent
@@ -94,9 +96,23 @@ func formatAddress(email, name string) string {
 	return fmt.Sprintf("%s <%s>", name, email)
 }
 
+// NonRetryableError wraps an error to indicate it should not be retried
+type NonRetryableError struct {
+	Err error
+}
+
+func (e *NonRetryableError) Error() string {
+	return e.Err.Error()
+}
+
+func (e *NonRetryableError) Unwrap() error {
+	return e.Err
+}
+
 // retryWithExponentialBackoff executes a function with retry logic using exponential backoff
 // maxRetries: number of retry attempts (3 means total 4 attempts: 1 initial + 3 retries)
 // baseDelay: initial delay duration (will be doubled on each retry)
+// Exits immediately if operation returns NonRetryableError
 func retryWithExponentialBackoff(ctx context.Context, maxRetries int, baseDelay time.Duration, operation func() error) error {
 	var lastErr error
 
@@ -106,6 +122,13 @@ func retryWithExponentialBackoff(ctx context.Context, maxRetries int, baseDelay 
 		if err == nil {
 			// Success
 			return nil
+		}
+
+		// Check if error is non-retryable
+		var nonRetryableErr *NonRetryableError
+		if ok := errors.As(err, &nonRetryableErr); ok {
+			logger.GetDefault().Errorf("Non-retryable error encountered: %v", err)
+			return err
 		}
 
 		lastErr = err
@@ -137,6 +160,8 @@ type SESClient struct {
 	defaultFromEmail string // Default verified identity
 	defaultFromName  string // Default sender name
 	defaultConfigSet string // Default configuration set
+	rateLimiter      *ratelimiter.RateLimiter
+	region           string // AWS region for rate limiting key
 }
 
 // Ensure SESClient implements EmailService interface at compile time
@@ -200,18 +225,38 @@ func NewSESClientFromConfig(c config.SESConfig) (*SESClient, error) {
 		return nil, fmt.Errorf("aws region could not be resolved")
 	}
 
+	// Get rate limiter instance (must be initialized at app startup)
+	rl := ratelimiter.GetInstance()
+
 	return &SESClient{
 		client:           ses.NewFromConfig(awsCfg),
 		defaultFromEmail: c.DefaultFromEmail,
 		defaultFromName:  c.DefaultFromName,
 		defaultConfigSet: c.DefaultConfigSet,
+		rateLimiter:      rl,
+		region:           awsCfg.Region,
 	}, nil
 }
 
 // SendEmail sends an email via SES with retry logic (3 retries with exponential backoff)
+// Implements AWS quota check before retry loop and Redis rate limiting on each retry attempt
 func (s *SESClient) SendEmail(ctx context.Context, msg *EmailMessage) (messageID string, err error) {
 	if err := msg.Validate(); err != nil {
 		return "", fmt.Errorf("validation failed: %w", err)
+	}
+
+	// Step 1: Check AWS SES quota BEFORE retry loop (fail fast if quota exceeded)
+	quota, err := s.GetSendQuota(ctx)
+	if err != nil {
+		return "", &NonRetryableError{Err: fmt.Errorf("failed to get AWS SES send quota: %w", err)}
+	}
+
+	// Check if 24-hour quota is exceeded
+	if quota.SentLast24Hours >= quota.Max24HourSend {
+		return "", &NonRetryableError{
+			Err: fmt.Errorf("AWS SES 24-hour quota exceeded: sent %.0f/%.0f emails",
+				quota.SentLast24Hours, quota.Max24HourSend),
+		}
 	}
 
 	// Use defaults if not specified
@@ -285,18 +330,35 @@ func (s *SESClient) SendEmail(ctx context.Context, msg *EmailMessage) (messageID
 		input.Tags = tags
 	}
 
-	// Retry logic: 3 retries with exponential backoff starting at 1 second
+	// Step 2: Retry logic with Redis rate limiter check on EACH attempt
 	// Total attempts: 4 (initial + 3 retries)
 	// Backoff delays: 1s, 2s, 4s
 	var resp *ses.SendEmailOutput
 	err = retryWithExponentialBackoff(ctx, 3, 1*time.Second, func() error {
+		// Check Redis rate limiter before each send attempt
+		result, rlErr := s.rateLimiter.AllowSES(ctx, s.region, 1)
+		if rlErr != nil {
+			logger.GetDefault().Errorf("Rate limiter check failed: %v", rlErr)
+			// Fail closed - return non-retryable error if rate limiter fails
+			return &NonRetryableError{Err: fmt.Errorf("rate limiter check failed: %w", rlErr)}
+		}
+
+		if !result.Allowed {
+			// Rate limit exceeded - fail immediately without retry
+			return &NonRetryableError{
+				Err: fmt.Errorf("rate limit exceeded: retry after %s seconds (remaining: %s)",
+					result.RetryAfterSecs, result.RemainingTokens),
+			}
+		}
+
+		// Rate limit allows - attempt to send email
 		var sendErr error
 		resp, sendErr = s.client.SendEmail(ctx, input)
 		return sendErr
 	})
 
 	if err != nil {
-		return "", fmt.Errorf("failed to send email after retries: %w", err)
+		return "", fmt.Errorf("failed to send email: %w", err)
 	}
 
 	return aws.ToString(resp.MessageId), nil

@@ -256,6 +256,36 @@ func (r *PgBusinessRepository) UpdateGSTData(ctx context.Context, bid string, gs
 	return nil
 }
 
+// GetKYBDataByPAN retrieves KYB data by PAN (income_tax_id)
+func (r *PgBusinessRepository) GetKYBDataByPAN(ctx context.Context, pan string) (*business.BusinessKYBData, error) {
+	query := `
+		SELECT income_tax_id, income_tax_id_data, company_id, company_id_data, business_deed
+		FROM xcentro.kyb_data
+		WHERE income_tax_id = $1
+	`
+
+	var kybData business.BusinessKYBData
+	var itidData, cid, cidData, docUrl sql.NullString
+
+	err := r.querier.QueryRow(ctx, query, pan).Scan(
+		&kybData.ITID, &itidData, &cid, &cidData, &docUrl,
+	)
+
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil // PAN not found
+		}
+		return nil, fmt.Errorf("error querying KYB data by PAN: %w", err)
+	}
+
+	kybData.ITIDData = itidData.String
+	kybData.CID = cid.String
+	kybData.CIDData = cidData.String
+	kybData.DocUrl = docUrl.String
+
+	return &kybData, nil
+}
+
 // GetBusinessWithKYBData retrieves both business and KYB data in a single query
 func (r *PgBusinessRepository) GetBusinessWithKYBData(ctx context.Context, bid string) (*business.Business, *business.BusinessKYBData, error) {
 	query := `

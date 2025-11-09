@@ -4,8 +4,10 @@ import (
 	"xcentro.in/internal/adapters/database/postgres/client"
 	payeeRepo "xcentro.in/internal/adapters/database/postgres/payee"
 	"xcentro.in/internal/adapters/external/payout/castler"
+	payoutFactory "xcentro.in/internal/adapters/external/payout/factory"
 	"xcentro.in/internal/core/business"
 	"xcentro.in/internal/core/business_rules"
+	"xcentro.in/internal/core/payout"
 	"xcentro.in/internal/services/verification"
 	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/logger"
@@ -43,16 +45,20 @@ func (f *PayeeServiceFactory) NewPayeeService() *PayeeService {
 	payeeBankAccountRepo := payeeRepo.NewPgPayeeBankAccountRepository(f.db, f.config.BankAccountEncryption.EncryptionKey)
 	businessPayeeRelationRepo := payeeRepo.NewPgBusinessPayeeRelationRepository(f.db, f.config.BankAccountEncryption.EncryptionKey)
 
-	// Create payout provider client (Castler with encryption support)
-	castlerClient, err := castler.NewCastlerClient(
-		f.config.Castler.BaseURL,
-		f.config.Castler.APIKey,
-		f.config.Castler.SecretKey,
-		f.config.Castler.EncryptionKey,
-		f.config.Castler.EncryptionIV,
-	)
+	// Create payout provider factory (supports mock mode via CASTLER_MOCK_ENABLED)
+	providerFactory := payoutFactory.NewPayoutProviderFactory(f.config)
+
+	// Get payout provider (returns mock or real based on config)
+	payoutProvider, err := providerFactory.GetProvider(payout.ProviderCastler)
 	if err != nil {
-		panic("Failed to create Castler client: " + err.Error())
+		panic("Failed to get payout provider: " + err.Error())
+	}
+
+	// Assert that the payout provider also implements CastlerPayeeOnboarder interface
+	// Both real and mock clients implement this interface
+	castlerClient, ok := payoutProvider.(CastlerPayeeOnboarder)
+	if !ok {
+		panic("Payout provider does not implement CastlerPayeeOnboarder interface")
 	}
 
 	// Create document verification service (AuthBridge - for GST, PAN verification)
@@ -61,8 +67,21 @@ func (f *PayeeServiceFactory) NewPayeeService() *PayeeService {
 		panic("Failed to create document verification service: " + err.Error())
 	}
 
-	// Create verification services
-	bankVerificationSvc := castler.NewCastlerBankVerificationService(castlerClient) // Use Castler for penny-drop
+	// Create bank verification service
+	// If mock mode is enabled, use mock bank verification; otherwise use Castler
+	var bankVerificationSvc business_rules.BankVerificationService
+	if f.config.Castler.MockEnabled {
+		logger.Info("🎭 Bank Verification Mock Mode ENABLED - Using mock service")
+		bankVerificationSvc = business_rules.NewMockBankVerificationService()
+	} else {
+		// For real Castler client, we need to assert it's a *castler.CastlerClient
+		realCastlerClient, ok := payoutProvider.(*castler.CastlerClient)
+		if !ok {
+			panic("Real payout provider is not a *castler.CastlerClient")
+		}
+		bankVerificationSvc = castler.NewCastlerBankVerificationService(realCastlerClient)
+	}
+
 	crossVerificationSvc := business_rules.NewCrossVerificationService()
 
 	// Get logger instance
@@ -79,10 +98,10 @@ func (f *PayeeServiceFactory) NewPayeeService() *PayeeService {
 		payeeEmployeeRepo,
 		payeeBankAccountRepo,
 		businessPayeeRelationRepo,
-		castlerClient,       // payout provider (for transfers)
-		castlerClient,       // castler client (for payee onboarding)
+		payoutProvider,      // payout provider (mock or real based on config)
+		castlerClient,       // castler client (mock or real based on config)
 		docVerificationSvc,  // document verification (AuthBridge for GST/PAN)
-		bankVerificationSvc,
+		bankVerificationSvc, // bank verification (mock or real based on config)
 		crossVerificationSvc,
 		f.txManager,
 		f.businessService,

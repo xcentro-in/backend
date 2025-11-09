@@ -25,12 +25,14 @@ type VoucherApprovalRequest struct {
 
 // VoucherApprovalResponse represents the response after approval action
 type VoucherApprovalResponse struct {
-	Success    bool           `json:"success"`
-	Message    string         `json:"message"`
-	ApprovalID string         `json:"approval_id,omitempty"`
-	VoucherID  string         `json:"voucher_id"`
-	Action     ApprovalAction `json:"action"`
-	CreatedAt  time.Time      `json:"created_at"` // When this action was taken
+	Success               bool           `json:"success"`
+	Message               string         `json:"message"`
+	ApprovalID            string         `json:"approval_id,omitempty"`
+	VoucherID             string         `json:"voucher_id"`
+	Action                ApprovalAction `json:"action"`
+	CreatedAt             time.Time      `json:"created_at"` // When this action was taken
+	PreviousApprovalState ApprovalAction `json:"previous_approval_state,omitempty"` // State before this change (empty if fresh)
+	PreviousApproverID    string         `json:"previous_approver_id,omitempty"`    // User who was responsible for previous state (empty if fresh)
 }
 
 // GetApprovalsByVoucherResponse represents list of approvals for a voucher

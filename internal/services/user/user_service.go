@@ -2,7 +2,6 @@ package user
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -21,6 +20,7 @@ import (
 	"xcentro.in/internal/services/verification"
 	sharedClients "xcentro.in/internal/shared/clients"
 	"xcentro.in/internal/shared/config"
+	"xcentro.in/internal/shared/crypto"
 	"xcentro.in/internal/shared/logger"
 	"xcentro.in/internal/shared/types"
 )
@@ -53,14 +53,28 @@ func NewUserService(
 		userRepo:            userRepo,
 		businessRepo:        businessRepo,
 		businessUserRelRepo: businessUserRelRepo,
-		txManager:           clients.GetTxManager(),       // Extract from clients
-		emailService:        clients.GetEmailService(),    // Extract from clients
+		txManager:           clients.GetTxManager(),    // Extract from clients
+		emailService:        clients.GetEmailService(), // Extract from clients
 		verificationService: verificationService,
 		config:              cfg,
-		rclient:             clients.GetRedisClient(),     // Extract from clients
+		rclient:             clients.GetRedisClient(), // Extract from clients
 		logger:              logger.GetDefault(),
 		// When needed: metrics: clients.GetMetrics().(metrics.MetricsProvider),
 	}
+}
+
+// maskAadhaar masks Aadhaar number, showing only last 4 digits
+// Example: "123456789012" -> "********9012"
+func maskAadhaar(aadhaar string) string {
+	if len(aadhaar) <= 4 {
+		return aadhaar // Don't mask if too short
+	}
+	lastFour := aadhaar[len(aadhaar)-4:]
+	masked := ""
+	for i := 0; i < len(aadhaar)-4; i++ {
+		masked += "*"
+	}
+	return masked + lastFour
 }
 
 // CreateUser creates a new user with proper validation and transaction handling
@@ -187,8 +201,8 @@ func (s *UserServiceImpl) GetUserProfile(ctx context.Context, userID string) (*u
 	// Add identity data if available
 	if identityData != nil {
 		profile.TaxID = identityData.TaxID
-		// Mask national ID - show only last 4 characters
-		profile.MaskedNationalID = s.maskNationalID(identityData.NationalID)
+		// National ID is already masked at DB level - no need to re-mask
+		profile.MaskedNationalID = identityData.NationalID
 	}
 
 	// Cache profile asynchronously (fire-and-forget)
@@ -200,22 +214,6 @@ func (s *UserServiceImpl) GetUserProfile(ctx context.Context, userID string) (*u
 	}()
 
 	return profile, nil
-}
-
-// maskNationalID masks the national ID showing only the last 4 characters
-func (s *UserServiceImpl) maskNationalID(nationalID string) string {
-	if nationalID == "" {
-		return ""
-	}
-	if len(nationalID) <= 4 {
-		return nationalID
-	}
-	lastFour := nationalID[len(nationalID)-4:]
-	maskedPart := ""
-	for i := 0; i < len(nationalID)-4; i++ {
-		maskedPart += "*"
-	}
-	return maskedPart + lastFour
 }
 
 // UpdateUserProfile updates user profile information in a transaction (mobile only)
@@ -312,26 +310,56 @@ func (s *UserServiceImpl) InitiateOnboarding(
 		return nil, types.ErrKYCAlreadyCompleted
 	}
 
-	// Step 4: Verify PAN via PAN_COM (EXTERNAL API - do BEFORE transaction)
-	s.logger.Info("Verifying PAN (tax ID) for user %s", userID)
-	panComTxnID := fmt.Sprintf("pancom_%s_%d", userID, time.Now().Unix())
-	panComResult, err := s.verificationService.VerifyPANCOM(ctx, taxID, panComTxnID)
-	if err != nil {
-		return nil, types.NewVerificationFailedError("Tax ID", err.Error())
+	// Step 4: Check if PAN already exists and reuse verification data (SMART OPTIMIZATION)
+	// If PAN exists with valid data, reuse PANCOMData; otherwise call verification API
+	var panComResultMap map[string]interface{}
+	existingIdentity, err := s.userRepo.GetUserIdentity(ctx, taxID)
+
+	// Check if we can reuse existing PAN verification data
+	canReusePAN := false
+	if err == nil && existingIdentity != nil && existingIdentity.TaxIDData != "" && existingIdentity.TaxIDData != "{}" {
+		// PAN exists with data - try to extract PANCOMData
+		var existingTaxIDData user.UserTaxIDVerificationData
+		if err := json.Unmarshal([]byte(existingIdentity.TaxIDData), &existingTaxIDData); err == nil {
+			if len(existingTaxIDData.PANCOMData) > 0 {
+				// Valid PANCOMData found - reuse it
+				s.logger.Infof("PAN %s already exists with valid data, reusing existing verification data", taxID)
+				panComResultMap = existingTaxIDData.PANCOMData
+				canReusePAN = true
+			}
+		}
+	}
+
+	// If we can't reuse, call verification API
+	if !canReusePAN {
+		s.logger.Infof("PAN %s not found or has no valid data, calling verification API", taxID)
+		panComTxnID := fmt.Sprintf("pancom_%s_%d", userID, time.Now().Unix())
+		panComResult, err := s.verificationService.VerifyPANCOM(ctx, taxID, panComTxnID)
+		if err != nil {
+			s.logger.Warnf("PAN verification failed for user %s: %v (proceeding with empty data)", userID, err)
+			panComResultMap = map[string]interface{}{} // Empty JSON on failure
+		} else {
+			panComResultMap = panComResult.PANCOMResponse
+		}
 	}
 
 	// Step 5: Verify PAN-Aadhaar link (EXTERNAL API - do BEFORE transaction)
+	// NOTE: PAN-Aadhaar verification is optional - if it fails, we proceed with empty data
 	s.logger.Info("Verifying Tax ID-National ID link for user %s", userID)
 	panAadhaarTxnID := fmt.Sprintf("panaadhaar_%s_%d", userID, time.Now().Unix())
+	var panAadhaarResultMap map[string]interface{}
 	panAadhaarResult, err := s.verificationService.VerifyPANAadhaar(ctx, taxID, nationalID, panAadhaarTxnID)
 	if err != nil {
-		return nil, types.NewVerificationFailedError("Tax ID-National ID link", err.Error())
+		s.logger.Warnf("PAN-Aadhaar link verification failed for user %s: %v (proceeding with empty data)", userID, err)
+		panAadhaarResultMap = map[string]interface{}{} // Empty JSON on failure
+	} else {
+		panAadhaarResultMap = panAadhaarResult
 	}
 
 	// Step 6: Combine verification data
 	taxIDVerificationData := &user.UserTaxIDVerificationData{
-		PANCOMData:     panComResult.PANCOMResponse,
-		PANAadhaarLink: panAadhaarResult,
+		PANCOMData:     panComResultMap,
+		PANAadhaarLink: panAadhaarResultMap,
 	}
 
 	taxIDDataJSON, err := json.Marshal(taxIDVerificationData)
@@ -348,8 +376,9 @@ func (s *UserServiceImpl) InitiateOnboarding(
 	}
 
 	aadhaarTxnID := fmt.Sprintf("aadhaar_%s_%d", userID, time.Now().Unix())
-	callbackURL := fmt.Sprintf("%s/v1/callback", s.config.Server.URL)
-	linkRequest := authbridge.NewAadhaarLinkRequest(aadhaarTxnID, "", callbackURL)
+	webhookURL := fmt.Sprintf("%s/v1/user/onboard/aadhaar/webhook", s.config.Server.URL)
+	redirectURL := fmt.Sprintf("%s/v1/user/onboard/aadhaar/callback", s.config.Server.URL)
+	linkRequest := authbridge.NewAadhaarLinkRequest(aadhaarTxnID, webhookURL, redirectURL)
 
 	aadhaarResponse, err := authClient.SearchDocument(linkRequest)
 	if err != nil {
@@ -387,12 +416,15 @@ func (s *UserServiceImpl) InitiateOnboarding(
 		txUserRepo := s.userRepo.WithTx(tx)
 
 		// Step 9: Create or update user identity
+		// Mask Aadhaar number before storing (only last 4 digits visible)
+		maskedAadhaar := maskAadhaar(nationalID)
+
 		identity := &user.UserIdentity{
 			TaxID:          taxID,
 			TaxIDData:      string(taxIDDataJSON),
-			NationalID:     nationalID,
-			NationalIDData: "{}", // Will be populated after Aadhaar verification
-			NTxnID:         "",   // Will be set below
+			NationalID:     maskedAadhaar, // Store masked Aadhaar
+			NationalIDData: "{}",          // Will be populated after Aadhaar verification
+			NTxnID:         "",            // Will be set below
 		}
 
 		if err := txUserRepo.UpsertUserIdentity(ctx, identity); err != nil {
@@ -676,50 +708,183 @@ func (s *UserServiceImpl) GetOnboardingStatus(ctx context.Context, userID string
 	return response, nil
 }
 
-// generateRandomPassword generates a cryptographically secure random password
-func (s *UserServiceImpl) generateRandomPassword() (string, error) {
-	const (
-		length      = 16
-		lowerChars  = "abcdefghijklmnopqrstuvwxyz"
-		upperChars  = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-		digitChars  = "0123456789"
-		symbolChars = "!@#$%^&*"
-		allChars    = lowerChars + upperChars + digitChars + symbolChars
-	)
+// ProcessAadhaarRedirectCallback processes the Aadhaar redirect callback with authentication
+// Returns error if verification fails or if KYC is already completed
+func (s *UserServiceImpl) ProcessAadhaarRedirectCallback(ctx context.Context, userID, encryptedResponse string) error {
+	s.logger.Info("Processing Aadhaar redirect callback for user %s", userID)
 
-	password := make([]byte, length)
-
-	// Ensure at least one character from each category
-	categories := []string{lowerChars, upperChars, digitChars, symbolChars}
-	for i := 0; i < 4; i++ {
-		category := categories[i]
-		randomIndex := make([]byte, 1)
-		if _, err := rand.Read(randomIndex); err != nil {
-			return "", fmt.Errorf("failed to generate random byte: %w", err)
-		}
-		password[i] = category[int(randomIndex[0])%len(category)]
+	// Decrypt the response
+	decryptedResponse, responseData, err := s.decryptAndParseAadhaarResponse(encryptedResponse)
+	if err != nil {
+		return err
 	}
 
-	// Fill remaining characters randomly from all characters
-	for i := 4; i < length; i++ {
-		randomIndex := make([]byte, 1)
-		if _, err := rand.Read(randomIndex); err != nil {
-			return "", fmt.Errorf("failed to generate random byte: %w", err)
+	// Check status first (must be 1 for success)
+	status, ok := responseData["status"].(float64)
+	if !ok || status != 1 {
+		errorMsg := "Verification failed"
+		if msg, exists := responseData["message"].(string); exists {
+			errorMsg = msg
 		}
-		password[i] = allChars[int(randomIndex[0])%len(allChars)]
+		s.logger.Error("Aadhaar verification failed for user %s: status=%v, message=%s", userID, status, errorMsg)
+		return fmt.Errorf("aadhaar verification failed: %s", errorMsg)
 	}
 
-	// Shuffle the password to randomize character positions
-	for i := length - 1; i > 0; i-- {
-		randomIndex := make([]byte, 1)
-		if _, err := rand.Read(randomIndex); err != nil {
-			return "", fmt.Errorf("failed to generate random byte: %w", err)
-		}
-		j := int(randomIndex[0]) % (i + 1)
-		password[i], password[j] = password[j], password[i]
+	// Extract ts_trans_id
+	tsTransID, ok := responseData["ts_trans_id"].(string)
+	if !ok || tsTransID == "" {
+		s.logger.Error("Missing ts_trans_id in callback response for user %s", userID)
+		return fmt.Errorf("missing transaction ID in response")
 	}
 
-	return string(password), nil
+	// Get user details
+	userObj, err := s.userRepo.GetUserByID(ctx, userID)
+	if err != nil {
+		s.logger.Error("Failed to get user details for user %s: %v", userID, err)
+		return fmt.Errorf("failed to get user details: %w", err)
+	}
+
+	// Check if KYC is already completed or verified
+	if userObj.KycStatus == shared.KYCCompleted || userObj.KycStatus == shared.KYCVerified {
+		s.logger.Info("KYC already completed for user %s, current status: %s", userID, userObj.KycStatus)
+		return fmt.Errorf("kyc_already_completed")
+	}
+
+	// Verify transaction ID matches
+	if err := s.verifyAadhaarTransactionID(ctx, userObj.TaxID, tsTransID); err != nil {
+		s.logger.Error("Transaction ID mismatch for user %s: %v", userID, err)
+		return fmt.Errorf("invalid transaction reference: %w", err)
+	}
+
+	// Update user identity with Aadhaar data
+	if err := s.updateAadhaarVerificationData(ctx, userObj.TaxID, userID, decryptedResponse); err != nil {
+		return err
+	}
+
+	s.logger.Info("Aadhaar verification completed successfully for user %s", userID)
+	return nil
+}
+
+// ProcessAadhaarWebhook processes the Aadhaar webhook without authentication
+// Always returns nil to acknowledge receipt (errors are logged only)
+func (s *UserServiceImpl) ProcessAadhaarWebhook(ctx context.Context, encryptedResponse string) error {
+	s.logger.Info("Processing Aadhaar webhook")
+
+	// Decrypt the response
+	decryptedResponse, responseData, err := s.decryptAndParseAadhaarResponse(encryptedResponse)
+	if err != nil {
+		s.logger.Error("Failed to decrypt/parse webhook response: %v", err)
+		return nil // Return nil to acknowledge receipt
+	}
+
+	// Check status first (must be 1 for success)
+	status, ok := responseData["status"].(float64)
+	if !ok || status != 1 {
+		errorMsg := "Verification failed"
+		if msg, exists := responseData["message"].(string); exists {
+			errorMsg = msg
+		}
+		s.logger.Error("Aadhaar verification failed in webhook: status=%v, message=%s", status, errorMsg)
+		return nil // Return nil to acknowledge receipt
+	}
+
+	// Extract ts_trans_id
+	tsTransID, ok := responseData["ts_trans_id"].(string)
+	if !ok || tsTransID == "" {
+		s.logger.Error("Missing ts_trans_id in webhook response")
+		return nil
+	}
+
+	// Find user identity by transaction ID
+	identity, err := s.userRepo.GetUserIdentityByTxnID(ctx, tsTransID)
+	if err != nil {
+		s.logger.Error("Failed to find user identity by txn_id %s: %v", tsTransID, err)
+		return nil
+	}
+
+	// Get user by tax ID
+	userObj, err := s.userRepo.GetUserByTaxID(ctx, identity.TaxID)
+	if err != nil {
+		s.logger.Error("Failed to get user by tax_id %s: %v", identity.TaxID, err)
+		return nil
+	}
+
+	// Check if KYC is already completed (idempotent)
+	if userObj.KycStatus == shared.KYCCompleted || userObj.KycStatus == shared.KYCVerified {
+		s.logger.Info("KYC already completed for user %s, current status: %s", userObj.Id, userObj.KycStatus)
+		return nil
+	}
+
+	// Update user identity with Aadhaar data
+	if err := s.updateAadhaarVerificationData(ctx, identity.TaxID, userObj.Id, decryptedResponse); err != nil {
+		s.logger.Error("Failed to update Aadhaar verification data in webhook: %v", err)
+		return nil
+	}
+
+	s.logger.Info("Aadhaar verification completed successfully via webhook for user %s", userObj.Id)
+	return nil
+}
+
+// decryptAndParseAadhaarResponse decrypts and parses the AuthBridge response
+func (s *UserServiceImpl) decryptAndParseAadhaarResponse(encryptedResponse string) (string, map[string]interface{}, error) {
+	// Decrypt response
+	decryptedResponse, err := crypto.DecryptAES256CBC(encryptedResponse, s.config.AuthBridge.Password)
+	if err != nil {
+		s.logger.Error("Failed to decrypt Aadhaar response: %v", err)
+		return "", nil, fmt.Errorf("decryption failed: %w", err)
+	}
+
+	// Parse decrypted response
+	var responseData map[string]interface{}
+	if err := json.Unmarshal([]byte(decryptedResponse), &responseData); err != nil {
+		s.logger.Error("Failed to parse decrypted response: %v", err)
+		return "", nil, fmt.Errorf("invalid response format: %w", err)
+	}
+
+	return decryptedResponse, responseData, nil
+}
+
+// verifyAadhaarTransactionID verifies that the transaction ID matches
+func (s *UserServiceImpl) verifyAadhaarTransactionID(ctx context.Context, taxID, tsTransID string) error {
+	identity, err := s.userRepo.GetUserIdentityByTaxID(ctx, taxID)
+	if err != nil {
+		return fmt.Errorf("failed to get user identity: %w", err)
+	}
+
+	if identity.NTxnID != tsTransID {
+		return fmt.Errorf("transaction ID mismatch: expected %s, got %s", identity.NTxnID, tsTransID)
+	}
+
+	return nil
+}
+
+// updateAadhaarVerificationData updates the user identity with Aadhaar verification data and KYC status
+// Uses transaction to ensure atomicity - both updates must succeed or both fail
+func (s *UserServiceImpl) updateAadhaarVerificationData(ctx context.Context, taxID, userID, responseJSON string) error {
+	// Use transaction to ensure both updates are atomic
+	err := s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
+		txUserRepo := s.userRepo.WithTx(tx)
+
+		// Update national_id_data with full response
+		if err := txUserRepo.UpdateNationalIDData(ctx, taxID, responseJSON); err != nil {
+			s.logger.Error("Failed to update national ID data: %v", err)
+			return fmt.Errorf("failed to save verification data: %w", err)
+		}
+
+		// Update KYC status to verified
+		if err := txUserRepo.UpdateUserKYCStatus(ctx, userID, shared.KYCVerified); err != nil {
+			s.logger.Error("Failed to update KYC status: %v", err)
+			return fmt.Errorf("failed to update verification status: %w", err)
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // CreateInvitedUser creates a new user for business invitation

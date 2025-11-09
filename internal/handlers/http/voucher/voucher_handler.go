@@ -1347,3 +1347,72 @@ func (h *VoucherHandler) GetVoucherPaymentDetails(c echo.Context) error {
 
 	return c.JSON(http.StatusOK, paymentDetails)
 }
+
+// GetCalendarView handles GET /vouchers/calendar - Get bills for calendar view by month
+func (h *VoucherHandler) GetCalendarView(c echo.Context) error {
+	h.logger.InfoWith("GetCalendarView API called")
+
+	// Extract business_id from X-Business-ID header
+	businessIDStr := c.Request().Header.Get("X-Business-ID")
+	if businessIDStr == "" {
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "MISSING_BUSINESS_ID",
+			"message": "X-Business-ID header is required",
+		})
+	}
+
+	// Extract year and month from query parameters
+	yearStr := c.QueryParam("year")
+	monthStr := c.QueryParam("month")
+
+	if yearStr == "" || monthStr == "" {
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "MISSING_PARAMETERS",
+			"message": "year and month query parameters are required",
+		})
+	}
+
+	// Parse year and month
+	year, err := strconv.Atoi(yearStr)
+	if err != nil {
+		h.logger.ErrorWith("Invalid year format", "error", err)
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "INVALID_YEAR",
+			"message": "year must be a valid integer",
+		})
+	}
+
+	month, err := strconv.Atoi(monthStr)
+	if err != nil {
+		h.logger.ErrorWith("Invalid month format", "error", err)
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "INVALID_MONTH",
+			"message": "month must be a valid integer (1-12)",
+		})
+	}
+
+	// Prepare request
+	req := &voucher.CalendarViewRequest{
+		BusinessID: businessIDStr,
+		Year:       year,
+		Month:      month,
+	}
+
+	// Call service
+	calendarView, err := h.voucherService.GetCalendarView(c.Request().Context(), req)
+	if err != nil {
+		h.logger.ErrorWith("Failed to get calendar view", "error", err)
+		return c.JSON(http.StatusInternalServerError, map[string]any{
+			"error":   "SERVICE_ERROR",
+			"message": err.Error(),
+		})
+	}
+
+	h.logger.InfoWith("Calendar view fetched successfully",
+		"business_id", businessIDStr,
+		"year", year,
+		"month", month,
+		"bill_count", calendarView.Count)
+
+	return c.JSON(http.StatusOK, calendarView)
+}

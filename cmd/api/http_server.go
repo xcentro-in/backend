@@ -12,11 +12,14 @@ import (
 	"github.com/labstack/echo/v4/middleware"
 	redis "xcentro.in/internal/adapters/cache/redis/client"
 	"xcentro.in/internal/adapters/database/postgres/client"
+	"xcentro.in/internal/adapters/providers/authbridge"
 	"xcentro.in/internal/adapters/providers/mailers"
 	metricsProvider "xcentro.in/internal/adapters/providers/metrics"
 	"xcentro.in/internal/core/metrics"
 	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/logger"
+	"xcentro.in/internal/shared/ratelimiter"
+	customValidator "xcentro.in/internal/shared/validator"
 )
 
 type externalClients struct {
@@ -66,6 +69,7 @@ func NewXcentroServer() *xcentroServer {
 	}
 
 	server.loadConfig()
+	server.registerValidator()
 	server.registerGlobalMiddleware()
 	server.registerClients()
 	server.registerRouters()
@@ -102,7 +106,39 @@ func (s *xcentroServer) registerGlobalMiddleware() {
 		},
 		MaxAge: s.meta.config.CORS.MaxAge,
 	}))
-	s.echo.Use(middleware.Secure())
+
+	// Configure secure middleware based on environment
+	s.echo.Use(middleware.SecureWithConfig(buildSecureConfig(s.meta.config.Environment, s.meta.config.Frontend.URL)))
+}
+
+// buildSecureConfig returns security middleware configuration based on environment
+func buildSecureConfig(env, frontendURL string) middleware.SecureConfig {
+	if env == "production" {
+		return middleware.SecureConfig{
+			XSSProtection:         "",       // Modern browsers ignore this header, rely on CSP
+			ContentTypeNosniff:    "nosniff", // Prevent MIME type sniffing
+			XFrameOptions:         "DENY",   // Prevent clickjacking
+			HSTSMaxAge:            31536000, // 1 year
+			HSTSExcludeSubdomains: false,
+			HSTSPreloadEnabled:    false,
+			ContentSecurityPolicy: "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; script-src 'self'; style-src 'self';",
+			CSPReportOnly:         false,
+			ReferrerPolicy:        "strict-origin-when-cross-origin",
+		}
+	}
+
+	// dev environment
+	return middleware.SecureConfig{
+		XSSProtection:         "",        // Modern browsers ignore this header
+		ContentTypeNosniff:    "nosniff", // Prevent MIME type sniffing
+		XFrameOptions:         "",        // Let CSP handle frame-ancestors
+		HSTSMaxAge:            0,         // Disable HSTS in dev
+		HSTSExcludeSubdomains: true,
+		HSTSPreloadEnabled:    false,
+		ContentSecurityPolicy: fmt.Sprintf("default-src 'self' %s; base-uri 'self'; object-src 'none'; frame-ancestors 'self' %s; form-action 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' %s; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline';", frontendURL, frontendURL, frontendURL),
+		CSPReportOnly:         true, // Report-only in dev to avoid breaking things
+		ReferrerPolicy:        "no-referrer-when-downgrade",
+	}
 }
 
 func (s *xcentroServer) loadConfig() {
@@ -113,6 +149,11 @@ func (s *xcentroServer) loadConfig() {
 	}
 	s.log.Info("Config loaded successfully")
 	s.meta.config = cfg
+}
+
+func (s *xcentroServer) registerValidator() {
+	s.echo.Validator = customValidator.NewCustomValidator()
+	s.log.Info("Custom validator registered successfully")
 }
 
 func (s *xcentroServer) registerClients() {
@@ -135,7 +176,20 @@ func (s *xcentroServer) registerClients() {
 	s.log.Info("Redis client created successfully")
 	s.meta.clients.rcache = redisClient
 
-	// Email service (SES)
+	// Rate limiter (depends on Redis)
+	if err := ratelimiter.Initialize(
+		redisClient.Client,
+		&s.meta.config.RateLimiter,
+		s.meta.config.Cookie.Secure,
+		s.meta.config.Cookie.SameSite,
+		s.meta.config.Cookie.Domain,
+	); err != nil {
+		s.log.Errorf("Failed to initialize rate limiter: %v", err)
+		panic(err)
+	}
+	s.log.Info("Rate limiter initialized successfully")
+
+	// Email service (SES) - depends on rate limiter
 	emailService, err := mailers.NewSESClientFromConfig(s.meta.config.SES)
 	if err != nil {
 		s.log.Errorf("Failed to create email service: %v", err)
@@ -156,6 +210,13 @@ func (s *xcentroServer) registerClients() {
 		s.log.Info("Metrics provider disabled (using no-op)")
 	}
 	s.meta.clients.metrics = metricsClient
+
+	// AuthBridge client (singleton)
+	if err := authbridge.Initialize(&s.meta.config); err != nil {
+		s.log.Errorf("Failed to initialize AuthBridge client: %v", err)
+		panic(err)
+	}
+	s.log.Info("AuthBridge client initialized successfully")
 }
 
 func (s *xcentroServer) registerRouters() {

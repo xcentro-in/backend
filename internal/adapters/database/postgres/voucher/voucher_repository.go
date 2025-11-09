@@ -1361,6 +1361,27 @@ func (r *PostgresVoucherRepository) CreateOrUpdateApproval(ctx context.Context, 
 		return nil, fmt.Errorf("invalid approver_user_id: %w", err)
 	}
 
+	// Fetch the most recent approval state BEFORE creating the new one
+	var previousApprovalState voucher.ApprovalAction
+	var previousApproverID string
+
+	previousApprovalQuery := `
+		SELECT action, approver_user_id
+		FROM xcentro.voucher_approvals
+		WHERE voucher_id = $1
+		ORDER BY created_at DESC
+		LIMIT 1
+	`
+
+	var prevApproverUUID uuid.UUID
+	err = r.querier.QueryRow(ctx, previousApprovalQuery, voucherID).Scan(&previousApprovalState, &prevApproverUUID)
+	if err == nil {
+		// Previous approval found - populate the approver ID
+		previousApproverID = prevApproverUUID.String()
+	}
+	// If err == pgx.ErrNoRows, it means this is a fresh voucher (no previous approvals)
+	// previousApprovalState and previousApproverID remain empty (zero values)
+
 	// Always INSERT a new row for each approval action (audit trail)
 	approvalID := uuid.Must(uuid.NewV7())
 	now := time.Now()
@@ -1402,12 +1423,14 @@ func (r *PostgresVoucherRepository) CreateOrUpdateApproval(ctx context.Context, 
 	}
 
 	return &voucher.VoucherApprovalResponse{
-		Success:    true,
-		Message:    message,
-		ApprovalID: approvalID.String(),
-		VoucherID:  req.VoucherID,
-		Action:     req.Action,
-		CreatedAt:  createdAt,
+		Success:               true,
+		Message:               message,
+		ApprovalID:            approvalID.String(),
+		VoucherID:             req.VoucherID,
+		Action:                req.Action,
+		CreatedAt:             createdAt,
+		PreviousApprovalState: previousApprovalState,
+		PreviousApproverID:    previousApproverID,
 	}, nil
 }
 
@@ -2231,4 +2254,84 @@ func (r *PostgresVoucherRepository) GetPaymentStatus(ctx context.Context, vouche
 	}
 
 	return &status, nil
+}
+
+// GetCalendarViewBills retrieves bills for a specific month and year based on invoice_due_date
+// Used for calendar view to show bills month by month
+func (r *PostgresVoucherRepository) GetCalendarViewBills(ctx context.Context, businessID string, year, month int) ([]voucher.CalendarBillItem, error) {
+	query := `
+		SELECT
+			v.voucher_id::text,
+			v.voucher_number,
+			COALESCE(v.invoice_number, '') as invoice_number,
+			v.invoice_due_date,
+			v.gross_amount,
+			v.net_amount,
+			v.payee_id::text,
+			v.account_id::text,
+			bpr.display_name as payee_name,
+			COALESCE(v.description, '') as description,
+			v.status::text as voucher_status,
+			p.status as payment_status
+		FROM xcentro.payment_vouchers v
+		INNER JOIN xcentro.business_payee_relation bpr
+			ON v.business_id = bpr.business_id
+			AND v.payee_id = bpr.payee_id
+			AND v.account_id = bpr.account_id
+		LEFT JOIN xcentro.payments p ON v.payment_id = p.payment_id
+		WHERE v.business_id = $1::uuid
+			AND EXTRACT(YEAR FROM v.invoice_due_date) = $2
+			AND EXTRACT(MONTH FROM v.invoice_due_date) = $3
+			AND v.invoice_due_date IS NOT NULL
+		ORDER BY v.invoice_due_date ASC
+	`
+
+	businessUUID, err := uuid.Parse(businessID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid business_id: %w", err)
+	}
+
+	rows, err := r.querier.Query(ctx, query, businessUUID, year, month)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query calendar view bills: %w", err)
+	}
+	defer rows.Close()
+
+	bills := []voucher.CalendarBillItem{}
+	for rows.Next() {
+		var bill voucher.CalendarBillItem
+		var dueDateDB *time.Time
+		var paymentStatus sql.NullString
+
+		err := rows.Scan(
+			&bill.VoucherID,
+			&bill.VoucherNumber,
+			&bill.InvoiceNumber,
+			&dueDateDB,
+			&bill.GrossAmount,
+			&bill.NetAmount,
+			&bill.PayeeID,
+			&bill.AccountID,
+			&bill.PayeeName,
+			&bill.Description,
+			&bill.VoucherStatus,
+			&paymentStatus,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan calendar bill row: %w", err)
+		}
+
+		bill.DueDate = dueDateDB
+		if paymentStatus.Valid {
+			bill.PaymentStatus = &paymentStatus.String
+		}
+
+		bills = append(bills, bill)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating calendar bill rows: %w", err)
+	}
+
+	return bills, nil
 }

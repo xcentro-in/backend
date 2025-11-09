@@ -13,7 +13,9 @@ import (
 	"xcentro.in/internal/middleware"
 	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/logger"
+	"xcentro.in/internal/shared/ratelimiter"
 	"xcentro.in/internal/shared/types"
+	customValidator "xcentro.in/internal/shared/validator"
 )
 
 type BusinessHandler struct {
@@ -55,8 +57,9 @@ func RegisterBusinessRoutes(e *echo.Group, businessService business.BusinessServ
 	handler := NewBusinessHandler(businessService, authService, userService, s3Config)
 
 	businessGroup := e.Group("/business")
-	// Apply middleware to the business group
+	// Apply middleware to the business group (JWT first, then rate limiter, then business roles)
 	businessGroup.Use(middleware.JWTMiddleware(authService))
+	businessGroup.Use(ratelimiter.MiddlewareDefault())
 	businessGroup.Use(middleware.BusinessRolesMiddleware(businessUserRelRepo, rclient))
 
 	// Business details route
@@ -140,16 +143,30 @@ func (h *BusinessHandler) InitiateOnboarding(c echo.Context) error {
 	}
 
 	// Parse request
-	type InitRequest struct {
-		Name  string `json:"name"`
-		GSTIN string `json:"gstin"`
-	}
+	var req business.InitiateOnboardingRequest
 
-	var req InitRequest
+	// Bind input
 	if err := c.Bind(&req); err != nil {
+		h.logger.Errorf("Invalid input: %v", err)
 		return c.JSON(400, map[string]interface{}{
 			"error":   "INVALID_INPUT",
 			"message": "Invalid request payload",
+		})
+	}
+
+	// Validate input
+	if err := c.Validate(&req); err != nil {
+		h.logger.Errorf("Validation failed: %v", err)
+		if ve, ok := err.(*customValidator.ValidationError); ok {
+			return c.JSON(400, map[string]interface{}{
+				"error":   "VALIDATION_FAILED",
+				"message": "Validation failed",
+				"errors":  ve.Errors,
+			})
+		}
+		return c.JSON(400, map[string]interface{}{
+			"error":   "VALIDATION_FAILED",
+			"message": "Validation failed",
 		})
 	}
 
@@ -182,7 +199,10 @@ func (h *BusinessHandler) InitiateOnboarding(c echo.Context) error {
 func (h *BusinessHandler) CompleteOnboarding(c echo.Context) error {
 	// Parse request
 	var req business.CompleteKYBRequest
+
+	// Bind input
 	if err := c.Bind(&req); err != nil {
+		h.logger.Errorf("Invalid input: %v", err)
 		return c.JSON(400, map[string]interface{}{
 			"error":   "INVALID_INPUT",
 			"message": "Invalid request payload",
@@ -199,7 +219,7 @@ func (h *BusinessHandler) CompleteOnboarding(c echo.Context) error {
 	}
 	userID := userIDRaw.(string)
 
-	// Get businessID from header
+	// Get businessID from header and set it BEFORE validation
 	businessID := c.Request().Header.Get("X-Business-ID")
 	if businessID == "" {
 		return c.JSON(400, map[string]interface{}{
@@ -208,6 +228,43 @@ func (h *BusinessHandler) CompleteOnboarding(c echo.Context) error {
 		})
 	}
 	req.BID = businessID
+
+	// Auto-populate ITID from business data if not provided
+	if req.ITID == "" {
+		businessData, err := h.businessService.GetBusiness(c.Request().Context(), businessID)
+		if err != nil {
+			h.logger.Errorf("Failed to fetch business data: %v", err)
+			return c.JSON(400, map[string]interface{}{
+				"error":   "BUSINESS_NOT_FOUND",
+				"message": "Business not found or not accessible",
+			})
+		}
+		if businessData.ITID == "" {
+			h.logger.Errorf("Business %s has no ITID - initiate onboarding first", businessID)
+			return c.JSON(400, map[string]interface{}{
+				"error":   "INCOMPLETE_ONBOARDING",
+				"message": "Business onboarding not initiated - please call initiate endpoint first",
+			})
+		}
+		req.ITID = businessData.ITID
+		h.logger.Infof("Auto-populated ITID %s from business data for BID %s", req.ITID, businessID)
+	}
+
+	// Validate input (after BID and ITID are set)
+	if err := c.Validate(&req); err != nil {
+		h.logger.Errorf("Validation failed: %v", err)
+		if ve, ok := err.(*customValidator.ValidationError); ok {
+			return c.JSON(400, map[string]interface{}{
+				"error":   "VALIDATION_FAILED",
+				"message": "Validation failed",
+				"errors":  ve.Errors,
+			})
+		}
+		return c.JSON(400, map[string]interface{}{
+			"error":   "VALIDATION_FAILED",
+			"message": "Validation failed",
+		})
+	}
 
 	// Get user roles from middleware context
 	ur := c.Get("userRoles")
@@ -315,25 +372,30 @@ func (h *BusinessHandler) InviteUser(c echo.Context) error {
 	}
 
 	// Parse request
-	type InviteRequest struct {
-		Email string          `json:"email"`
-		Name  string          `json:"name"`
-		Role  shared.UserRole `json:"role"`
-	}
+	var req business.InviteUserRequest
 
-	var req InviteRequest
+	// Bind input
 	if err := c.Bind(&req); err != nil {
+		h.logger.Errorf("Invalid input: %v", err)
 		return c.JSON(400, map[string]interface{}{
 			"error":   "INVALID_INPUT",
 			"message": "Invalid request payload",
 		})
 	}
 
-	// Validate input (body validation only)
-	if req.Email == "" || req.Name == "" || req.Role == "" {
+	// Validate input
+	if err := c.Validate(&req); err != nil {
+		h.logger.Errorf("Validation failed: %v", err)
+		if ve, ok := err.(*customValidator.ValidationError); ok {
+			return c.JSON(400, map[string]interface{}{
+				"error":   "VALIDATION_FAILED",
+				"message": "Validation failed",
+				"errors":  ve.Errors,
+			})
+		}
 		return c.JSON(400, map[string]interface{}{
-			"error":   "INVALID_INPUT",
-			"message": "Email, name, and role are required",
+			"error":   "VALIDATION_FAILED",
+			"message": "Validation failed",
 		})
 	}
 
@@ -421,24 +483,30 @@ func (h *BusinessHandler) UpdateBusinessUser(c echo.Context) error {
 	}
 
 	// Parse request
-	type UpdateUserRequest struct {
-		UserID  string          `json:"userId"`
-		NewRole shared.UserRole `json:"newRole"`
-	}
+	var req business.UpdateBusinessUserRequest
 
-	var req UpdateUserRequest
+	// Bind input
 	if err := c.Bind(&req); err != nil {
+		h.logger.Errorf("Invalid input: %v", err)
 		return c.JSON(400, map[string]interface{}{
 			"error":   "INVALID_INPUT",
 			"message": "Invalid request payload",
 		})
 	}
 
-	// Validate input (body validation only)
-	if req.UserID == "" || req.NewRole == "" {
+	// Validate input
+	if err := c.Validate(&req); err != nil {
+		h.logger.Errorf("Validation failed: %v", err)
+		if ve, ok := err.(*customValidator.ValidationError); ok {
+			return c.JSON(400, map[string]interface{}{
+				"error":   "VALIDATION_FAILED",
+				"message": "Validation failed",
+				"errors":  ve.Errors,
+			})
+		}
 		return c.JSON(400, map[string]interface{}{
-			"error":   "INVALID_INPUT",
-			"message": "userId and newRole are required",
+			"error":   "VALIDATION_FAILED",
+			"message": "Validation failed",
 		})
 	}
 
@@ -478,23 +546,30 @@ func (h *BusinessHandler) RemoveBusinessUser(c echo.Context) error {
 	}
 
 	// Parse request
-	type RemoveUserRequest struct {
-		UserID string `json:"userId"`
-	}
+	var req business.RemoveBusinessUserRequest
 
-	var req RemoveUserRequest
+	// Bind input
 	if err := c.Bind(&req); err != nil {
+		h.logger.Errorf("Invalid input: %v", err)
 		return c.JSON(400, map[string]interface{}{
 			"error":   "INVALID_INPUT",
 			"message": "Invalid request payload",
 		})
 	}
 
-	// Validate input (body validation only)
-	if req.UserID == "" {
+	// Validate input
+	if err := c.Validate(&req); err != nil {
+		h.logger.Errorf("Validation failed: %v", err)
+		if ve, ok := err.(*customValidator.ValidationError); ok {
+			return c.JSON(400, map[string]interface{}{
+				"error":   "VALIDATION_FAILED",
+				"message": "Validation failed",
+				"errors":  ve.Errors,
+			})
+		}
 		return c.JSON(400, map[string]interface{}{
-			"error":   "INVALID_INPUT",
-			"message": "userId is required",
+			"error":   "VALIDATION_FAILED",
+			"message": "Validation failed",
 		})
 	}
 

@@ -13,6 +13,7 @@ import (
 // Config holds the application configuration.
 // Sensitive fields (like Password) are excluded from JSON marshalling.
 type Config struct {
+	Environment           string                      `json:"environment" env:"ENVIRONMENT" env-default:"dev"` // dev or production
 	Database              DatabaseConfig              `json:"database"`
 	MigrationDatabase     MigrationDatabaseConfig     `json:"migration_database"`
 	Server                ServerConfig                `json:"server"`
@@ -31,6 +32,8 @@ type Config struct {
 	Workers               WorkersConfig               `json:"workers"`
 	Frontend              FrontendConfig              `json:"frontend"`
 	BankAccountEncryption BankAccountEncryptionConfig `json:"bank_account_encryption"`
+	AuthBridge            AuthBridgeConfig            `json:"authbridge"`
+	RateLimiter           RateLimiterConfig           `json:"rate_limiter"`
 }
 
 // JWTSecretConfig holds JWT secret configuration.
@@ -97,6 +100,7 @@ type CastlerConfig struct {
 	WebhookSecret string `json:"-" env:"CASTLER_WEBHOOK_SECRET"` // Webhook signature verification (sensitive)
 	EncryptionKey string `json:"-" env:"CASTLER_ENCRYPTION_KEY"` // AES encryption key (optional, sensitive)
 	EncryptionIV  string `json:"-" env:"CASTLER_ENCRYPTION_IV"`  // Fixed AES IV in base64 (optional, sensitive)
+	MockEnabled   bool   `json:"mock_enabled" env:"CASTLER_MOCK_ENABLED" env-default:"false"` // Enable mock mode for testing (no real API calls)
 }
 
 // JioPayConfig holds JioPay payment gateway configuration.
@@ -223,6 +227,39 @@ type NotificationWorkerConfig struct {
 // BankAccountEncryptionConfig holds bank account encryption configuration for PCI DSS compliance.
 type BankAccountEncryptionConfig struct {
 	EncryptionKey string `json:"-" env:"BANK_ACCOUNT_ENCRYPTION_KEY" env-required:"true"` // AES-256-GCM key (sensitive, 32 bytes recommended)
+}
+
+// AuthBridgeConfig holds AuthBridge/TruthScreen document verification service configuration.
+type AuthBridgeConfig struct {
+	Username string `json:"username" env:"TRUTHSCREEN_USERNAME" env-required:"true"` // AuthBridge/TruthScreen username
+	Password string `json:"-" env:"TRUTHSCREEN_PASSWORD" env-required:"true"`        // AuthBridge/TruthScreen password (sensitive)
+	UseMock  bool   `json:"use_mock" env:"AUTHBRIDGE_USE_MOCK" env-default:"false"`  // Use mock responses instead of real API calls
+}
+
+// RateLimiterConfig holds rate limiter configuration for token-bucket algorithm.
+type RateLimiterConfig struct {
+	Enabled                      bool          `json:"enabled" env:"RATE_LIMITER_ENABLED" env-default:"true"`
+	HMACSecret                   string        `json:"-" env:"RATE_LIMITER_HMAC_SECRET" env-required:"true"` // Secret for signing device IDs
+	CookieName                   string        `json:"cookie_name" env:"RATE_LIMITER_COOKIE_NAME" env-default:"device_id"`
+	CookieTTL                    time.Duration `json:"cookie_ttl" env:"RATE_LIMITER_COOKIE_TTL" env-default:"720h"` // 30 days
+	DeviceCreationThrottlePerIP  int           `json:"device_creation_throttle_per_ip" env:"RATE_LIMITER_DEVICE_CREATION_THROTTLE_PER_IP" env-default:"50"`
+	DeviceCreationThrottleWindow time.Duration `json:"device_creation_throttle_window" env:"RATE_LIMITER_DEVICE_CREATION_THROTTLE_WINDOW" env-default:"1h"`
+	InvalidSignaturePenalty      time.Duration `json:"invalid_signature_penalty" env:"RATE_LIMITER_INVALID_SIGNATURE_PENALTY" env-default:"1h"` // Penalty for tampered device signatures
+	FailOpenByDefault            bool          `json:"fail_open_by_default" env:"RATE_LIMITER_FAIL_OPEN_BY_DEFAULT" env-default:"true"`
+	// Note: FailOpenByDefault only affects the "default" policy. Other built-in policies (login, signup, etc.) have their own hardcoded FailClosed settings
+	// Note: Token bucket TTL is hardcoded to 30 minutes in Lua script (lua_script.go line 48)
+	// Note: Fixed window TTL is automatically set to window_seconds in the strategy
+
+	// Default policy (used as fallback for any group not in JSON)
+	DefaultCapacity        int64   `json:"default_capacity" env:"RATE_LIMITER_DEFAULT_CAPACITY" env-default:"120"`
+	DefaultRefillPerSec    float64 `json:"default_refill_per_sec" env:"RATE_LIMITER_DEFAULT_REFILL_PER_SEC" env-default:"2.0"` // 120 req/min
+	DefaultRequestedTokens int64   `json:"default_requested_tokens" env:"RATE_LIMITER_DEFAULT_REQUESTED_TOKENS" env-default:"1"`
+
+	// GroupPoliciesJSON is a JSON string defining rate limit policies for custom groups
+	// Format: {"group_name": {"capacity": 100, "refill_per_second": 2.0, "requested_tokens": 1, "fail_closed": false}}
+	// If JSON contains "default" key, it overrides the individual default fields above
+	// If empty, only the default policy from individual fields is used
+	GroupPoliciesJSON string `json:"group_policies_json" env:"RATE_LIMITER_GROUP_POLICIES_JSON" env-default:""`
 }
 
 var (

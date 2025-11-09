@@ -97,6 +97,10 @@ type VoucherRepository interface {
 	// Returns counts for: all, paid, open, overdue
 	GetVoucherCounts(ctx context.Context, businessID string) (*VoucherCountsResponse, error)
 
+	// GetCalendarViewBills retrieves bills for a specific month and year
+	// Returns bills filtered by invoice_due_date for calendar view
+	GetCalendarViewBills(ctx context.Context, businessID string, year, month int) ([]CalendarBillItem, error)
+
 	// GetVoucherActivity retrieves complete activity history for a voucher
 	// Returns chronologically sorted list of activities including:
 	// - Voucher creation
@@ -145,21 +149,6 @@ type PaginationResult struct {
 	Limit      int   `json:"limit"`
 	Total      int64 `json:"total"`
 	TotalPages int   `json:"total_pages"`
-}
-
-// ApprovalRepository defines the interface for voucher approval operations
-type ApprovalRepository interface {
-	// CreateApproval creates a new approval record
-	CreateApproval(ctx context.Context, approval *VoucherApproval) error
-
-	// GetApprovalsByVoucher retrieves all approvals for a voucher
-	GetApprovalsByVoucher(ctx context.Context, voucherID uuid.UUID) ([]*VoucherApproval, error)
-
-	// UpdateApprovalAction updates the approval action (approve/reject)
-	UpdateApprovalAction(ctx context.Context, approvalID uuid.UUID, action string, remarks string) error
-
-	// GetPendingApprovals retrieves pending approvals for a user
-	GetPendingApprovals(ctx context.Context, userID uuid.UUID) ([]*VoucherApproval, error)
 }
 
 // ERPSyncQueueRepository defines the interface for ERP sync queue operations

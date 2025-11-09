@@ -6,6 +6,7 @@ import (
 
 	"github.com/labstack/echo/v4"
 	"xcentro.in/internal/core/notification"
+	customValidator "xcentro.in/internal/shared/validator"
 )
 
 // NotificationHandler handles notification HTTP requests
@@ -133,14 +134,28 @@ func (h *NotificationHandler) MarkMultipleAsRead(c echo.Context) error {
 		})
 	}
 
-	var req struct {
-		NotificationIDs []int64 `json:"notification_ids" validate:"required,min=1"`
-	}
+	var req notification.MarkMultipleAsReadRequest
 
+	// Bind input
 	if err := c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]any{
 			"error":   "INVALID_REQUEST",
 			"message": "Invalid request body",
+		})
+	}
+
+	// Validate input
+	if err := c.Validate(&req); err != nil {
+		if ve, ok := err.(*customValidator.ValidationError); ok {
+			return c.JSON(http.StatusBadRequest, map[string]any{
+				"error":   "VALIDATION_FAILED",
+				"message": "Validation failed",
+				"errors":  ve.Errors,
+			})
+		}
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "VALIDATION_FAILED",
+			"message": "Validation failed",
 		})
 	}
 

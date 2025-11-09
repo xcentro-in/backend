@@ -1,7 +1,7 @@
 // XCentro Backend Database Schema
-// Generated from migrations 000001-000015
+// Generated from migrations 000001-000032
 // Schema: xcentro
-// Last updated: 2025-10-19 (Complete Schema)
+// Last updated: 2025-11-07 (Complete Schema)
 
 // =============================================================================
 // ENUMS
@@ -142,15 +142,6 @@ Enum "refund_status_enum" {
   "failed"
 }
 
-Enum "payee_onboarding_status_enum" {
-  "not_onboarded"
-  "pending"
-  "active"
-  "failed"
-  "suspended"
-  "deactivated"
-}
-
 Enum "payout_provider_enum" {
   "castler"
   "razorpay"
@@ -178,6 +169,38 @@ Enum "payment_type" {
   "payment"
   "tokenization"
   "refund"
+}
+
+Enum "approval_action_enum" {
+  "pending"
+  "approved"
+  "rejected"
+  "request_changes"
+  "edited"
+}
+
+Enum "payment_action_enum" {
+  "payment_initiated"
+  "payment_processing"
+  "payment_success"
+  "payment_failed"
+  "payment_refunded"
+  "settlement_pending"
+  "settlement_received"
+  "settlement_failed"
+  "payout_initiated"
+  "payout_processing"
+  "payout_completed"
+  "payout_failed"
+  "payout_timeout"
+  "payout_cancelled"
+}
+
+Enum "payment_actor_enum" {
+  "user"
+  "system"
+  "webhook"
+  "api"
 }
 
 // =============================================================================
@@ -264,8 +287,12 @@ Table "business" {
   "business_turnover" text
   "country_code" varchar(3)
   "currency_code" varchar(3)
+  "has_completed_onboarding" boolean [not null, default: false]
+  "has_added_payment_method" boolean [not null, default: false]
+  "has_added_vendor" boolean [not null, default: false]
+  "has_created_first_payment" boolean [not null, default: false]
   "updated_at" timestamptz
-  Note: 'Business entities and their KYB information'
+  Note: 'Business entities and their KYB information with onboarding flags'
 }
 
 Table "business_user_relation" {
@@ -383,28 +410,50 @@ Table "payments" {
 Table "payment_fee_rules" {
   "rule_id" uuid [pk, default: `uuidv7()`]
   "payment_method" payment_method_enum [not null]
-  "card_type" card_type_enum [note: 'NULL = applies to all card types']
-  "card_category" card_category_enum [note: 'NULL = applies to all categories']
+  "card_type" card_type_enum [note: 'NULL = applies to non-card payment methods']
+  "card_category" card_category_enum [note: 'NULL = applies to non-card payment methods']
   "fee_type" fee_type_enum [not null]
   "percentage_fee" "decimal(5,2)" [note: 'e.g., 1.90 for 1.9%']
   "fixed_fee" bigint [default: 0, note: 'in paise (e.g., 2800 for ₹28)']
-  "min_fee" bigint [default: 0]
-  "max_fee" bigint
   "gst_percentage" "decimal(5,2)" [default: 18.00]
   "gst_applicable" boolean [default: true]
-  "priority" int [default: 0, note: 'higher priority rules take precedence']
   "is_active" boolean [default: true]
-  "effective_from" timestamptz [not null, default: `NOW()`]
-  "effective_until" timestamptz
   "created_at" timestamptz [not null, default: `NOW()`]
-  "created_by" uuid [ref: > user_table.id]
   "updated_at" timestamptz [default: `NOW()`]
 
   indexes {
-    (is_active, effective_from) [name: 'idx_fee_rules_active']
-    (payment_method, card_type, card_category, priority) [name: 'idx_fee_rules_lookup']
+    (payment_method, card_type, card_category) [name: 'idx_fee_rules_lookup', note: 'WHERE is_active = true']
   }
-  Note: 'Configurable convenience fee rules for payment methods - enables quarterly fee updates without code deployment'
+  Note: 'Simplified fee rules with explicit rules only - no NULL fallback complexity'
+}
+
+Table "payment_state_changes" {
+  "state_change_id" uuid [pk, default: `uuidv7()`]
+  "payment_id" uuid [not null, ref: > payments.payment_id, note: 'ON DELETE CASCADE']
+  "transfer_request_id" uuid [ref: > payout_transfer_requests.transfer_request_id, note: 'ON DELETE SET NULL']
+  "action" payment_action_enum [not null]
+  "action_timestamp" timestamptz [not null, default: `NOW()`]
+  "actor_type" payment_actor_enum [not null, default: 'system']
+  "actor_user_id" uuid [ref: > user_table.id, note: 'ON DELETE SET NULL']
+  "actor_name" varchar(100) [note: 'Denormalized: payout_worker, razorpay_webhook, etc.']
+  "previous_state" varchar(50) [note: 'Previous status value if applicable']
+  "new_state" varchar(50) [note: 'New status value if applicable']
+  "amount" bigint [note: 'Amount involved in this action (in paise)']
+  "currency" varchar(3) [default: 'INR']
+  "utr" varchar(100) [note: 'Bank UTR for completed payouts']
+  "provider" varchar(50) [note: 'Gateway/provider name (jiopay, easebuzz, castler)']
+  "metadata" jsonb [note: 'Additional context (gateway response, error codes, etc.)']
+  "remarks" text [note: 'Human-readable description']
+  "created_at" timestamptz [not null, default: `NOW()`]
+
+  indexes {
+    (payment_id, action_timestamp) [name: 'idx_payment_state_payment']
+    (transfer_request_id, action_timestamp) [name: 'idx_payment_state_transfer']
+    (action, action_timestamp) [name: 'idx_payment_state_action']
+    actor_user_id [name: 'idx_payment_state_actor', note: 'WHERE actor_user_id IS NOT NULL']
+    action_timestamp [name: 'idx_payment_state_timestamp']
+  }
+  Note: 'Audit trail for payment and payout state transitions. Tracks payment lifecycle from initiation to payout completion.'
 }
 
 // =============================================================================
@@ -516,7 +565,6 @@ Table "payee_employee" {
   "payee_id" uuid [pk, ref: - payee_master.payee_id, note: 'ON DELETE CASCADE']
   "employee_code" varchar(100)
   "full_name" varchar(500) [not null]
-  "pan" varchar(10) [unique, not null, note: 'Permanent Account Number']
   "email" varchar(254)
   "phone" varchar(20)
   "designation" varchar(200)
@@ -525,9 +573,8 @@ Table "payee_employee" {
   "employment_type" varchar(50)
   "remuneration_doc_url" text [note: 'S3 URL (versioned at S3 level)']
   "remuneration_doc_uploaded_at" timestamptz
+  "remuneration_doc_verified" boolean [not null, default: false, note: 'Document uploaded and verified']
   "is_sensitive" boolean [default: true, note: 'Always true for employees']
-  "pan_verification_status" verification_status_enum [default: 'pending']
-  "pan_verified_at" timestamptz
   "created_at" timestamptz [default: `NOW()`]
   "updated_at" timestamptz
   "metadata" jsonb
@@ -549,16 +596,16 @@ Table "payee_bank_accounts" {
   "bank_verification_status" verification_status_enum [default: 'pending']
   "bank_verification_data" jsonb [note: 'Penny drop verification details']
   "cross_verification_status" verification_status_enum [default: 'pending']
-  "name_match_score" "numeric(3,2)"
   "is_active" boolean [default: true]
-  "is_primary" boolean [default: false]
   "account_label" varchar(100)
+  "castler_beneficiary_id" varchar(255) [note: 'Castler provider beneficiary ID for payouts']
   "added_at" timestamptz [default: `NOW()`]
   "updated_at" timestamptz
   "metadata" jsonb
 
   indexes {
     (payee_id, account_number_hash) [unique, name: 'unique_payee_account']
+    castler_beneficiary_id [name: 'idx_bank_accounts_castler_onboarded', note: 'WHERE castler_beneficiary_id IS NOT NULL']
   }
   Note: 'Bank accounts for vendor and employee payees (NOT for GST/Biller)'
 }
@@ -577,7 +624,7 @@ Table "business_payee_relation" {
   "tags" "text[]"
   "type_specific_data" jsonb [note: 'Type-specific metadata']
   "added_at" timestamptz [default: `NOW()`]
-  "added_by" uuid [ref: > user_table.id, note: 'ON DELETE SET NULL']
+  "added_by" uuid [not null, ref: > user_table.id, note: 'User who added this payee relation (required)']
   "last_used_at" timestamptz [note: 'Updated by payment system']
   "updated_at" timestamptz
   "metadata" jsonb
@@ -588,32 +635,6 @@ Table "business_payee_relation" {
     payee_id [name: 'idx_business_payee_relation_payee_id']
   }
   Note: 'Customer-payee relationships (polymorphic - all payee types)'
-}
-
-Table "payee_provider_mappings" {
-  "mapping_id" uuid [pk, default: `uuidv7()`]
-  "payee_id" uuid [not null, ref: > payee_master.payee_id, note: 'ON DELETE RESTRICT']
-  "account_id" uuid [not null, ref: > payee_bank_accounts.account_id, note: 'ON DELETE RESTRICT']
-  "provider" payout_provider_enum [not null]
-  "provider_beneficiary_id" varchar(255) [note: 'Provider-generated beneficiary ID (e.g., Castler beneficiary_id, Razorpay contact_id)']
-  "provider_account_id" varchar(255)
-  "onboarding_status" payee_onboarding_status_enum [not null, default: 'not_onboarded']
-  "onboarded_at" timestamptz
-  "onboarding_error_code" varchar(100)
-  "onboarding_error_message" text
-  "provider_metadata" jsonb [note: 'Provider-specific metadata (Castler: beneficiary details, Razorpay: contact info, etc.)']
-  "created_at" timestamptz [not null, default: `NOW()`]
-  "created_by" uuid [ref: > user_table.id]
-  "updated_at" timestamptz [default: `NOW()`]
-  "last_synced_at" timestamptz
-
-  indexes {
-    (payee_id, account_id, provider) [unique]
-    (payee_id, account_id) [name: 'idx_provider_mappings_payee_account']
-    (provider, onboarding_status) [name: 'idx_provider_mappings_provider']
-    (onboarding_status, created_at) [name: 'idx_provider_mappings_pending']
-  }
-  Note: 'Maps payees to payout providers (Castler, Razorpay, etc.) - supports multi-provider routing'
 }
 
 // =============================================================================
@@ -678,6 +699,8 @@ Table "payment_vouchers" {
   "refund_initiated_at" timestamptz
   "refund_reference_id" varchar(255)
   "refund_metadata" jsonb
+  "payment_terms" varchar(50) [note: 'e.g., Net 30, Net 45, Due on Receipt, 2/10 Net 30']
+  "vendor_reference_number" varchar(100) [note: 'Vendor reference or PO number from invoice']
   "created_at" timestamptz [not null, default: `NOW()`]
   "created_by_user_id" uuid [ref: > user_table.id, note: 'ON DELETE SET NULL']
   "updated_at" timestamptz
@@ -697,18 +720,18 @@ Ref: payment_vouchers.(business_id, payee_id, account_id) > business_payee_relat
 Table "voucher_approvals" {
   "approval_id" uuid [pk, default: `uuidv7()`]
   "voucher_id" uuid [not null, ref: > payment_vouchers.voucher_id, note: 'ON DELETE CASCADE']
-  "approval_level" int [not null, note: '1, 2, 3 for multi-level']
-  "approver_user_id" uuid [not null, ref: > user_table.id, note: 'ON DELETE CASCADE']
-  "approver_role" varchar(50) [note: 'Manager, Finance Head, etc.']
-  "action" varchar(50) [not null, default: 'pending', note: 'pending, approved, rejected']
-  "action_timestamp" timestamptz
-  "remarks" text
+  "requester_user_id" uuid [not null, ref: > user_table.id, note: 'User who initiated the payment']
+  "approver_user_id" uuid [not null, ref: > user_table.id, note: 'User who approved/rejected the payment']
+  "action" approval_action_enum [not null, default: 'pending', note: 'pending → approved/rejected/request_changes/edited']
+  "remarks" text [note: 'Approver notes explaining their decision']
   "created_at" timestamptz [not null, default: `NOW()`]
 
   indexes {
-    (voucher_id, approval_level) [unique]
+    voucher_id [name: 'idx_voucher_approvals_voucher']
+    (approver_user_id, action) [name: 'idx_voucher_approvals_approver']
+    requester_user_id [name: 'idx_voucher_approvals_requester']
   }
-  Note: 'Multi-level approval workflow for vouchers'
+  Note: 'Approval workflow audit log. Each row represents an approval action/event. Query latest status with ORDER BY created_at DESC.'
 }
 
 Table "erp_sync_queue" {
@@ -727,6 +750,63 @@ Table "erp_sync_queue" {
   "started_at" timestamptz
   "completed_at" timestamptz
   Note: 'Async queue for ERP synchronization workers'
+}
+
+// =============================================================================
+// BATCH PAYMENT TABLES
+// =============================================================================
+
+Table "batch_payments" {
+  "batch_id" uuid [pk, default: `uuidv7()`]
+  "business_id" uuid [not null, ref: > business.bid, note: 'ON DELETE CASCADE']
+  "uploaded_by" uuid [not null, ref: > user_table.id, note: 'ON DELETE RESTRICT']
+  "file_name" varchar(255) [note: 'Optional: for audit trail']
+  "status" varchar(20) [not null, note: 'pending, processing, completed, failed, cancelled']
+  "total_rows" int [not null, default: 0]
+  "total_amount" bigint [not null, default: 0, note: 'Total CSV amount in paise (informational only)']
+  "processed_rows" int [not null, default: 0]
+  "success_rows" int [not null, default: 0]
+  "failed_rows" int [not null, default: 0]
+  "created_at" timestamptz [not null, default: `NOW()`]
+  "processed_at" timestamptz
+  "completed_at" timestamptz
+
+  indexes {
+    business_id [name: 'idx_batch_payments_business_id']
+    status [name: 'idx_batch_payments_status']
+    created_at [name: 'idx_batch_payments_created_at']
+  }
+  Note: 'Batch payment CSV upload tracking'
+}
+
+Table "batch_payment_items" {
+  "item_id" uuid [pk, default: `uuidv7()`]
+  "batch_id" uuid [not null, ref: > batch_payments.batch_id, note: 'ON DELETE CASCADE']
+  "row_number" int [not null]
+  "status" varchar(20) [not null, note: 'matched, ambiguous, not_found, pending, processing, success, failed, skipped']
+  "csv_payee_name" varchar(255) [not null]
+  "csv_account_last_4" varchar(4)
+  "csv_amount" bigint [not null, note: 'In paise']
+  "payment_context" varchar(50) [not null]
+  "description" text
+  "expense_category" varchar(100)
+  "gst_amount" bigint [default: 0]
+  "tds_amount" bigint [default: 0]
+  "invoice_number" varchar(100)
+  "matched_relation_id" uuid [note: 'FK to business_payee_relation']
+  "match_confidence" "decimal(3,2)" [note: '0.00 to 1.00']
+  "voucher_id" uuid [note: 'FK to vouchers (created draft voucher)']
+  "error_message" text
+  "created_at" timestamptz [not null, default: `NOW()`]
+  "processed_at" timestamptz
+
+  indexes {
+    (batch_id, row_number) [unique]
+    batch_id [name: 'idx_batch_payment_items_batch_id']
+    status [name: 'idx_batch_payment_items_status']
+    voucher_id [name: 'idx_batch_payment_items_voucher_id']
+  }
+  Note: 'Individual batch payment items with matching and processing status'
 }
 
 // =============================================================================
@@ -799,4 +879,51 @@ Table "payout_configuration" {
     business_id [name: 'idx_payout_config_business']
   }
   Note: 'Payout system configuration including auto-approval limits and retry settings'
+}
+
+// =============================================================================
+// NOTIFICATION SYSTEM TABLES
+// =============================================================================
+
+Table "notification_events" {
+  "id" bigserial [pk]
+  "event_type" text [not null, note: 'e.g., payment.failed, report.ready']
+  "payload" jsonb [not null, note: 'Full message data (target, entities, message, actions)']
+  "created_at" timestamptz [not null, default: `NOW()`]
+
+  Note: 'Temporary queue of notification events to be fanned out and deleted'
+}
+
+Table "user_notifications" {
+  "id" bigserial [pk]
+  "user_id" uuid [not null, ref: > user_table.id, note: 'ON DELETE CASCADE']
+  "business_id" uuid [ref: > business.bid, note: 'ON DELETE CASCADE']
+  "event_id" bigint [not null, note: 'No FK, just for unique constraint (events are deleted)']
+  "channel" text [not null, note: 'email, push, web']
+  "status" text [not null, default: 'pending', note: 'pending, processing, sent, failed, read']
+  "content" jsonb [not null, note: '{title, body, actions, entities}']
+  "retry_count" int [not null, default: 0, note: 'Number of retry attempts for failed jobs']
+  "created_at" timestamptz [not null, default: `NOW()`]
+  "sent_at" timestamptz
+  "read_at" timestamptz
+
+  indexes {
+    (user_id, read_at, created_at) [name: 'idx_user_notifications_user_web', note: 'WHERE channel = web, read_at NULLS FIRST, created_at DESC']
+    (channel, status, retry_count, created_at) [name: 'idx_user_notifications_worker_jobs', note: 'WHERE status IN (pending, failed)']
+    created_at [name: 'idx_user_notifications_stuck_processing', note: 'WHERE status = processing']
+    (event_id, user_id, channel) [unique, name: 'uq_user_notifications_event']
+  }
+  Note: 'Persistent notification inbox for each user. Email/push notifications deleted after successful send. Web channel persists for bell icon.'
+}
+
+Table "notification_preferences" {
+  "user_id" uuid [pk, ref: > user_table.id, note: 'ON DELETE CASCADE']
+  "email_enabled" boolean [not null, default: true, note: 'Global switch for email notifications']
+  "push_enabled" boolean [not null, default: true, note: 'Global switch for push notifications']
+  "messages_enabled" boolean [not null, default: true, note: 'Global switch for in-app messages/web notifications']
+  "category_preferences" jsonb [not null, default: '{"announcements": true, "rewards": true, "payments": true, "payees": true, "approvals": true, "security": true, "insights": true}', note: 'Category-level preferences']
+  "created_at" timestamptz [not null, default: `NOW()`]
+  "updated_at" timestamptz
+
+  Note: 'User notification preferences (global, not per-business)'
 }

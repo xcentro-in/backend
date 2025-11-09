@@ -6,6 +6,7 @@ import (
 	batchPaymentRepo "xcentro.in/internal/adapters/database/postgres/batch_payment"
 	"xcentro.in/internal/adapters/database/postgres/business"
 	"xcentro.in/internal/adapters/database/postgres/client"
+	featureFlagsRepo "xcentro.in/internal/adapters/database/postgres/feature_flags"
 	notificationRepo "xcentro.in/internal/adapters/database/postgres/notification"
 	payeeRepo "xcentro.in/internal/adapters/database/postgres/payee"
 	paymentRepo "xcentro.in/internal/adapters/database/postgres/payment"
@@ -22,19 +23,21 @@ import (
 	corePayment "xcentro.in/internal/core/payment"
 	coreUser "xcentro.in/internal/core/user"
 	coreVoucher "xcentro.in/internal/core/voucher"
-	"xcentro.in/internal/middleware"
 	"xcentro.in/internal/handlers/http/auth"
 	batchPaymentHandler "xcentro.in/internal/handlers/http/batch_payment"
 	businessHandler "xcentro.in/internal/handlers/http/business"
+	featureFlagsHandler "xcentro.in/internal/handlers/http/feature_flags"
 	notificationHandler "xcentro.in/internal/handlers/http/notification"
 	"xcentro.in/internal/handlers/http/payee"
 	"xcentro.in/internal/handlers/http/payment"
 	payoutHandler "xcentro.in/internal/handlers/http/payout"
 	userHandler "xcentro.in/internal/handlers/http/user"
 	voucherHandler "xcentro.in/internal/handlers/http/voucher"
+	"xcentro.in/internal/middleware"
 	authservice "xcentro.in/internal/services/auth"
 	batchPaymentSvc "xcentro.in/internal/services/batch_payment"
 	businessSvc "xcentro.in/internal/services/business"
+	featureFlagsSvc "xcentro.in/internal/services/feature_flags"
 	notificationService "xcentro.in/internal/services/notification"
 	payeeSvc "xcentro.in/internal/services/payee"
 	"xcentro.in/internal/services/payments"
@@ -88,6 +91,14 @@ func registerV1AuthRoutes(clients *externalClients, cfg *config.Config, group *e
 
 	_, _, _, _, _, busSvc, authSvc := factory.createCoreServices(verificationSvc)
 	auth.RegisterAuthRoutes(group, authSvc, busSvc, cfg)
+
+	// Feature Flags
+	featureFlagsRepository := featureFlagsRepo.NewPgFeatureFlagsRepository(clients.db, clients.rcache)
+	featureFlagsService := featureFlagsSvc.NewFeatureFlagsService(featureFlagsRepository)
+	featureFlagsHandlerInstance := featureFlagsHandler.NewFeatureFlagsHandler(featureFlagsService)
+
+	authGroup := group.Group("/auth")
+	authGroup.GET("/feature-flags", featureFlagsHandlerInstance.GetFeatureFlags)
 }
 
 func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
@@ -114,11 +125,11 @@ func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group
 	paymentSourceService := payments.NewPaymentSourceService(walletService, databaseFeeCalculator)
 
 	voucherRepository := voucherRepo.NewPostgresVoucherRepository(clients.db, cfg.BankAccountEncryption.EncryptionKey)
-	approvalRepository := voucherRepo.NewPostgresApprovalRepository(clients.db)
 	queueRepository := voucherRepo.NewPostgresERPSyncQueueRepository(clients.db)
 	voucherCoreService := coreVoucher.NewVoucherService(voucherRepository)
 	businessPayeeRelationRepo := payeeRepo.NewPgBusinessPayeeRelationRepository(clients.db, cfg.BankAccountEncryption.EncryptionKey)
-	voucherService := voucherSvc.NewVoucherService(voucherRepository, approvalRepository, queueRepository, voucherCoreService, businessPayeeRelationRepo)
+	notificationEventRepo := notificationRepo.NewPgNotificationEventRepository(clients.db)
+	voucherService := voucherSvc.NewVoucherService(voucherRepository, queueRepository, voucherCoreService, businessPayeeRelationRepo, notificationEventRepo, logger.GetDefault())
 
 	paymentService := payments.NewPaymentService(orchestrator, paymentRepository, storedCardRepository, bankAccountRepository, walletService, feeCalculator, clients.txManager, voucherService, voucherRepository, busSvc, logger.GetDefault())
 
@@ -156,7 +167,7 @@ func registerV1UserRoutes(clients *externalClients, cfg *config.Config, group *e
 	}
 
 	_, _, _, businessUserRelRepo, userService, _, authSvc := factory.createCoreServices(verificationSvc)
-	userHandler.RegisterUserRoutes(group, userService, authSvc, businessUserRelRepo, clients.rcache)
+	userHandler.RegisterUserRoutes(group, userService, authSvc, businessUserRelRepo, clients.rcache, cfg)
 }
 
 func registerV1PayeeRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
@@ -177,11 +188,11 @@ func registerV1VoucherRoutes(clients *externalClients, cfg *config.Config, group
 	_, _, _, businessUserRelRepo, _, _, authSvc := factory.createCoreServices(nil)
 
 	voucherRepository := voucherRepo.NewPostgresVoucherRepository(clients.db, cfg.BankAccountEncryption.EncryptionKey)
-	approvalRepository := voucherRepo.NewPostgresApprovalRepository(clients.db)
 	queueRepository := voucherRepo.NewPostgresERPSyncQueueRepository(clients.db)
 	voucherCoreService := coreVoucher.NewVoucherService(voucherRepository)
 	businessPayeeRelationRepo := payeeRepo.NewPgBusinessPayeeRelationRepository(clients.db, cfg.BankAccountEncryption.EncryptionKey)
-	voucherService := voucherSvc.NewVoucherService(voucherRepository, approvalRepository, queueRepository, voucherCoreService, businessPayeeRelationRepo)
+	notificationEventRepo := notificationRepo.NewPgNotificationEventRepository(clients.db)
+	voucherService := voucherSvc.NewVoucherService(voucherRepository, queueRepository, voucherCoreService, businessPayeeRelationRepo, notificationEventRepo, logger.GetDefault())
 
 	voucherGroup := group.Group("/vouchers")
 	voucherHandler.RegisterVoucherRoutes(voucherGroup, voucherService, authSvc, businessUserRelRepo, clients.rcache)
@@ -225,10 +236,10 @@ func registerV1BatchPaymentRoutes(clients *externalClients, cfg *config.Config, 
 
 	// Voucher service dependencies
 	voucherRepository := voucherRepo.NewPostgresVoucherRepository(clients.db, cfg.BankAccountEncryption.EncryptionKey)
-	approvalRepository := voucherRepo.NewPostgresApprovalRepository(clients.db)
 	queueRepository := voucherRepo.NewPostgresERPSyncQueueRepository(clients.db)
 	voucherCoreService := coreVoucher.NewVoucherService(voucherRepository)
-	voucherService := voucherSvc.NewVoucherService(voucherRepository, approvalRepository, queueRepository, voucherCoreService, businessPayeeRelationRepo)
+	notificationEventRepo := notificationRepo.NewPgNotificationEventRepository(clients.db)
+	voucherService := voucherSvc.NewVoucherService(voucherRepository, queueRepository, voucherCoreService, businessPayeeRelationRepo, notificationEventRepo, logger.GetDefault())
 
 	// Batch payment service
 	batchPaymentService := batchPaymentSvc.NewBatchPaymentService(
@@ -267,15 +278,6 @@ func registerV1Routes(s *xcentroServer) {
 
 	v1.GET("/health", func(c echo.Context) error {
 		return c.JSON(200, map[string]string{"status": "ok"})
-	})
-
-	v1.POST("/callback", func(c echo.Context) error {
-		headers := c.Request().Header
-		body := make([]byte, c.Request().ContentLength)
-		c.Request().Body.Read(body)
-		s.log.Infof("Headers: %v", headers)
-		s.log.Infof("Body: %s", string(body))
-		return c.JSON(200, map[string]string{"status": "received"})
 	})
 
 	clients := &s.meta.clients

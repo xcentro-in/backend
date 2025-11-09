@@ -35,6 +35,6 @@ ALTER TABLE xcentro.payee_bank_accounts
     ADD CONSTRAINT unique_payee_account UNIQUE (payee_id, account_number_hash);
 
 -- Step 7: Recreate indexes
+-- Note: is_primary column was removed in migration 000021, so we don't recreate that index
 CREATE INDEX idx_payee_bank_accounts_payee_id ON xcentro.payee_bank_accounts(payee_id);
-CREATE INDEX idx_payee_bank_accounts_is_primary ON xcentro.payee_bank_accounts(payee_id, is_primary) WHERE is_primary = TRUE;
 CREATE INDEX idx_payee_bank_accounts_active ON xcentro.payee_bank_accounts(payee_id, is_active) WHERE is_active = TRUE;

@@ -39,6 +39,11 @@ const (
 	// Security category (security)
 	EventUserInvited     = "security.user.invited"
 	EventUserRoleChanged = "security.user.role.changed"
+
+	// Approvals category (approvals)
+	EventVoucherApprovalRequested = "approvals.voucher.requested"
+	EventVoucherApprovalApproved  = "approvals.voucher.approved"
+	EventVoucherApprovalRejected  = "approvals.voucher.rejected"
 )
 
 // Notification channels
@@ -180,6 +185,11 @@ type UpdatePreferencesRequest struct {
 	PushEnabled         *bool                  `json:"push_enabled,omitempty"`
 	MessagesEnabled     *bool                  `json:"messages_enabled,omitempty"`
 	CategoryPreferences map[string]interface{} `json:"category_preferences,omitempty"`
+}
+
+// MarkMultipleAsReadRequest represents the request to mark multiple notifications as read
+type MarkMultipleAsReadRequest struct {
+	NotificationIDs []int64 `json:"notification_ids" validate:"required,min=1,dive,gt=0"`
 }
 
 // #############################################################################
