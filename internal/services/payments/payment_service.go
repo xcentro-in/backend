@@ -24,6 +24,7 @@ type PaymentService struct {
 	voucherService  interface{} // voucher.VoucherService, using interface{} to avoid circular import (Phase 6)
 	voucherRepo     interface{} // voucher.VoucherRepository, using interface{} to avoid circular import
 	businessService business.BusinessService
+	serverURL       string      // Public-facing backend URL for callbacks
 	logger          *logger.Logger
 }
 
@@ -39,6 +40,7 @@ func NewPaymentService(
 	voucherService interface{}, // Phase 6: Voucher service for payment integration
 	voucherRepo interface{}, // voucher.VoucherRepository for transactional operations
 	businessService business.BusinessService,
+	serverURL string, // Public-facing backend URL for callbacks (from config.Server.URL)
 	logger *logger.Logger,
 ) *PaymentService {
 	s := &PaymentService{
@@ -52,6 +54,7 @@ func NewPaymentService(
 		voucherService:  voucherService,
 		voucherRepo:     voucherRepo,
 		businessService: businessService,
+		serverURL:       serverURL,
 		logger:          logger,
 	}
 
@@ -350,25 +353,22 @@ func getCardCategoryFromRequest(req *payment.PaymentRequest) payment.CardCategor
 // generateCallbackURL generates the appropriate callback URL based on calling device
 // Returns user-facing HTML page URLs for web/POS and deep links for mobile
 func (s *PaymentService) generateCallbackURL(device payment.CallingDevice, paymentID string) string {
-	// TODO: Make base URLs configurable via environment variables
-	baseURL := "https://api.xcentro.in" // Production base URL
-
 	switch device {
 	case payment.CallingDeviceWeb:
 		// Web callback - HTML page showing payment status
-		return fmt.Sprintf("%s/v1/process_payment/callback_page?transaction_id=%s&source=web", baseURL, paymentID)
+		return fmt.Sprintf("%s/v1/process_payment/callback_page?transaction_id=%s&source=web", s.serverURL, paymentID)
 
 	case payment.CallingDeviceMobile:
 		// Mobile callback - deep link to mobile app (handled separately by app)
-		return fmt.Sprintf("%s/v1/process_payment/callback?payment_id=%s&source=mobile", baseURL, paymentID)
+		return fmt.Sprintf("%s/v1/process_payment/callback?payment_id=%s&source=mobile", s.serverURL, paymentID)
 
 	case payment.CallingDevicePOS:
 		// POS callback - HTML page showing payment status
-		return fmt.Sprintf("%s/v1/process_payment/callback_page?transaction_id=%s&source=pos", baseURL, paymentID)
+		return fmt.Sprintf("%s/v1/process_payment/callback_page?transaction_id=%s&source=pos", s.serverURL, paymentID)
 
 	default:
 		// Default to web callback with HTML page
-		return fmt.Sprintf("%s/v1/process_payment/callback_page?transaction_id=%s&source=web", baseURL, paymentID)
+		return fmt.Sprintf("%s/v1/process_payment/callback_page?transaction_id=%s&source=web", s.serverURL, paymentID)
 	}
 }
 
