@@ -1,6 +1,6 @@
 module xcentro.in
 
-go 1.25.1
+go 1.24.0
 
 require (
 	github.com/aws/aws-sdk-go-v2/credentials v1.18.21

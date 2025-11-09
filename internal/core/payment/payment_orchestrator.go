@@ -361,6 +361,9 @@ func (o *paymentOrchestratorImpl) ProcessTokenizedPayment(ctx context.Context, r
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch payment for callback URL: %w", err)
 	}
+	if paymentEntity == nil {
+		return nil, fmt.Errorf("payment not found: %s", cryptogramRequest.TransactionID)
+	}
 
 	// Step 6: Prepare gateway payment request with token + cryptogram
 	gatewayRequest := GatewayPaymentRequest{
