@@ -15,6 +15,7 @@ import (
 	voucherRepo "xcentro.in/internal/adapters/database/postgres/voucher"
 	"xcentro.in/internal/adapters/external/payment/easebuzz"
 	"xcentro.in/internal/adapters/external/payment/jiopay"
+	"xcentro.in/internal/adapters/external/payment/mockpg"
 	"xcentro.in/internal/adapters/external/payout/factory"
 	coreAuth "xcentro.in/internal/core/auth"
 	coreBusiness "xcentro.in/internal/core/business"
@@ -109,10 +110,13 @@ func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group
 
 	_, _, _, _, _, busSvc, authSvc := factory.createCoreServices(nil)
 
+	// Initialize payment gateway clients
 	easebuzzClient := easebuzz.NewEasebuzzClient(cfg.Easebuzz.BaseURL, cfg.Easebuzz.MerchantKey, cfg.Easebuzz.Salt, cfg.Easebuzz.APIKey)
 	jioPayClient := jiopay.NewJioPayClient(cfg.JioPay.BaseURL, cfg.JioPay.TokenizationBaseURL, cfg.JioPay.MerchantID, cfg.JioPay.APIKey, cfg.JioPay.AppID, cfg.JioPay.EncryptionKey)
+	mockPGClient := mockpg.NewMockPGClient(cfg.MockPG.MerchantID, cfg.MockPG.APIKey, cfg.MockPG.SimulateSuccess)
 
-	orchestrator := corePayment.NewMockPaymentOrchestrator(paymentRepository, storedCardRepository, jioPayClient, easebuzzClient, logger.GetDefault())
+	// Create payment orchestrator with all gateway clients
+	orchestrator := corePayment.NewPaymentOrchestrator(paymentRepository, storedCardRepository, jioPayClient, easebuzzClient, mockPGClient, cfg.MockPG.Enabled, logger.GetDefault())
 	feeCalculator := business_rules.NewFeeCalculator()
 	walletService := business_rules.NewWalletService(storedCardRepository, bankAccountRepository, clients.txManager, busSvc, logger.GetDefault())
 
@@ -127,7 +131,7 @@ func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group
 	notificationEventRepo := notificationRepo.NewPgNotificationEventRepository(clients.db)
 	voucherService := voucherSvc.NewVoucherService(voucherRepository, queueRepository, voucherCoreService, businessPayeeRelationRepo, notificationEventRepo, logger.GetDefault())
 
-	paymentService := payments.NewPaymentService(orchestrator, paymentRepository, storedCardRepository, bankAccountRepository, walletService, feeCalculator, clients.txManager, voucherService, voucherRepository, busSvc, logger.GetDefault())
+	paymentService := payments.NewPaymentService(orchestrator, paymentRepository, storedCardRepository, bankAccountRepository, walletService, feeCalculator, clients.txManager, voucherService, voucherRepository, busSvc, cfg, logger.GetDefault())
 
 	processPaymentGroup := group.Group("/process_payment")
 	payment.RegisterPaymentRoutes(processPaymentGroup, paymentService, paymentSourceService, authSvc, logger.GetDefault())
@@ -138,10 +142,14 @@ func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group
 	callbackHandler := payment.NewCallbackHandler(paymentRepository, jioPayClient, easebuzzClient)
 	processPaymentGroup.POST("/callback", callbackHandler.HandleCallback)
 
-	webhookHandler := payment.NewWebhookHandler(paymentRepository, jioPayClient, easebuzzClient)
+	webhookHandler := payment.NewWebhookHandler(paymentRepository, jioPayClient, easebuzzClient, mockPGClient, cfg.MockPG.Enabled)
 	webhookGroup := processPaymentGroup.Group("/webhooks")
 	webhookGroup.POST("/payment_status", webhookHandler.HandlePaymentStatusWebhook)
 	webhookGroup.POST("/settlement_status", webhookHandler.HandleSettlementStatusWebhook)
+
+	// Payment callback page handler (user-facing HTML redirect pages)
+	paymentCallbackHandler := payment.NewPaymentCallbackHandler(paymentRepository)
+	processPaymentGroup.GET("/callback_page", paymentCallbackHandler.HandlePaymentCallback)
 }
 
 func registerV1BusinessRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {

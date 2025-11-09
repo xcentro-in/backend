@@ -9,6 +9,7 @@ import (
 	"xcentro.in/internal/core/business"
 	"xcentro.in/internal/core/business_rules"
 	"xcentro.in/internal/core/payment"
+	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/logger"
 )
 
@@ -24,6 +25,7 @@ type PaymentService struct {
 	voucherService  interface{} // voucher.VoucherService, using interface{} to avoid circular import (Phase 6)
 	voucherRepo     interface{} // voucher.VoucherRepository, using interface{} to avoid circular import
 	businessService business.BusinessService
+	config          *config.Config // Application configuration (server URL, etc.)
 	logger          *logger.Logger
 }
 
@@ -39,6 +41,7 @@ func NewPaymentService(
 	voucherService interface{}, // Phase 6: Voucher service for payment integration
 	voucherRepo interface{}, // voucher.VoucherRepository for transactional operations
 	businessService business.BusinessService,
+	cfg *config.Config, // Application configuration
 	logger *logger.Logger,
 ) *PaymentService {
 	s := &PaymentService{
@@ -52,6 +55,7 @@ func NewPaymentService(
 		voucherService:  voucherService,
 		voucherRepo:     voucherRepo,
 		businessService: businessService,
+		config:          cfg,
 		logger:          logger,
 	}
 
@@ -134,6 +138,7 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 
 		// Sub-step 2: Call orchestrator (gateway communication - may fail)
 		req.PaymentID = paymentID
+		req.CallbackURL = callbackURL
 		s.logger.DebugWith("Calling payment orchestrator")
 		resp, err := s.orchestrator.ProcessPayment(txCtx, req)
 		if err != nil {
@@ -347,26 +352,26 @@ func getCardCategoryFromRequest(req *payment.PaymentRequest) payment.CardCategor
 }
 
 // generateCallbackURL generates the appropriate callback URL based on calling device
+// Returns user-facing HTML page URLs for web/POS and deep links for mobile
 func (s *PaymentService) generateCallbackURL(device payment.CallingDevice, paymentID string) string {
-	// TODO: Make base URLs configurable via environment variables
-	baseURL := "https://api.xcentro.in" // Production base URL
+	serverURL := s.config.Server.URL
 
 	switch device {
 	case payment.CallingDeviceWeb:
-		// Web callback - redirect to web application
-		return fmt.Sprintf("%s/v1/process_payment/callback?payment_id=%s&source=web", baseURL, paymentID)
+		// Web callback - HTML page showing payment status
+		return fmt.Sprintf("%s/v1/process_payment/callback_page?transaction_id=%s&source=web", serverURL, paymentID)
 
 	case payment.CallingDeviceMobile:
-		// Mobile callback - deep link to mobile app
-		return fmt.Sprintf("%s/v1/process_payment/callback?payment_id=%s&source=mobile", baseURL, paymentID)
+		// Mobile callback - deep link to mobile app (handled separately by app)
+		return fmt.Sprintf("%s/v1/process_payment/callback?payment_id=%s&source=mobile", serverURL, paymentID)
 
 	case payment.CallingDevicePOS:
-		// POS callback - return to POS application
-		return fmt.Sprintf("%s/v1/process_payment/callback?payment_id=%s&source=pos", baseURL, paymentID)
+		// POS callback - HTML page showing payment status
+		return fmt.Sprintf("%s/v1/process_payment/callback_page?transaction_id=%s&source=pos", serverURL, paymentID)
 
 	default:
-		// Default to web callback
-		return fmt.Sprintf("%s/v1/process_payment/callback?payment_id=%s&source=web", baseURL, paymentID)
+		// Default to web callback with HTML page
+		return fmt.Sprintf("%s/v1/process_payment/callback_page?transaction_id=%s&source=web", serverURL, paymentID)
 	}
 }
 
