@@ -99,6 +99,7 @@ type CastlerConfig struct {
 	WebhookSecret string `json:"-" env:"CASTLER_WEBHOOK_SECRET"` // Webhook signature verification (sensitive)
 	EncryptionKey string `json:"-" env:"CASTLER_ENCRYPTION_KEY"` // AES encryption key (optional, sensitive)
 	EncryptionIV  string `json:"-" env:"CASTLER_ENCRYPTION_IV"`  // Fixed AES IV in base64 (optional, sensitive)
+	MockEnabled   bool   `json:"mock_enabled" env:"CASTLER_MOCK_ENABLED" env-default:"false"` // Enable mock mode for testing (no real API calls)
 }
 
 // JioPayConfig holds JioPay payment gateway configuration.
