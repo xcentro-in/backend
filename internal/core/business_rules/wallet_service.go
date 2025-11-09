@@ -253,14 +253,10 @@ func (ws *WalletServiceImpl) AddPaymentSource(ctx context.Context, businessID st
 
 	// Update onboarding flag (non-blocking, first-time only)
 	if ws.businessService != nil {
-		go func(bizID string) {
-			bgCtx := context.Background()
-			flags, err := ws.businessService.GetBusinessOnboardingFlags(bgCtx, bizID)
-			if err == nil && !flags.HasAddedPaymentMethod {
-				_ = ws.businessService.UpdateOnboardingStatus(bgCtx, bizID, "has_added_payment_method", true)
-				ws.logger.DebugWith("Onboarding flag updated", "business_id", bizID, "flag", "has_added_payment_method")
-			}
-		}(businessID)
+		flags, err := ws.businessService.GetBusinessOnboardingFlags(ctx, businessID)
+		if err == nil && !flags.HasAddedPaymentMethod {
+			_ = ws.businessService.UpdateOnboardingStatus(ctx, businessID, "has_added_payment_method", true)
+			ws.logger.DebugWith("Onboarding flag updated", "business_id", businessID, "flag", "has_added_payment_method")
 	}
 
 	return nil

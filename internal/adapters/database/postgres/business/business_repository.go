@@ -348,10 +348,10 @@ func (r *PgBusinessRepository) UpdateOnboardingFlag(ctx context.Context, bid str
 	query := `
 		UPDATE xcentro.business
 		SET
-			has_completed_onboarding = CASE WHEN $2 = 'hasCompletedOnboarding' THEN $3 ELSE has_completed_onboarding END,
-			has_added_payment_method = CASE WHEN $2 = 'hasAddedPaymentMethod' THEN $3 ELSE has_added_payment_method END,
-			has_added_vendor = CASE WHEN $2 = 'hasAddedVendor' THEN $3 ELSE has_added_vendor END,
-			has_created_first_payment = CASE WHEN $2 = 'hasCreatedFirstPayment' THEN $3 ELSE has_created_first_payment END
+			has_completed_onboarding = CASE WHEN $2 = 'has_completed_onboarding' THEN $3 ELSE has_completed_onboarding END,
+			has_added_payment_method = CASE WHEN $2 = 'has_added_payment_method' THEN $3 ELSE has_added_payment_method END,
+			has_added_vendor = CASE WHEN $2 = 'has_added_vendor' THEN $3 ELSE has_added_vendor END,
+			has_created_first_payment = CASE WHEN $2 = 'has_created_first_payment' THEN $3 ELSE has_created_first_payment END
 		WHERE bid = $1
 	`
 

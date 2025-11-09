@@ -212,16 +212,12 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 
 	// Update onboarding flag (non-blocking, first-time only, outside transaction)
 	if s.businessService != nil {
-		go func(bizID string) {
-			bgCtx := context.Background()
-			flags, err := s.businessService.GetBusinessOnboardingFlags(bgCtx, bizID)
-			if err == nil && !flags.HasCreatedFirstPayment {
-				_ = s.businessService.UpdateOnboardingStatus(bgCtx, bizID, "has_created_first_payment", true)
-				s.logger.DebugWith("Onboarding flag updated",
-					"business_id", bizID,
-					"flag", "has_created_first_payment")
-			}
-		}(req.BusinessID)
+		flags, err := s.businessService.GetBusinessOnboardingFlags(ctx, req.BusinessID)
+		if err == nil && !flags.HasCreatedFirstPayment {
+			_ = s.businessService.UpdateOnboardingStatus(ctx, req.BusinessID, "has_created_first_payment", true)
+			s.logger.DebugWith("Onboarding flag updated",
+				"business_id", req.BusinessID,
+				"flag", "has_created_first_payment")
 	}
 
 	s.logger.InfoWith("Payment processing completed", "payment_id", paymentID)
