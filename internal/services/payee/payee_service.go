@@ -443,13 +443,35 @@ func (s *PayeeService) onboardVendor(ctx context.Context, req payee.OnboardPayee
 		go func(bizID string) {
 			bgCtx := context.Background()
 			flags, err := s.businessService.GetBusinessOnboardingFlags(bgCtx, bizID)
-			if err == nil && !flags.HasAddedVendor {
-				_ = s.businessService.UpdateOnboardingStatus(bgCtx, bizID, "has_added_vendor", true)
-				s.logger.DebugWith("Onboarding flag updated",
-					"business_id", bizID,
-					"flag", "has_added_vendor")
+			if err != nil {
+				s.logger.ErrorWith("Failed to get business onboarding flags for cache invalidation",
+					err,
+					"business_id", bizID)
+				return
 			}
+
+			if flags.HasAddedVendor {
+				s.logger.DebugWith("Vendor already added previously, skipping onboarding flag update",
+					"business_id", bizID)
+				return
+			}
+
+			// This is the first vendor - update the flag
+			err = s.businessService.UpdateOnboardingStatus(bgCtx, bizID, "has_added_vendor", true)
+			if err != nil {
+				s.logger.ErrorWith("Failed to update onboarding status for first vendor",
+					err,
+					"business_id", bizID)
+				return
+			}
+
+			s.logger.InfoWith("First vendor added - onboarding flag updated and cache invalidated",
+				"business_id", bizID,
+				"flag", "has_added_vendor")
 		}(req.BusinessID)
+	} else {
+		s.logger.WarnWith("Business service is nil, cannot update onboarding flag",
+			"business_id", req.BusinessID)
 	}
 
 	// Step 12: Return response
