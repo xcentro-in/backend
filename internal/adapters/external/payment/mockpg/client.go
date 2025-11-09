@@ -184,9 +184,9 @@ func (c *MockPGClient) InitiatePayment(ctx context.Context, request payment.Gate
 	// Generate mock gateway payment ID
 	mockGatewayPaymentID := fmt.Sprintf("MOCKPG_%s", uuid.Must(uuid.NewV7()).String())
 
-	// Generate mock redirect URL (simulates 3DS/OTP page)
-	redirectURL := fmt.Sprintf("https://mockpg.example.com/auth?txn=%s&merchant=%s",
-		request.TransactionID, c.merchantID)
+	// Use the actual callback URL as redirect (mock PG directly redirects to callback page)
+	// In real gateways, this would be gateway's OTP/3DS page, but for testing we skip that
+	redirectURL := request.CallbackURL
 
 	// Determine payment status based on payment method
 	status := payment.PaymentStatusPending // Most payments require user action
