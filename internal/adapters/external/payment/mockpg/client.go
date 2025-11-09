@@ -184,9 +184,16 @@ func (c *MockPGClient) InitiatePayment(ctx context.Context, request payment.Gate
 	// Generate mock gateway payment ID
 	mockGatewayPaymentID := fmt.Sprintf("MOCKPG_%s", uuid.Must(uuid.NewV7()).String())
 
-	// Use the actual callback URL as redirect (mock PG directly redirects to callback page)
-	// In real gateways, this would be gateway's OTP/3DS page, but for testing we skip that
-	redirectURL := request.CallbackURL
+	// Construct mock 3DS page URL (simulates bank's OTP/authentication page)
+	// This URL is derived from the callback URL by extracting the base server URL
+	// Example: http://localhost:8080/api/v1/process_payment/callback -> http://localhost:8080/api/v1/process_payment/mock_3ds
+	redirectURL := fmt.Sprintf("%s?transaction_id=%s&gateway_payment_id=%s&amount=%d",
+		// Replace "/callback" with "/mock_3ds" in the callback URL
+		replaceLastPath(request.CallbackURL, "/callback", "/mock_3ds"),
+		request.TransactionID,
+		mockGatewayPaymentID,
+		request.Amount,
+	)
 
 	// Determine payment status based on payment method
 	status := payment.PaymentStatusPending // Most payments require user action
@@ -220,18 +227,13 @@ func (c *MockPGClient) InitiatePayment(ctx context.Context, request payment.Gate
 	}
 
 	fmt.Printf("✅ Payment request accepted (PENDING - awaiting user authentication)\n")
-	fmt.Printf("🌐 Redirect URL: %s\n", redirectURL)
+	fmt.Printf("🌐 Redirect URL (Mock 3DS): %s\n", redirectURL)
 	fmt.Printf("🔑 Gateway Payment ID: %s\n", mockGatewayPaymentID)
 
-	// Schedule webhook to be sent after delay (simulates payment completion after OTP/3DS)
-	c.sendWebhookAfterDelay(
-		request.CallbackURL,
-		request.TransactionID,
-		mockGatewayPaymentID,
-		request.Amount,
-		string(request.Currency),
-		string(request.PaymentMethod),
-	)
+	// Note: Webhook is NOT scheduled automatically
+	// The mock 3DS page will trigger the callback when user clicks Success/Failure buttons
+	fmt.Printf("📌 User will be redirected to mock 3DS page for authentication\n")
+	fmt.Printf("📌 Callback will be triggered when user completes authentication\n")
 
 	// Create response - returns PENDING status (payment not complete yet)
 	// Real payment gateways return PENDING here and send final status via webhook
@@ -252,11 +254,11 @@ func (c *MockPGClient) InitiatePayment(ctx context.Context, request payment.Gate
 			"tokenized":        request.Token != "",
 			"merchant_id":      c.merchantID,
 			"simulate_success": c.simulateSuccess,
-			"webhook_delay":    c.webhookDelay.String(),
+			"mock_3ds_url":     redirectURL,
 		},
 	}
 
-	fmt.Printf("📌 Note: Webhook will be sent to %s after %v\n", request.CallbackURL, c.webhookDelay)
+	fmt.Printf("📌 Note: User should open the redirect URL to complete authentication\n")
 	fmt.Println("=== MOCK PG GATEWAY: InitiatePayment Complete ===")
 	return response, nil
 }
@@ -318,6 +320,18 @@ func getMockBankName(cardType payment.CardType) string {
 	default:
 		return "Mock Bank"
 	}
+}
+
+// replaceLastPath replaces the last path segment in a URL
+// Example: replaceLastPath("http://localhost:8080/api/v1/process_payment/callback", "/callback", "/mock_3ds")
+// Returns: "http://localhost:8080/api/v1/process_payment/mock_3ds"
+func replaceLastPath(url, oldPath, newPath string) string {
+	// Simple string replacement - works for our use case
+	if len(url) >= len(oldPath) && url[len(url)-len(oldPath):] == oldPath {
+		return url[:len(url)-len(oldPath)] + newPath
+	}
+	// If oldPath not found at end, just append newPath
+	return url + newPath
 }
 
 // === WEBHOOK SIMULATION ===

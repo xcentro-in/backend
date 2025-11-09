@@ -10,6 +10,7 @@ import (
 	"github.com/labstack/echo/v4"
 	"xcentro.in/internal/adapters/external/payment/easebuzz"
 	"xcentro.in/internal/adapters/external/payment/jiopay"
+	"xcentro.in/internal/adapters/external/payment/mockpg"
 	"xcentro.in/internal/core/payment"
 )
 
@@ -20,6 +21,8 @@ type CallbackHandler struct {
 	paymentRepo     payment.PaymentRepository
 	jioPayGateway   payment.PaymentGateway
 	easebuzzGateway payment.PaymentGateway
+	mockPGGateway   payment.PaymentGateway
+	mockPGEnabled   bool // Flag to check if mock PG is enabled
 }
 
 // NewCallbackHandler creates a new callback handler
@@ -27,17 +30,22 @@ func NewCallbackHandler(
 	paymentRepo payment.PaymentRepository,
 	jioPayGateway payment.PaymentGateway,
 	easebuzzGateway payment.PaymentGateway,
+	mockPGGateway payment.PaymentGateway,
+	mockPGEnabled bool,
 ) *CallbackHandler {
 	return &CallbackHandler{
 		paymentRepo:     paymentRepo,
 		jioPayGateway:   jioPayGateway,
 		easebuzzGateway: easebuzzGateway,
+		mockPGGateway:   mockPGGateway,
+		mockPGEnabled:   mockPGEnabled,
 	}
 }
 
 // HandleCallback handles payment gateway callbacks (SURL/FURL)
 // Route: POST /api/v1/process_payment/callback?type=jiopay
 // Route: POST /api/v1/process_payment/callback?type=easebuzz
+// Route: POST /api/v1/process_payment/callback?type=mockpg
 //
 // This endpoint is called by payment gateways after user completes payment.
 // It returns HTML page to show success/failure message to user.
@@ -51,6 +59,13 @@ func (h *CallbackHandler) HandleCallback(c echo.Context) error {
 		return h.handleJioPayCallback(c)
 	case "easebuzz":
 		return h.handleEasebuzzCallback(c)
+	case "mockpg":
+		// Only allow mock PG callbacks if mock PG is enabled
+		if !h.mockPGEnabled {
+			fmt.Printf("❌ Mock PG callback received but Mock PG is not enabled\n")
+			return c.HTML(http.StatusForbidden, generateErrorHTML("Mock PG is not enabled"))
+		}
+		return h.handleMockPGCallback(c)
 	default:
 		fmt.Printf("❌ Invalid gateway type: %s\n", gatewayType)
 		return c.HTML(http.StatusBadRequest, generateErrorHTML("Invalid gateway type"))
@@ -265,6 +280,108 @@ func (h *CallbackHandler) handleEasebuzzCallback(c echo.Context) error {
 		return c.HTML(http.StatusOK, generatePendingHTML(pmt, callback.TxnID, callback.Error))
 	default:
 		return c.HTML(http.StatusOK, generateFailureHTML(pmt, callback.TxnID, callback.ErrorMessage))
+	}
+}
+
+// handleMockPGCallback processes Mock PG callback (testing only)
+// This simulates the callback flow that real gateways use
+func (h *CallbackHandler) handleMockPGCallback(c echo.Context) error {
+	ctx := c.Request().Context()
+
+	fmt.Println("=== MOCK PG CALLBACK: Processing ===")
+
+	// Step 1: Read request body
+	bodyBytes, err := io.ReadAll(c.Request().Body)
+	if err != nil {
+		fmt.Printf("❌ Failed to read body: %v\n", err)
+		return c.HTML(http.StatusBadRequest, generateErrorHTML("Invalid request"))
+	}
+
+	fmt.Printf("📥 Callback payload size: %d bytes\n", len(bodyBytes))
+
+	// Step 2: Parse callback payload
+	var callback mockpg.MockPGWebhookPayload
+	if err := json.Unmarshal(bodyBytes, &callback); err != nil {
+		fmt.Printf("❌ Failed to parse payload: %v\n", err)
+		return c.HTML(http.StatusBadRequest, generateErrorHTML("Invalid payload format"))
+	}
+
+	fmt.Printf("📋 TransactionID: %s\n", callback.TransactionID)
+	fmt.Printf("📋 GatewayPaymentID: %s\n", callback.GatewayPaymentID)
+	fmt.Printf("📋 Status: %s\n", callback.Status)
+	fmt.Printf("📋 Amount: %d %s\n", callback.Amount, callback.Currency)
+
+	// Step 3: Verify signature (mock validation)
+	if err := h.mockPGGateway.ValidateWebhook(bodyBytes, callback.Signature); err != nil {
+		fmt.Printf("❌ Signature verification failed: %v\n", err)
+		return c.HTML(http.StatusUnauthorized, generateErrorHTML("Security verification failed"))
+	}
+
+	fmt.Println("✅ Signature verified")
+
+	// Step 4: Query payment by transaction ID
+	pmt, err := h.paymentRepo.GetPaymentByID(ctx, callback.TransactionID)
+	if err != nil || pmt == nil {
+		fmt.Printf("❌ Payment not found: %s, error: %v\n", callback.TransactionID, err)
+		return c.HTML(http.StatusNotFound, generateErrorHTML("Payment not found"))
+	}
+
+	fmt.Printf("✅ Payment found: %s (current status: %s)\n", pmt.ID, pmt.Status)
+
+	// Step 5: Map callback status to internal status
+	var newStatus payment.PaymentStatus
+	if callback.Status == "success" {
+		newStatus = payment.PaymentStatusSuccess
+	} else {
+		newStatus = payment.PaymentStatusFailed
+	}
+
+	fmt.Printf("📊 Status mapping: %s → %s\n", callback.Status, newStatus)
+
+	// Step 6: Update payment (only if not already in terminal state)
+	if !isTerminalStatus(pmt.Status) {
+		fmt.Println("🔄 Updating payment status...")
+
+		metadata := map[string]any{
+			"callback_received_at":      time.Now().Format(time.RFC3339),
+			"callback_type":             "payment_status",
+			"gateway":                   "mockpg",
+			"mock_gateway_payment_id":   callback.GatewayPaymentID,
+			"payment_method":            callback.PaymentMethod,
+			"processed_at":              callback.ProcessedAt,
+			"merchant_id":               callback.MerchantID,
+			"mock_simulation":           true,
+		}
+
+		if err := h.paymentRepo.UpdatePaymentStatus(ctx, pmt.ID, newStatus, metadata); err != nil {
+			fmt.Printf("❌ Failed to update payment: %v\n", err)
+			// Don't fail callback - still show page to user
+		} else {
+			fmt.Printf("✅ Payment status updated to: %s\n", newStatus)
+		}
+
+		// Update gateway payment ID if not set
+		if pmt.GatewayPaymentID == "" || pmt.GatewayPaymentID != callback.GatewayPaymentID {
+			if err := h.paymentRepo.UpdateGatewayPaymentID(ctx, pmt.ID, callback.GatewayPaymentID, ""); err != nil {
+				fmt.Printf("⚠️  Failed to update gateway payment ID: %v\n", err)
+			} else {
+				fmt.Printf("✅ Gateway payment ID updated to: %s\n", callback.GatewayPaymentID)
+			}
+		}
+	} else {
+		fmt.Printf("⚠️  Payment already in terminal state: %s (skipping update)\n", pmt.Status)
+	}
+
+	// Step 7: Return HTML response to user
+	fmt.Println("=== MOCK PG CALLBACK: Complete ===")
+
+	switch newStatus {
+	case payment.PaymentStatusSuccess:
+		return c.HTML(http.StatusOK, generateSuccessHTML(pmt, callback.TransactionID, "Payment completed successfully"))
+	case payment.PaymentStatusPending:
+		return c.HTML(http.StatusOK, generatePendingHTML(pmt, callback.TransactionID, "Payment is being processed"))
+	default:
+		return c.HTML(http.StatusOK, generateFailureHTML(pmt, callback.TransactionID, "Payment failed"))
 	}
 }
 
