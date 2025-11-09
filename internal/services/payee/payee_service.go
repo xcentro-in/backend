@@ -853,73 +853,73 @@ func (s *PayeeService) onboardEmployee(ctx context.Context, req payee.OnboardPay
 		// Step 4: Perform penny drop verification (only for new accounts)
 		s.logger.InfoWith("Bank account not found, initiating bank account verification")
 
-	bankReq := authbridge.NewBankVerificationRequest(
-		"10000",
-		employee.AccountNumber,
-		employee.IFSCCode,
-	)
-	authbridgeClient, err := authbridge.NewClient()
-	if err != nil {
-		s.logger.ErrorWith("Failed to create authbridge client", err)
-		return nil, fmt.Errorf("failed to create authbridge client: %w", err)
-	}
-	bankResp, err := authbridgeClient.SearchDocument(bankReq)
-	if err != nil {
-		s.logger.ErrorWith("Failed to search document", err)
-		return nil, fmt.Errorf("failed to search document: %w", err)
-	}
-	s.logger.InfoWith("Bank verification response", bankResp)
-
-	/*
-		// response from authbridge
-		{
-		"msg": {
-			"accountType":"SAVINGS",
-			"beneficiaryName":"DARAHAS KOPPARAPU",
-			"clientRefId":"02112025859128",
-			"responseCode":"00",
-			"responseMsg":"SUCCESS",
-			"rrn":"530613010252",
-			"status":"SUCCESS",
-			"transDateTime":"02/11/2025 13:45:04"
-			},
-			"status":1,
-			"transId":"12",
-			"tsTransId":"TS-UXR-307481"
+		bankReq := authbridge.NewBankVerificationRequest(
+			"10000",
+			employee.AccountNumber,
+			employee.IFSCCode,
+		)
+		authbridgeClient, err := authbridge.NewClient()
+		if err != nil {
+			s.logger.ErrorWith("Failed to create authbridge client", err)
+			return nil, fmt.Errorf("failed to create authbridge client: %w", err)
 		}
-	*/
+		bankResp, err := authbridgeClient.SearchDocument(bankReq)
+		if err != nil {
+			s.logger.ErrorWith("Failed to search document", err)
+			return nil, fmt.Errorf("failed to search document: %w", err)
+		}
+		s.logger.InfoWith("Bank verification response", bankResp)
 
-	// Type assert to access nested map
-	msgData, ok := bankResp["msg"].(map[string]interface{})
-	if !ok {
-		s.logger.ErrorWith("Invalid bank verification response format")
-		return nil, fmt.Errorf("invalid bank verification response format")
-	}
+		/*
+			// response from authbridge
+			{
+			"msg": {
+				"accountType":"SAVINGS",
+				"beneficiaryName":"DARAHAS KOPPARAPU",
+				"clientRefId":"02112025859128",
+				"responseCode":"00",
+				"responseMsg":"SUCCESS",
+				"rrn":"530613010252",
+				"status":"SUCCESS",
+				"transDateTime":"02/11/2025 13:45:04"
+				},
+				"status":1,
+				"transId":"12",
+				"tsTransId":"TS-UXR-307481"
+			}
+		*/
 
-	verificationStatus, _ := msgData["status"].(string)
-	s.logger.InfoWith("Bank verification completed", "status", verificationStatus)
+		// Type assert to access nested map
+		msgData, ok := bankResp["msg"].(map[string]interface{})
+		if !ok {
+			s.logger.ErrorWith("Invalid bank verification response format")
+			return nil, fmt.Errorf("invalid bank verification response format")
+		}
 
-	// Fail fast: Abort if bank verification did not succeed
-	if verificationStatus != "SUCCESS" {
-		s.logger.ErrorWith("Bank verification failed, aborting onboarding", "status", verificationStatus)
-		return nil, fmt.Errorf("bank verification failed: account could not be verified")
-	}
+		verificationStatus, _ := msgData["status"].(string)
+		s.logger.InfoWith("Bank verification completed", "status", verificationStatus)
 
-	s.logger.InfoWith("Onboarding payee to Castler")
-	castlerPayeeResp, err := s.castlerClient.OnboardPayeeToCastler(
-		ctx,
-		req.DisplayName,
-		req.ContactEmail,
-		req.ContactPhone,
-		employee.AccountNumber,
-		employee.IFSCCode,
-		employee.BankName,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("castler payee onboarding failed: %w", err)
-	}
-	s.logger.InfoWith("Castler onboarding successful",
-		"castler_payee_id", castlerPayeeResp.Result)
+		// Fail fast: Abort if bank verification did not succeed
+		if verificationStatus != "SUCCESS" {
+			s.logger.ErrorWith("Bank verification failed, aborting onboarding", "status", verificationStatus)
+			return nil, fmt.Errorf("bank verification failed: account could not be verified")
+		}
+
+		s.logger.InfoWith("Onboarding payee to Castler")
+		castlerPayeeResp, err := s.castlerClient.OnboardPayeeToCastler(
+			ctx,
+			req.DisplayName,
+			req.ContactEmail,
+			req.ContactPhone,
+			employee.AccountNumber,
+			employee.IFSCCode,
+			employee.BankName,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("castler payee onboarding failed: %w", err)
+		}
+		s.logger.InfoWith("Castler onboarding successful",
+			"castler_payee_id", castlerPayeeResp.Result)
 
 		// // Step 5: Cross-verification (employee name vs bank account holder name)
 		// s.logger.DebugWith("Cross-verifying employee name with bank account holder name")
@@ -1061,6 +1061,12 @@ func (s *PayeeService) onboardEmployee(ctx context.Context, req payee.OnboardPay
 func (s *PayeeService) GetPayeesByBusiness(ctx context.Context, businessID string, filters payee.RelationSearchFilters) ([]*payee.BusinessPayeeRelation, error) {
 	s.logger.DebugWith("Fetching payees for business", "business_id", businessID)
 	return s.businessPayeeRelationRepo.FindByBusiness(ctx, businessID, filters)
+}
+
+// CountPayeesByBusiness returns the total count of payees for a business with filters (excluding pagination)
+func (s *PayeeService) CountPayeesByBusiness(ctx context.Context, businessID string, filters payee.RelationSearchFilters) (int, error) {
+	s.logger.DebugWith("Counting payees for business", "business_id", businessID)
+	return s.businessPayeeRelationRepo.CountByBusiness(ctx, businessID, filters)
 }
 
 // GetPayeeDetails retrieves detailed information about a specific payee (polymorphic)

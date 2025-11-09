@@ -568,6 +568,60 @@ func (r *PgBusinessPayeeRelationRepository) GetPayeeCountByType(ctx context.Cont
 	return count, nil
 }
 
+// CountByBusiness returns the total count of payee relations for a business with filters (excluding pagination)
+func (r *PgBusinessPayeeRelationRepository) CountByBusiness(ctx context.Context, businessID string, filters payee.RelationSearchFilters) (int, error) {
+	query := `
+		SELECT COUNT(*)
+		FROM xcentro.business_payee_relation r
+		INNER JOIN xcentro.payee_master m ON r.payee_id = m.payee_id
+		WHERE r.business_id = $1
+	`
+
+	args := []interface{}{businessID}
+	argIdx := 2
+
+	// Add filters (same as FindByBusiness, but excluding Limit and Offset)
+	if filters.DisplayName != "" {
+		query += fmt.Sprintf(" AND r.display_name ILIKE $%d", argIdx)
+		args = append(args, "%"+filters.DisplayName+"%")
+		argIdx++
+	}
+
+	if filters.PayeeType != "" {
+		query += fmt.Sprintf(" AND m.payee_type = $%d", argIdx)
+		args = append(args, filters.PayeeType)
+		argIdx++
+	}
+
+	if filters.IsActive != nil {
+		query += fmt.Sprintf(" AND r.is_active = $%d", argIdx)
+		args = append(args, *filters.IsActive)
+		argIdx++
+	}
+
+	if filters.IsFavorite != nil {
+		query += fmt.Sprintf(" AND r.is_favorite = $%d", argIdx)
+		args = append(args, *filters.IsFavorite)
+		argIdx++
+	}
+
+	if len(filters.Tags) > 0 {
+		query += fmt.Sprintf(" AND r.tags && $%d", argIdx)
+		args = append(args, filters.Tags)
+	}
+
+	var count int
+	err := r.querier.QueryRow(ctx, query, args...).Scan(&count)
+	if err != nil {
+		r.logger.ErrorWith("failed to count payee relations",
+			"error", err,
+			"business_id", businessID)
+		return 0, fmt.Errorf("failed to count payee relations: %w", err)
+	}
+
+	return count, nil
+}
+
 // GetVendorsForDropdown retrieves lightweight vendor list for dropdown (voucher creation)
 // Returns only vendors (not employees, billers, or GST payees) with minimal fields
 func (r *PgBusinessPayeeRelationRepository) GetVendorsForDropdown(ctx context.Context, businessID string) ([]*payee.VendorDropdownItem, error) {

@@ -194,8 +194,16 @@ func (h *PayeeHandler) GetPayees(c echo.Context) error {
 	}
 	h.logger.DebugWith("Business context", "business_id", businessID)
 
-	// Convert to service filters
-	filters := payee.RelationSearchFilters{
+	// Create filters for counting (without pagination)
+	countFilters := payee.RelationSearchFilters{
+		DisplayName: displayName,
+		IsActive:    isActive,
+		IsFavorite:  isFavorite,
+		Tags:        []string{}, // TODO: Parse tags from query if needed
+	}
+
+	// Create filters for data fetching (with pagination)
+	dataFilters := payee.RelationSearchFilters{
 		DisplayName: displayName,
 		IsActive:    isActive,
 		IsFavorite:  isFavorite,
@@ -204,9 +212,20 @@ func (h *PayeeHandler) GetPayees(c echo.Context) error {
 		Offset:      (page - 1) * pageSize,
 	}
 
-	// Call payee service
-	h.logger.DebugWith("Calling payee service")
-	relations, err := h.payeeService.GetPayeesByBusiness(c.Request().Context(), businessID, filters)
+	// Call payee service to get total count (without pagination)
+	h.logger.DebugWith("Calling payee service for total count")
+	totalCount, err := h.payeeService.CountPayeesByBusiness(c.Request().Context(), businessID, countFilters)
+	if err != nil {
+		h.logger.ErrorWith("Failed to fetch total count", "error", err)
+		return c.JSON(http.StatusInternalServerError, map[string]any{
+			"error":   "count_failed",
+			"message": err.Error(),
+		})
+	}
+
+	// Call payee service to get paginated data
+	h.logger.DebugWith("Calling payee service for paginated data")
+	relations, err := h.payeeService.GetPayeesByBusiness(c.Request().Context(), businessID, dataFilters)
 	if err != nil {
 		h.logger.ErrorWith("Failed to fetch payees", "error", err)
 		return c.JSON(http.StatusInternalServerError, map[string]any{
@@ -217,12 +236,12 @@ func (h *PayeeHandler) GetPayees(c echo.Context) error {
 
 	// Convert to response (simplified - returning relations directly)
 	// In production, you might want to enrich with payee and account details
-	h.logger.InfoWith("Payees fetched successfully", "count", len(relations), "business_id", businessID)
+	h.logger.InfoWith("Payees fetched successfully", "count", len(relations), "total_count", totalCount, "business_id", businessID)
 
 	return c.JSON(http.StatusOK, map[string]any{
 		"message":     "Payees retrieved successfully",
 		"status":      "success",
-		"total_count": len(relations),
+		"total_count": totalCount,
 		"page":        page,
 		"page_size":   pageSize,
 		"data":        relations,
