@@ -134,6 +134,7 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 
 		// Sub-step 2: Call orchestrator (gateway communication - may fail)
 		req.PaymentID = paymentID
+		req.CallbackURL = callbackURL
 		s.logger.DebugWith("Calling payment orchestrator")
 		resp, err := s.orchestrator.ProcessPayment(txCtx, req)
 		if err != nil {
