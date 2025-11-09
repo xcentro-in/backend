@@ -218,6 +218,7 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 			s.logger.DebugWith("Onboarding flag updated",
 				"business_id", req.BusinessID,
 				"flag", "has_created_first_payment")
+		}
 	}
 
 	s.logger.InfoWith("Payment processing completed", "payment_id", paymentID)

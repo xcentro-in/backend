@@ -257,6 +257,7 @@ func (ws *WalletServiceImpl) AddPaymentSource(ctx context.Context, businessID st
 		if err == nil && !flags.HasAddedPaymentMethod {
 			_ = ws.businessService.UpdateOnboardingStatus(ctx, businessID, "has_added_payment_method", true)
 			ws.logger.DebugWith("Onboarding flag updated", "business_id", businessID, "flag", "has_added_payment_method")
+		}
 	}
 
 	return nil
