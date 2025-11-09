@@ -146,6 +146,10 @@ func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group
 	webhookGroup := processPaymentGroup.Group("/webhooks")
 	webhookGroup.POST("/payment_status", webhookHandler.HandlePaymentStatusWebhook)
 	webhookGroup.POST("/settlement_status", webhookHandler.HandleSettlementStatusWebhook)
+
+	// Payment callback page handler (user-facing HTML redirect pages)
+	paymentCallbackHandler := payment.NewPaymentCallbackHandler(paymentRepository)
+	processPaymentGroup.GET("/callback_page", paymentCallbackHandler.HandlePaymentCallback)
 }
 
 func registerV1BusinessRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {

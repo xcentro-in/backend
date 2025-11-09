@@ -347,26 +347,27 @@ func getCardCategoryFromRequest(req *payment.PaymentRequest) payment.CardCategor
 }
 
 // generateCallbackURL generates the appropriate callback URL based on calling device
+// Returns user-facing HTML page URLs for web/POS and deep links for mobile
 func (s *PaymentService) generateCallbackURL(device payment.CallingDevice, paymentID string) string {
 	// TODO: Make base URLs configurable via environment variables
 	baseURL := "https://api.xcentro.in" // Production base URL
 
 	switch device {
 	case payment.CallingDeviceWeb:
-		// Web callback - redirect to web application
-		return fmt.Sprintf("%s/v1/process_payment/callback?payment_id=%s&source=web", baseURL, paymentID)
+		// Web callback - HTML page showing payment status
+		return fmt.Sprintf("%s/v1/process_payment/callback_page?transaction_id=%s&source=web", baseURL, paymentID)
 
 	case payment.CallingDeviceMobile:
-		// Mobile callback - deep link to mobile app
+		// Mobile callback - deep link to mobile app (handled separately by app)
 		return fmt.Sprintf("%s/v1/process_payment/callback?payment_id=%s&source=mobile", baseURL, paymentID)
 
 	case payment.CallingDevicePOS:
-		// POS callback - return to POS application
-		return fmt.Sprintf("%s/v1/process_payment/callback?payment_id=%s&source=pos", baseURL, paymentID)
+		// POS callback - HTML page showing payment status
+		return fmt.Sprintf("%s/v1/process_payment/callback_page?transaction_id=%s&source=pos", baseURL, paymentID)
 
 	default:
-		// Default to web callback
-		return fmt.Sprintf("%s/v1/process_payment/callback?payment_id=%s&source=web", baseURL, paymentID)
+		// Default to web callback with HTML page
+		return fmt.Sprintf("%s/v1/process_payment/callback_page?transaction_id=%s&source=web", baseURL, paymentID)
 	}
 }
 
