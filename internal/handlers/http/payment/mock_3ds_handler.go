@@ -386,17 +386,20 @@ func generateMock3DSPageHTML(transactionID, gatewayPaymentID string, amountINR f
                 });
 
                 console.log('Callback response status:', response.status);
+                console.log('Callback response content-type:', response.headers.get('content-type'));
 
-                if (response.ok) {
+                // Check if response is HTML (callback always returns HTML pages)
+                const contentType = response.headers.get('content-type');
+                if (contentType && contentType.includes('text/html')) {
                     const html = await response.text();
-                    console.log('Callback succeeded, rendering response page');
+                    console.log('Rendering HTML response page (status:', response.status, ')');
 
-                    // Replace current page with callback response (success/failure page)
+                    // Replace current page with callback response (success/failure/error page)
                     document.open();
                     document.write(html);
                     document.close();
                 } else {
-                    console.error('Callback request failed with status:', response.status);
+                    console.error('Unexpected response type:', contentType);
                     showError('Payment processing failed. Please try again.');
                 }
             } catch (error) {
