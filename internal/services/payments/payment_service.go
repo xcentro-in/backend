@@ -136,18 +136,46 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 		}
 
 		// Set payment source details for tokenized payments
-		if req.PaymentMethod == payment.PaymentMethodTokenCard && req.TokenCardDetails != nil {
-			cardSourceType := payment.PaymentSourceCard
-			p.PaymentSourceID = &req.TokenCardDetails.CardID
-			p.PaymentSourceType = &cardSourceType
-			s.logger.DebugWith("Set payment source for token card", "card_id", req.TokenCardDetails.CardID)
+		// CRITICAL: These fields must be set for payment_source tracking to work
+		if req.PaymentMethod == payment.PaymentMethodTokenCard {
+			if req.TokenCardDetails != nil && req.TokenCardDetails.CardID != "" {
+				cardSourceType := payment.PaymentSourceCard
+				p.PaymentSourceID = &req.TokenCardDetails.CardID
+				p.PaymentSourceType = &cardSourceType
+				s.logger.InfoWith("Payment source set for tokenized card payment",
+					"payment_id", paymentID,
+					"card_id", req.TokenCardDetails.CardID,
+					"source_type", "card")
+			} else {
+				// This is a critical error - tokenized payment without card_id
+				s.logger.ErrorWith("CRITICAL: token_card payment missing TokenCardDetails or CardID",
+					"payment_id", paymentID,
+					"payment_method", req.PaymentMethod,
+					"has_token_details", req.TokenCardDetails != nil)
+				return fmt.Errorf("token_card payment requires TokenCardDetails with valid CardID")
+			}
+		} else if req.PaymentMethod == payment.PaymentMethodNetBanking && req.NetBankingDetails != nil {
+			// Note: For net_banking, we may not have a payment_source_id unless it's from saved account
+			// This is expected behavior for one-time bank account usage
+			s.logger.DebugWith("Net banking payment without payment_source (one-time use)",
+				"payment_id", paymentID,
+				"bank_name", req.NetBankingDetails.BankName)
+		} else {
+			// For card, upi, wallet methods without source tracking
+			s.logger.DebugWith("Payment created without payment_source tracking",
+				"payment_id", paymentID,
+				"payment_method", req.PaymentMethod)
 		}
 
 		if err := txPaymentRepo.CreatePayment(txCtx, p); err != nil {
 			s.logger.ErrorWith("Failed to create payment record", "error", err)
 			return fmt.Errorf("failed to create payment record: %w", err)
 		}
-		s.logger.DebugWith("Payment record created", "payment_id", paymentID)
+		s.logger.InfoWith("Payment record created in database",
+			"payment_id", paymentID,
+			"payment_method", req.PaymentMethod,
+			"has_source_id", p.PaymentSourceID != nil,
+			"has_source_type", p.PaymentSourceType != nil)
 
 		// Sub-step 2: Call orchestrator (gateway communication - may fail)
 		req.PaymentID = paymentID

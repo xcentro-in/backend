@@ -41,14 +41,24 @@ func (r *PgPaymentRepository) WithTx(tx interface{}) payment.PaymentRepository {
 
 // CreatePayment creates a new payment record
 func (r *PgPaymentRepository) CreatePayment(ctx context.Context, p *payment.Payment) error {
-	fmt.Printf("[PgPaymentRepository] CreatePayment called - BusinessID: %s, UserID: %s, Amount: %d, Currency: %s, Method: %s, Type: %s\n",
-		p.BusinessID, p.UserID, p.Amount, p.Currency, p.PaymentMethod, p.PaymentType)
+	// Log payment creation with source tracking
+	sourceIDLog := "nil"
+	sourceTypeLog := "nil"
+	if p.PaymentSourceID != nil {
+		sourceIDLog = *p.PaymentSourceID
+	}
+	if p.PaymentSourceType != nil {
+		sourceTypeLog = string(*p.PaymentSourceType)
+	}
+
+	fmt.Printf("[PgPaymentRepository] CreatePayment called - BusinessID: %s, UserID: %s, Amount: %d, Currency: %s, Method: %s, Type: %s, SourceID: %s, SourceType: %s\n",
+		p.BusinessID, p.UserID, p.Amount, p.Currency, p.PaymentMethod, p.PaymentType, sourceIDLog, sourceTypeLog)
 
 	query := `
 		INSERT INTO xcentro.payments (
 			payment_id, user_id, business_id, amount, currency, payment_method, payment_type, status,
-			description, callback_url, fee_amount, total_amount, metadata
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+			description, callback_url, fee_amount, total_amount, metadata, payment_source_id, payment_source_type
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 		RETURNING created_at
 	`
 
@@ -63,26 +73,28 @@ func (r *PgPaymentRepository) CreatePayment(ctx context.Context, p *payment.Paym
 	}
 
 	err := r.querier.QueryRow(ctx, query,
-		p.ID,           // $1 - payment_id (now explicitly provided)
-		p.UserID,       // $2
-		p.BusinessID,   // $3
-		p.Amount,       // $4
-		p.Currency,     // $5
-		p.PaymentMethod, // $6
-		p.PaymentType,  // $7
-		p.Status,       // $8
-		p.Description,  // $9
-		p.CallbackURL,  // $10
-		p.FeeAmount,    // $11
-		p.TotalAmount,  // $12
-		metadataJSON,   // $13
+		p.ID,                // $1 - payment_id (now explicitly provided)
+		p.UserID,            // $2
+		p.BusinessID,        // $3
+		p.Amount,            // $4
+		p.Currency,          // $5
+		p.PaymentMethod,     // $6
+		p.PaymentType,       // $7
+		p.Status,            // $8
+		p.Description,       // $9
+		p.CallbackURL,       // $10
+		p.FeeAmount,         // $11
+		p.TotalAmount,       // $12
+		metadataJSON,        // $13
+		p.PaymentSourceID,   // $14 - CRITICAL: Must be set for tokenized payments
+		p.PaymentSourceType, // $15 - CRITICAL: Must be set for tokenized payments
 	).Scan(&p.CreatedAt)
 
 	if err != nil {
 		return fmt.Errorf("failed to create payment: %w", err)
 	}
 
-	fmt.Printf("[PgPaymentRepository] Payment created with ID: %s\n", p.ID)
+	fmt.Printf("[PgPaymentRepository] Payment created with ID: %s (source_id: %s, source_type: %s)\n", p.ID, sourceIDLog, sourceTypeLog)
 	return nil
 }
 
