@@ -664,9 +664,28 @@ func (r *PgPaymentRepository) GetPaymentListForBusiness(ctx context.Context, bus
 			) as has_successful_retry,
 			COALESCE(pa.payees, ARRAY[]::TEXT[]) as payees,
 			COALESCE(pa.bill_count, 0) as bill_count,
-			COALESCE(pa.bills, '[]'::JSONB) as bills
+			COALESCE(pa.bills, '[]'::JSONB) as bills,
+			-- Card details (if payment source is card)
+			CASE
+				WHEN sc.card_type = 'visa' THEN 'Visa'
+				WHEN sc.card_type = 'mastercard' THEN 'Mastercard'
+				WHEN sc.card_type = 'amex' THEN 'Amex'
+				WHEN sc.card_type = 'rupay' THEN 'RuPay'
+				WHEN sc.card_type = 'diners' THEN 'Diners'
+				ELSE NULL
+			END as card_provider,
+			sc.last_four_digits as card_last4,
+			-- Bank account details (if payment source is bank_account)
+			ba.bank_name,
+			ba.account_number_encrypted
 		FROM xcentro.payments p
 		LEFT JOIN payment_aggregates pa ON p.payment_id = pa.payment_id
+		LEFT JOIN xcentro.stored_cards sc
+			ON p.payment_source_id::TEXT = sc.card_id::TEXT
+			AND p.payment_source_type = 'card'
+		LEFT JOIN xcentro.bank_accounts ba
+			ON p.payment_source_id::TEXT = ba.account_id::TEXT
+			AND p.payment_source_type = 'bank_account'
 		WHERE p.business_id = $1
 		  AND p.status IN ('success', 'pending', 'failed')
 		  AND p.payment_type = 'payment'
@@ -692,6 +711,7 @@ func (r *PgPaymentRepository) GetPaymentListForBusiness(ctx context.Context, bus
 		var hasSuccessfulRetry bool
 		var payees []string
 		var billsJSON []byte
+		var cardProvider, cardLast4, bankName, accountNumberEncrypted *string
 
 		err := rows.Scan(
 			&item.PaymentID,
@@ -709,6 +729,10 @@ func (r *PgPaymentRepository) GetPaymentListForBusiness(ctx context.Context, bus
 			&payees,
 			&item.BillCount,
 			&billsJSON,
+			&cardProvider,
+			&cardLast4,
+			&bankName,
+			&accountNumberEncrypted,
 		)
 		if err != nil {
 			return nil, 0, fmt.Errorf("failed to scan payment list item: %w", err)
@@ -727,8 +751,15 @@ func (r *PgPaymentRepository) GetPaymentListForBusiness(ctx context.Context, bus
 		// Set payees
 		item.Payees = payees
 
-		// Parse payment method details
-		item.PaymentMethod = extractPaymentMethodDetails(paymentMethod, paymentSourceID, paymentSourceType, ctx, r)
+		// Parse payment method details using data from JOIN (no separate queries!)
+		item.PaymentMethod = buildPaymentMethodDetails(
+			paymentMethod,
+			cardProvider,
+			cardLast4,
+			bankName,
+			accountNumberEncrypted,
+			r.encryptionKey,
+		)
 
 		// Parse bills
 		var bills []payment.BillItem
@@ -779,7 +810,52 @@ func mapPaymentStatus(status string) string {
 	}
 }
 
-// extractPaymentMethodDetails extracts payment method details from payment
+// buildPaymentMethodDetails builds payment method details from JOIN data (no separate queries)
+func buildPaymentMethodDetails(
+	method string,
+	cardProvider *string,
+	cardLast4 *string,
+	bankName *string,
+	accountNumberEncrypted *string,
+	encryptionKey string,
+) payment.PaymentMethodDetails {
+	details := payment.PaymentMethodDetails{}
+
+	switch method {
+	case "card", "token_card":
+		details.Type = "credit"
+		if cardProvider != nil {
+			details.CardProvider = *cardProvider
+		}
+		if cardLast4 != nil {
+			details.Last4 = *cardLast4
+		}
+	case "net_banking":
+		details.Type = "bank"
+		if bankName != nil {
+			details.Bank = *bankName
+		}
+		if accountNumberEncrypted != nil {
+			// Decrypt and extract last 4 digits
+			decrypted, err := crypto.DecryptBankAccountNumber(*accountNumberEncrypted, encryptionKey)
+			if err == nil {
+				details.Last4 = crypto.ExtractLastDigits(decrypted, 4)
+			} else {
+				details.Last4 = "****"
+			}
+		}
+	case "upi":
+		details.Type = "upi"
+		details.Last4 = "UPI"
+	default:
+		details.Type = "other"
+	}
+
+	return details
+}
+
+// extractPaymentMethodDetails is kept for backward compatibility (single payment queries)
+// For list queries, use buildPaymentMethodDetails which uses JOIN data
 func extractPaymentMethodDetails(method string, sourceID, sourceType *string, ctx context.Context, r *PgPaymentRepository) payment.PaymentMethodDetails {
 	details := payment.PaymentMethodDetails{}
 
