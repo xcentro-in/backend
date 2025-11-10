@@ -17,18 +17,20 @@ import (
 	"xcentro.in/internal/shared/logger"
 )
 
-// Simple interfaces to avoid circular imports and reflection complexity
+// Simple interfaces to avoid circular imports
 type pendingVoucherManager interface {
 	GetPendingVouchers(ctx context.Context, paymentID uuid.UUID) ([]uuid.UUID, error)
 	DeletePendingVouchers(ctx context.Context, paymentID uuid.UUID) error
+	WithTx(tx interface{}) pendingVoucherManager
 }
 
 type voucherFinalizer interface {
 	FinalizeVoucher(ctx context.Context, voucherID uuid.UUID, paymentID uuid.UUID) error
+	WithTx(tx interface{}) voucherFinalizer
 }
 
 type transactionManager interface {
-	WithTx(ctx context.Context, fn func(context.Context) error) error
+	WithTx(ctx context.Context, fn func(ctx context.Context, tx interface{}) error) error
 }
 
 // CallbackHandler handles payment gateway callbacks (SURL/FURL)
@@ -500,11 +502,15 @@ func (h *CallbackHandler) finalizeVouchersOnSuccess(ctx context.Context, payment
 	h.logger.InfoWith("Found pending vouchers, starting finalization", "payment_id", paymentID, "voucher_count", len(voucherIDs))
 
 	// Step 2: Finalize vouchers and cleanup in a single transaction
-	err = h.txManager.WithTx(ctx, func(txCtx context.Context) error {
+	err = h.txManager.WithTx(ctx, func(txCtx context.Context, tx interface{}) error {
+		// Create transactional repositories
+		txVoucherRepo := h.voucherRepo.WithTx(tx)
+		txPendingRepo := h.pendingVoucherRepo.WithTx(tx)
+
 		// Finalize each voucher
 		for _, voucherID := range voucherIDs {
 			h.logger.DebugWith("Finalizing voucher", "voucher_id", voucherID.String(), "payment_id", paymentID)
-			if err := h.voucherRepo.FinalizeVoucher(txCtx, voucherID, paymentUUID); err != nil {
+			if err := txVoucherRepo.FinalizeVoucher(txCtx, voucherID, paymentUUID); err != nil {
 				h.logger.ErrorWith("Failed to finalize voucher", "voucher_id", voucherID.String(), "error", err)
 				return fmt.Errorf("failed to finalize voucher %s: %w", voucherID.String(), err)
 			}
@@ -514,7 +520,7 @@ func (h *CallbackHandler) finalizeVouchersOnSuccess(ctx context.Context, payment
 
 		// Delete pending voucher records (cleanup)
 		h.logger.DebugWith("Deleting pending voucher records", "payment_id", paymentID)
-		if err := h.pendingVoucherRepo.DeletePendingVouchers(txCtx, paymentUUID); err != nil {
+		if err := txPendingRepo.DeletePendingVouchers(txCtx, paymentUUID); err != nil {
 			h.logger.ErrorWith("Failed to delete pending vouchers", "error", err)
 			return fmt.Errorf("failed to delete pending vouchers: %w", err)
 		}
