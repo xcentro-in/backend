@@ -107,6 +107,7 @@ func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group
 	paymentRepository := paymentRepo.NewPgPaymentRepository(clients.db, cfg.BankAccountEncryption.EncryptionKey)
 	storedCardRepository := paymentRepo.NewPgStoredCardRepository(clients.db)
 	bankAccountRepository := paymentRepo.NewPgBankAccountRepository(clients.db, cfg.BankAccountEncryption.EncryptionKey)
+	pendingVoucherRepository := paymentRepo.NewPaymentVoucherPendingRepository(clients.db)
 
 	_, _, _, _, _, busSvc, authSvc := factory.createCoreServices(nil)
 
@@ -131,7 +132,7 @@ func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group
 	notificationEventRepo := notificationRepo.NewPgNotificationEventRepository(clients.db)
 	voucherService := voucherSvc.NewVoucherService(voucherRepository, queueRepository, voucherCoreService, businessPayeeRelationRepo, notificationEventRepo, logger.GetDefault())
 
-	paymentService := payments.NewPaymentService(orchestrator, paymentRepository, storedCardRepository, bankAccountRepository, walletService, feeCalculator, clients.txManager, voucherService, voucherRepository, busSvc, cfg, logger.GetDefault())
+	paymentService := payments.NewPaymentService(orchestrator, paymentRepository, storedCardRepository, bankAccountRepository, walletService, feeCalculator, clients.txManager, voucherService, voucherRepository, pendingVoucherRepository, busSvc, cfg, logger.GetDefault())
 
 	processPaymentGroup := group.Group("/process_payment")
 	payment.RegisterPaymentRoutes(processPaymentGroup, paymentService, paymentSourceService, authSvc, logger.GetDefault())

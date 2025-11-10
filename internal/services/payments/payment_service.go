@@ -16,18 +16,19 @@ import (
 
 // PaymentService orchestrates payment operations with proper layering
 type PaymentService struct {
-	orchestrator    payment.PaymentOrchestrator
-	paymentRepo     payment.PaymentRepository
-	storedCardRepo  payment.StoredCardRepository
-	bankAccountRepo payment.BankAccountRepository
-	walletService   business_rules.WalletService
-	feeCalculator   business_rules.FeeCalculator
-	txManager       client.TxManager
-	voucherService  interface{} // voucher.VoucherService, using interface{} to avoid circular import (Phase 6)
-	voucherRepo     interface{} // voucher.VoucherRepository, using interface{} to avoid circular import
-	businessService business.BusinessService
-	config          *config.Config // Application configuration (server URL, etc.)
-	logger          *logger.Logger
+	orchestrator         payment.PaymentOrchestrator
+	paymentRepo          payment.PaymentRepository
+	storedCardRepo       payment.StoredCardRepository
+	bankAccountRepo      payment.BankAccountRepository
+	walletService        business_rules.WalletService
+	feeCalculator        business_rules.FeeCalculator
+	txManager            client.TxManager
+	voucherService       interface{} // voucher.VoucherService, using interface{} to avoid circular import (Phase 6)
+	voucherRepo          interface{} // voucher.VoucherRepository, using interface{} to avoid circular import
+	pendingVoucherRepo   interface{} // PaymentVoucherPendingRepository for temporary voucher-payment linkage
+	businessService      business.BusinessService
+	config               *config.Config // Application configuration (server URL, etc.)
+	logger               *logger.Logger
 }
 
 // NewPaymentService creates a new payment service with all dependencies
@@ -41,27 +42,30 @@ func NewPaymentService(
 	txManager client.TxManager,
 	voucherService interface{}, // Phase 6: Voucher service for payment integration
 	voucherRepo interface{}, // voucher.VoucherRepository for transactional operations
+	pendingVoucherRepo interface{}, // PaymentVoucherPendingRepository for temporary voucher-payment linkage
 	businessService business.BusinessService,
 	cfg *config.Config, // Application configuration
 	logger *logger.Logger,
 ) *PaymentService {
 	s := &PaymentService{
-		orchestrator:    orchestrator,
-		paymentRepo:     paymentRepo,
-		storedCardRepo:  storedCardRepo,
-		bankAccountRepo: bankAccountRepo,
-		walletService:   walletService,
-		feeCalculator:   feeCalculator,
-		txManager:       txManager,
-		voucherService:  voucherService,
-		voucherRepo:     voucherRepo,
-		businessService: businessService,
-		config:          cfg,
-		logger:          logger,
+		orchestrator:       orchestrator,
+		paymentRepo:        paymentRepo,
+		storedCardRepo:     storedCardRepo,
+		bankAccountRepo:    bankAccountRepo,
+		walletService:      walletService,
+		feeCalculator:      feeCalculator,
+		txManager:          txManager,
+		voucherService:     voucherService,
+		voucherRepo:        voucherRepo,
+		pendingVoucherRepo: pendingVoucherRepo,
+		businessService:    businessService,
+		config:             cfg,
+		logger:             logger,
 	}
 
-	// NOTE: Voucher finalization now handled directly in service layer within transaction
-	// All payment and voucher operations are wrapped in a single transaction
+	// NOTE: Voucher finalization happens in callback handler (when payment succeeds)
+	// During payment initiation, we only store pending voucher-payment relationships
+	// This ensures vouchers are only finalized when payment actually succeeds
 
 	return s
 }
@@ -157,16 +161,16 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 		}
 		s.logger.DebugWith("Payment updated with gateway details")
 
-		// Sub-step 4: Finalize vouchers if provided (within same transaction)
-		if len(req.VoucherIDs) > 0 && s.voucherRepo != nil {
-			s.logger.InfoWith("Finalizing vouchers within transaction", "count", len(req.VoucherIDs))
+		// Sub-step 4: Store pending voucher relationships (within same transaction)
+		// Vouchers will be finalized later in callback handler when payment succeeds
+		if len(req.VoucherIDs) > 0 && s.pendingVoucherRepo != nil {
+			s.logger.InfoWith("Storing pending voucher relationships", "count", len(req.VoucherIDs))
 
-			// Use reflection to call WithTx method since we can't use direct type assertion
-			// due to circular import issues (voucherRepo is interface{} to avoid importing voucher package)
-			var txVoucherRepo interface{}
+			// Use reflection to call WithTx method since pendingVoucherRepo is interface{}
+			var txPendingRepo interface{}
 
 			// Try to call WithTx method using reflection
-			repoValue := reflect.ValueOf(s.voucherRepo)
+			repoValue := reflect.ValueOf(s.pendingVoucherRepo)
 			withTxMethod := repoValue.MethodByName("WithTx")
 
 			if withTxMethod.IsValid() {
@@ -174,44 +178,54 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 				txValue := reflect.ValueOf(tx)
 				result := withTxMethod.Call([]reflect.Value{txValue})
 				if len(result) > 0 {
-					txVoucherRepo = result[0].Interface()
-					s.logger.DebugWith("Created transactional voucher repository using reflection")
+					txPendingRepo = result[0].Interface()
+					s.logger.DebugWith("Created transactional pending voucher repository using reflection")
 				} else {
 					s.logger.ErrorWith("WithTx method returned no value")
-					return fmt.Errorf("failed to create transactional voucher repository")
+					return fmt.Errorf("failed to create transactional pending voucher repository")
 				}
 			} else {
-				s.logger.WarnWith("Voucher repository does not have WithTx method, using original repository")
-				txVoucherRepo = s.voucherRepo
+				s.logger.WarnWith("Pending voucher repository does not have WithTx method, using original repository")
+				txPendingRepo = s.pendingVoucherRepo
 			}
 
-			// Define interface for finalization
-			type voucherFinalizer interface {
-				FinalizeVoucher(ctx context.Context, voucherID uuid.UUID, paymentID uuid.UUID) error
+			// Define interface for storing pending vouchers
+			type pendingVoucherStorer interface {
+				StorePendingVouchers(ctx context.Context, paymentID uuid.UUID, voucherIDs []uuid.UUID) error
 			}
 
-			// Try to use the transactional repository for finalization
-			if finalizer, ok := txVoucherRepo.(voucherFinalizer); ok {
-				s.logger.DebugWith("Voucher repository supports FinalizeVoucher")
-				paymentUUID, _ := uuid.Parse(paymentID)
+			// Try to use the transactional repository to store pending vouchers
+			if storer, ok := txPendingRepo.(pendingVoucherStorer); ok {
+				s.logger.DebugWith("Pending voucher repository supports StorePendingVouchers")
+
+				// Parse payment ID
+				paymentUUID, parseErr := uuid.Parse(paymentID)
+				if parseErr != nil {
+					s.logger.ErrorWith("Invalid payment ID format", "payment_id", paymentID, "error", parseErr)
+					return fmt.Errorf("invalid payment ID: %w", parseErr)
+				}
+
+				// Parse voucher IDs
+				voucherUUIDs := make([]uuid.UUID, 0, len(req.VoucherIDs))
 				for _, voucherIDStr := range req.VoucherIDs {
 					voucherUUID, parseErr := uuid.Parse(voucherIDStr)
 					if parseErr != nil {
 						s.logger.ErrorWith("Invalid voucher ID format", "voucher_id", voucherIDStr, "error", parseErr)
 						return fmt.Errorf("invalid voucher ID: %w", parseErr)
 					}
-
-					s.logger.DebugWith("Calling FinalizeVoucher", "voucher_id", voucherIDStr, "payment_id", paymentID)
-					if finalizeErr := finalizer.FinalizeVoucher(txCtx, voucherUUID, paymentUUID); finalizeErr != nil {
-						s.logger.ErrorWith("Failed to finalize voucher", "voucher_id", voucherIDStr, "error", finalizeErr)
-						return fmt.Errorf("failed to finalize voucher %s: %w", voucherIDStr, finalizeErr)
-					}
-					s.logger.DebugWith("Voucher finalized", "voucher_id", voucherIDStr)
+					voucherUUIDs = append(voucherUUIDs, voucherUUID)
 				}
-				s.logger.InfoWith("All vouchers finalized successfully", "count", len(req.VoucherIDs))
+
+				// Store pending voucher relationships
+				s.logger.DebugWith("Calling StorePendingVouchers", "payment_id", paymentID, "voucher_count", len(voucherUUIDs))
+				if storeErr := storer.StorePendingVouchers(txCtx, paymentUUID, voucherUUIDs); storeErr != nil {
+					s.logger.ErrorWith("Failed to store pending vouchers", "error", storeErr)
+					return fmt.Errorf("failed to store pending vouchers: %w", storeErr)
+				}
+				s.logger.InfoWith("Pending vouchers stored successfully", "count", len(voucherUUIDs))
 			} else {
-				s.logger.ErrorWith("Voucher repository does not implement FinalizeVoucher method")
-				return fmt.Errorf("voucher repository does not support finalization")
+				s.logger.ErrorWith("Pending voucher repository does not implement StorePendingVouchers method")
+				return fmt.Errorf("pending voucher repository does not support storing")
 			}
 		}
 
