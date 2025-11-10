@@ -185,11 +185,12 @@ func (c *MockPGClient) InitiatePayment(ctx context.Context, request payment.Gate
 	mockGatewayPaymentID := fmt.Sprintf("MOCKPG_%s", uuid.Must(uuid.NewV7()).String())
 
 	// Construct mock 3DS page URL (simulates bank's OTP/authentication page)
-	// This URL is derived from the callback URL by extracting the base server URL
-	// Example: http://localhost:8080/api/v1/process_payment/callback -> http://localhost:8080/api/v1/process_payment/mock_3ds
-	redirectURL := fmt.Sprintf("%s?transaction_id=%s&gateway_payment_id=%s&amount=%d",
-		// Replace "/callback" with "/mock_3ds" in the callback URL
-		replaceLastPath(request.CallbackURL, "/callback", "/mock_3ds"),
+	// Extract base URL from callback URL and construct mock 3DS URL
+	// Callback URL format: http://localhost:8888/v1/process_payment/callback_page?transaction_id=xxx&source=web
+	// Mock 3DS URL format: http://localhost:8888/v1/process_payment/mock_3ds?transaction_id=xxx&gateway_payment_id=xxx&amount=xxx
+	baseURL := extractBaseURL(request.CallbackURL)
+	redirectURL := fmt.Sprintf("%s/v1/process_payment/mock_3ds?transaction_id=%s&gateway_payment_id=%s&amount=%d",
+		baseURL,
 		request.TransactionID,
 		mockGatewayPaymentID,
 		request.Amount,
@@ -322,16 +323,43 @@ func getMockBankName(cardType payment.CardType) string {
 	}
 }
 
-// replaceLastPath replaces the last path segment in a URL
-// Example: replaceLastPath("http://localhost:8080/api/v1/process_payment/callback", "/callback", "/mock_3ds")
-// Returns: "http://localhost:8080/api/v1/process_payment/mock_3ds"
-func replaceLastPath(url, oldPath, newPath string) string {
-	// Simple string replacement - works for our use case
-	if len(url) >= len(oldPath) && url[len(url)-len(oldPath):] == oldPath {
-		return url[:len(url)-len(oldPath)] + newPath
+// extractBaseURL extracts the base URL from a callback URL
+// Example: extractBaseURL("http://localhost:8888/v1/process_payment/callback_page?transaction_id=xxx&source=web")
+// Returns: "http://localhost:8888"
+func extractBaseURL(callbackURL string) string {
+	// Find the position of the first slash after "://"
+	// This handles both http:// and https://
+	schemeEnd := 0
+	if idx := findSubstring(callbackURL, "://"); idx >= 0 {
+		schemeEnd = idx + 3
 	}
-	// If oldPath not found at end, just append newPath
-	return url + newPath
+
+	// Find the first slash after the scheme (this marks the end of host:port)
+	pathStart := schemeEnd
+	for i := schemeEnd; i < len(callbackURL); i++ {
+		if callbackURL[i] == '/' {
+			pathStart = i
+			break
+		}
+	}
+
+	// Return everything up to (but not including) the first path slash
+	if pathStart > schemeEnd {
+		return callbackURL[:pathStart]
+	}
+
+	// Fallback: return the whole URL if no path found
+	return callbackURL
+}
+
+// findSubstring finds the index of a substring in a string
+func findSubstring(s, substr string) int {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return i
+		}
+	}
+	return -1
 }
 
 // === WEBHOOK SIMULATION ===

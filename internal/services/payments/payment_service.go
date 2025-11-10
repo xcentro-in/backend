@@ -166,12 +166,14 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 			}
 			if vr, ok := s.voucherRepo.(voucherRepoInterface); ok {
 				txVoucherRepo := vr.WithTx(tx)
+				s.logger.DebugWith("Created transactional voucher repository")
 
 				// Type assert to call FinalizeVoucher method
 				type voucherRepoFinalizer interface {
 					FinalizeVoucher(ctx context.Context, voucherID uuid.UUID, paymentID uuid.UUID) error
 				}
 				if finalizer, ok := txVoucherRepo.(voucherRepoFinalizer); ok {
+					s.logger.DebugWith("Voucher repository supports FinalizeVoucher")
 					paymentUUID, _ := uuid.Parse(paymentID)
 					for _, voucherIDStr := range req.VoucherIDs {
 						voucherUUID, parseErr := uuid.Parse(voucherIDStr)
@@ -180,6 +182,7 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 							return fmt.Errorf("invalid voucher ID: %w", parseErr)
 						}
 
+						s.logger.DebugWith("Calling FinalizeVoucher", "voucher_id", voucherIDStr, "payment_id", paymentID)
 						if finalizeErr := finalizer.FinalizeVoucher(txCtx, voucherUUID, paymentUUID); finalizeErr != nil {
 							s.logger.ErrorWith("Failed to finalize voucher", "voucher_id", voucherIDStr, "error", finalizeErr)
 							return fmt.Errorf("failed to finalize voucher %s: %w", voucherIDStr, finalizeErr)
@@ -187,7 +190,13 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 						s.logger.DebugWith("Voucher finalized", "voucher_id", voucherIDStr)
 					}
 					s.logger.InfoWith("All vouchers finalized successfully", "count", len(req.VoucherIDs))
+				} else {
+					s.logger.ErrorWith("Voucher repository does not support FinalizeVoucher method")
+					return fmt.Errorf("voucher repository does not support finalization")
 				}
+			} else {
+				s.logger.ErrorWith("Voucher repository does not support WithTx method")
+				return fmt.Errorf("voucher repository does not support transactions")
 			}
 		}
 
