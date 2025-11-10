@@ -3,10 +3,10 @@ package payments
 import (
 	"context"
 	"fmt"
-	"reflect"
 
 	"github.com/google/uuid"
 	"xcentro.in/internal/adapters/database/postgres/client"
+	paymentdb "xcentro.in/internal/adapters/database/postgres/payment"
 	"xcentro.in/internal/core/business"
 	"xcentro.in/internal/core/business_rules"
 	"xcentro.in/internal/core/payment"
@@ -23,9 +23,9 @@ type PaymentService struct {
 	walletService        business_rules.WalletService
 	feeCalculator        business_rules.FeeCalculator
 	txManager            client.TxManager
-	voucherService       interface{} // voucher.VoucherService, using interface{} to avoid circular import (Phase 6)
-	voucherRepo          interface{} // voucher.VoucherRepository, using interface{} to avoid circular import
-	pendingVoucherRepo   interface{} // PaymentVoucherPendingRepository for temporary voucher-payment linkage
+	voucherService       interface{}                                 // voucher.VoucherService, using interface{} to avoid circular import (Phase 6)
+	voucherRepo          interface{}                                 // voucher.VoucherRepository, using interface{} to avoid circular import
+	pendingVoucherRepo   *paymentdb.PaymentVoucherPendingRepository // Concrete type for temporary voucher-payment linkage
 	businessService      business.BusinessService
 	config               *config.Config // Application configuration (server URL, etc.)
 	logger               *logger.Logger
@@ -57,7 +57,7 @@ func NewPaymentService(
 		txManager:          txManager,
 		voucherService:     voucherService,
 		voucherRepo:        voucherRepo,
-		pendingVoucherRepo: pendingVoucherRepo,
+		pendingVoucherRepo: pendingVoucherRepo.(*paymentdb.PaymentVoucherPendingRepository),
 		businessService:    businessService,
 		config:             cfg,
 		logger:             logger,
@@ -166,67 +166,34 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 		if len(req.VoucherIDs) > 0 && s.pendingVoucherRepo != nil {
 			s.logger.InfoWith("Storing pending voucher relationships", "count", len(req.VoucherIDs))
 
-			// Use reflection to call WithTx method since pendingVoucherRepo is interface{}
-			var txPendingRepo interface{}
+			// Create transactional repository - no reflection needed!
+			txPendingRepo := s.pendingVoucherRepo.WithTx(tx)
 
-			// Try to call WithTx method using reflection
-			repoValue := reflect.ValueOf(s.pendingVoucherRepo)
-			withTxMethod := repoValue.MethodByName("WithTx")
-
-			if withTxMethod.IsValid() {
-				// Call WithTx(tx) and get the transactional repository
-				txValue := reflect.ValueOf(tx)
-				result := withTxMethod.Call([]reflect.Value{txValue})
-				if len(result) > 0 {
-					txPendingRepo = result[0].Interface()
-					s.logger.DebugWith("Created transactional pending voucher repository using reflection")
-				} else {
-					s.logger.ErrorWith("WithTx method returned no value")
-					return fmt.Errorf("failed to create transactional pending voucher repository")
-				}
-			} else {
-				s.logger.WarnWith("Pending voucher repository does not have WithTx method, using original repository")
-				txPendingRepo = s.pendingVoucherRepo
+			// Parse payment ID
+			paymentUUID, parseErr := uuid.Parse(paymentID)
+			if parseErr != nil {
+				s.logger.ErrorWith("Invalid payment ID format", "payment_id", paymentID, "error", parseErr)
+				return fmt.Errorf("invalid payment ID: %w", parseErr)
 			}
 
-			// Define interface for storing pending vouchers
-			type pendingVoucherStorer interface {
-				StorePendingVouchers(ctx context.Context, paymentID uuid.UUID, voucherIDs []uuid.UUID) error
-			}
-
-			// Try to use the transactional repository to store pending vouchers
-			if storer, ok := txPendingRepo.(pendingVoucherStorer); ok {
-				s.logger.DebugWith("Pending voucher repository supports StorePendingVouchers")
-
-				// Parse payment ID
-				paymentUUID, parseErr := uuid.Parse(paymentID)
+			// Parse voucher IDs
+			voucherUUIDs := make([]uuid.UUID, 0, len(req.VoucherIDs))
+			for _, voucherIDStr := range req.VoucherIDs {
+				voucherUUID, parseErr := uuid.Parse(voucherIDStr)
 				if parseErr != nil {
-					s.logger.ErrorWith("Invalid payment ID format", "payment_id", paymentID, "error", parseErr)
-					return fmt.Errorf("invalid payment ID: %w", parseErr)
+					s.logger.ErrorWith("Invalid voucher ID format", "voucher_id", voucherIDStr, "error", parseErr)
+					return fmt.Errorf("invalid voucher ID: %w", parseErr)
 				}
-
-				// Parse voucher IDs
-				voucherUUIDs := make([]uuid.UUID, 0, len(req.VoucherIDs))
-				for _, voucherIDStr := range req.VoucherIDs {
-					voucherUUID, parseErr := uuid.Parse(voucherIDStr)
-					if parseErr != nil {
-						s.logger.ErrorWith("Invalid voucher ID format", "voucher_id", voucherIDStr, "error", parseErr)
-						return fmt.Errorf("invalid voucher ID: %w", parseErr)
-					}
-					voucherUUIDs = append(voucherUUIDs, voucherUUID)
-				}
-
-				// Store pending voucher relationships
-				s.logger.DebugWith("Calling StorePendingVouchers", "payment_id", paymentID, "voucher_count", len(voucherUUIDs))
-				if storeErr := storer.StorePendingVouchers(txCtx, paymentUUID, voucherUUIDs); storeErr != nil {
-					s.logger.ErrorWith("Failed to store pending vouchers", "error", storeErr)
-					return fmt.Errorf("failed to store pending vouchers: %w", storeErr)
-				}
-				s.logger.InfoWith("Pending vouchers stored successfully", "count", len(voucherUUIDs))
-			} else {
-				s.logger.ErrorWith("Pending voucher repository does not implement StorePendingVouchers method")
-				return fmt.Errorf("pending voucher repository does not support storing")
+				voucherUUIDs = append(voucherUUIDs, voucherUUID)
 			}
+
+			// Store pending voucher relationships
+			s.logger.DebugWith("Calling StorePendingVouchers", "payment_id", paymentID, "voucher_count", len(voucherUUIDs))
+			if storeErr := txPendingRepo.StorePendingVouchers(txCtx, paymentUUID, voucherUUIDs); storeErr != nil {
+				s.logger.ErrorWith("Failed to store pending vouchers", "error", storeErr)
+				return fmt.Errorf("failed to store pending vouchers: %w", storeErr)
+			}
+			s.logger.InfoWith("Pending vouchers stored successfully", "count", len(voucherUUIDs))
 		}
 
 		// Sub-step 5: Store response for return (transaction successful)
