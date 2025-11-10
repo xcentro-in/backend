@@ -30,6 +30,7 @@ type CallbackHandler struct {
 	pendingVoucherRepo interface{} // PaymentVoucherPendingRepository for fetching pending vouchers
 	voucherRepo        interface{} // VoucherRepository for finalizing vouchers
 	txManager          interface{} // TxManager for transaction support
+	stateChangeRepo    payment.PaymentStateChangeRepository
 	logger             *logger.Logger
 }
 
@@ -43,6 +44,7 @@ func NewCallbackHandler(
 	pendingVoucherRepo interface{},
 	voucherRepo interface{},
 	txManager interface{},
+	stateChangeRepo payment.PaymentStateChangeRepository,
 ) *CallbackHandler {
 	return &CallbackHandler{
 		paymentRepo:        paymentRepo,
@@ -53,6 +55,7 @@ func NewCallbackHandler(
 		pendingVoucherRepo: pendingVoucherRepo,
 		voucherRepo:        voucherRepo,
 		txManager:          txManager,
+		stateChangeRepo:    stateChangeRepo,
 		logger:             logger.GetDefault(),
 	}
 }
@@ -373,6 +376,25 @@ func (h *CallbackHandler) handleMockPGCallback(c echo.Context) error {
 			// Don't fail callback - still show page to user
 		} else {
 			fmt.Printf("✅ Payment status updated to: %s\n", newStatus)
+
+			// Step 6.1: Record payment state change in audit trail
+			previousState := string(pmt.Status)
+			newStateStr := string(newStatus)
+			var action payment.PaymentAction
+			if newStatus == payment.PaymentStatusSuccess {
+				action = payment.PaymentActionSuccess
+			} else if newStatus == payment.PaymentStatusFailed {
+				action = payment.PaymentActionFailed
+			} else {
+				action = payment.PaymentActionProcessing
+			}
+
+			if err := h.recordPaymentStateChange(ctx, pmt.ID, action, previousState, newStateStr, "mockpg", metadata); err != nil {
+				fmt.Printf("⚠️  Failed to record state change: %v\n", err)
+				// Don't fail the callback - payment update is still successful
+			} else {
+				fmt.Println("✅ Payment state change recorded")
+			}
 		}
 
 		// Update gateway payment ID if not set
@@ -576,6 +598,55 @@ func (h *CallbackHandler) finalizeVouchersOnSuccess(ctx context.Context, payment
 	}
 
 	h.logger.InfoWith("Voucher finalization completed successfully", "payment_id", paymentID, "voucher_count", len(voucherIDs))
+	return nil
+}
+
+// recordPaymentStateChange records a state change in the audit trail
+func (h *CallbackHandler) recordPaymentStateChange(
+	ctx context.Context,
+	paymentID string,
+	action payment.PaymentAction,
+	previousState string,
+	newState string,
+	gatewayName string,
+	metadata map[string]any,
+) error {
+	// Parse payment ID
+	paymentUUID, err := uuid.Parse(paymentID)
+	if err != nil {
+		h.logger.ErrorWith("Failed to parse payment ID", "payment_id", paymentID, "error", err)
+		return fmt.Errorf("invalid payment ID: %w", err)
+	}
+
+	// Create state change request
+	req := &payment.CreatePaymentStateChangeRequest{
+		PaymentID:       paymentUUID,
+		Action:          action,
+		ActionTimestamp: time.Now(),
+		ActorType:       payment.ActorTypeWebhook,
+		ActorName:       fmt.Sprintf("%s_callback", gatewayName),
+		PreviousState:   previousState,
+		NewState:        newState,
+		Provider:        gatewayName,
+		Metadata:        metadata,
+		Remarks:         fmt.Sprintf("Payment status updated via %s callback", gatewayName),
+	}
+
+	// Record state change
+	stateChange, err := h.stateChangeRepo.Create(ctx, req)
+	if err != nil {
+		h.logger.ErrorWith("Failed to record state change", "payment_id", paymentID, "error", err)
+		return fmt.Errorf("failed to record state change: %w", err)
+	}
+
+	h.logger.InfoWith("Payment state change recorded",
+		"payment_id", paymentID,
+		"state_change_id", stateChange.StateChangeID,
+		"action", action,
+		"previous_state", previousState,
+		"new_state", newState,
+	)
+
 	return nil
 }
 

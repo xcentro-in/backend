@@ -108,6 +108,7 @@ func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group
 	storedCardRepository := paymentRepo.NewPgStoredCardRepository(clients.db)
 	bankAccountRepository := paymentRepo.NewPgBankAccountRepository(clients.db, cfg.BankAccountEncryption.EncryptionKey)
 	pendingVoucherRepository := paymentRepo.NewPaymentVoucherPendingRepository(clients.db)
+	stateChangeRepository := paymentRepo.NewPostgresPaymentStateChangeRepository(clients.db)
 
 	_, _, _, _, _, busSvc, authSvc := factory.createCoreServices(nil)
 
@@ -144,7 +145,7 @@ func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group
 	mock3DSHandler := payment.NewMock3DSHandler(paymentRepository, cfg.Server.URL)
 	processPaymentGroup.GET("/mock_3ds", mock3DSHandler.HandleMock3DSPage)
 
-	callbackHandler := payment.NewCallbackHandler(paymentRepository, jioPayClient, easebuzzClient, mockPGClient, cfg.MockPG.Enabled, pendingVoucherRepository, voucherRepository, clients.txManager)
+	callbackHandler := payment.NewCallbackHandler(paymentRepository, jioPayClient, easebuzzClient, mockPGClient, cfg.MockPG.Enabled, pendingVoucherRepository, voucherRepository, clients.txManager, stateChangeRepository)
 	processPaymentGroup.POST("/callback", callbackHandler.HandleCallback)
 
 	webhookHandler := payment.NewWebhookHandler(paymentRepository, jioPayClient, easebuzzClient, mockPGClient, cfg.MockPG.Enabled)
