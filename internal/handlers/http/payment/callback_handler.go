@@ -10,28 +10,15 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
+	"xcentro.in/internal/adapters/database/postgres/client"
+	paymentdb "xcentro.in/internal/adapters/database/postgres/payment"
+	voucherdb "xcentro.in/internal/adapters/database/postgres/voucher"
 	"xcentro.in/internal/adapters/external/payment/easebuzz"
 	"xcentro.in/internal/adapters/external/payment/jiopay"
 	"xcentro.in/internal/adapters/external/payment/mockpg"
 	"xcentro.in/internal/core/payment"
 	"xcentro.in/internal/shared/logger"
 )
-
-// Simple interfaces to avoid circular imports
-type pendingVoucherManager interface {
-	GetPendingVouchers(ctx context.Context, paymentID uuid.UUID) ([]uuid.UUID, error)
-	DeletePendingVouchers(ctx context.Context, paymentID uuid.UUID) error
-	WithTx(tx interface{}) pendingVoucherManager
-}
-
-type voucherFinalizer interface {
-	FinalizeVoucher(ctx context.Context, voucherID uuid.UUID, paymentID uuid.UUID) error
-	WithTx(tx interface{}) voucherFinalizer
-}
-
-type transactionManager interface {
-	WithTx(ctx context.Context, fn func(ctx context.Context, tx interface{}) error) error
-}
 
 // CallbackHandler handles payment gateway callbacks (SURL/FURL)
 // These are user-facing endpoints where gateways POST payment results
@@ -42,16 +29,16 @@ type CallbackHandler struct {
 	easebuzzGateway    payment.PaymentGateway
 	mockPGGateway      payment.PaymentGateway
 	mockPGEnabled      bool
-	pendingVoucherRepo pendingVoucherManager
-	voucherRepo        voucherFinalizer
-	txManager          transactionManager
+	pendingVoucherRepo *paymentdb.PaymentVoucherPendingRepository
+	voucherRepo        *voucherdb.PostgresVoucherRepository
+	txManager          client.TxManager
 	stateChangeRepo    payment.PaymentStateChangeRepository
 	logger             *logger.Logger
 }
 
 // NewCallbackHandler creates a new callback handler
 func NewCallbackHandler(
-	paymentRepo payment.PaymentRepository,
+	paymentRepoParam payment.PaymentRepository,
 	jioPayGateway payment.PaymentGateway,
 	easebuzzGateway payment.PaymentGateway,
 	mockPGGateway payment.PaymentGateway,
@@ -62,14 +49,14 @@ func NewCallbackHandler(
 	stateChangeRepo payment.PaymentStateChangeRepository,
 ) *CallbackHandler {
 	return &CallbackHandler{
-		paymentRepo:        paymentRepo,
+		paymentRepo:        paymentRepoParam,
 		jioPayGateway:      jioPayGateway,
 		easebuzzGateway:    easebuzzGateway,
 		mockPGGateway:      mockPGGateway,
 		mockPGEnabled:      mockPGEnabled,
-		pendingVoucherRepo: pendingVoucherRepo.(pendingVoucherManager),
-		voucherRepo:        voucherRepo.(voucherFinalizer),
-		txManager:          txManager.(transactionManager),
+		pendingVoucherRepo: pendingVoucherRepo.(*paymentdb.PaymentVoucherPendingRepository),
+		voucherRepo:        voucherRepo.(*voucherdb.PostgresVoucherRepository),
+		txManager:          txManager.(client.TxManager),
 		stateChangeRepo:    stateChangeRepo,
 		logger:             logger.GetDefault(),
 	}
@@ -502,7 +489,7 @@ func (h *CallbackHandler) finalizeVouchersOnSuccess(ctx context.Context, payment
 	h.logger.InfoWith("Found pending vouchers, starting finalization", "payment_id", paymentID, "voucher_count", len(voucherIDs))
 
 	// Step 2: Finalize vouchers and cleanup in a single transaction
-	err = h.txManager.WithTx(ctx, func(txCtx context.Context, tx interface{}) error {
+	err = h.txManager.WithTx(ctx, func(txCtx context.Context, tx client.Tx) error {
 		// Create transactional repositories
 		txVoucherRepo := h.voucherRepo.WithTx(tx)
 		txPendingRepo := h.pendingVoucherRepo.WithTx(tx)
