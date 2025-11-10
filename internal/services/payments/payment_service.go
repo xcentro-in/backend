@@ -3,6 +3,7 @@ package payments
 import (
 	"context"
 	"fmt"
+	"reflect"
 
 	"github.com/google/uuid"
 	"xcentro.in/internal/adapters/database/postgres/client"
@@ -157,46 +158,60 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 		s.logger.DebugWith("Payment updated with gateway details")
 
 		// Sub-step 4: Finalize vouchers if provided (within same transaction)
-		if len(req.VoucherIDs) > 0 && s.voucherRepo != nil && s.voucherService != nil {
+		if len(req.VoucherIDs) > 0 && s.voucherRepo != nil {
 			s.logger.InfoWith("Finalizing vouchers within transaction", "count", len(req.VoucherIDs))
 
-			// Type assert to get WithTx method
-			type voucherRepoInterface interface {
-				WithTx(tx interface{}) interface{}
-			}
-			if vr, ok := s.voucherRepo.(voucherRepoInterface); ok {
-				txVoucherRepo := vr.WithTx(tx)
-				s.logger.DebugWith("Created transactional voucher repository")
+			// Use reflection to call WithTx method since we can't use direct type assertion
+			// due to circular import issues (voucherRepo is interface{} to avoid importing voucher package)
+			var txVoucherRepo interface{}
 
-				// Type assert to call FinalizeVoucher method
-				type voucherRepoFinalizer interface {
-					FinalizeVoucher(ctx context.Context, voucherID uuid.UUID, paymentID uuid.UUID) error
-				}
-				if finalizer, ok := txVoucherRepo.(voucherRepoFinalizer); ok {
-					s.logger.DebugWith("Voucher repository supports FinalizeVoucher")
-					paymentUUID, _ := uuid.Parse(paymentID)
-					for _, voucherIDStr := range req.VoucherIDs {
-						voucherUUID, parseErr := uuid.Parse(voucherIDStr)
-						if parseErr != nil {
-							s.logger.ErrorWith("Invalid voucher ID format", "voucher_id", voucherIDStr, "error", parseErr)
-							return fmt.Errorf("invalid voucher ID: %w", parseErr)
-						}
+			// Try to call WithTx method using reflection
+			repoValue := reflect.ValueOf(s.voucherRepo)
+			withTxMethod := repoValue.MethodByName("WithTx")
 
-						s.logger.DebugWith("Calling FinalizeVoucher", "voucher_id", voucherIDStr, "payment_id", paymentID)
-						if finalizeErr := finalizer.FinalizeVoucher(txCtx, voucherUUID, paymentUUID); finalizeErr != nil {
-							s.logger.ErrorWith("Failed to finalize voucher", "voucher_id", voucherIDStr, "error", finalizeErr)
-							return fmt.Errorf("failed to finalize voucher %s: %w", voucherIDStr, finalizeErr)
-						}
-						s.logger.DebugWith("Voucher finalized", "voucher_id", voucherIDStr)
-					}
-					s.logger.InfoWith("All vouchers finalized successfully", "count", len(req.VoucherIDs))
+			if withTxMethod.IsValid() {
+				// Call WithTx(tx) and get the transactional repository
+				txValue := reflect.ValueOf(tx)
+				result := withTxMethod.Call([]reflect.Value{txValue})
+				if len(result) > 0 {
+					txVoucherRepo = result[0].Interface()
+					s.logger.DebugWith("Created transactional voucher repository using reflection")
 				} else {
-					s.logger.ErrorWith("Voucher repository does not support FinalizeVoucher method")
-					return fmt.Errorf("voucher repository does not support finalization")
+					s.logger.ErrorWith("WithTx method returned no value")
+					return fmt.Errorf("failed to create transactional voucher repository")
 				}
 			} else {
-				s.logger.ErrorWith("Voucher repository does not support WithTx method")
-				return fmt.Errorf("voucher repository does not support transactions")
+				s.logger.WarnWith("Voucher repository does not have WithTx method, using original repository")
+				txVoucherRepo = s.voucherRepo
+			}
+
+			// Define interface for finalization
+			type voucherFinalizer interface {
+				FinalizeVoucher(ctx context.Context, voucherID uuid.UUID, paymentID uuid.UUID) error
+			}
+
+			// Try to use the transactional repository for finalization
+			if finalizer, ok := txVoucherRepo.(voucherFinalizer); ok {
+				s.logger.DebugWith("Voucher repository supports FinalizeVoucher")
+				paymentUUID, _ := uuid.Parse(paymentID)
+				for _, voucherIDStr := range req.VoucherIDs {
+					voucherUUID, parseErr := uuid.Parse(voucherIDStr)
+					if parseErr != nil {
+						s.logger.ErrorWith("Invalid voucher ID format", "voucher_id", voucherIDStr, "error", parseErr)
+						return fmt.Errorf("invalid voucher ID: %w", parseErr)
+					}
+
+					s.logger.DebugWith("Calling FinalizeVoucher", "voucher_id", voucherIDStr, "payment_id", paymentID)
+					if finalizeErr := finalizer.FinalizeVoucher(txCtx, voucherUUID, paymentUUID); finalizeErr != nil {
+						s.logger.ErrorWith("Failed to finalize voucher", "voucher_id", voucherIDStr, "error", finalizeErr)
+						return fmt.Errorf("failed to finalize voucher %s: %w", voucherIDStr, finalizeErr)
+					}
+					s.logger.DebugWith("Voucher finalized", "voucher_id", voucherIDStr)
+				}
+				s.logger.InfoWith("All vouchers finalized successfully", "count", len(req.VoucherIDs))
+			} else {
+				s.logger.ErrorWith("Voucher repository does not implement FinalizeVoucher method")
+				return fmt.Errorf("voucher repository does not support finalization")
 			}
 		}
 
