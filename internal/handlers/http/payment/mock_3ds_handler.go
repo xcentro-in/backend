@@ -345,7 +345,7 @@ func generateMock3DSPageHTML(transactionID, gatewayPaymentID string, amountINR f
         otpInput.value = '123456';
 
         // Handle payment simulation (success or failure)
-        async function handlePayment(outcome) {
+        function handlePayment(outcome) {
             console.log('Mock 3DS: Simulating payment outcome:', outcome);
 
             // Disable buttons and show spinner
@@ -372,52 +372,24 @@ func generateMock3DSPageHTML(transactionID, gatewayPaymentID string, amountINR f
                 signature: 'MOCK_SIG_' + Math.random().toString(36).substring(7)
             };
 
-            console.log('Sending webhook to callback URL:', callbackURL);
+            console.log('Submitting form to callback URL:', callbackURL);
             console.log('Webhook payload:', webhookPayload);
 
-            try {
-                // Send webhook to callback endpoint
-                const response = await fetch(callbackURL, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify(webhookPayload)
-                });
+            // Create hidden form to POST to callback URL (traditional gateway behavior)
+            const form = document.createElement('form');
+            form.method = 'POST';
+            form.action = callbackURL;
 
-                console.log('Callback response status:', response.status);
-                console.log('Callback response content-type:', response.headers.get('content-type'));
+            // Add payload as hidden input field (JSON string)
+            const payloadInput = document.createElement('input');
+            payloadInput.type = 'hidden';
+            payloadInput.name = 'payload';
+            payloadInput.value = JSON.stringify(webhookPayload);
+            form.appendChild(payloadInput);
 
-                // Check if response is HTML (callback always returns HTML pages)
-                const contentType = response.headers.get('content-type');
-                if (contentType && contentType.includes('text/html')) {
-                    const html = await response.text();
-                    console.log('Rendering HTML response page (status:', response.status, ')');
-
-                    // Replace current page with callback response (success/failure/error page)
-                    document.open();
-                    document.write(html);
-                    document.close();
-                } else {
-                    console.error('Unexpected response type:', contentType);
-                    showError('Payment processing failed. Please try again.');
-                }
-            } catch (error) {
-                console.error('Error sending callback:', error);
-                showError('Network error. Please check your connection and try again.');
-            }
-        }
-
-        function showError(message) {
-            // Re-enable buttons
-            successBtn.disabled = false;
-            failureBtn.disabled = false;
-            document.getElementById('successText').style.display = 'inline';
-            document.getElementById('failureText').style.display = 'inline';
-            document.getElementById('successSpinner').style.display = 'none';
-            document.getElementById('failureSpinner').style.display = 'none';
-
-            alert(message);
+            // Submit form to navigate to callback page
+            document.body.appendChild(form);
+            form.submit();
         }
 
         // Simulate OTP input validation

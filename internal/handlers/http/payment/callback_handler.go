@@ -308,18 +308,18 @@ func (h *CallbackHandler) handleMockPGCallback(c echo.Context) error {
 
 	fmt.Println("=== MOCK PG CALLBACK: Processing ===")
 
-	// Step 1: Read request body
-	bodyBytes, err := io.ReadAll(c.Request().Body)
-	if err != nil {
-		fmt.Printf("❌ Failed to read body: %v\n", err)
+	// Step 1: Read form data (traditional gateway POST)
+	payloadStr := c.FormValue("payload")
+	if payloadStr == "" {
+		fmt.Println("❌ Missing payload in form data")
 		return c.HTML(http.StatusBadRequest, generateErrorHTML("Invalid request"))
 	}
 
-	fmt.Printf("📥 Callback payload size: %d bytes\n", len(bodyBytes))
+	fmt.Printf("📥 Callback payload size: %d bytes\n", len(payloadStr))
 
-	// Step 2: Parse callback payload
+	// Step 2: Parse callback payload (JSON string from form data)
 	var callback mockpg.MockPGWebhookPayload
-	if err := json.Unmarshal(bodyBytes, &callback); err != nil {
+	if err := json.Unmarshal([]byte(payloadStr), &callback); err != nil {
 		fmt.Printf("❌ Failed to parse payload: %v\n", err)
 		return c.HTML(http.StatusBadRequest, generateErrorHTML("Invalid payload format"))
 	}
@@ -330,7 +330,7 @@ func (h *CallbackHandler) handleMockPGCallback(c echo.Context) error {
 	fmt.Printf("📋 Amount: %d %s\n", callback.Amount, callback.Currency)
 
 	// Step 3: Verify signature (mock validation)
-	if err := h.mockPGGateway.ValidateWebhook(bodyBytes, callback.Signature); err != nil {
+	if err := h.mockPGGateway.ValidateWebhook([]byte(payloadStr), callback.Signature); err != nil {
 		fmt.Printf("❌ Signature verification failed: %v\n", err)
 		return c.HTML(http.StatusUnauthorized, generateErrorHTML("Security verification failed"))
 	}
