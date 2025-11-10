@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"reflect"
 	"time"
 
 	"github.com/google/uuid"
@@ -18,6 +17,20 @@ import (
 	"xcentro.in/internal/shared/logger"
 )
 
+// Simple interfaces to avoid circular imports and reflection complexity
+type pendingVoucherManager interface {
+	GetPendingVouchers(ctx context.Context, paymentID uuid.UUID) ([]uuid.UUID, error)
+	DeletePendingVouchers(ctx context.Context, paymentID uuid.UUID) error
+}
+
+type voucherFinalizer interface {
+	FinalizeVoucher(ctx context.Context, voucherID uuid.UUID, paymentID uuid.UUID) error
+}
+
+type transactionManager interface {
+	WithTx(ctx context.Context, fn func(context.Context) error) error
+}
+
 // CallbackHandler handles payment gateway callbacks (SURL/FURL)
 // These are user-facing endpoints where gateways POST payment results
 // after user completes payment. Response is HTML page for visual feedback.
@@ -26,10 +39,10 @@ type CallbackHandler struct {
 	jioPayGateway      payment.PaymentGateway
 	easebuzzGateway    payment.PaymentGateway
 	mockPGGateway      payment.PaymentGateway
-	mockPGEnabled      bool        // Flag to check if mock PG is enabled
-	pendingVoucherRepo interface{} // PaymentVoucherPendingRepository for fetching pending vouchers
-	voucherRepo        interface{} // VoucherRepository for finalizing vouchers
-	txManager          interface{} // TxManager for transaction support
+	mockPGEnabled      bool
+	pendingVoucherRepo pendingVoucherManager
+	voucherRepo        voucherFinalizer
+	txManager          transactionManager
 	stateChangeRepo    payment.PaymentStateChangeRepository
 	logger             *logger.Logger
 }
@@ -52,9 +65,9 @@ func NewCallbackHandler(
 		easebuzzGateway:    easebuzzGateway,
 		mockPGGateway:      mockPGGateway,
 		mockPGEnabled:      mockPGEnabled,
-		pendingVoucherRepo: pendingVoucherRepo,
-		voucherRepo:        voucherRepo,
-		txManager:          txManager,
+		pendingVoucherRepo: pendingVoucherRepo.(pendingVoucherManager),
+		voucherRepo:        voucherRepo.(voucherFinalizer),
+		txManager:          txManager.(transactionManager),
 		stateChangeRepo:    stateChangeRepo,
 		logger:             logger.GetDefault(),
 	}
@@ -463,31 +476,17 @@ func mapCallbackStatusToPaymentStatus(status string) payment.PaymentStatus {
 // This is called from callback handlers after payment status is updated to SUCCESS
 // It fetches pending vouchers, finalizes them, and cleans up pending records - all in a transaction
 func (h *CallbackHandler) finalizeVouchersOnSuccess(ctx context.Context, paymentID string, gatewayName string) error {
-	if h.pendingVoucherRepo == nil || h.voucherRepo == nil || h.txManager == nil {
-		h.logger.WarnWith("Voucher finalization dependencies not available, skipping", "payment_id", paymentID)
-		return nil // Not an error, just skip if dependencies aren't wired
-	}
-
 	h.logger.InfoWith("Checking for pending vouchers to finalize", "payment_id", paymentID)
 
-	// Step 1: Fetch pending vouchers for this payment
-	type pendingVoucherFetcher interface {
-		GetPendingVouchers(ctx context.Context, paymentID uuid.UUID) ([]uuid.UUID, error)
-	}
-
-	fetcher, ok := h.pendingVoucherRepo.(pendingVoucherFetcher)
-	if !ok {
-		h.logger.ErrorWith("Pending voucher repository does not implement GetPendingVouchers")
-		return fmt.Errorf("pending voucher repository missing GetPendingVouchers method")
-	}
-
+	// Parse payment ID
 	paymentUUID, err := uuid.Parse(paymentID)
 	if err != nil {
 		h.logger.ErrorWith("Invalid payment ID", "payment_id", paymentID, "error", err)
 		return fmt.Errorf("invalid payment ID: %w", err)
 	}
 
-	voucherIDs, err := fetcher.GetPendingVouchers(ctx, paymentUUID)
+	// Step 1: Get pending vouchers for this payment
+	voucherIDs, err := h.pendingVoucherRepo.GetPendingVouchers(ctx, paymentUUID)
 	if err != nil {
 		h.logger.ErrorWith("Failed to fetch pending vouchers", "error", err)
 		return fmt.Errorf("failed to fetch pending vouchers: %w", err)
@@ -500,51 +499,12 @@ func (h *CallbackHandler) finalizeVouchersOnSuccess(ctx context.Context, payment
 
 	h.logger.InfoWith("Found pending vouchers, starting finalization", "payment_id", paymentID, "voucher_count", len(voucherIDs))
 
-	// Step 2: Finalize vouchers in a transaction
-	type txManagerInterface interface {
-		WithTx(ctx context.Context, fn func(ctx context.Context, tx interface{}) error) error
-	}
-
-	txMgr, ok := h.txManager.(txManagerInterface)
-	if !ok {
-		h.logger.ErrorWith("TxManager does not implement WithTx method")
-		return fmt.Errorf("txManager missing WithTx method")
-	}
-
-	err = txMgr.WithTx(ctx, func(txCtx context.Context, tx interface{}) error {
-		// Create transactional voucher repository
-		var txVoucherRepo interface{}
-		repoValue := reflect.ValueOf(h.voucherRepo)
-		withTxMethod := repoValue.MethodByName("WithTx")
-
-		if withTxMethod.IsValid() {
-			txValue := reflect.ValueOf(tx)
-			result := withTxMethod.Call([]reflect.Value{txValue})
-			if len(result) > 0 {
-				txVoucherRepo = result[0].Interface()
-				h.logger.DebugWith("Created transactional voucher repository")
-			} else {
-				return fmt.Errorf("WithTx returned no value")
-			}
-		} else {
-			h.logger.WarnWith("Voucher repository does not have WithTx, using non-transactional")
-			txVoucherRepo = h.voucherRepo
-		}
-
+	// Step 2: Finalize vouchers and cleanup in a single transaction
+	err = h.txManager.WithTx(ctx, func(txCtx context.Context) error {
 		// Finalize each voucher
-		type voucherFinalizer interface {
-			FinalizeVoucher(ctx context.Context, voucherID uuid.UUID, paymentID uuid.UUID) error
-		}
-
-		finalizer, ok := txVoucherRepo.(voucherFinalizer)
-		if !ok {
-			h.logger.ErrorWith("Voucher repository does not implement FinalizeVoucher")
-			return fmt.Errorf("voucher repository missing FinalizeVoucher method")
-		}
-
 		for _, voucherID := range voucherIDs {
 			h.logger.DebugWith("Finalizing voucher", "voucher_id", voucherID.String(), "payment_id", paymentID)
-			if err := finalizer.FinalizeVoucher(txCtx, voucherID, paymentUUID); err != nil {
+			if err := h.voucherRepo.FinalizeVoucher(txCtx, voucherID, paymentUUID); err != nil {
 				h.logger.ErrorWith("Failed to finalize voucher", "voucher_id", voucherID.String(), "error", err)
 				return fmt.Errorf("failed to finalize voucher %s: %w", voucherID.String(), err)
 			}
@@ -552,38 +512,9 @@ func (h *CallbackHandler) finalizeVouchersOnSuccess(ctx context.Context, payment
 
 		h.logger.InfoWith("All vouchers finalized successfully", "count", len(voucherIDs))
 
-		// Create transactional pending voucher repository and delete records
-		var txPendingRepo interface{}
-		pendingRepoValue := reflect.ValueOf(h.pendingVoucherRepo)
-		pendingWithTxMethod := pendingRepoValue.MethodByName("WithTx")
-
-		if pendingWithTxMethod.IsValid() {
-			txValue := reflect.ValueOf(tx)
-			result := pendingWithTxMethod.Call([]reflect.Value{txValue})
-			if len(result) > 0 {
-				txPendingRepo = result[0].Interface()
-				h.logger.DebugWith("Created transactional pending voucher repository")
-			} else {
-				return fmt.Errorf("pending repo WithTx returned no value")
-			}
-		} else {
-			h.logger.WarnWith("Pending voucher repository does not have WithTx, using non-transactional")
-			txPendingRepo = h.pendingVoucherRepo
-		}
-
-		// Delete pending records
-		type pendingVoucherDeleter interface {
-			DeletePendingVouchers(ctx context.Context, paymentID uuid.UUID) error
-		}
-
-		deleter, ok := txPendingRepo.(pendingVoucherDeleter)
-		if !ok {
-			h.logger.ErrorWith("Pending voucher repository does not implement DeletePendingVouchers")
-			return fmt.Errorf("pending voucher repository missing DeletePendingVouchers method")
-		}
-
+		// Delete pending voucher records (cleanup)
 		h.logger.DebugWith("Deleting pending voucher records", "payment_id", paymentID)
-		if err := deleter.DeletePendingVouchers(txCtx, paymentUUID); err != nil {
+		if err := h.pendingVoucherRepo.DeletePendingVouchers(txCtx, paymentUUID); err != nil {
 			h.logger.ErrorWith("Failed to delete pending vouchers", "error", err)
 			return fmt.Errorf("failed to delete pending vouchers: %w", err)
 		}
