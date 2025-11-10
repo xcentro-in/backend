@@ -681,10 +681,10 @@ func (r *PgPaymentRepository) GetPaymentListForBusiness(ctx context.Context, bus
 		FROM xcentro.payments p
 		LEFT JOIN payment_aggregates pa ON p.payment_id = pa.payment_id
 		LEFT JOIN xcentro.stored_cards sc
-			ON p.payment_source_id::TEXT = sc.card_id::TEXT
+			ON p.payment_source_id = sc.card_id
 			AND p.payment_source_type = 'card'
 		LEFT JOIN xcentro.bank_accounts ba
-			ON p.payment_source_id::TEXT = ba.account_id::TEXT
+			ON p.payment_source_id = ba.account_id
 			AND p.payment_source_type = 'bank_account'
 		WHERE p.business_id = $1
 		  AND p.status IN ('success', 'pending', 'failed')

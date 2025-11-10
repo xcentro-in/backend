@@ -135,6 +135,14 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 			Metadata:      req.Metadata,
 		}
 
+		// Set payment source details for tokenized payments
+		if req.PaymentMethod == payment.PaymentMethodTokenCard && req.TokenCardDetails != nil {
+			cardSourceType := payment.PaymentSourceCard
+			p.PaymentSourceID = &req.TokenCardDetails.CardID
+			p.PaymentSourceType = &cardSourceType
+			s.logger.DebugWith("Set payment source for token card", "card_id", req.TokenCardDetails.CardID)
+		}
+
 		if err := txPaymentRepo.CreatePayment(txCtx, p); err != nil {
 			s.logger.ErrorWith("Failed to create payment record", "error", err)
 			return fmt.Errorf("failed to create payment record: %w", err)
