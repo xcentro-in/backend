@@ -144,7 +144,7 @@ func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group
 	mock3DSHandler := payment.NewMock3DSHandler(paymentRepository, cfg.Server.URL)
 	processPaymentGroup.GET("/mock_3ds", mock3DSHandler.HandleMock3DSPage)
 
-	callbackHandler := payment.NewCallbackHandler(paymentRepository, jioPayClient, easebuzzClient, mockPGClient, cfg.MockPG.Enabled)
+	callbackHandler := payment.NewCallbackHandler(paymentRepository, jioPayClient, easebuzzClient, mockPGClient, cfg.MockPG.Enabled, pendingVoucherRepository, voucherRepository, clients.txManager)
 	processPaymentGroup.POST("/callback", callbackHandler.HandleCallback)
 
 	webhookHandler := payment.NewWebhookHandler(paymentRepository, jioPayClient, easebuzzClient, mockPGClient, cfg.MockPG.Enabled)
