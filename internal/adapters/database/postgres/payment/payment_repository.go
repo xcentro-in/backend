@@ -561,7 +561,8 @@ func (r *PgPaymentRepository) GetPaymentListForBusiness(ctx context.Context, bus
 
 	// Main query to fetch payments with aggregated data
 	query := `
-		WITH payment_vouchers AS (
+		WITH payment_vouchers_finalized AS (
+			-- Vouchers that have been finalized (success payments)
 			SELECT
 				v.payment_id,
 				v.voucher_id,
@@ -574,20 +575,75 @@ func (r *PgPaymentRepository) GetPaymentListForBusiness(ctx context.Context, bus
 				AND v.account_id = bpr.account_id
 			WHERE v.payment_id IS NOT NULL
 		),
+		payment_vouchers_pending AS (
+			-- Vouchers that are still pending (pending/failed payments)
+			SELECT
+				pvp.payment_id,
+				v.voucher_id,
+				v.invoice_number,
+				v.net_amount,
+				bpr.display_name as payee_name
+			FROM xcentro.payment_voucher_pending pvp
+			INNER JOIN xcentro.payment_vouchers v ON pvp.voucher_id = v.voucher_id
+			INNER JOIN xcentro.business_payee_relation bpr
+				ON v.payee_id = bpr.payee_id
+				AND v.account_id = bpr.account_id
+		),
 		payment_aggregates AS (
 			SELECT
-				pv.payment_id,
-				ARRAY_AGG(DISTINCT pv.payee_name) as payees,
-				COUNT(pv.voucher_id) as bill_count,
-				JSONB_AGG(
-					JSONB_BUILD_OBJECT(
-						'voucherId', pv.voucher_id,
-						'billId', pv.invoice_number,
-						'amount', pv.net_amount
+				p.payment_id,
+				CASE
+					WHEN p.status = 'success' THEN (
+						SELECT ARRAY_AGG(DISTINCT pvf.payee_name)
+						FROM payment_vouchers_finalized pvf
+						WHERE pvf.payment_id = p.payment_id
 					)
-				) as bills
-			FROM payment_vouchers pv
-			GROUP BY pv.payment_id
+					ELSE (
+						SELECT ARRAY_AGG(DISTINCT pvp.payee_name)
+						FROM payment_vouchers_pending pvp
+						WHERE pvp.payment_id = p.payment_id
+					)
+				END as payees,
+				CASE
+					WHEN p.status = 'success' THEN (
+						SELECT COUNT(pvf.voucher_id)
+						FROM payment_vouchers_finalized pvf
+						WHERE pvf.payment_id = p.payment_id
+					)
+					ELSE (
+						SELECT COUNT(pvp.voucher_id)
+						FROM payment_vouchers_pending pvp
+						WHERE pvp.payment_id = p.payment_id
+					)
+				END as bill_count,
+				CASE
+					WHEN p.status = 'success' THEN (
+						SELECT JSONB_AGG(
+							JSONB_BUILD_OBJECT(
+								'voucherId', pvf.voucher_id,
+								'billId', pvf.invoice_number,
+								'amount', pvf.net_amount
+							)
+						)
+						FROM payment_vouchers_finalized pvf
+						WHERE pvf.payment_id = p.payment_id
+					)
+					ELSE (
+						SELECT JSONB_AGG(
+							JSONB_BUILD_OBJECT(
+								'voucherId', pvp.voucher_id,
+								'billId', pvp.invoice_number,
+								'amount', pvp.net_amount
+							)
+						)
+						FROM payment_vouchers_pending pvp
+						WHERE pvp.payment_id = p.payment_id
+					)
+				END as bills
+			FROM xcentro.payments p
+			WHERE p.business_id = $1
+			  AND p.status IN ('success', 'pending', 'failed')
+			  AND p.payment_type = 'payment'
 		)
 		SELECT
 			p.payment_id,
@@ -599,6 +655,13 @@ func (r *PgPaymentRepository) GetPaymentListForBusiness(ctx context.Context, bus
 			p.status,
 			p.payment_source_id,
 			p.payment_source_type,
+			p.retry_of_payment_id,
+			p.retry_count,
+			EXISTS(
+				SELECT 1 FROM xcentro.payments p2
+				WHERE p2.retry_of_payment_id = p.payment_id
+				AND p2.status = 'success'
+			) as has_successful_retry,
 			COALESCE(pa.payees, ARRAY[]::TEXT[]) as payees,
 			COALESCE(pa.bill_count, 0) as bill_count,
 			COALESCE(pa.bills, '[]'::JSONB) as bills
@@ -624,6 +687,9 @@ func (r *PgPaymentRepository) GetPaymentListForBusiness(ctx context.Context, bus
 		var totalAmount, baseAmount, feeAmount int64
 		var status string
 		var paymentSourceID, paymentSourceType *string
+		var retryOfPaymentID *string
+		var retryCount int
+		var hasSuccessfulRetry bool
 		var payees []string
 		var billsJSON []byte
 
@@ -637,6 +703,9 @@ func (r *PgPaymentRepository) GetPaymentListForBusiness(ctx context.Context, bus
 			&status,
 			&paymentSourceID,
 			&paymentSourceType,
+			&retryOfPaymentID,
+			&retryCount,
+			&hasSuccessfulRetry,
 			&payees,
 			&item.BillCount,
 			&billsJSON,
@@ -678,6 +747,11 @@ func (r *PgPaymentRepository) GetPaymentListForBusiness(ctx context.Context, bus
 			ConvenienceFee: convenienceFee,
 			GSTOnFee:       gstOnFee,
 		}
+
+		// Set retry-related fields
+		item.RetryOfPaymentID = retryOfPaymentID
+		item.RetryCount = retryCount
+		item.HasSuccessfulRetry = hasSuccessfulRetry
 
 		items = append(items, item)
 	}

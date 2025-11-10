@@ -5,14 +5,17 @@ import "time"
 // PaymentListItem represents a single payment in the list view
 // Used for displaying payment history with aggregated voucher/bill information
 type PaymentListItem struct {
-	PaymentID     string               `json:"payoutId"`      // Using payoutId for frontend compatibility
-	Date          time.Time            `json:"date"`
-	Payees        []string             `json:"payees"`        // List of unique payee display names
-	BillCount     int                  `json:"billCount"`     // Number of vouchers/bills
-	PaymentMethod PaymentMethodDetails `json:"paymentMethod"`
-	TotalAmount   float64              `json:"totalAmount"`   // In rupees (converted from paise)
-	Status        string               `json:"status"`        // Completed, In Progress, Failed
-	Breakdown     PaymentBreakdown     `json:"breakdown"`
+	PaymentID           string               `json:"payoutId"`                // Using payoutId for frontend compatibility
+	Date                time.Time            `json:"date"`
+	Payees              []string             `json:"payees"`                  // List of unique payee display names
+	BillCount           int                  `json:"billCount"`               // Number of vouchers/bills
+	PaymentMethod       PaymentMethodDetails `json:"paymentMethod"`
+	TotalAmount         float64              `json:"totalAmount"`             // In rupees (converted from paise)
+	Status              string               `json:"status"`                  // Completed, In Progress, Failed
+	Breakdown           PaymentBreakdown     `json:"breakdown"`
+	RetryOfPaymentID    *string              `json:"retryOfPaymentId,omitempty"` // ID of original payment if this is a retry
+	RetryCount          int                  `json:"retryCount"`              // Number of times this payment has been retried
+	HasSuccessfulRetry  bool                 `json:"hasSuccessfulRetry"`      // True if this failed payment was retried successfully
 }
 
 // PaymentMethodDetails represents payment method information for display
