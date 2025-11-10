@@ -63,7 +63,7 @@ func (h *Mock3DSHandler) HandleMock3DSPage(c echo.Context) error {
 	amountINR := float64(pmt.Amount) / 100.0
 
 	// Construct callback URL
-	callbackURL := fmt.Sprintf("%s/api/v1/process_payment/callback?type=mockpg", h.serverURL)
+	callbackURL := fmt.Sprintf("%s/v1/process_payment/callback?type=mockpg", h.serverURL)
 
 	h.logger.InfoWith("Serving mock 3DS page",
 		"transaction_id", transactionID,
