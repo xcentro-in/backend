@@ -138,12 +138,15 @@ func (r *PgBusinessRepository) CreateBusinessByNameAndGSTIN(ctx context.Context,
 func (r *PgBusinessRepository) AddKYBSuccessData(ctx context.Context, bus *business.Business) error {
 	query := `
 		UPDATE xcentro.business
-		SET kyb_status = $2, business_type = $3, income_tax_id = $4
+		SET kyb_status = $2, business_type = $3, income_tax_id = $4,
+		    business_model = CASE WHEN $5 != '' THEN $5 ELSE business_model END,
+		    business_turnover = CASE WHEN $6 != '' THEN $6 ELSE business_turnover END
 		WHERE bid = $1
 	`
 
 	result, err := r.querier.Exec(ctx, query,
 		bus.BID, bus.KybStatus, bus.BusinessType, bus.ITID,
+		bus.BusinessModel, bus.BusinessTurnover,
 	)
 
 	if err != nil {

@@ -81,10 +81,12 @@ type OnboardingInitResponse struct {
 }
 
 type CompleteKYBRequest struct {
-	BID          string              `json:"bid" validate:"required"`
-	BusinessType shared.BusinessType `json:"businessType" validate:"required"`
-	ITID         string              `json:"itid,omitempty" validate:"omitempty,pan"` // Income Tax ID (PAN) - auto-populated from init step if not provided
-	CID          string              `json:"cid,omitempty" validate:"omitempty,cin"`  // Company ID (CIN) - required for certain business types
+	BID              string              `json:"bid" validate:"required"`
+	BusinessType     shared.BusinessType `json:"businessType" validate:"required"`
+	BusinessModel    string              `json:"businessModel,omitempty"`    // Optional business model description
+	BusinessTurnover string              `json:"businessTurnover,omitempty"` // Optional business turnover description
+	ITID             string              `json:"itid,omitempty" validate:"omitempty,pan"` // Income Tax ID (PAN) - auto-populated from init step if not provided
+	CID              string              `json:"cid,omitempty" validate:"omitempty,cin"`  // Company ID (CIN) - required for certain business types
 }
 
 type CompleteKYBResponse struct {

@@ -3,6 +3,7 @@ package business
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -326,7 +327,11 @@ func (s *BusinessServiceImpl) CompleteKYB(ctx context.Context, uid string, userR
 		return nil, types.NewInvalidInputError("bid or businessType", "bid and businessType are required")
 	}
 
-	// Step 2: Validate business type
+	// Step 2: Trim optional fields
+	req.BusinessModel = strings.TrimSpace(req.BusinessModel)
+	req.BusinessTurnover = strings.TrimSpace(req.BusinessTurnover)
+
+	// Step 3: Validate business type
 	if !shared.IsValidBusinessType(req.BusinessType) {
 		return nil, types.NewInvalidBusinessTypeError(string(req.BusinessType))
 	}
@@ -435,12 +440,14 @@ func (s *BusinessServiceImpl) CompleteKYB(ctx context.Context, uid string, userR
 			return fmt.Errorf("error updating KYB data: %w", err)
 		}
 
-		// Step 9: Update business with type and status
+		// Step 9: Update business with type, model, turnover, and status
 		err = txBusinessRepo.AddKYBSuccessData(ctx, &business.Business{
-			BID:          req.BID,
-			KybStatus:    shared.KYBCompleted,
-			BusinessType: req.BusinessType,
-			ITID:         existingPAN, // Keep existing PAN
+			BID:              req.BID,
+			KybStatus:        shared.KYBCompleted,
+			BusinessType:     req.BusinessType,
+			BusinessModel:    req.BusinessModel,    // Optional
+			BusinessTurnover: req.BusinessTurnover, // Optional
+			ITID:             existingPAN,          // Keep existing PAN
 		})
 		if err != nil {
 			return fmt.Errorf("error updating business KYB status: %w", err)
