@@ -10,7 +10,6 @@ services:
       POSTGRES_USER: ${POSTGRES_SUPERUSER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_SUPERUSER_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB:-xcentro}
-      # Pass user credentials to init script
       POSTGRES_INITDB_ARGS: >-
         -c xcentro.db_owner_user=${DB_OWNER_USER:-owner}
         -c xcentro.db_owner_password=${DB_OWNER_PASSWORD}
@@ -49,11 +48,8 @@ services:
   # ----------------------------------------
   # MIGRATION SERVICE
   # ----------------------------------------
-  # Note: PostgreSQL and Redis users are set up automatically via init scripts
-  # - postgres: uses /docker-entrypoint-initdb.d/01-init-users.sql
-  # - redis: uses init-redis.sh called from redis-entrypoint.sh
   migrate:
-    image: ghcr.io/xcentro-in/backend-migrate:main-b495ce0
+    image: ghcr.io/xcentro-in/backend-migrate:main-ea1757a
     container_name: xcentro-migrate
     env_file: .env
     depends_on:
@@ -66,7 +62,7 @@ services:
   # APPLICATION SERVICES
   # ----------------------------------------
   api:
-    image: ghcr.io/xcentro-in/backend-api:main-b495ce0
+    image: ghcr.io/xcentro-in/backend-api:main-ea1757a
     container_name: xcentro-api
     restart: always
     env_file: .env
@@ -79,9 +75,15 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://localhost/v1/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   notification-worker:
-    image: ghcr.io/xcentro-in/backend-notification-worker:main-b495ce0
+    image: ghcr.io/xcentro-in/backend-notification-worker:main-ea1757a
     container_name: xcentro-notification-worker
     restart: always
     env_file: .env
@@ -94,12 +96,20 @@ services:
         condition: service_healthy
 
   frontend:
-    image: ghcr.io/xcentro-in/xcentro-app:mvp
+    image: ghcr.io/xcentro-in/xcentro-app:mvp-53fac8c
     container_name: xcentro-frontend
     restart: always
     env_file: .env
+    expose:
+      - "80"
     depends_on:
       - api
+    healthcheck:
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://localhost/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   # ----------------------------------------
   # SSL CERTIFICATE MANAGEMENT & NGINX
@@ -112,8 +122,6 @@ services:
       - certbot_conf:/etc/letsencrypt
       - certbot_www:/var/www/certbot
     entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew --webroot --webroot-path=/var/www/certbot --quiet; sleep 12h & wait $${!}; done;'"
-    # No depends_on: certbot and nginx are independent services
-    # Initial setup is handled by init-letsencrypt.sh
 
   nginx:
     image: nginx:alpine
@@ -129,11 +137,11 @@ services:
       - certbot_www:/var/www/certbot:ro
     depends_on:
       api:
-        condition: service_started
+        condition: service_healthy
       frontend:
-        condition: service_started
+        condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/health", "||", "exit", "1"]
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://localhost/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 3
