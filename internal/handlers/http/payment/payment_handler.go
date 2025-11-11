@@ -1096,6 +1096,7 @@ func RegisterPaymentRoutes(group *echo.Group, paymentService *payments.PaymentSe
 	group.POST("/get_fee_rules", handler.GetFeeRules)
 	group.POST("/tokenize", handler.Tokenize)
 	group.POST("/make_payment", handler.MakePayment)
+	group.POST("/retry", handler.RetryPayment) // Retry failed/pending payment
 
 	// Phase 10: Payment source selection with context-aware fees
 	group.POST("/get_payment_sources_with_fees", handler.GetPaymentSourcesWithFees)
@@ -1157,6 +1158,138 @@ func (h *PaymentHandler) GetPaymentList(c echo.Context) error {
 			"message": "Failed to retrieve payment list",
 		})
 	}
+
+	return c.JSON(http.StatusOK, response)
+}
+
+// RetryPayment handles POST /process_payment/retry
+func (h *PaymentHandler) RetryPayment(c echo.Context) error {
+	h.logger.Info("RetryPayment API called")
+
+	// Extract userId from JWT context
+	userID, ok := c.Get("userId").(string)
+	if !ok || userID == "" {
+		h.logger.Warn("Missing userId in JWT context")
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "MISSING_USER_ID",
+			"message": "User ID not found in token",
+		})
+	}
+
+	// Extract business_id from X-Business-ID header
+	businessID := c.Request().Header.Get("X-Business-ID")
+	if businessID == "" {
+		h.logger.Warn("Missing X-Business-ID header")
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "MISSING_BUSINESS_ID",
+			"message": "X-Business-ID header is required",
+		})
+	}
+
+	// Parse request body
+	var req struct {
+		OriginalPaymentID string `json:"original_payment_id"`
+		CallingDevice     string `json:"calling_device"`
+	}
+	if err := c.Bind(&req); err != nil {
+		h.logger.ErrorWith("Failed to bind request", "error", err)
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "invalid_request",
+			"message": "Invalid request body",
+		})
+	}
+
+	// Validate required fields
+	if req.OriginalPaymentID == "" {
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "validation_failed",
+			"message": "original_payment_id is required",
+		})
+	}
+
+	// Set default calling device
+	callingDevice := payment.CallingDeviceWeb
+	if req.CallingDevice != "" {
+		callingDevice = payment.CallingDevice(req.CallingDevice)
+	}
+
+	h.logger.InfoWith("Initiating payment retry",
+		"original_payment_id", req.OriginalPaymentID,
+		"business_id", businessID,
+		"user_id", userID,
+		"calling_device", callingDevice)
+
+	// Call payment service to retry payment
+	retryResponse, err := h.paymentService.RetryPayment(c.Request().Context(), req.OriginalPaymentID, callingDevice)
+	if err != nil {
+		h.logger.ErrorWith("Payment retry failed", "error", err,
+			"original_payment_id", req.OriginalPaymentID,
+			"business_id", businessID)
+
+		// Check for specific validation errors
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "not found") {
+			return c.JSON(http.StatusNotFound, map[string]any{
+				"error":   "payment_not_found",
+				"message": err.Error(),
+			})
+		}
+		if strings.Contains(errMsg, "cannot retry successful") {
+			return c.JSON(http.StatusBadRequest, map[string]any{
+				"error":   "already_successful",
+				"message": err.Error(),
+			})
+		}
+		if strings.Contains(errMsg, "retry window expired") {
+			return c.JSON(http.StatusBadRequest, map[string]any{
+				"error":   "retry_window_expired",
+				"message": err.Error(),
+			})
+		}
+		if strings.Contains(errMsg, "already has a retry") {
+			return c.JSON(http.StatusBadRequest, map[string]any{
+				"error":   "max_retry_exceeded",
+				"message": err.Error(),
+			})
+		}
+		if strings.Contains(errMsg, "not in draft status") {
+			return c.JSON(http.StatusBadRequest, map[string]any{
+				"error":   "voucher_already_paid",
+				"message": err.Error(),
+			})
+		}
+
+		return c.JSON(http.StatusInternalServerError, map[string]any{
+			"error":   "retry_failed",
+			"message": "Payment retry failed: " + err.Error(),
+		})
+	}
+
+	// Build response
+	response := map[string]any{
+		"status":  "success",
+		"message": "Payment retry initiated successfully",
+		"data": map[string]any{
+			"payment_id":            retryResponse.PaymentID,
+			"original_payment_id":   req.OriginalPaymentID,
+			"status":                string(retryResponse.Status),
+			"amount":                retryResponse.Amount,
+			"total_amount":          retryResponse.TotalAmount,
+			"fee_amount":            retryResponse.FeeAmount,
+			"currency":              string(retryResponse.Currency),
+			"payment_method":        string(retryResponse.PaymentMethod),
+			"gateway_used":          string(retryResponse.GatewayUsed),
+			"redirect_url":          retryResponse.RedirectURL,
+			"created_at":            retryResponse.CreatedAt.Format("2006-01-02T15:04:05Z"),
+			"is_retry":              true,
+			"retry_count":           1,
+		},
+	}
+
+	h.logger.InfoWith("Payment retry initiated successfully",
+		"retry_payment_id", retryResponse.PaymentID,
+		"original_payment_id", req.OriginalPaymentID,
+		"gateway_used", retryResponse.GatewayUsed)
 
 	return c.JSON(http.StatusOK, response)
 }

@@ -41,14 +41,24 @@ func (r *PgPaymentRepository) WithTx(tx interface{}) payment.PaymentRepository {
 
 // CreatePayment creates a new payment record
 func (r *PgPaymentRepository) CreatePayment(ctx context.Context, p *payment.Payment) error {
-	fmt.Printf("[PgPaymentRepository] CreatePayment called - BusinessID: %s, UserID: %s, Amount: %d, Currency: %s, Method: %s, Type: %s\n",
-		p.BusinessID, p.UserID, p.Amount, p.Currency, p.PaymentMethod, p.PaymentType)
+	// Log payment creation with source tracking
+	sourceIDLog := "nil"
+	sourceTypeLog := "nil"
+	if p.PaymentSourceID != nil {
+		sourceIDLog = *p.PaymentSourceID
+	}
+	if p.PaymentSourceType != nil {
+		sourceTypeLog = string(*p.PaymentSourceType)
+	}
+
+	fmt.Printf("[PgPaymentRepository] CreatePayment called - BusinessID: %s, UserID: %s, Amount: %d, Currency: %s, Method: %s, Type: %s, SourceID: %s, SourceType: %s\n",
+		p.BusinessID, p.UserID, p.Amount, p.Currency, p.PaymentMethod, p.PaymentType, sourceIDLog, sourceTypeLog)
 
 	query := `
 		INSERT INTO xcentro.payments (
 			payment_id, user_id, business_id, amount, currency, payment_method, payment_type, status,
-			description, callback_url, fee_amount, total_amount, metadata
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+			description, callback_url, fee_amount, total_amount, metadata, payment_source_id, payment_source_type
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 		RETURNING created_at
 	`
 
@@ -63,26 +73,28 @@ func (r *PgPaymentRepository) CreatePayment(ctx context.Context, p *payment.Paym
 	}
 
 	err := r.querier.QueryRow(ctx, query,
-		p.ID,           // $1 - payment_id (now explicitly provided)
-		p.UserID,       // $2
-		p.BusinessID,   // $3
-		p.Amount,       // $4
-		p.Currency,     // $5
-		p.PaymentMethod, // $6
-		p.PaymentType,  // $7
-		p.Status,       // $8
-		p.Description,  // $9
-		p.CallbackURL,  // $10
-		p.FeeAmount,    // $11
-		p.TotalAmount,  // $12
-		metadataJSON,   // $13
+		p.ID,                // $1 - payment_id (now explicitly provided)
+		p.UserID,            // $2
+		p.BusinessID,        // $3
+		p.Amount,            // $4
+		p.Currency,          // $5
+		p.PaymentMethod,     // $6
+		p.PaymentType,       // $7
+		p.Status,            // $8
+		p.Description,       // $9
+		p.CallbackURL,       // $10
+		p.FeeAmount,         // $11
+		p.TotalAmount,       // $12
+		metadataJSON,        // $13
+		p.PaymentSourceID,   // $14 - CRITICAL: Must be set for tokenized payments
+		p.PaymentSourceType, // $15 - CRITICAL: Must be set for tokenized payments
 	).Scan(&p.CreatedAt)
 
 	if err != nil {
 		return fmt.Errorf("failed to create payment: %w", err)
 	}
 
-	fmt.Printf("[PgPaymentRepository] Payment created with ID: %s\n", p.ID)
+	fmt.Printf("[PgPaymentRepository] Payment created with ID: %s (source_id: %s, source_type: %s)\n", p.ID, sourceIDLog, sourceTypeLog)
 	return nil
 }
 
@@ -93,13 +105,14 @@ func (r *PgPaymentRepository) GetPaymentByID(ctx context.Context, paymentID stri
 	query := `
 		SELECT payment_id, user_id, business_id, amount, currency, payment_method, status,
 		       description, gateway_used, gateway_payment_id, callback_url, redirect_url,
-		       payment_source_id, payment_source_type, fee_amount, total_amount,
-		       metadata, created_at, updated_at
+		       payment_source_id, payment_source_type, retry_of_payment_id, retry_count,
+		       fee_amount, total_amount, metadata, created_at, updated_at
 		FROM xcentro.payments WHERE payment_id = $1
 	`
 
 	var p payment.Payment
-	var gatewayUsed, gatewayPaymentID, redirectURL, paymentSourceID, paymentSourceType *string
+	var gatewayUsed, gatewayPaymentID, redirectURL, paymentSourceID, paymentSourceType, retryOfPaymentID *string
+	var retryCount *int
 	var metadataJSON []byte
 	var updatedAt *time.Time
 
@@ -118,6 +131,8 @@ func (r *PgPaymentRepository) GetPaymentByID(ctx context.Context, paymentID stri
 		&redirectURL,
 		&paymentSourceID,
 		&paymentSourceType,
+		&retryOfPaymentID,
+		&retryCount,
 		&p.FeeAmount,
 		&p.TotalAmount,
 		&metadataJSON,
@@ -147,6 +162,8 @@ func (r *PgPaymentRepository) GetPaymentByID(ctx context.Context, paymentID stri
 		pst := payment.PaymentSourceType(*paymentSourceType)
 		p.PaymentSourceType = &pst
 	}
+	p.RetryOfPaymentID = retryOfPaymentID
+	p.RetryCount = retryCount
 	if updatedAt != nil {
 		p.UpdatedAt = *updatedAt
 	}
@@ -561,7 +578,8 @@ func (r *PgPaymentRepository) GetPaymentListForBusiness(ctx context.Context, bus
 
 	// Main query to fetch payments with aggregated data
 	query := `
-		WITH payment_vouchers AS (
+		WITH payment_vouchers_finalized AS (
+			-- Vouchers that have been finalized (success payments)
 			SELECT
 				v.payment_id,
 				v.voucher_id,
@@ -574,20 +592,75 @@ func (r *PgPaymentRepository) GetPaymentListForBusiness(ctx context.Context, bus
 				AND v.account_id = bpr.account_id
 			WHERE v.payment_id IS NOT NULL
 		),
+		payment_vouchers_pending AS (
+			-- Vouchers that are still pending (pending/failed payments)
+			SELECT
+				pvp.payment_id,
+				v.voucher_id,
+				v.invoice_number,
+				v.net_amount,
+				bpr.display_name as payee_name
+			FROM xcentro.payment_voucher_pending pvp
+			INNER JOIN xcentro.payment_vouchers v ON pvp.voucher_id = v.voucher_id
+			INNER JOIN xcentro.business_payee_relation bpr
+				ON v.payee_id = bpr.payee_id
+				AND v.account_id = bpr.account_id
+		),
 		payment_aggregates AS (
 			SELECT
-				pv.payment_id,
-				ARRAY_AGG(DISTINCT pv.payee_name) as payees,
-				COUNT(pv.voucher_id) as bill_count,
-				JSONB_AGG(
-					JSONB_BUILD_OBJECT(
-						'voucherId', pv.voucher_id,
-						'billId', pv.invoice_number,
-						'amount', pv.net_amount
+				p.payment_id,
+				CASE
+					WHEN p.status = 'success' THEN (
+						SELECT ARRAY_AGG(DISTINCT pvf.payee_name)
+						FROM payment_vouchers_finalized pvf
+						WHERE pvf.payment_id = p.payment_id
 					)
-				) as bills
-			FROM payment_vouchers pv
-			GROUP BY pv.payment_id
+					ELSE (
+						SELECT ARRAY_AGG(DISTINCT pvp.payee_name)
+						FROM payment_vouchers_pending pvp
+						WHERE pvp.payment_id = p.payment_id
+					)
+				END as payees,
+				CASE
+					WHEN p.status = 'success' THEN (
+						SELECT COUNT(pvf.voucher_id)
+						FROM payment_vouchers_finalized pvf
+						WHERE pvf.payment_id = p.payment_id
+					)
+					ELSE (
+						SELECT COUNT(pvp.voucher_id)
+						FROM payment_vouchers_pending pvp
+						WHERE pvp.payment_id = p.payment_id
+					)
+				END as bill_count,
+				CASE
+					WHEN p.status = 'success' THEN (
+						SELECT JSONB_AGG(
+							JSONB_BUILD_OBJECT(
+								'voucherId', pvf.voucher_id,
+								'billId', pvf.invoice_number,
+								'amount', pvf.net_amount
+							)
+						)
+						FROM payment_vouchers_finalized pvf
+						WHERE pvf.payment_id = p.payment_id
+					)
+					ELSE (
+						SELECT JSONB_AGG(
+							JSONB_BUILD_OBJECT(
+								'voucherId', pvp.voucher_id,
+								'billId', pvp.invoice_number,
+								'amount', pvp.net_amount
+							)
+						)
+						FROM payment_vouchers_pending pvp
+						WHERE pvp.payment_id = p.payment_id
+					)
+				END as bills
+			FROM xcentro.payments p
+			WHERE p.business_id = $1
+			  AND p.status IN ('success', 'pending', 'failed')
+			  AND p.payment_type = 'payment'
 		)
 		SELECT
 			p.payment_id,
@@ -599,11 +672,37 @@ func (r *PgPaymentRepository) GetPaymentListForBusiness(ctx context.Context, bus
 			p.status,
 			p.payment_source_id,
 			p.payment_source_type,
+			p.retry_of_payment_id,
+			p.retry_count,
+			EXISTS(
+				SELECT 1 FROM xcentro.payments p2
+				WHERE p2.retry_of_payment_id = p.payment_id
+				AND p2.status = 'success'
+			) as has_successful_retry,
 			COALESCE(pa.payees, ARRAY[]::TEXT[]) as payees,
 			COALESCE(pa.bill_count, 0) as bill_count,
-			COALESCE(pa.bills, '[]'::JSONB) as bills
+			COALESCE(pa.bills, '[]'::JSONB) as bills,
+			-- Card details (if payment source is card)
+			CASE
+				WHEN sc.card_type = 'visa' THEN 'Visa'
+				WHEN sc.card_type = 'mastercard' THEN 'Mastercard'
+				WHEN sc.card_type = 'amex' THEN 'Amex'
+				WHEN sc.card_type = 'rupay' THEN 'RuPay'
+				WHEN sc.card_type = 'diners' THEN 'Diners'
+				ELSE NULL
+			END as card_provider,
+			sc.last_four_digits as card_last4,
+			-- Bank account details (if payment source is bank_account)
+			ba.bank_name,
+			ba.account_number_encrypted
 		FROM xcentro.payments p
 		LEFT JOIN payment_aggregates pa ON p.payment_id = pa.payment_id
+		LEFT JOIN xcentro.stored_cards sc
+			ON p.payment_source_id = sc.card_id
+			AND p.payment_source_type = 'card'
+		LEFT JOIN xcentro.bank_accounts ba
+			ON p.payment_source_id = ba.account_id
+			AND p.payment_source_type = 'bank_account'
 		WHERE p.business_id = $1
 		  AND p.status IN ('success', 'pending', 'failed')
 		  AND p.payment_type = 'payment'
@@ -624,8 +723,12 @@ func (r *PgPaymentRepository) GetPaymentListForBusiness(ctx context.Context, bus
 		var totalAmount, baseAmount, feeAmount int64
 		var status string
 		var paymentSourceID, paymentSourceType *string
+		var retryOfPaymentID *string
+		var retryCount int
+		var hasSuccessfulRetry bool
 		var payees []string
 		var billsJSON []byte
+		var cardProvider, cardLast4, bankName, accountNumberEncrypted *string
 
 		err := rows.Scan(
 			&item.PaymentID,
@@ -637,20 +740,26 @@ func (r *PgPaymentRepository) GetPaymentListForBusiness(ctx context.Context, bus
 			&status,
 			&paymentSourceID,
 			&paymentSourceType,
+			&retryOfPaymentID,
+			&retryCount,
+			&hasSuccessfulRetry,
 			&payees,
 			&item.BillCount,
 			&billsJSON,
+			&cardProvider,
+			&cardLast4,
+			&bankName,
+			&accountNumberEncrypted,
 		)
 		if err != nil {
 			return nil, 0, fmt.Errorf("failed to scan payment list item: %w", err)
 		}
 
-		// Convert amounts from paise to rupees
-		item.TotalAmount = float64(totalAmount) / 100.0
-		convenienceFee := float64(feeAmount) / 100.0
+		// Keep amounts in paise (no conversion)
+		item.TotalAmount = totalAmount
 
-		// Calculate GST on fee (18% of convenience fee)
-		gstOnFee := convenienceFee * 0.18
+		// Calculate GST on fee (18% of convenience fee) - keep in paise
+		gstOnFee := int64(float64(feeAmount) * 0.18)
 
 		// Map status
 		item.Status = status
@@ -658,26 +767,35 @@ func (r *PgPaymentRepository) GetPaymentListForBusiness(ctx context.Context, bus
 		// Set payees
 		item.Payees = payees
 
-		// Parse payment method details
-		item.PaymentMethod = extractPaymentMethodDetails(paymentMethod, paymentSourceID, paymentSourceType, ctx, r)
+		// Parse payment method details using data from JOIN (no separate queries!)
+		item.PaymentMethod = buildPaymentMethodDetails(
+			paymentMethod,
+			cardProvider,
+			cardLast4,
+			bankName,
+			accountNumberEncrypted,
+			r.encryptionKey,
+		)
 
-		// Parse bills
+		// Parse bills - amounts already in paise from database
 		var bills []payment.BillItem
 		if len(billsJSON) > 0 {
 			if err := json.Unmarshal(billsJSON, &bills); err != nil {
 				return nil, 0, fmt.Errorf("failed to unmarshal bills: %w", err)
 			}
-			// Convert bill amounts from paise to rupees
-			for i := range bills {
-				bills[i].Amount = bills[i].Amount / 100.0
-			}
+			// Bills already in paise, no conversion needed
 		}
 
 		item.Breakdown = payment.PaymentBreakdown{
 			Bills:          bills,
-			ConvenienceFee: convenienceFee,
+			ConvenienceFee: feeAmount,
 			GSTOnFee:       gstOnFee,
 		}
+
+		// Set retry-related fields
+		item.RetryOfPaymentID = retryOfPaymentID
+		item.RetryCount = retryCount
+		item.HasSuccessfulRetry = hasSuccessfulRetry
 
 		items = append(items, item)
 	}
@@ -705,7 +823,52 @@ func mapPaymentStatus(status string) string {
 	}
 }
 
-// extractPaymentMethodDetails extracts payment method details from payment
+// buildPaymentMethodDetails builds payment method details from JOIN data (no separate queries)
+func buildPaymentMethodDetails(
+	method string,
+	cardProvider *string,
+	cardLast4 *string,
+	bankName *string,
+	accountNumberEncrypted *string,
+	encryptionKey string,
+) payment.PaymentMethodDetails {
+	details := payment.PaymentMethodDetails{}
+
+	switch method {
+	case "card", "token_card":
+		details.Type = "credit"
+		if cardProvider != nil {
+			details.CardProvider = *cardProvider
+		}
+		if cardLast4 != nil {
+			details.Last4 = *cardLast4
+		}
+	case "net_banking":
+		details.Type = "bank"
+		if bankName != nil {
+			details.Bank = *bankName
+		}
+		if accountNumberEncrypted != nil {
+			// Decrypt and extract last 4 digits
+			decrypted, err := crypto.DecryptBankAccountNumber(*accountNumberEncrypted, encryptionKey)
+			if err == nil {
+				details.Last4 = crypto.ExtractLastDigits(decrypted, 4)
+			} else {
+				details.Last4 = "****"
+			}
+		}
+	case "upi":
+		details.Type = "upi"
+		details.Last4 = "UPI"
+	default:
+		details.Type = "other"
+	}
+
+	return details
+}
+
+// extractPaymentMethodDetails is kept for backward compatibility (single payment queries)
+// For list queries, use buildPaymentMethodDetails which uses JOIN data
 func extractPaymentMethodDetails(method string, sourceID, sourceType *string, ctx context.Context, r *PgPaymentRepository) payment.PaymentMethodDetails {
 	details := payment.PaymentMethodDetails{}
 
@@ -828,4 +991,43 @@ func fetchBankAccountDetails(ctx context.Context, r *PgPaymentRepository, accoun
 
 	last4 := crypto.ExtractLastDigits(decryptedAccountNumber, 4)
 	return &bankDetailsResult{BankName: bankName, Last4: last4}
+}
+
+// UpdateRetryMetadata updates retry-related fields on a payment
+func (r *PgPaymentRepository) UpdateRetryMetadata(ctx context.Context, paymentID string, retryOfPaymentID string, retryCount int) error {
+	query := `
+		UPDATE xcentro.payments
+		SET retry_of_payment_id = $1, retry_count = $2, updated_at = NOW()
+		WHERE payment_id = $3
+	`
+
+	result, err := r.querier.Exec(ctx, query, retryOfPaymentID, retryCount, paymentID)
+	if err != nil {
+		return fmt.Errorf("failed to update retry metadata: %w", err)
+	}
+
+	rowsAffected := result.RowsAffected()
+	if rowsAffected == 0 {
+		return fmt.Errorf("payment not found: %s", paymentID)
+	}
+
+	fmt.Printf("[PgPaymentRepository] Updated retry metadata - PaymentID: %s, RetryOf: %s, RetryCount: %d\n",
+		paymentID, retryOfPaymentID, retryCount)
+
+	return nil
+}
+
+// UpdateHasSuccessfulRetry updates the has_successful_retry flag on the original payment
+// This is called when a retry payment succeeds
+func (r *PgPaymentRepository) UpdateHasSuccessfulRetry(ctx context.Context, paymentID string, hasSuccessfulRetry bool) error {
+	// Note: has_successful_retry is computed dynamically in the payment list query
+	// via EXISTS check. This method is a no-op since we don't store it.
+	// The flag is determined by: EXISTS(SELECT 1 FROM payments WHERE retry_of_payment_id = p.payment_id AND status = 'success')
+	// So we don't need to update anything - it will automatically reflect when the retry payment has status='success'
+	
+	r.logger.DebugWith("UpdateHasSuccessfulRetry called (no-op - computed dynamically)",
+		"payment_id", paymentID,
+		"has_successful_retry", hasSuccessfulRetry)
+	
+	return nil
 }

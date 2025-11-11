@@ -15,6 +15,8 @@ type PaymentRepository interface {
 	UpdateGatewayPaymentID(ctx context.Context, paymentID string, gatewayPaymentID, redirectURL string) error
 	UpdatePaymentFees(ctx context.Context, paymentID string, feeAmount, totalAmount int64) error
 	UpdatePaymentSource(ctx context.Context, paymentID string, sourceID string, sourceType PaymentSourceType) error
+	UpdateRetryMetadata(ctx context.Context, paymentID string, retryOfPaymentID string, retryCount int) error
+	UpdateHasSuccessfulRetry(ctx context.Context, paymentID string, hasSuccessfulRetry bool) error
 
 	// Querying for business operations
 	GetPaymentsByBusinessID(ctx context.Context, businessID string, limit, offset int) ([]*Payment, error)

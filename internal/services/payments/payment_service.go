@@ -3,9 +3,11 @@ package payments
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"xcentro.in/internal/adapters/database/postgres/client"
+	paymentdb "xcentro.in/internal/adapters/database/postgres/payment"
 	"xcentro.in/internal/core/business"
 	"xcentro.in/internal/core/business_rules"
 	"xcentro.in/internal/core/payment"
@@ -15,18 +17,19 @@ import (
 
 // PaymentService orchestrates payment operations with proper layering
 type PaymentService struct {
-	orchestrator    payment.PaymentOrchestrator
-	paymentRepo     payment.PaymentRepository
-	storedCardRepo  payment.StoredCardRepository
-	bankAccountRepo payment.BankAccountRepository
-	walletService   business_rules.WalletService
-	feeCalculator   business_rules.FeeCalculator
-	txManager       client.TxManager
-	voucherService  interface{} // voucher.VoucherService, using interface{} to avoid circular import (Phase 6)
-	voucherRepo     interface{} // voucher.VoucherRepository, using interface{} to avoid circular import
-	businessService business.BusinessService
-	config          *config.Config // Application configuration (server URL, etc.)
-	logger          *logger.Logger
+	orchestrator         payment.PaymentOrchestrator
+	paymentRepo          payment.PaymentRepository
+	storedCardRepo       payment.StoredCardRepository
+	bankAccountRepo      payment.BankAccountRepository
+	walletService        business_rules.WalletService
+	feeCalculator        business_rules.FeeCalculator
+	txManager            client.TxManager
+	voucherService       interface{}                                 // voucher.VoucherService, using interface{} to avoid circular import (Phase 6)
+	voucherRepo          interface{}                                 // voucher.VoucherRepository, using interface{} to avoid circular import
+	pendingVoucherRepo   *paymentdb.PaymentVoucherPendingRepository // Concrete type for temporary voucher-payment linkage
+	businessService      business.BusinessService
+	config               *config.Config // Application configuration (server URL, etc.)
+	logger               *logger.Logger
 }
 
 // NewPaymentService creates a new payment service with all dependencies
@@ -40,27 +43,30 @@ func NewPaymentService(
 	txManager client.TxManager,
 	voucherService interface{}, // Phase 6: Voucher service for payment integration
 	voucherRepo interface{}, // voucher.VoucherRepository for transactional operations
+	pendingVoucherRepo interface{}, // PaymentVoucherPendingRepository for temporary voucher-payment linkage
 	businessService business.BusinessService,
 	cfg *config.Config, // Application configuration
 	logger *logger.Logger,
 ) *PaymentService {
 	s := &PaymentService{
-		orchestrator:    orchestrator,
-		paymentRepo:     paymentRepo,
-		storedCardRepo:  storedCardRepo,
-		bankAccountRepo: bankAccountRepo,
-		walletService:   walletService,
-		feeCalculator:   feeCalculator,
-		txManager:       txManager,
-		voucherService:  voucherService,
-		voucherRepo:     voucherRepo,
-		businessService: businessService,
-		config:          cfg,
-		logger:          logger,
+		orchestrator:       orchestrator,
+		paymentRepo:        paymentRepo,
+		storedCardRepo:     storedCardRepo,
+		bankAccountRepo:    bankAccountRepo,
+		walletService:      walletService,
+		feeCalculator:      feeCalculator,
+		txManager:          txManager,
+		voucherService:     voucherService,
+		voucherRepo:        voucherRepo,
+		pendingVoucherRepo: pendingVoucherRepo.(*paymentdb.PaymentVoucherPendingRepository),
+		businessService:    businessService,
+		config:             cfg,
+		logger:             logger,
 	}
 
-	// NOTE: Voucher finalization now handled directly in service layer within transaction
-	// All payment and voucher operations are wrapped in a single transaction
+	// NOTE: Voucher finalization happens in callback handler (when payment succeeds)
+	// During payment initiation, we only store pending voucher-payment relationships
+	// This ensures vouchers are only finalized when payment actually succeeds
 
 	return s
 }
@@ -130,11 +136,47 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 			Metadata:      req.Metadata,
 		}
 
+		// Set payment source details for tokenized payments
+		// CRITICAL: These fields must be set for payment_source tracking to work
+		if req.PaymentMethod == payment.PaymentMethodTokenCard {
+			if req.TokenCardDetails != nil && req.TokenCardDetails.CardID != "" {
+				cardSourceType := payment.PaymentSourceCard
+				p.PaymentSourceID = &req.TokenCardDetails.CardID
+				p.PaymentSourceType = &cardSourceType
+				s.logger.InfoWith("Payment source set for tokenized card payment",
+					"payment_id", paymentID,
+					"card_id", req.TokenCardDetails.CardID,
+					"source_type", "card")
+			} else {
+				// This is a critical error - tokenized payment without card_id
+				s.logger.ErrorWith("CRITICAL: token_card payment missing TokenCardDetails or CardID",
+					"payment_id", paymentID,
+					"payment_method", req.PaymentMethod,
+					"has_token_details", req.TokenCardDetails != nil)
+				return fmt.Errorf("token_card payment requires TokenCardDetails with valid CardID")
+			}
+		} else if req.PaymentMethod == payment.PaymentMethodNetBanking && req.NetBankingDetails != nil {
+			// Note: For net_banking, we may not have a payment_source_id unless it's from saved account
+			// This is expected behavior for one-time bank account usage
+			s.logger.DebugWith("Net banking payment without payment_source (one-time use)",
+				"payment_id", paymentID,
+				"bank_name", req.NetBankingDetails.BankName)
+		} else {
+			// For card, upi, wallet methods without source tracking
+			s.logger.DebugWith("Payment created without payment_source tracking",
+				"payment_id", paymentID,
+				"payment_method", req.PaymentMethod)
+		}
+
 		if err := txPaymentRepo.CreatePayment(txCtx, p); err != nil {
 			s.logger.ErrorWith("Failed to create payment record", "error", err)
 			return fmt.Errorf("failed to create payment record: %w", err)
 		}
-		s.logger.DebugWith("Payment record created", "payment_id", paymentID)
+		s.logger.InfoWith("Payment record created in database",
+			"payment_id", paymentID,
+			"payment_method", req.PaymentMethod,
+			"has_source_id", p.PaymentSourceID != nil,
+			"has_source_type", p.PaymentSourceType != nil)
 
 		// Sub-step 2: Call orchestrator (gateway communication - may fail)
 		req.PaymentID = paymentID
@@ -156,39 +198,39 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 		}
 		s.logger.DebugWith("Payment updated with gateway details")
 
-		// Sub-step 4: Finalize vouchers if provided (within same transaction)
-		if len(req.VoucherIDs) > 0 && s.voucherRepo != nil && s.voucherService != nil {
-			s.logger.InfoWith("Finalizing vouchers within transaction", "count", len(req.VoucherIDs))
+		// Sub-step 4: Store pending voucher relationships (within same transaction)
+		// Vouchers will be finalized later in callback handler when payment succeeds
+		if len(req.VoucherIDs) > 0 && s.pendingVoucherRepo != nil {
+			s.logger.InfoWith("Storing pending voucher relationships", "count", len(req.VoucherIDs))
 
-			// Type assert to get WithTx method
-			type voucherRepoInterface interface {
-				WithTx(tx interface{}) interface{}
+			// Create transactional repository - no reflection needed!
+			txPendingRepo := s.pendingVoucherRepo.WithTx(tx)
+
+			// Parse payment ID
+			paymentUUID, parseErr := uuid.Parse(paymentID)
+			if parseErr != nil {
+				s.logger.ErrorWith("Invalid payment ID format", "payment_id", paymentID, "error", parseErr)
+				return fmt.Errorf("invalid payment ID: %w", parseErr)
 			}
-			if vr, ok := s.voucherRepo.(voucherRepoInterface); ok {
-				txVoucherRepo := vr.WithTx(tx)
 
-				// Type assert to call FinalizeVoucher method
-				type voucherRepoFinalizer interface {
-					FinalizeVoucher(ctx context.Context, voucherID uuid.UUID, paymentID uuid.UUID) error
+			// Parse voucher IDs
+			voucherUUIDs := make([]uuid.UUID, 0, len(req.VoucherIDs))
+			for _, voucherIDStr := range req.VoucherIDs {
+				voucherUUID, parseErr := uuid.Parse(voucherIDStr)
+				if parseErr != nil {
+					s.logger.ErrorWith("Invalid voucher ID format", "voucher_id", voucherIDStr, "error", parseErr)
+					return fmt.Errorf("invalid voucher ID: %w", parseErr)
 				}
-				if finalizer, ok := txVoucherRepo.(voucherRepoFinalizer); ok {
-					paymentUUID, _ := uuid.Parse(paymentID)
-					for _, voucherIDStr := range req.VoucherIDs {
-						voucherUUID, parseErr := uuid.Parse(voucherIDStr)
-						if parseErr != nil {
-							s.logger.ErrorWith("Invalid voucher ID format", "voucher_id", voucherIDStr, "error", parseErr)
-							return fmt.Errorf("invalid voucher ID: %w", parseErr)
-						}
-
-						if finalizeErr := finalizer.FinalizeVoucher(txCtx, voucherUUID, paymentUUID); finalizeErr != nil {
-							s.logger.ErrorWith("Failed to finalize voucher", "voucher_id", voucherIDStr, "error", finalizeErr)
-							return fmt.Errorf("failed to finalize voucher %s: %w", voucherIDStr, finalizeErr)
-						}
-						s.logger.DebugWith("Voucher finalized", "voucher_id", voucherIDStr)
-					}
-					s.logger.InfoWith("All vouchers finalized successfully", "count", len(req.VoucherIDs))
-				}
+				voucherUUIDs = append(voucherUUIDs, voucherUUID)
 			}
+
+			// Store pending voucher relationships
+			s.logger.DebugWith("Calling StorePendingVouchers", "payment_id", paymentID, "voucher_count", len(voucherUUIDs))
+			if storeErr := txPendingRepo.StorePendingVouchers(txCtx, paymentUUID, voucherUUIDs); storeErr != nil {
+				s.logger.ErrorWith("Failed to store pending vouchers", "error", storeErr)
+				return fmt.Errorf("failed to store pending vouchers: %w", storeErr)
+			}
+			s.logger.InfoWith("Pending vouchers stored successfully", "count", len(voucherUUIDs))
 		}
 
 		// Sub-step 5: Store response for return (transaction successful)
@@ -415,4 +457,203 @@ func (s *PaymentService) GetPaymentList(ctx context.Context, businessID string, 
 		Limit:      limit,
 		Offset:     offset,
 	}, nil
+}
+
+// RetryPayment retries a failed or pending payment with the same payment source and vouchers
+// Maximum 1 retry allowed per payment, within 7 days of original payment
+func (s *PaymentService) RetryPayment(ctx context.Context, originalPaymentID string, callingDevice payment.CallingDevice) (*payment.PaymentResponse, error) {
+	s.logger.InfoWith("Starting payment retry",
+		"original_payment_id", originalPaymentID,
+		"calling_device", callingDevice)
+
+	// Step 1: Validate and fetch original payment
+	originalPayment, err := s.paymentRepo.GetPaymentByID(ctx, originalPaymentID)
+	if err != nil {
+		s.logger.ErrorWith("Failed to fetch original payment", "error", err, "payment_id", originalPaymentID)
+		return nil, fmt.Errorf("failed to fetch original payment: %w", err)
+	}
+	if originalPayment == nil {
+		s.logger.WarnWith("Original payment not found", "payment_id", originalPaymentID)
+		return nil, fmt.Errorf("payment not found: %s", originalPaymentID)
+	}
+
+	s.logger.DebugWith("Original payment fetched",
+		"payment_id", originalPaymentID,
+		"status", originalPayment.Status,
+		"created_at", originalPayment.CreatedAt,
+		"payment_method", originalPayment.PaymentMethod)
+
+	// Step 2: Validate payment status
+	if originalPayment.Status == payment.PaymentStatusSuccess {
+		return nil, fmt.Errorf("cannot retry successful payment")
+	}
+
+	// Step 3: Validate retry window (7 days)
+	maxRetryWindow := 7 * 24 * time.Hour
+	timeSinceCreation := time.Since(originalPayment.CreatedAt)
+	if timeSinceCreation > maxRetryWindow {
+		s.logger.WarnWith("Payment retry window expired",
+			"payment_id", originalPaymentID,
+			"created_at", originalPayment.CreatedAt,
+			"days_since_creation", timeSinceCreation.Hours()/24)
+		return nil, fmt.Errorf("retry window expired (max 7 days)")
+	}
+
+	// Step 4: Check max 1 retry (if RetryCount is set and > 0, already retried)
+	if originalPayment.RetryCount != nil && *originalPayment.RetryCount > 0 {
+		return nil, fmt.Errorf("payment already has a retry (max 1 retry allowed)")
+	}
+
+	// Step 5: Fetch pending vouchers
+	paymentUUID, err := uuid.Parse(originalPaymentID)
+	if err != nil {
+		s.logger.ErrorWith("Invalid payment ID format", "error", err, "payment_id", originalPaymentID)
+		return nil, fmt.Errorf("invalid payment ID format: %w", err)
+	}
+
+	voucherIDs, err := s.pendingVoucherRepo.GetPendingVouchers(ctx, paymentUUID)
+	if err != nil {
+		s.logger.ErrorWith("Failed to fetch pending vouchers", "error", err, "payment_id", originalPaymentID)
+		return nil, fmt.Errorf("failed to fetch vouchers: %w", err)
+	}
+	if len(voucherIDs) == 0 {
+		s.logger.WarnWith("No vouchers found for payment", "payment_id", originalPaymentID)
+		return nil, fmt.Errorf("no vouchers found for payment %s (payment may have already been finalized by another payment)", originalPaymentID)
+	}
+
+	s.logger.InfoWith("Fetched pending vouchers for retry",
+		"payment_id", originalPaymentID,
+		"voucher_count", len(voucherIDs))
+
+	// Step 6: Validate vouchers are still in draft status (if voucher repo available)
+	if s.voucherRepo != nil {
+		if err := s.validateVouchersAreInDraft(ctx, voucherIDs); err != nil {
+			s.logger.WarnWith("Voucher validation failed", "error", err, "payment_id", originalPaymentID)
+			return nil, err
+		}
+	}
+
+	// Step 7: Build retry payment request
+	voucherIDStrings := make([]string, len(voucherIDs))
+	for i, vID := range voucherIDs {
+		voucherIDStrings[i] = vID.String()
+	}
+
+	retryRequest := payment.PaymentRequest{
+		UserID:        originalPayment.UserID,
+		BusinessID:    originalPayment.BusinessID,
+		Amount:        originalPayment.Amount, // Base amount (fees will be recalculated)
+		Currency:      originalPayment.Currency,
+		PaymentMethod: originalPayment.PaymentMethod,
+		Description:   fmt.Sprintf("Retry of payment %s", originalPaymentID),
+		CallingDevice: callingDevice,
+		VoucherIDs:    voucherIDStrings,
+		Metadata: map[string]any{
+			"retry_of":             originalPaymentID,
+			"retry_count":          1, // Always 1 since max 1 retry allowed
+			"retry_reason":         "user_initiated",
+			"original_created_at":  originalPayment.CreatedAt.Format(time.RFC3339),
+			"original_status":      string(originalPayment.Status),
+			"original_gateway":     string(originalPayment.GatewayUsed),
+		},
+	}
+
+	// Set payment source details based on payment method
+	if originalPayment.PaymentMethod == payment.PaymentMethodTokenCard {
+		if originalPayment.PaymentSourceID == nil {
+			s.logger.ErrorWith("CRITICAL: Original token_card payment missing payment_source_id",
+				"payment_id", originalPaymentID)
+			return nil, fmt.Errorf("original payment missing payment source information")
+		}
+		retryRequest.TokenCardDetails = &payment.TokenCardDetails{
+			CardID: *originalPayment.PaymentSourceID,
+		}
+		s.logger.InfoWith("Set token card details for retry",
+			"card_id", *originalPayment.PaymentSourceID)
+	}
+
+	// Step 8: Process retry payment through normal flow
+	s.logger.InfoWith("Processing retry payment",
+		"original_payment_id", originalPaymentID,
+		"amount", retryRequest.Amount,
+		"voucher_count", len(retryRequest.VoucherIDs))
+
+	retryResponse, err := s.ProcessPayment(ctx, retryRequest)
+	if err != nil {
+		s.logger.ErrorWith("Retry payment processing failed", "error", err, "original_payment_id", originalPaymentID)
+		return nil, fmt.Errorf("retry payment failed: %w", err)
+	}
+
+	// Step 9: Update retry metadata columns on the new payment
+	// This ensures retry_of_payment_id and retry_count are set in database columns (not just metadata JSON)
+	s.logger.DebugWith("Updating retry metadata columns", "retry_payment_id", retryResponse.PaymentID)
+	if err := s.paymentRepo.UpdateRetryMetadata(ctx, retryResponse.PaymentID, originalPaymentID, 1); err != nil {
+		// Non-fatal error - payment was created and processed, but metadata update failed
+		s.logger.ErrorWith("Failed to update retry metadata (non-fatal)", "error", err,
+			"retry_payment_id", retryResponse.PaymentID,
+			"original_payment_id", originalPaymentID)
+		// Continue anyway - the retry info is in the metadata JSON field
+	}
+
+	s.logger.InfoWith("Payment retry successful",
+		"original_payment_id", originalPaymentID,
+		"retry_payment_id", retryResponse.PaymentID,
+		"gateway_used", retryResponse.GatewayUsed,
+		"retry_metadata_updated", true)
+
+	// Add retry metadata to response
+	if retryResponse.Metadata == nil {
+		retryResponse.Metadata = make(map[string]any)
+	}
+	retryResponse.Metadata["is_retry"] = true
+	retryResponse.Metadata["retry_of"] = originalPaymentID
+	retryResponse.Metadata["retry_count"] = 1
+
+	return retryResponse, nil
+}
+
+// validateVouchersAreInDraft checks if vouchers are still in draft status
+func (s *PaymentService) validateVouchersAreInDraft(ctx context.Context, voucherIDs []uuid.UUID) error {
+	// Type assert voucherRepo to access GetByID method
+	type voucherGetter interface {
+		GetByID(ctx context.Context, voucherID uuid.UUID) (interface{}, error)
+	}
+
+	repo, ok := s.voucherRepo.(voucherGetter)
+	if !ok {
+		s.logger.WarnWith("Voucher repository doesn't implement GetByID, skipping validation")
+		return nil
+	}
+
+	for _, voucherID := range voucherIDs {
+		voucherInterface, err := repo.GetByID(ctx, voucherID)
+		if err != nil {
+			s.logger.ErrorWith("Failed to fetch voucher", "error", err, "voucher_id", voucherID)
+			return fmt.Errorf("failed to fetch voucher %s: %w", voucherID, err)
+		}
+		if voucherInterface == nil {
+			return fmt.Errorf("voucher %s not found", voucherID)
+		}
+
+		// Try to extract status from voucher
+		type statusGetter interface {
+			GetStatus() string
+		}
+
+		if v, ok := voucherInterface.(statusGetter); ok {
+			status := v.GetStatus()
+			if status != "draft" {
+				s.logger.WarnWith("Voucher not in draft status",
+					"voucher_id", voucherID,
+					"status", status)
+				return fmt.Errorf("voucher %s is not in draft status (current: %s). It may have been paid by another payment", voucherID, status)
+			}
+		} else {
+			s.logger.DebugWith("Unable to check voucher status via interface",
+				"voucher_id", voucherID)
+		}
+	}
+
+	s.logger.DebugWith("All vouchers validated for retry", "count", len(voucherIDs))
+	return nil
 }

@@ -1,43 +1,71 @@
 package payment
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
+	"xcentro.in/internal/adapters/database/postgres/client"
+	paymentdb "xcentro.in/internal/adapters/database/postgres/payment"
+	voucherdb "xcentro.in/internal/adapters/database/postgres/voucher"
 	"xcentro.in/internal/adapters/external/payment/easebuzz"
 	"xcentro.in/internal/adapters/external/payment/jiopay"
+	"xcentro.in/internal/adapters/external/payment/mockpg"
 	"xcentro.in/internal/core/payment"
+	"xcentro.in/internal/shared/logger"
 )
 
 // CallbackHandler handles payment gateway callbacks (SURL/FURL)
 // These are user-facing endpoints where gateways POST payment results
 // after user completes payment. Response is HTML page for visual feedback.
 type CallbackHandler struct {
-	paymentRepo     payment.PaymentRepository
-	jioPayGateway   payment.PaymentGateway
-	easebuzzGateway payment.PaymentGateway
+	paymentRepo        payment.PaymentRepository
+	jioPayGateway      payment.PaymentGateway
+	easebuzzGateway    payment.PaymentGateway
+	mockPGGateway      payment.PaymentGateway
+	mockPGEnabled      bool
+	pendingVoucherRepo *paymentdb.PaymentVoucherPendingRepository
+	voucherRepo        *voucherdb.PostgresVoucherRepository
+	txManager          client.TxManager
+	stateChangeRepo    payment.PaymentStateChangeRepository
+	logger             *logger.Logger
 }
 
 // NewCallbackHandler creates a new callback handler
 func NewCallbackHandler(
-	paymentRepo payment.PaymentRepository,
+	paymentRepoParam payment.PaymentRepository,
 	jioPayGateway payment.PaymentGateway,
 	easebuzzGateway payment.PaymentGateway,
+	mockPGGateway payment.PaymentGateway,
+	mockPGEnabled bool,
+	pendingVoucherRepo interface{},
+	voucherRepo interface{},
+	txManager interface{},
+	stateChangeRepo payment.PaymentStateChangeRepository,
 ) *CallbackHandler {
 	return &CallbackHandler{
-		paymentRepo:     paymentRepo,
-		jioPayGateway:   jioPayGateway,
-		easebuzzGateway: easebuzzGateway,
+		paymentRepo:        paymentRepoParam,
+		jioPayGateway:      jioPayGateway,
+		easebuzzGateway:    easebuzzGateway,
+		mockPGGateway:      mockPGGateway,
+		mockPGEnabled:      mockPGEnabled,
+		pendingVoucherRepo: pendingVoucherRepo.(*paymentdb.PaymentVoucherPendingRepository),
+		voucherRepo:        voucherRepo.(*voucherdb.PostgresVoucherRepository),
+		txManager:          txManager.(client.TxManager),
+		stateChangeRepo:    stateChangeRepo,
+		logger:             logger.GetDefault(),
 	}
 }
 
 // HandleCallback handles payment gateway callbacks (SURL/FURL)
 // Route: POST /api/v1/process_payment/callback?type=jiopay
 // Route: POST /api/v1/process_payment/callback?type=easebuzz
+// Route: POST /api/v1/process_payment/callback?type=mockpg
 //
 // This endpoint is called by payment gateways after user completes payment.
 // It returns HTML page to show success/failure message to user.
@@ -51,6 +79,13 @@ func (h *CallbackHandler) HandleCallback(c echo.Context) error {
 		return h.handleJioPayCallback(c)
 	case "easebuzz":
 		return h.handleEasebuzzCallback(c)
+	case "mockpg":
+		// Only allow mock PG callbacks if mock PG is enabled
+		if !h.mockPGEnabled {
+			fmt.Printf("❌ Mock PG callback received but Mock PG is not enabled\n")
+			return c.HTML(http.StatusForbidden, generateErrorHTML("Mock PG is not enabled"))
+		}
+		return h.handleMockPGCallback(c)
 	default:
 		fmt.Printf("❌ Invalid gateway type: %s\n", gatewayType)
 		return c.HTML(http.StatusBadRequest, generateErrorHTML("Invalid gateway type"))
@@ -133,6 +168,12 @@ func (h *CallbackHandler) handleJioPayCallback(c echo.Context) error {
 			// Don't fail callback - still show page to user
 		} else {
 			fmt.Printf("✅ Payment status updated to: %s\n", newStatus)
+
+			// Step 6.1: Handle post-update operations (state changes, voucher finalization)
+			if err := h.handlePostPaymentUpdate(ctx, pmt, newStatus, "jiopay", metadata); err != nil {
+				fmt.Printf("⚠️  Post-update operations had issues: %v\n", err)
+				// Non-fatal: callback continues
+			}
 		}
 
 		// Update gateway payment ID if not set
@@ -241,6 +282,12 @@ func (h *CallbackHandler) handleEasebuzzCallback(c echo.Context) error {
 			// Don't fail callback - still show page to user
 		} else {
 			fmt.Printf("✅ Payment status updated to: %s\n", newStatus)
+
+			// Step 6.1: Handle post-update operations (state changes, voucher finalization)
+			if err := h.handlePostPaymentUpdate(ctx, pmt, newStatus, "easebuzz", metadata); err != nil {
+				fmt.Printf("⚠️  Post-update operations had issues: %v\n", err)
+				// Non-fatal: callback continues
+			}
 		}
 
 		// Update gateway payment ID if not set or if it's still our txnid
@@ -268,6 +315,114 @@ func (h *CallbackHandler) handleEasebuzzCallback(c echo.Context) error {
 	}
 }
 
+// handleMockPGCallback processes Mock PG callback (testing only)
+// This simulates the callback flow that real gateways use
+func (h *CallbackHandler) handleMockPGCallback(c echo.Context) error {
+	ctx := c.Request().Context()
+
+	fmt.Println("=== MOCK PG CALLBACK: Processing ===")
+
+	// Step 1: Read form data (traditional gateway POST)
+	payloadStr := c.FormValue("payload")
+	if payloadStr == "" {
+		fmt.Println("❌ Missing payload in form data")
+		return c.HTML(http.StatusBadRequest, generateErrorHTML("Invalid request"))
+	}
+
+	fmt.Printf("📥 Callback payload size: %d bytes\n", len(payloadStr))
+
+	// Step 2: Parse callback payload (JSON string from form data)
+	var callback mockpg.MockPGWebhookPayload
+	if err := json.Unmarshal([]byte(payloadStr), &callback); err != nil {
+		fmt.Printf("❌ Failed to parse payload: %v\n", err)
+		return c.HTML(http.StatusBadRequest, generateErrorHTML("Invalid payload format"))
+	}
+
+	fmt.Printf("📋 TransactionID: %s\n", callback.TransactionID)
+	fmt.Printf("📋 GatewayPaymentID: %s\n", callback.GatewayPaymentID)
+	fmt.Printf("📋 Status: %s\n", callback.Status)
+	fmt.Printf("📋 Amount: %d %s\n", callback.Amount, callback.Currency)
+
+	// Step 3: Verify signature (mock validation)
+	if err := h.mockPGGateway.ValidateWebhook([]byte(payloadStr), callback.Signature); err != nil {
+		fmt.Printf("❌ Signature verification failed: %v\n", err)
+		return c.HTML(http.StatusUnauthorized, generateErrorHTML("Security verification failed"))
+	}
+
+	fmt.Println("✅ Signature verified")
+
+	// Step 4: Query payment by transaction ID
+	pmt, err := h.paymentRepo.GetPaymentByID(ctx, callback.TransactionID)
+	if err != nil || pmt == nil {
+		fmt.Printf("❌ Payment not found: %s, error: %v\n", callback.TransactionID, err)
+		return c.HTML(http.StatusNotFound, generateErrorHTML("Payment not found"))
+	}
+
+	fmt.Printf("✅ Payment found: %s (current status: %s)\n", pmt.ID, pmt.Status)
+
+	// Step 5: Map callback status to internal status
+	var newStatus payment.PaymentStatus
+	if callback.Status == "success" {
+		newStatus = payment.PaymentStatusSuccess
+	} else {
+		newStatus = payment.PaymentStatusFailed
+	}
+
+	fmt.Printf("📊 Status mapping: %s → %s\n", callback.Status, newStatus)
+
+	// Step 6: Update payment (only if not already in terminal state)
+	if !isTerminalStatus(pmt.Status) {
+		fmt.Println("🔄 Updating payment status...")
+
+		metadata := map[string]any{
+			"callback_received_at":      time.Now().Format(time.RFC3339),
+			"callback_type":             "payment_status",
+			"gateway":                   "mockpg",
+			"mock_gateway_payment_id":   callback.GatewayPaymentID,
+			"payment_method":            callback.PaymentMethod,
+			"processed_at":              callback.ProcessedAt,
+			"merchant_id":               callback.MerchantID,
+			"mock_simulation":           true,
+		}
+
+		if err := h.paymentRepo.UpdatePaymentStatus(ctx, pmt.ID, newStatus, metadata); err != nil {
+			fmt.Printf("❌ Failed to update payment: %v\n", err)
+			// Don't fail callback - still show page to user
+		} else {
+			fmt.Printf("✅ Payment status updated to: %s\n", newStatus)
+
+			// Step 6.1: Handle post-update operations (state changes, voucher finalization)
+			if err := h.handlePostPaymentUpdate(ctx, pmt, newStatus, "mockpg", metadata); err != nil {
+				fmt.Printf("⚠️  Post-update operations had issues: %v\n", err)
+				// Non-fatal: callback continues
+			}
+		}
+
+		// Update gateway payment ID if not set
+		if pmt.GatewayPaymentID == "" || pmt.GatewayPaymentID != callback.GatewayPaymentID {
+			if err := h.paymentRepo.UpdateGatewayPaymentID(ctx, pmt.ID, callback.GatewayPaymentID, ""); err != nil {
+				fmt.Printf("⚠️  Failed to update gateway payment ID: %v\n", err)
+			} else {
+				fmt.Printf("✅ Gateway payment ID updated to: %s\n", callback.GatewayPaymentID)
+			}
+		}
+	} else {
+		fmt.Printf("⚠️  Payment already in terminal state: %s (skipping update)\n", pmt.Status)
+	}
+
+	// Step 7: Return HTML response to user
+	fmt.Println("=== MOCK PG CALLBACK: Complete ===")
+
+	switch newStatus {
+	case payment.PaymentStatusSuccess:
+		return c.HTML(http.StatusOK, generateSuccessHTML(pmt, callback.TransactionID, "Payment completed successfully"))
+	case payment.PaymentStatusPending:
+		return c.HTML(http.StatusOK, generatePendingHTML(pmt, callback.TransactionID, "Payment is being processed"))
+	default:
+		return c.HTML(http.StatusOK, generateFailureHTML(pmt, callback.TransactionID, "Payment failed"))
+	}
+}
+
 // ============================================================================
 // HELPER FUNCTIONS
 // ============================================================================
@@ -291,6 +446,172 @@ func mapCallbackStatusToPaymentStatus(status string) payment.PaymentStatus {
 	default:
 		return payment.PaymentStatusFailed
 	}
+}
+
+// finalizeVouchersOnSuccess finalizes vouchers when payment succeeds
+// This is called from callback handlers after payment status is updated to SUCCESS
+// It fetches pending vouchers, finalizes them, and cleans up pending records - all in a transaction
+func (h *CallbackHandler) finalizeVouchersOnSuccess(ctx context.Context, paymentID string, gatewayName string) error {
+	h.logger.InfoWith("Checking for pending vouchers to finalize", "payment_id", paymentID)
+
+	// Parse payment ID
+	paymentUUID, err := uuid.Parse(paymentID)
+	if err != nil {
+		h.logger.ErrorWith("Invalid payment ID", "payment_id", paymentID, "error", err)
+		return fmt.Errorf("invalid payment ID: %w", err)
+	}
+
+	// Step 1: Get pending vouchers for this payment
+	voucherIDs, err := h.pendingVoucherRepo.GetPendingVouchers(ctx, paymentUUID)
+	if err != nil {
+		h.logger.ErrorWith("Failed to fetch pending vouchers", "error", err)
+		return fmt.Errorf("failed to fetch pending vouchers: %w", err)
+	}
+
+	if len(voucherIDs) == 0 {
+		h.logger.InfoWith("No pending vouchers found for payment", "payment_id", paymentID)
+		return nil // No vouchers to finalize
+	}
+
+	h.logger.InfoWith("Found pending vouchers, starting finalization", "payment_id", paymentID, "voucher_count", len(voucherIDs))
+
+	// Step 2: Finalize vouchers and cleanup in a single transaction
+	err = h.txManager.WithTx(ctx, func(txCtx context.Context, tx client.Tx) error {
+		// Create transactional repositories
+		txVoucherRepo := h.voucherRepo.WithTx(tx)
+		txPendingRepo := h.pendingVoucherRepo.WithTx(tx)
+
+		// Finalize each voucher
+		for _, voucherID := range voucherIDs {
+			h.logger.DebugWith("Finalizing voucher", "voucher_id", voucherID.String(), "payment_id", paymentID)
+			if err := txVoucherRepo.FinalizeVoucher(txCtx, voucherID, paymentUUID); err != nil {
+				h.logger.ErrorWith("Failed to finalize voucher", "voucher_id", voucherID.String(), "error", err)
+				return fmt.Errorf("failed to finalize voucher %s: %w", voucherID.String(), err)
+			}
+		}
+
+		h.logger.InfoWith("All vouchers finalized successfully", "count", len(voucherIDs))
+
+		// Delete pending voucher records (cleanup)
+		h.logger.DebugWith("Deleting pending voucher records", "payment_id", paymentID)
+		if err := txPendingRepo.DeletePendingVouchers(txCtx, paymentUUID); err != nil {
+			h.logger.ErrorWith("Failed to delete pending vouchers", "error", err)
+			return fmt.Errorf("failed to delete pending vouchers: %w", err)
+		}
+
+		h.logger.InfoWith("Pending voucher records deleted", "payment_id", paymentID)
+		return nil
+	})
+
+	if err != nil {
+		h.logger.ErrorWith("Voucher finalization transaction failed", "error", err)
+		return fmt.Errorf("voucher finalization failed: %w", err)
+	}
+
+	h.logger.InfoWith("Voucher finalization completed successfully", "payment_id", paymentID, "voucher_count", len(voucherIDs))
+	return nil
+}
+
+// recordPaymentStateChange records a state change in the audit trail
+func (h *CallbackHandler) recordPaymentStateChange(
+	ctx context.Context,
+	paymentID string,
+	action payment.PaymentAction,
+	previousState string,
+	newState string,
+	gatewayName string,
+	metadata map[string]any,
+) error {
+	// Parse payment ID
+	paymentUUID, err := uuid.Parse(paymentID)
+	if err != nil {
+		h.logger.ErrorWith("Failed to parse payment ID", "payment_id", paymentID, "error", err)
+		return fmt.Errorf("invalid payment ID: %w", err)
+	}
+
+	// Create state change request
+	req := &payment.CreatePaymentStateChangeRequest{
+		PaymentID:       paymentUUID,
+		Action:          action,
+		ActionTimestamp: time.Now(),
+		ActorType:       payment.ActorTypeWebhook,
+		ActorName:       fmt.Sprintf("%s_callback", gatewayName),
+		PreviousState:   previousState,
+		NewState:        newState,
+		Provider:        gatewayName,
+		Metadata:        metadata,
+		Remarks:         fmt.Sprintf("Payment status updated via %s callback", gatewayName),
+	}
+
+	// Record state change
+	stateChange, err := h.stateChangeRepo.Create(ctx, req)
+	if err != nil {
+		h.logger.ErrorWith("Failed to record state change", "payment_id", paymentID, "error", err)
+		return fmt.Errorf("failed to record state change: %w", err)
+	}
+
+	h.logger.InfoWith("Payment state change recorded",
+		"payment_id", paymentID,
+		"state_change_id", stateChange.StateChangeID,
+		"action", action,
+		"previous_state", previousState,
+		"new_state", newState,
+	)
+
+	return nil
+}
+
+// handlePostPaymentUpdate handles common post-payment-update operations for all gateways
+// This includes: 1) Recording state changes in audit trail, 2) Finalizing vouchers on success
+// This method is non-fatal - errors are logged but don't fail the callback
+func (h *CallbackHandler) handlePostPaymentUpdate(
+	ctx context.Context,
+	pmt *payment.Payment,
+	newStatus payment.PaymentStatus,
+	gatewayName string,
+	metadata map[string]any,
+) error {
+	// Step 1: Record payment state change in audit trail
+	previousState := string(pmt.Status)
+	newStateStr := string(newStatus)
+
+	var action payment.PaymentAction
+	switch newStatus {
+	case payment.PaymentStatusSuccess:
+		action = payment.PaymentActionSuccess
+	case payment.PaymentStatusFailed:
+		action = payment.PaymentActionFailed
+	case payment.PaymentStatusPending:
+		action = payment.PaymentActionProcessing
+	default:
+		action = payment.PaymentActionProcessing
+	}
+
+	if err := h.recordPaymentStateChange(ctx, pmt.ID, action, previousState, newStateStr, gatewayName, metadata); err != nil {
+		h.logger.ErrorWith("Failed to record state change (non-fatal)", "payment_id", pmt.ID, "gateway", gatewayName, "error", err)
+		fmt.Printf("⚠️  Failed to record state change: %v\n", err)
+		// Non-fatal: Continue to voucher finalization
+	} else {
+		h.logger.InfoWith("Payment state change recorded", "payment_id", pmt.ID, "gateway", gatewayName, "new_status", newStatus)
+		fmt.Println("✅ Payment state change recorded")
+	}
+
+	// Step 2: Finalize vouchers if payment succeeded
+	if newStatus == payment.PaymentStatusSuccess {
+		h.logger.InfoWith("Payment succeeded, attempting voucher finalization", "payment_id", pmt.ID, "gateway", gatewayName)
+		fmt.Println("💰 Payment succeeded, finalizing vouchers...")
+
+		if err := h.finalizeVouchersOnSuccess(ctx, pmt.ID, gatewayName); err != nil {
+			h.logger.ErrorWith("Failed to finalize vouchers (non-fatal)", "payment_id", pmt.ID, "gateway", gatewayName, "error", err)
+			fmt.Printf("⚠️  Failed to finalize vouchers: %v\n", err)
+			// Non-fatal: Payment is still successful, vouchers can be finalized manually or by recovery job
+		} else {
+			h.logger.InfoWith("Vouchers finalized successfully", "payment_id", pmt.ID, "gateway", gatewayName)
+			fmt.Println("✅ Vouchers finalized successfully")
+		}
+	}
+
+	return nil
 }
 
 // ============================================================================

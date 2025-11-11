@@ -184,9 +184,17 @@ func (c *MockPGClient) InitiatePayment(ctx context.Context, request payment.Gate
 	// Generate mock gateway payment ID
 	mockGatewayPaymentID := fmt.Sprintf("MOCKPG_%s", uuid.Must(uuid.NewV7()).String())
 
-	// Use the actual callback URL as redirect (mock PG directly redirects to callback page)
-	// In real gateways, this would be gateway's OTP/3DS page, but for testing we skip that
-	redirectURL := request.CallbackURL
+	// Construct mock 3DS page URL (simulates bank's OTP/authentication page)
+	// Extract base URL from callback URL and construct mock 3DS URL
+	// Callback URL format: http://localhost:8888/v1/process_payment/callback_page?transaction_id=xxx&source=web
+	// Mock 3DS URL format: http://localhost:8888/v1/process_payment/mock_3ds?transaction_id=xxx&gateway_payment_id=xxx&amount=xxx
+	baseURL := extractBaseURL(request.CallbackURL)
+	redirectURL := fmt.Sprintf("%s/v1/process_payment/mock_3ds?transaction_id=%s&gateway_payment_id=%s&amount=%d",
+		baseURL,
+		request.TransactionID,
+		mockGatewayPaymentID,
+		request.Amount,
+	)
 
 	// Determine payment status based on payment method
 	status := payment.PaymentStatusPending // Most payments require user action
@@ -220,18 +228,13 @@ func (c *MockPGClient) InitiatePayment(ctx context.Context, request payment.Gate
 	}
 
 	fmt.Printf("✅ Payment request accepted (PENDING - awaiting user authentication)\n")
-	fmt.Printf("🌐 Redirect URL: %s\n", redirectURL)
+	fmt.Printf("🌐 Redirect URL (Mock 3DS): %s\n", redirectURL)
 	fmt.Printf("🔑 Gateway Payment ID: %s\n", mockGatewayPaymentID)
 
-	// Schedule webhook to be sent after delay (simulates payment completion after OTP/3DS)
-	c.sendWebhookAfterDelay(
-		request.CallbackURL,
-		request.TransactionID,
-		mockGatewayPaymentID,
-		request.Amount,
-		string(request.Currency),
-		string(request.PaymentMethod),
-	)
+	// Note: Webhook is NOT scheduled automatically
+	// The mock 3DS page will trigger the callback when user clicks Success/Failure buttons
+	fmt.Printf("📌 User will be redirected to mock 3DS page for authentication\n")
+	fmt.Printf("📌 Callback will be triggered when user completes authentication\n")
 
 	// Create response - returns PENDING status (payment not complete yet)
 	// Real payment gateways return PENDING here and send final status via webhook
@@ -252,11 +255,11 @@ func (c *MockPGClient) InitiatePayment(ctx context.Context, request payment.Gate
 			"tokenized":        request.Token != "",
 			"merchant_id":      c.merchantID,
 			"simulate_success": c.simulateSuccess,
-			"webhook_delay":    c.webhookDelay.String(),
+			"mock_3ds_url":     redirectURL,
 		},
 	}
 
-	fmt.Printf("📌 Note: Webhook will be sent to %s after %v\n", request.CallbackURL, c.webhookDelay)
+	fmt.Printf("📌 Note: User should open the redirect URL to complete authentication\n")
 	fmt.Println("=== MOCK PG GATEWAY: InitiatePayment Complete ===")
 	return response, nil
 }
@@ -318,6 +321,45 @@ func getMockBankName(cardType payment.CardType) string {
 	default:
 		return "Mock Bank"
 	}
+}
+
+// extractBaseURL extracts the base URL from a callback URL
+// Example: extractBaseURL("http://localhost:8888/v1/process_payment/callback_page?transaction_id=xxx&source=web")
+// Returns: "http://localhost:8888"
+func extractBaseURL(callbackURL string) string {
+	// Find the position of the first slash after "://"
+	// This handles both http:// and https://
+	schemeEnd := 0
+	if idx := findSubstring(callbackURL, "://"); idx >= 0 {
+		schemeEnd = idx + 3
+	}
+
+	// Find the first slash after the scheme (this marks the end of host:port)
+	pathStart := schemeEnd
+	for i := schemeEnd; i < len(callbackURL); i++ {
+		if callbackURL[i] == '/' {
+			pathStart = i
+			break
+		}
+	}
+
+	// Return everything up to (but not including) the first path slash
+	if pathStart > schemeEnd {
+		return callbackURL[:pathStart]
+	}
+
+	// Fallback: return the whole URL if no path found
+	return callbackURL
+}
+
+// findSubstring finds the index of a substring in a string
+func findSubstring(s, substr string) int {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return i
+		}
+	}
+	return -1
 }
 
 // === WEBHOOK SIMULATION ===
