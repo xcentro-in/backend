@@ -930,3 +930,8 @@ func (s *UserServiceImpl) CreateInvitedUser(ctx context.Context, email, name str
 func (s *UserServiceImpl) SearchUsersByBusinesses(ctx context.Context, businessIDs []string, searchTerm string) ([]*user.OpsUserSearchResult, error) {
 	return s.userRepo.SearchUsersByBusinesses(ctx, businessIDs, searchTerm)
 }
+
+// GetUserDetailsForOps retrieves detailed user information with identity data (ops dashboard)
+func (s *UserServiceImpl) GetUserDetailsForOps(ctx context.Context, userID string) (*user.OpsUserDetails, error) {
+	return s.userRepo.GetUserDetailsForOps(ctx, userID)
+}

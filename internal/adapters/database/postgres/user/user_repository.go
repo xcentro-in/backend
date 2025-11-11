@@ -806,3 +806,42 @@ func (r *PgUserRepository) SearchUsersByBusinesses(ctx context.Context, business
 
 	return results, nil
 }
+
+// GetUserDetailsForOps retrieves detailed user information with identity data for ops dashboard
+func (r *PgUserRepository) GetUserDetailsForOps(ctx context.Context, userID string) (*user.OpsUserDetails, error) {
+	query := `
+		SELECT
+			u.id, u.email, COALESCE(u.mobile, '') as mobile, COALESCE(u.name, '') as name,
+			COALESCE(u.dob, '') as dob, COALESCE(u.tax_id, '') as tax_id,
+			u.kyc_status, u.kyc_needed, u.email_verified, u.mobile_verified,
+			u.created_at::text, COALESCE(u.updated_at::text, '') as updated_at,
+			COALESCE(ui.tax_id_data, '') as tax_id_data, COALESCE(ui.national_id, '') as national_id,
+			COALESCE(ui.national_id_data, '') as national_id_data, COALESCE(ui.n_txn_id, '') as n_txn_id
+		FROM xcentro.user_table u
+		LEFT JOIN xcentro.user_identity ui ON u.tax_id = ui.tax_id
+		WHERE u.id = $1
+	`
+
+	var details user.OpsUserDetails
+	var kycStatusStr string
+
+	err := r.querier.QueryRow(ctx, query, userID).Scan(
+		&details.ID, &details.Email, &details.Mobile, &details.Name,
+		&details.DOB, &details.TaxID, &kycStatusStr, &details.KycNeeded,
+		&details.EmailVerified, &details.MobileVerified,
+		&details.CreatedAt, &details.UpdatedAt,
+		&details.TaxIDData, &details.NationalID, &details.NationalIDData, &details.NTxnID,
+	)
+
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("user not found")
+		}
+		return nil, fmt.Errorf("failed to get user details: %w", err)
+	}
+
+	// Parse KYC status
+	details.KycStatus = parseKYCStatus(kycStatusStr)
+
+	return &details, nil
+}

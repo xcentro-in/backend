@@ -120,3 +120,26 @@ type OpsUserSearchResult struct {
 	Name       string `json:"name"`
 	BusinessID string `json:"business_id"`
 }
+
+// OpsUserDetails represents detailed user information for ops dashboard
+type OpsUserDetails struct {
+	// User basic info
+	ID             string           `json:"id"`
+	Email          string           `json:"email"`
+	Mobile         string           `json:"mobile"`
+	Name           string           `json:"name"`
+	DOB            string           `json:"dob"`
+	TaxID          string           `json:"taxId"`
+	KycStatus      shared.KYCStatus `json:"kycStatus"`
+	KycNeeded      bool             `json:"kycNeeded"`
+	EmailVerified  bool             `json:"emailVerified"`
+	MobileVerified bool             `json:"mobileVerified"`
+	CreatedAt      string           `json:"createdAt"`
+	UpdatedAt      string           `json:"updatedAt"`
+
+	// Identity data (if available)
+	TaxIDData      string `json:"taxIdData"`
+	NationalID     string `json:"nationalId"`
+	NationalIDData string `json:"nationalIdData"`
+	NTxnID         string `json:"nTxnId"`
+}

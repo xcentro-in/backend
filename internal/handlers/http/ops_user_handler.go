@@ -33,6 +33,9 @@ func RegisterOpsUserRoutes(e *echo.Group, userService user.UserService, authServ
 
 	// User search endpoint
 	userGroup.GET("/search", handler.SearchUsers)
+
+	// User details endpoint
+	userGroup.GET("/:user_id", handler.GetUserDetails)
 }
 
 // SearchUsers handles GET /users/search?business_id=biz-123&business_id=biz-456&q=john
@@ -75,4 +78,31 @@ func (h *OpsUserHandler) SearchUsers(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, results)
+}
+
+// GetUserDetails handles GET /users/:user_id
+func (h *OpsUserHandler) GetUserDetails(c echo.Context) error {
+	// Get user ID from path parameter
+	userID := c.Param("user_id")
+	if userID == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "User ID is required",
+		})
+	}
+
+	// Call service layer
+	details, err := h.userService.GetUserDetailsForOps(c.Request().Context(), userID)
+	if err != nil {
+		if err.Error() == "user not found" {
+			return c.JSON(http.StatusNotFound, map[string]string{
+				"error": "User not found",
+			})
+		}
+		h.logger.Errorf("Error getting user details: %v", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Failed to get user details",
+		})
+	}
+
+	return c.JSON(http.StatusOK, details)
 }
