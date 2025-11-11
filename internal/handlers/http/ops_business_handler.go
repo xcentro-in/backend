@@ -3,6 +3,7 @@ package http
 import (
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/labstack/echo/v4"
 	"xcentro.in/internal/core/auth"
@@ -40,6 +41,11 @@ func RegisterOpsBusinessRoutes(e *echo.Group, businessService business.BusinessS
 
 	// Endpoint 3: Get single business details
 	businessGroup.GET("/:bid", handler.GetBusinessDetails)
+
+	// Ops verification endpoints
+	businessGroup.POST("/:bid/reload-data", handler.ReloadBusinessData)
+	businessGroup.POST("/:bid/reject-kyb", handler.RejectKYB)
+	businessGroup.POST("/:bid/verify-kyb", handler.VerifyKYB)
 }
 
 // PaginationResponse represents pagination metadata
@@ -161,4 +167,108 @@ func (h *OpsBusinessHandler) GetBusinessDetails(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, details)
+}
+
+// ReloadBusinessData handles POST /businesses/:bid/reload-data?type=gstin|income_tax_id|company_id
+func (h *OpsBusinessHandler) ReloadBusinessData(c echo.Context) error {
+	// Parse and validate business ID
+	bid := strings.TrimSpace(c.Param("bid"))
+	if bid == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Business ID is required",
+		})
+	}
+
+	// Parse and validate data type
+	dataType := strings.TrimSpace(c.QueryParam("type"))
+	if dataType == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Query parameter 'type' is required",
+		})
+	}
+
+	// Validate allowed types
+	allowedTypes := map[string]bool{
+		"gstin":          true,
+		"income_tax_id":  true,
+		"company_id":     true,
+	}
+	if !allowedTypes[dataType] {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Invalid type. Allowed values: gstin, income_tax_id, company_id",
+		})
+	}
+
+	// Call service layer
+	if err := h.businessService.ReloadBusinessData(c.Request().Context(), bid, dataType); err != nil {
+		h.logger.Errorf("Error reloading business data for BID %s, type %s: %v", bid, dataType, err)
+		if err.Error() == "business not found" {
+			return c.JSON(http.StatusNotFound, map[string]string{
+				"error": "Business not found",
+			})
+		}
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Failed to reload business data",
+		})
+	}
+
+	return c.JSON(http.StatusOK, map[string]string{
+		"message": "Business data reloaded successfully",
+	})
+}
+
+// RejectKYB handles POST /businesses/:bid/reject-kyb
+func (h *OpsBusinessHandler) RejectKYB(c echo.Context) error {
+	// Parse and validate business ID
+	bid := strings.TrimSpace(c.Param("bid"))
+	if bid == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Business ID is required",
+		})
+	}
+
+	// Call service layer
+	if err := h.businessService.RejectKYB(c.Request().Context(), bid); err != nil {
+		h.logger.Errorf("Error rejecting KYB for BID %s: %v", bid, err)
+		if err.Error() == "business not found" {
+			return c.JSON(http.StatusNotFound, map[string]string{
+				"error": "Business not found",
+			})
+		}
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Failed to reject KYB",
+		})
+	}
+
+	return c.JSON(http.StatusOK, map[string]string{
+		"message": "KYB rejected successfully",
+	})
+}
+
+// VerifyKYB handles POST /businesses/:bid/verify-kyb
+func (h *OpsBusinessHandler) VerifyKYB(c echo.Context) error {
+	// Parse and validate business ID
+	bid := strings.TrimSpace(c.Param("bid"))
+	if bid == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Business ID is required",
+		})
+	}
+
+	// Call service layer
+	if err := h.businessService.VerifyKYB(c.Request().Context(), bid); err != nil {
+		h.logger.Errorf("Error verifying KYB for BID %s: %v", bid, err)
+		if err.Error() == "business not found" {
+			return c.JSON(http.StatusNotFound, map[string]string{
+				"error": "Business not found",
+			})
+		}
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Failed to verify KYB",
+		})
+	}
+
+	return c.JSON(http.StatusOK, map[string]string{
+		"message": "KYB verified successfully",
+	})
 }

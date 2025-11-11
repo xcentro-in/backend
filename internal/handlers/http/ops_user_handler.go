@@ -37,6 +37,10 @@ func RegisterOpsUserRoutes(e *echo.Group, userService user.UserService, authServ
 
 	// User details endpoint
 	userGroup.GET("/:user_id", handler.GetUserDetails)
+
+	// Ops verification endpoints
+	userGroup.POST("/:user_id/reload-pan", handler.ReloadUserPANData)
+	userGroup.POST("/:user_id/reject-kyc", handler.RejectKYC)
 }
 
 // SearchUsers handles GET /users/search?business_id=biz-123&business_id=biz-456&q=john
@@ -135,4 +139,79 @@ func (h *OpsUserHandler) GetUserDetails(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, details)
+}
+
+// ReloadUserPANData handles POST /users/:user_id/reload-pan?type=pan_com|pan_aadhaar_link
+func (h *OpsUserHandler) ReloadUserPANData(c echo.Context) error {
+	// Parse and validate user ID
+	userID := strings.TrimSpace(c.Param("user_id"))
+	if userID == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "User ID is required",
+		})
+	}
+
+	// Parse and validate data type
+	dataType := strings.TrimSpace(c.QueryParam("type"))
+	if dataType == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Query parameter 'type' is required",
+		})
+	}
+
+	// Validate allowed types
+	allowedTypes := map[string]bool{
+		"pan_com":          true,
+		"pan_aadhaar_link": true,
+	}
+	if !allowedTypes[dataType] {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Invalid type. Allowed values: pan_com, pan_aadhaar_link",
+		})
+	}
+
+	// Call service layer
+	if err := h.userService.ReloadUserPANData(c.Request().Context(), userID, dataType); err != nil {
+		h.logger.Errorf("Error reloading user PAN data for user %s, type %s: %v", userID, dataType, err)
+		if err.Error() == "user not found" {
+			return c.JSON(http.StatusNotFound, map[string]string{
+				"error": "User not found",
+			})
+		}
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Failed to reload user PAN data",
+		})
+	}
+
+	return c.JSON(http.StatusOK, map[string]string{
+		"message": "User PAN data reloaded successfully",
+	})
+}
+
+// RejectKYC handles POST /users/:user_id/reject-kyc
+func (h *OpsUserHandler) RejectKYC(c echo.Context) error {
+	// Parse and validate user ID
+	userID := strings.TrimSpace(c.Param("user_id"))
+	if userID == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "User ID is required",
+		})
+	}
+
+	// Call service layer
+	if err := h.userService.RejectKYC(c.Request().Context(), userID); err != nil {
+		h.logger.Errorf("Error rejecting KYC for user %s: %v", userID, err)
+		if err.Error() == "user not found" {
+			return c.JSON(http.StatusNotFound, map[string]string{
+				"error": "User not found",
+			})
+		}
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Failed to reject KYC",
+		})
+	}
+
+	return c.JSON(http.StatusOK, map[string]string{
+		"message": "KYC rejected successfully",
+	})
 }
