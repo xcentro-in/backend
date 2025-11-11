@@ -41,5 +41,5 @@ type UserService interface {
 
 	// Ops dashboard methods
 	SearchUsersByBusinesses(ctx context.Context, businessIDs []string, searchTerm string) ([]*OpsUserSearchResult, error)
-	GetUserDetailsForOps(ctx context.Context, userID string) (*OpsUserDetails, error)
+	GetUserDetailsForOps(ctx context.Context, userID string, businessID string) (*OpsUserDetails, error)
 }

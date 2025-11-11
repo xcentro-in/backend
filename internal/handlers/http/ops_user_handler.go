@@ -80,7 +80,7 @@ func (h *OpsUserHandler) SearchUsers(c echo.Context) error {
 	return c.JSON(http.StatusOK, results)
 }
 
-// GetUserDetails handles GET /users/:user_id
+// GetUserDetails handles GET /users/:user_id?bid=biz-123
 func (h *OpsUserHandler) GetUserDetails(c echo.Context) error {
 	// Get user ID from path parameter
 	userID := c.Param("user_id")
@@ -90,8 +90,11 @@ func (h *OpsUserHandler) GetUserDetails(c echo.Context) error {
 		})
 	}
 
+	// Get optional business ID from query parameter
+	businessID := c.QueryParam("bid")
+
 	// Call service layer
-	details, err := h.userService.GetUserDetailsForOps(c.Request().Context(), userID)
+	details, err := h.userService.GetUserDetailsForOps(c.Request().Context(), userID, businessID)
 	if err != nil {
 		if err.Error() == "user not found" {
 			return c.JSON(http.StatusNotFound, map[string]string{

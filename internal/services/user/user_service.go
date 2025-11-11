@@ -932,6 +932,7 @@ func (s *UserServiceImpl) SearchUsersByBusinesses(ctx context.Context, businessI
 }
 
 // GetUserDetailsForOps retrieves detailed user information with identity data (ops dashboard)
-func (s *UserServiceImpl) GetUserDetailsForOps(ctx context.Context, userID string) (*user.OpsUserDetails, error) {
-	return s.userRepo.GetUserDetailsForOps(ctx, userID)
+// If businessID is provided, also fetches role information for that business
+func (s *UserServiceImpl) GetUserDetailsForOps(ctx context.Context, userID string, businessID string) (*user.OpsUserDetails, error) {
+	return s.userRepo.GetUserDetailsForOps(ctx, userID, businessID)
 }

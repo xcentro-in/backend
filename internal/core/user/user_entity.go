@@ -142,4 +142,8 @@ type OpsUserDetails struct {
 	NationalID     string `json:"nationalId"`
 	NationalIDData string `json:"nationalIdData"`
 	NTxnID         string `json:"nTxnId"`
+
+	// Business role data (if bid query param provided)
+	Role      *shared.UserRole `json:"role,omitempty"`
+	RoleClaim *shared.UserRole `json:"roleClaim,omitempty"`
 }
