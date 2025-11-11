@@ -7,7 +7,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
+	payeeCore "xcentro.in/internal/core/payee"
+	voucherCore "xcentro.in/internal/core/voucher"
 	"xcentro.in/internal/core/auth"
 	"xcentro.in/internal/core/business_rules"
 	"xcentro.in/internal/core/payment"
@@ -20,14 +23,34 @@ import (
 type PaymentHandler struct {
 	paymentService       *payments.PaymentService
 	paymentSourceService *payments.PaymentSourceService // Phase 10
-	logger               *logger.Logger
+	// Additional repositories for detailed payment information
+	voucherRepo       voucherCore.VoucherRepository
+	stateChangeRepo   payment.PaymentStateChangeRepository
+	payeeRelationRepo payeeCore.BusinessPayeeRelationRepository
+	storedCardRepo    payment.StoredCardRepository
+	bankAccountRepo   payment.BankAccountRepository
+	logger            *logger.Logger
 }
 
 // NewPaymentHandler creates a new payment handler
-func NewPaymentHandler(paymentService *payments.PaymentService, paymentSourceService *payments.PaymentSourceService, logger *logger.Logger) *PaymentHandler {
+func NewPaymentHandler(
+	paymentService *payments.PaymentService,
+	paymentSourceService *payments.PaymentSourceService,
+	voucherRepo voucherCore.VoucherRepository,
+	stateChangeRepo payment.PaymentStateChangeRepository,
+	payeeRelationRepo payeeCore.BusinessPayeeRelationRepository,
+	storedCardRepo payment.StoredCardRepository,
+	bankAccountRepo payment.BankAccountRepository,
+	logger *logger.Logger,
+) *PaymentHandler {
 	return &PaymentHandler{
 		paymentService:       paymentService,
 		paymentSourceService: paymentSourceService,
+		voucherRepo:          voucherRepo,
+		stateChangeRepo:      stateChangeRepo,
+		payeeRelationRepo:    payeeRelationRepo,
+		storedCardRepo:       storedCardRepo,
+		bankAccountRepo:      bankAccountRepo,
 		logger:               logger,
 	}
 }
@@ -1086,8 +1109,19 @@ func convertPaymentSourcesResponse(serviceResp *payments.GetPaymentSourcesRespon
 }
 
 // RegisterPaymentRoutes registers all payment processing routes
-func RegisterPaymentRoutes(group *echo.Group, paymentService *payments.PaymentService, paymentSourceService *payments.PaymentSourceService, authService auth.AuthService, log *logger.Logger) {
-	handler := NewPaymentHandler(paymentService, paymentSourceService, log)
+func RegisterPaymentRoutes(
+	group *echo.Group,
+	paymentService *payments.PaymentService,
+	paymentSourceService *payments.PaymentSourceService,
+	authService auth.AuthService,
+	voucherRepo voucherCore.VoucherRepository,
+	stateChangeRepo payment.PaymentStateChangeRepository,
+	payeeRelationRepo payeeCore.BusinessPayeeRelationRepository,
+	storedCardRepo payment.StoredCardRepository,
+	bankAccountRepo payment.BankAccountRepository,
+	log *logger.Logger,
+) {
+	handler := NewPaymentHandler(paymentService, paymentSourceService, voucherRepo, stateChangeRepo, payeeRelationRepo, storedCardRepo, bankAccountRepo, log)
 
 	// Apply JWT middleware to all payment routes
 	group.Use(middleware.JWTMiddleware(authService))
@@ -1108,7 +1142,8 @@ func RegisterPaymentRoutes(group *echo.Group, paymentService *payments.PaymentSe
 
 // RegisterWalletRoutes registers all wallet management routes
 func RegisterWalletRoutes(group *echo.Group, paymentService *payments.PaymentService, paymentSourceService *payments.PaymentSourceService, authService auth.AuthService, log *logger.Logger) {
-	handler := NewPaymentHandler(paymentService, paymentSourceService, log)
+	// Wallet routes don't need the additional repositories for payment details
+	handler := NewPaymentHandler(paymentService, paymentSourceService, nil, nil, nil, nil, nil, log)
 
 	// Apply JWT middleware to all wallet routes
 	group.Use(middleware.JWTMiddleware(authService))
@@ -1164,14 +1199,13 @@ func (h *PaymentHandler) GetPaymentList(c echo.Context) error {
 }
 
 // GetPaymentByID handles GET /process_payment/:payment_id
-// Retrieves detailed payment information by payment ID
+// Retrieves comprehensive payment details with payment source, bills, and activity history
 func (h *PaymentHandler) GetPaymentByID(c echo.Context) error {
 	h.logger.Info("GetPaymentByID API called")
 
 	// Extract payment_id from URL path parameter
 	paymentID := c.Param("payment_id")
 	if paymentID == "" {
-		h.logger.Warn("Missing payment_id in URL path")
 		return c.JSON(http.StatusBadRequest, map[string]any{
 			"error":   "MISSING_PAYMENT_ID",
 			"message": "payment_id is required in URL path",
@@ -1181,120 +1215,193 @@ func (h *PaymentHandler) GetPaymentByID(c echo.Context) error {
 	// Extract business_id from X-Business-ID header
 	businessID := c.Request().Header.Get("X-Business-ID")
 	if businessID == "" {
-		h.logger.Warn("Missing X-Business-ID header")
 		return c.JSON(http.StatusBadRequest, map[string]any{
 			"error":   "MISSING_BUSINESS_ID",
 			"message": "X-Business-ID header is required",
 		})
 	}
 
-	// Extract userId from JWT context for authorization
-	userID, ok := c.Get("userId").(string)
-	if !ok || userID == "" {
-		h.logger.Warn("Missing userId in JWT context")
-		return c.JSON(http.StatusUnauthorized, map[string]any{
-			"error":   "MISSING_USER_ID",
-			"message": "User ID not found in token",
+	// Parse payment UUID
+	paymentUUID, err := uuid.Parse(paymentID)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "INVALID_PAYMENT_ID",
+			"message": "Invalid payment ID format",
 		})
 	}
 
-	h.logger.DebugWith("Fetching payment details",
-		"payment_id", paymentID,
-		"business_id", businessID,
-		"user_id", userID)
-
-	// Call payment service (validation and authorization happens in service layer)
+	// Fetch payment record (with authorization check)
 	paymentRecord, err := h.paymentService.GetPaymentByID(c.Request().Context(), paymentID, businessID)
 	if err != nil {
-		h.logger.ErrorWith("Failed to retrieve payment",
-			"error", err,
-			"payment_id", paymentID,
-			"business_id", businessID)
-
-		// Check if payment not found
 		if strings.Contains(err.Error(), "not found") {
 			return c.JSON(http.StatusNotFound, map[string]any{
 				"error":   "PAYMENT_NOT_FOUND",
 				"message": "Payment not found",
 			})
 		}
-
 		return c.JSON(http.StatusInternalServerError, map[string]any{
 			"error":   "SERVICE_ERROR",
 			"message": "Failed to retrieve payment details",
 		})
 	}
 
+	// Calculate GST on service charge (18%)
+	serviceChargeGST := int64(float64(paymentRecord.FeeAmount) * 0.18)
+
+	// Build comprehensive response
+	response := &PaymentDetailsResponse{
+		PaymentID:        paymentRecord.ID,
+		Status:           string(paymentRecord.Status),
+		NetAmount:        paymentRecord.Amount,
+		ServiceCharge:    paymentRecord.FeeAmount,
+		ServiceChargeGST: serviceChargeGST,
+		TotalAmount:      paymentRecord.TotalAmount,
+		Currency:         string(paymentRecord.Currency),
+		PaymentMethod:    string(paymentRecord.PaymentMethod),
+		Description:      paymentRecord.Description,
+		Bills:            []BillDetails{},
+		Activity:         []PaymentActivityItem{},
+		CreatedAt:        paymentRecord.CreatedAt.Format("2006-01-02T15:04:05Z"),
+	}
+
+	// Fetch payment source details (card/bank)
+	if paymentRecord.PaymentSourceID != nil && paymentRecord.PaymentSourceType != nil {
+		sourceDetails, err := h.fetchPaymentSourceDetails(c.Request().Context(), *paymentRecord.PaymentSourceID, *paymentRecord.PaymentSourceType)
+		if err != nil {
+			h.logger.WarnWith("Failed to fetch payment source", "error", err)
+		} else {
+			response.PaymentSource = sourceDetails
+		}
+	}
+
+	// Fetch bills/vouchers linked to this payment
+	bills, err := h.fetchBillsForPayment(c.Request().Context(), paymentUUID)
+	if err != nil {
+		h.logger.WarnWith("Failed to fetch bills", "error", err)
+	} else {
+		response.Bills = bills
+	}
+
+	// Fetch payment activity history
+	activity, err := h.fetchPaymentActivity(c.Request().Context(), paymentUUID)
+	if err != nil {
+		h.logger.WarnWith("Failed to fetch activity", "error", err)
+	} else {
+		response.Activity = activity
+	}
+
 	h.logger.InfoWith("Payment details retrieved successfully",
 		"payment_id", paymentID,
-		"business_id", businessID,
-		"status", paymentRecord.Status,
-		"amount", paymentRecord.Amount)
+		"bills_count", len(response.Bills),
+		"activity_count", len(response.Activity))
 
-	// Build response with comprehensive payment details
-	response := map[string]any{
+	return c.JSON(http.StatusOK, map[string]any{
 		"status":  "success",
 		"message": "Payment details retrieved successfully",
-		"data": map[string]any{
-			"payment_id":          paymentRecord.ID,
-			"business_id":         paymentRecord.BusinessID,
-			"user_id":             paymentRecord.UserID,
-			"amount":              paymentRecord.Amount,
-			"currency":            string(paymentRecord.Currency),
-			"payment_method":      string(paymentRecord.PaymentMethod),
-			"payment_type":        string(paymentRecord.PaymentType),
-			"status":              string(paymentRecord.Status),
-			"description":         paymentRecord.Description,
-			"gateway_used":        string(paymentRecord.GatewayUsed),
-			"gateway_payment_id":  paymentRecord.GatewayPaymentID,
-			"redirect_url":        paymentRecord.RedirectURL,
-			"fee_amount":          paymentRecord.FeeAmount,
-			"total_amount":        paymentRecord.TotalAmount,
-			"settlement_status":   string(paymentRecord.SettlementStatus),
-			"created_at":          paymentRecord.CreatedAt.Format("2006-01-02T15:04:05Z"),
-			"updated_at":          paymentRecord.UpdatedAt.Format("2006-01-02T15:04:05Z"),
-		},
+		"data":    response,
+	})
+}
+
+// fetchPaymentSourceDetails retrieves payment source information (card/bank account)
+func (h *PaymentHandler) fetchPaymentSourceDetails(ctx context.Context, sourceID string, sourceType payment.PaymentSourceType) (*PaymentSourceDetails, error) {
+	details := &PaymentSourceDetails{
+		SourceType: string(sourceType),
 	}
 
-	// Add optional fields if present
-	data := response["data"].(map[string]any)
+	switch sourceType {
+	case payment.PaymentSourceCard:
+		card, err := h.storedCardRepo.GetStoredCardByID(ctx, sourceID)
+		if err != nil || card == nil {
+			return nil, fmt.Errorf("card not found")
+		}
+		lastFour := card.LastFourDigits
+		details.LastFourDigits = &lastFour
+		details.BankName = card.IssuerBank
+		cardType := string(card.CardType)
+		cardCategory := string(card.CardCategory)
+		details.CardType = &cardType
+		details.CardCategory = &cardCategory
 
-	if paymentRecord.PaymentSourceID != nil {
-		data["payment_source_id"] = *paymentRecord.PaymentSourceID
-	}
-	if paymentRecord.PaymentSourceType != nil {
-		data["payment_source_type"] = string(*paymentRecord.PaymentSourceType)
-	}
-	if paymentRecord.RetryOfPaymentID != nil {
-		data["retry_of_payment_id"] = *paymentRecord.RetryOfPaymentID
-		data["is_retry"] = true
-	}
-	if paymentRecord.RetryCount != nil {
-		data["retry_count"] = *paymentRecord.RetryCount
-	}
-	if paymentRecord.SettledAt != nil {
-		data["settled_at"] = paymentRecord.SettledAt.Format("2006-01-02T15:04:05Z")
-	}
-	if paymentRecord.SettlementReferenceID != "" {
-		data["settlement_reference_id"] = paymentRecord.SettlementReferenceID
-	}
-	if paymentRecord.SettlementUTR != "" {
-		data["settlement_utr"] = paymentRecord.SettlementUTR
-	}
-	if paymentRecord.SettlementAmount != nil {
-		data["settlement_amount"] = *paymentRecord.SettlementAmount
-	}
-	if paymentRecord.MDRAmount > 0 {
-		data["mdr_amount"] = paymentRecord.MDRAmount
-	}
-	if paymentRecord.NetSettlementAmount != nil {
-		data["net_settlement_amount"] = *paymentRecord.NetSettlementAmount
-	}
-	if paymentRecord.Metadata != nil && len(paymentRecord.Metadata) > 0 {
-		data["metadata"] = paymentRecord.Metadata
+	case payment.PaymentSourceBankAccount:
+		bankAcc, err := h.bankAccountRepo.GetBankAccountByID(ctx, sourceID)
+		if err != nil || bankAcc == nil {
+			return nil, fmt.Errorf("bank account not found")
+		}
+		lastFive := bankAcc.LastFiveDigits
+		details.LastFiveDigits = &lastFive
+		details.BankName = bankAcc.BankName
 	}
 
-	return c.JSON(http.StatusOK, response)
+	return details, nil
+}
+
+// fetchBillsForPayment retrieves vouchers/bills linked to a payment with payee details
+func (h *PaymentHandler) fetchBillsForPayment(ctx context.Context, paymentUUID uuid.UUID) ([]BillDetails, error) {
+	// Fetch vouchers by payment ID
+	vouchers, err := h.voucherRepo.GetByPaymentID(ctx, paymentUUID)
+	if err != nil {
+		return nil, err
+	}
+
+	bills := []BillDetails{}
+	for _, v := range vouchers {
+		// Fetch payee relation details
+		businessID := v.BusinessID.String()
+		payeeID := v.PayeeID.String()
+		accountID := v.AccountID.String()
+
+		relation, err := h.payeeRelationRepo.FindRelation(ctx, businessID, payeeID, accountID)
+		if err != nil {
+			h.logger.WarnWith("Failed to fetch payee relation", "voucher_id", v.VoucherID, "error", err)
+			continue
+		}
+
+		bill := BillDetails{
+			VoucherID:     v.VoucherID.String(),
+			InvoiceNumber: v.InvoiceNumber,
+			PayeeName:     relation.DisplayName,
+			PayeeType:     string(relation.PayeeType),
+			RelationID:    relation.RelationID,
+			Amount:        v.NetAmount,
+		}
+
+		// Try to extract GSTIN from TypeSpecificData for vendors
+		if relation.PayeeType == payeeCore.PayeeTypeVendor && relation.TypeSpecificData != nil {
+			if gstin, ok := relation.TypeSpecificData["gstin"].(string); ok && gstin != "" {
+				bill.GSTIN = &gstin
+			}
+		}
+
+		bills = append(bills, bill)
+	}
+
+	return bills, nil
+}
+
+// fetchPaymentActivity retrieves payment activity history from state changes
+func (h *PaymentHandler) fetchPaymentActivity(ctx context.Context, paymentUUID uuid.UUID) ([]PaymentActivityItem, error) {
+	stateChanges, err := h.stateChangeRepo.GetByPaymentID(ctx, paymentUUID)
+	if err != nil {
+		return nil, err
+	}
+
+	activity := []PaymentActivityItem{}
+	for _, sc := range stateChanges {
+		item := PaymentActivityItem{
+			Action:    payment.MapPaymentActionToUserFriendly(sc.Action),
+			ActorName: sc.ActorName,
+			Timestamp: sc.ActionTimestamp.Format("2006-01-02T15:04:05Z"),
+		}
+
+		// If no actor name, use actor type
+		if item.ActorName == "" {
+			item.ActorName = string(sc.ActorType)
+		}
+
+		activity = append(activity, item)
+	}
+
+	return activity, nil
 }
 
 // RetryPayment handles POST /process_payment/retry
