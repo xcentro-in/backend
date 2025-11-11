@@ -168,6 +168,12 @@ func (h *CallbackHandler) handleJioPayCallback(c echo.Context) error {
 			// Don't fail callback - still show page to user
 		} else {
 			fmt.Printf("✅ Payment status updated to: %s\n", newStatus)
+
+			// Step 6.1: Handle post-update operations (state changes, voucher finalization)
+			if err := h.handlePostPaymentUpdate(ctx, pmt, newStatus, "jiopay", metadata); err != nil {
+				fmt.Printf("⚠️  Post-update operations had issues: %v\n", err)
+				// Non-fatal: callback continues
+			}
 		}
 
 		// Update gateway payment ID if not set
@@ -276,6 +282,12 @@ func (h *CallbackHandler) handleEasebuzzCallback(c echo.Context) error {
 			// Don't fail callback - still show page to user
 		} else {
 			fmt.Printf("✅ Payment status updated to: %s\n", newStatus)
+
+			// Step 6.1: Handle post-update operations (state changes, voucher finalization)
+			if err := h.handlePostPaymentUpdate(ctx, pmt, newStatus, "easebuzz", metadata); err != nil {
+				fmt.Printf("⚠️  Post-update operations had issues: %v\n", err)
+				// Non-fatal: callback continues
+			}
 		}
 
 		// Update gateway payment ID if not set or if it's still our txnid
@@ -379,23 +391,10 @@ func (h *CallbackHandler) handleMockPGCallback(c echo.Context) error {
 		} else {
 			fmt.Printf("✅ Payment status updated to: %s\n", newStatus)
 
-			// Step 6.1: Record payment state change in audit trail
-			previousState := string(pmt.Status)
-			newStateStr := string(newStatus)
-			var action payment.PaymentAction
-			if newStatus == payment.PaymentStatusSuccess {
-				action = payment.PaymentActionSuccess
-			} else if newStatus == payment.PaymentStatusFailed {
-				action = payment.PaymentActionFailed
-			} else {
-				action = payment.PaymentActionProcessing
-			}
-
-			if err := h.recordPaymentStateChange(ctx, pmt.ID, action, previousState, newStateStr, "mockpg", metadata); err != nil {
-				fmt.Printf("⚠️  Failed to record state change: %v\n", err)
-				// Don't fail the callback - payment update is still successful
-			} else {
-				fmt.Println("✅ Payment state change recorded")
+			// Step 6.1: Handle post-update operations (state changes, voucher finalization)
+			if err := h.handlePostPaymentUpdate(ctx, pmt, newStatus, "mockpg", metadata); err != nil {
+				fmt.Printf("⚠️  Post-update operations had issues: %v\n", err)
+				// Non-fatal: callback continues
 			}
 		}
 
@@ -405,18 +404,6 @@ func (h *CallbackHandler) handleMockPGCallback(c echo.Context) error {
 				fmt.Printf("⚠️  Failed to update gateway payment ID: %v\n", err)
 			} else {
 				fmt.Printf("✅ Gateway payment ID updated to: %s\n", callback.GatewayPaymentID)
-			}
-		}
-
-		// Step 6.5: Finalize vouchers if payment succeeded
-		if newStatus == payment.PaymentStatusSuccess {
-			fmt.Println("💰 Payment succeeded, finalizing vouchers...")
-			if err := h.finalizeVouchersOnSuccess(ctx, pmt.ID, "mockpg"); err != nil {
-				fmt.Printf("⚠️  Failed to finalize vouchers: %v\n", err)
-				// Don't fail the callback - payment is still successful
-				// Vouchers can be finalized manually or by a recovery job
-			} else {
-				fmt.Println("✅ Vouchers finalized successfully")
 			}
 		}
 	} else {
@@ -570,6 +557,59 @@ func (h *CallbackHandler) recordPaymentStateChange(
 		"previous_state", previousState,
 		"new_state", newState,
 	)
+
+	return nil
+}
+
+// handlePostPaymentUpdate handles common post-payment-update operations for all gateways
+// This includes: 1) Recording state changes in audit trail, 2) Finalizing vouchers on success
+// This method is non-fatal - errors are logged but don't fail the callback
+func (h *CallbackHandler) handlePostPaymentUpdate(
+	ctx context.Context,
+	pmt *payment.Payment,
+	newStatus payment.PaymentStatus,
+	gatewayName string,
+	metadata map[string]any,
+) error {
+	// Step 1: Record payment state change in audit trail
+	previousState := string(pmt.Status)
+	newStateStr := string(newStatus)
+
+	var action payment.PaymentAction
+	switch newStatus {
+	case payment.PaymentStatusSuccess:
+		action = payment.PaymentActionSuccess
+	case payment.PaymentStatusFailed:
+		action = payment.PaymentActionFailed
+	case payment.PaymentStatusPending:
+		action = payment.PaymentActionProcessing
+	default:
+		action = payment.PaymentActionProcessing
+	}
+
+	if err := h.recordPaymentStateChange(ctx, pmt.ID, action, previousState, newStateStr, gatewayName, metadata); err != nil {
+		h.logger.ErrorWith("Failed to record state change (non-fatal)", "payment_id", pmt.ID, "gateway", gatewayName, "error", err)
+		fmt.Printf("⚠️  Failed to record state change: %v\n", err)
+		// Non-fatal: Continue to voucher finalization
+	} else {
+		h.logger.InfoWith("Payment state change recorded", "payment_id", pmt.ID, "gateway", gatewayName, "new_status", newStatus)
+		fmt.Println("✅ Payment state change recorded")
+	}
+
+	// Step 2: Finalize vouchers if payment succeeded
+	if newStatus == payment.PaymentStatusSuccess {
+		h.logger.InfoWith("Payment succeeded, attempting voucher finalization", "payment_id", pmt.ID, "gateway", gatewayName)
+		fmt.Println("💰 Payment succeeded, finalizing vouchers...")
+
+		if err := h.finalizeVouchersOnSuccess(ctx, pmt.ID, gatewayName); err != nil {
+			h.logger.ErrorWith("Failed to finalize vouchers (non-fatal)", "payment_id", pmt.ID, "gateway", gatewayName, "error", err)
+			fmt.Printf("⚠️  Failed to finalize vouchers: %v\n", err)
+			// Non-fatal: Payment is still successful, vouchers can be finalized manually or by recovery job
+		} else {
+			h.logger.InfoWith("Vouchers finalized successfully", "payment_id", pmt.ID, "gateway", gatewayName)
+			fmt.Println("✅ Vouchers finalized successfully")
+		}
+	}
 
 	return nil
 }
