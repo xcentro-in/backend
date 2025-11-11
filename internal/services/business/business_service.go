@@ -2,6 +2,7 @@ package business
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -993,4 +994,151 @@ func (s *businessService) SearchBusinesses(ctx context.Context, searchTerm strin
 // GetBusinessDetailsForOps retrieves complete business details for ops dashboard
 func (s *businessService) GetBusinessDetailsForOps(ctx context.Context, bid string) (*coreBusiness.OpsBusinessDetails, error) {
 	return s.businessRepo.GetBusinessDetailsForOps(ctx, bid)
+}
+
+// ReloadBusinessData reloads verification data for business (GSTIN, ITID, or CID)
+func (s *BusinessServiceImpl) ReloadBusinessData(ctx context.Context, bid string, dataType string) error {
+	s.logger.Infof("Reloading business data for bid=%s, type=%s", bid, dataType)
+
+	// Get business to fetch required IDs
+	bus, err := s.businessRepo.FindByID(ctx, bid)
+	if err != nil {
+		return fmt.Errorf("business not found: %w", err)
+	}
+
+	// Generate transaction ID
+	transID := fmt.Sprintf("reload_%s_%s_%d", dataType, bid, time.Now().Unix())
+
+	switch dataType {
+	case "gstin":
+		// Verify GSTIN and update data
+		gstData, err := s.verificationService.VerifyGSTIN(ctx, bus.GSTIN, transID)
+		if err != nil {
+			return fmt.Errorf("GSTIN verification failed: %w", err)
+		}
+
+		// Convert to JSON
+		gstDataJSON, err := json.Marshal(gstData.RawResponse)
+		if err != nil {
+			return fmt.Errorf("failed to marshal GST data: %w", err)
+		}
+
+		// Update in database
+		return s.businessRepo.UpdateGSTINData(ctx, bid, string(gstDataJSON))
+
+	case "income_tax_id":
+		// Verify PAN and update data
+		if bus.ITID == "" {
+			return fmt.Errorf("income tax ID not set for business")
+		}
+
+		panData, err := s.verificationService.VerifyPANCOM(ctx, bus.ITID, transID)
+		if err != nil {
+			return fmt.Errorf("PAN verification failed: %w", err)
+		}
+
+		// Convert to JSON
+		panDataJSON, err := json.Marshal(panData.PANCOMResponse)
+		if err != nil {
+			return fmt.Errorf("failed to marshal PAN data: %w", err)
+		}
+
+		// Update in database
+		return s.businessRepo.UpdateIncometTaxIDData(ctx, bus.ITID, string(panDataJSON))
+
+	case "company_id":
+		// Get CID from KYB data
+		_, kybData, err := s.businessRepo.GetBusinessWithKYBData(ctx, bid)
+		if err != nil || kybData == nil || kybData.CID == "" {
+			return fmt.Errorf("company ID not set for business")
+		}
+
+		// Verify CIN and update data
+		cinData, err := s.verificationService.VerifyCIN(ctx, kybData.CID, transID)
+		if err != nil {
+			return fmt.Errorf("CIN verification failed: %w", err)
+		}
+
+		// Convert to JSON
+		cinDataJSON, err := json.Marshal(cinData.RawResponse)
+		if err != nil {
+			return fmt.Errorf("failed to marshal CIN data: %w", err)
+		}
+
+		// Update in database
+		return s.businessRepo.UpdateCompanyIDData(ctx, bus.ITID, string(cinDataJSON))
+
+	default:
+		return fmt.Errorf("invalid data type: %s (must be gstin, income_tax_id, or company_id)", dataType)
+	}
+}
+
+// RejectKYB marks business KYB as rejected, sets owner role to NULL, and clears KYB data
+func (s *BusinessServiceImpl) RejectKYB(ctx context.Context, bid string) error {
+	s.logger.Infof("Rejecting KYB for business: %s", bid)
+
+	// Get business to check ITID
+	bus, err := s.businessRepo.FindByID(ctx, bid)
+	if err != nil {
+		return fmt.Errorf("business not found: %w", err)
+	}
+
+	// Use transaction to ensure atomicity
+	return s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
+		txBusinessRepo := s.businessRepo.WithTx(tx)
+		txBusinessUserRelRepo := s.businessUserRelRepo.WithTx(tx)
+
+		// 1. Set KYB status to rejected
+		if err := txBusinessRepo.SetKYBStatusRejected(ctx, bid); err != nil {
+			return err
+		}
+
+		// 2. Set owner role to NULL (database NULL)
+		if err := txBusinessUserRelRepo.SetOwnerRoleToNull(ctx, bid); err != nil {
+			// It's OK if no owner exists
+			s.logger.Warnf("No owner found for business %s: %v", bid, err)
+		}
+
+		// 3. Clear KYB data
+		if bus.ITID != "" {
+			if err := txBusinessRepo.ClearKYBData(ctx, bus.ITID); err != nil {
+				return err
+			}
+		}
+
+		s.logger.Infof("KYB rejected successfully for business: %s", bid)
+		return nil
+	})
+}
+
+// VerifyKYB marks business KYB as verified and sets owner's KYC status to verified
+func (s *BusinessServiceImpl) VerifyKYB(ctx context.Context, bid string) error {
+	s.logger.Infof("Verifying KYB for business: %s", bid)
+
+	// Use transaction to ensure atomicity
+	return s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
+		txBusinessRepo := s.businessRepo.WithTx(tx)
+
+		// 1. Set business KYB status to verified
+		if err := txBusinessRepo.SetKYBStatusVerified(ctx, bid); err != nil {
+			return err
+		}
+
+		// 2. Get owner user ID
+		ownerUserID, err := txBusinessRepo.GetOwnerUserID(ctx, bid)
+		if err != nil {
+			// It's OK if no owner exists yet
+			s.logger.Warnf("No owner found for business %s: %v", bid, err)
+			return nil
+		}
+
+		// 3. Set owner's KYC status to verified
+		txUserRepo := s.userRepo.WithTx(tx)
+		if err := txUserRepo.SetKYCStatusVerified(ctx, ownerUserID); err != nil {
+			return fmt.Errorf("failed to verify owner KYC: %w", err)
+		}
+
+		s.logger.Infof("KYB and owner KYC verified successfully for business: %s", bid)
+		return nil
+	})
 }
