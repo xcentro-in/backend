@@ -459,6 +459,56 @@ func (s *PaymentService) GetPaymentList(ctx context.Context, businessID string, 
 	}, nil
 }
 
+// GetPaymentByID retrieves detailed payment information by payment ID
+func (s *PaymentService) GetPaymentByID(ctx context.Context, paymentID string, businessID string) (*payment.Payment, error) {
+	s.logger.InfoWith("Fetching payment by ID",
+		"payment_id", paymentID,
+		"business_id", businessID)
+
+	// Validate payment ID
+	if paymentID == "" {
+		return nil, fmt.Errorf("payment_id is required")
+	}
+
+	// Validate business ID
+	if businessID == "" {
+		return nil, fmt.Errorf("business_id is required")
+	}
+
+	// Fetch payment from repository
+	paymentRecord, err := s.paymentRepo.GetPaymentByID(ctx, paymentID)
+	if err != nil {
+		s.logger.ErrorWith("failed to get payment by ID",
+			"error", err,
+			"payment_id", paymentID)
+		return nil, fmt.Errorf("failed to get payment: %w", err)
+	}
+
+	// Check if payment exists
+	if paymentRecord == nil {
+		s.logger.WarnWith("payment not found",
+			"payment_id", paymentID)
+		return nil, fmt.Errorf("payment not found")
+	}
+
+	// Verify payment belongs to the business (authorization check)
+	if paymentRecord.BusinessID != businessID {
+		s.logger.WarnWith("payment does not belong to business",
+			"payment_id", paymentID,
+			"requested_business_id", businessID,
+			"actual_business_id", paymentRecord.BusinessID)
+		return nil, fmt.Errorf("payment not found")
+	}
+
+	s.logger.InfoWith("Successfully retrieved payment",
+		"payment_id", paymentID,
+		"business_id", businessID,
+		"status", paymentRecord.Status,
+		"amount", paymentRecord.Amount)
+
+	return paymentRecord, nil
+}
+
 // RetryPayment retries a failed or pending payment with the same payment source and vouchers
 // Maximum 1 retry allowed per payment, within 7 days of original payment
 func (s *PaymentService) RetryPayment(ctx context.Context, originalPaymentID string, callingDevice payment.CallingDevice) (*payment.PaymentResponse, error) {

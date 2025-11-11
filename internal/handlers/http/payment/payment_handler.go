@@ -1101,8 +1101,9 @@ func RegisterPaymentRoutes(group *echo.Group, paymentService *payments.PaymentSe
 	// Phase 10: Payment source selection with context-aware fees
 	group.POST("/get_payment_sources_with_fees", handler.GetPaymentSourcesWithFees)
 
-	// Payment list for dashboard/history
+	// Payment list and details for dashboard/history
 	group.GET("/list", handler.GetPaymentList)
+	group.GET("/:payment_id", handler.GetPaymentByID)
 }
 
 // RegisterWalletRoutes registers all wallet management routes
@@ -1157,6 +1158,140 @@ func (h *PaymentHandler) GetPaymentList(c echo.Context) error {
 			"error":   "SERVICE_ERROR",
 			"message": "Failed to retrieve payment list",
 		})
+	}
+
+	return c.JSON(http.StatusOK, response)
+}
+
+// GetPaymentByID handles GET /process_payment/:payment_id
+// Retrieves detailed payment information by payment ID
+func (h *PaymentHandler) GetPaymentByID(c echo.Context) error {
+	h.logger.Info("GetPaymentByID API called")
+
+	// Extract payment_id from URL path parameter
+	paymentID := c.Param("payment_id")
+	if paymentID == "" {
+		h.logger.Warn("Missing payment_id in URL path")
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "MISSING_PAYMENT_ID",
+			"message": "payment_id is required in URL path",
+		})
+	}
+
+	// Extract business_id from X-Business-ID header
+	businessID := c.Request().Header.Get("X-Business-ID")
+	if businessID == "" {
+		h.logger.Warn("Missing X-Business-ID header")
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "MISSING_BUSINESS_ID",
+			"message": "X-Business-ID header is required",
+		})
+	}
+
+	// Extract userId from JWT context for authorization
+	userID, ok := c.Get("userId").(string)
+	if !ok || userID == "" {
+		h.logger.Warn("Missing userId in JWT context")
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "MISSING_USER_ID",
+			"message": "User ID not found in token",
+		})
+	}
+
+	h.logger.DebugWith("Fetching payment details",
+		"payment_id", paymentID,
+		"business_id", businessID,
+		"user_id", userID)
+
+	// Call payment service (validation and authorization happens in service layer)
+	paymentRecord, err := h.paymentService.GetPaymentByID(c.Request().Context(), paymentID, businessID)
+	if err != nil {
+		h.logger.ErrorWith("Failed to retrieve payment",
+			"error", err,
+			"payment_id", paymentID,
+			"business_id", businessID)
+
+		// Check if payment not found
+		if strings.Contains(err.Error(), "not found") {
+			return c.JSON(http.StatusNotFound, map[string]any{
+				"error":   "PAYMENT_NOT_FOUND",
+				"message": "Payment not found",
+			})
+		}
+
+		return c.JSON(http.StatusInternalServerError, map[string]any{
+			"error":   "SERVICE_ERROR",
+			"message": "Failed to retrieve payment details",
+		})
+	}
+
+	h.logger.InfoWith("Payment details retrieved successfully",
+		"payment_id", paymentID,
+		"business_id", businessID,
+		"status", paymentRecord.Status,
+		"amount", paymentRecord.Amount)
+
+	// Build response with comprehensive payment details
+	response := map[string]any{
+		"status":  "success",
+		"message": "Payment details retrieved successfully",
+		"data": map[string]any{
+			"payment_id":          paymentRecord.ID,
+			"business_id":         paymentRecord.BusinessID,
+			"user_id":             paymentRecord.UserID,
+			"amount":              paymentRecord.Amount,
+			"currency":            string(paymentRecord.Currency),
+			"payment_method":      string(paymentRecord.PaymentMethod),
+			"payment_type":        string(paymentRecord.PaymentType),
+			"status":              string(paymentRecord.Status),
+			"description":         paymentRecord.Description,
+			"gateway_used":        string(paymentRecord.GatewayUsed),
+			"gateway_payment_id":  paymentRecord.GatewayPaymentID,
+			"redirect_url":        paymentRecord.RedirectURL,
+			"fee_amount":          paymentRecord.FeeAmount,
+			"total_amount":        paymentRecord.TotalAmount,
+			"settlement_status":   string(paymentRecord.SettlementStatus),
+			"created_at":          paymentRecord.CreatedAt.Format("2006-01-02T15:04:05Z"),
+			"updated_at":          paymentRecord.UpdatedAt.Format("2006-01-02T15:04:05Z"),
+		},
+	}
+
+	// Add optional fields if present
+	data := response["data"].(map[string]any)
+
+	if paymentRecord.PaymentSourceID != nil {
+		data["payment_source_id"] = *paymentRecord.PaymentSourceID
+	}
+	if paymentRecord.PaymentSourceType != nil {
+		data["payment_source_type"] = string(*paymentRecord.PaymentSourceType)
+	}
+	if paymentRecord.RetryOfPaymentID != nil {
+		data["retry_of_payment_id"] = *paymentRecord.RetryOfPaymentID
+		data["is_retry"] = true
+	}
+	if paymentRecord.RetryCount != nil {
+		data["retry_count"] = *paymentRecord.RetryCount
+	}
+	if paymentRecord.SettledAt != nil {
+		data["settled_at"] = paymentRecord.SettledAt.Format("2006-01-02T15:04:05Z")
+	}
+	if paymentRecord.SettlementReferenceID != "" {
+		data["settlement_reference_id"] = paymentRecord.SettlementReferenceID
+	}
+	if paymentRecord.SettlementUTR != "" {
+		data["settlement_utr"] = paymentRecord.SettlementUTR
+	}
+	if paymentRecord.SettlementAmount != nil {
+		data["settlement_amount"] = *paymentRecord.SettlementAmount
+	}
+	if paymentRecord.MDRAmount > 0 {
+		data["mdr_amount"] = paymentRecord.MDRAmount
+	}
+	if paymentRecord.NetSettlementAmount != nil {
+		data["net_settlement_amount"] = *paymentRecord.NetSettlementAmount
+	}
+	if paymentRecord.Metadata != nil && len(paymentRecord.Metadata) > 0 {
+		data["metadata"] = paymentRecord.Metadata
 	}
 
 	return c.JSON(http.StatusOK, response)
