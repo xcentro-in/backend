@@ -1,21 +1,24 @@
 package http
 
 import (
+	"net/http"
+
 	"github.com/labstack/echo/v4"
 	"xcentro.in/internal/core/auth"
+	coreNotification "xcentro.in/internal/core/notification"
 	"xcentro.in/internal/services/notification"
 	"xcentro.in/internal/shared/logger"
 )
 
 // OpsNotificationHandler handles ops dashboard notification-related endpoints
 type OpsNotificationHandler struct {
-	notificationService notification.UserFacingNotificationService
+	notificationService notification.NotificationService
 	authService         auth.AuthService
 	logger              *logger.Logger
 }
 
 // NewOpsNotificationHandler creates a new ops notification handler instance
-func NewOpsNotificationHandler(notificationService notification.UserFacingNotificationService, authService auth.AuthService) *OpsNotificationHandler {
+func NewOpsNotificationHandler(notificationService notification.NotificationService, authService auth.AuthService) *OpsNotificationHandler {
 	return &OpsNotificationHandler{
 		notificationService: notificationService,
 		authService:         authService,
@@ -24,27 +27,83 @@ func NewOpsNotificationHandler(notificationService notification.UserFacingNotifi
 }
 
 // RegisterOpsNotificationRoutes registers all ops dashboard notification routes
-func RegisterOpsNotificationRoutes(e *echo.Group, notificationService notification.UserFacingNotificationService, authService auth.AuthService) {
+func RegisterOpsNotificationRoutes(e *echo.Group, notificationService notification.NotificationService, authService auth.AuthService) {
 	handler := NewOpsNotificationHandler(notificationService, authService)
 
 	notificationGroup := e.Group("/notifications")
 
-	// TODO: Add ops dashboard notification routes here
-	// Examples:
-	// notificationGroup.GET("", handler.ListNotifications)
-	// notificationGroup.GET("/:notification_id", handler.GetNotificationDetails)
-	// notificationGroup.POST("/send", handler.SendNotification)
-	// notificationGroup.GET("/events", handler.ListNotificationEvents)
-	// notificationGroup.GET("/users/:user_id/notifications", handler.GetUserNotifications)
-	// notificationGroup.POST("/broadcast", handler.BroadcastNotification)
-
-	_ = handler // Suppress unused variable warning
-	_ = notificationGroup
+	// Bulk trigger endpoint
+	notificationGroup.POST("/trigger", handler.TriggerNotifications)
 }
 
-// TODO: Add handler methods here
-// Example:
-// func (h *OpsNotificationHandler) ListNotifications(c echo.Context) error {
-//     // Implementation
-//     return c.JSON(200, map[string]string{"message": "list notifications"})
-// }
+// TriggerNotifications handles POST /notifications/trigger
+func (h *OpsNotificationHandler) TriggerNotifications(c echo.Context) error {
+	// Parse and validate request body
+	var req coreNotification.OpsBulkTriggerRequest
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Invalid request body",
+		})
+	}
+
+	// Validate using the validator
+	if err := c.Validate(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": err.Error(),
+		})
+	}
+
+	// Additional validation for target types
+	for i, target := range req.Targets {
+		switch target.Type {
+		case coreNotification.TargetUnicast:
+			// Unicast must have exactly one ID
+			if len(target.IDs) != 1 {
+				return c.JSON(http.StatusBadRequest, map[string]string{
+					"error": "Unicast target must have exactly one user ID",
+					"index": string(rune(i)),
+				})
+			}
+		case coreNotification.TargetMulticast:
+			// Multicast must have either IDs or MinimumRole, but not both
+			hasIDs := len(target.IDs) > 0
+			hasRole := target.MinimumRole != nil && *target.MinimumRole != ""
+			if hasIDs && hasRole {
+				return c.JSON(http.StatusBadRequest, map[string]string{
+					"error": "Multicast target cannot have both IDs and MinimumRole",
+					"index": string(rune(i)),
+				})
+			}
+			if !hasIDs && !hasRole {
+				return c.JSON(http.StatusBadRequest, map[string]string{
+					"error": "Multicast target must have either IDs or MinimumRole",
+					"index": string(rune(i)),
+				})
+			}
+		case coreNotification.TargetBroadcast:
+			// Broadcast must have MinimumRole
+			if target.MinimumRole == nil || *target.MinimumRole == "" {
+				return c.JSON(http.StatusBadRequest, map[string]string{
+					"error": "Broadcast target must have MinimumRole",
+					"index": string(rune(i)),
+				})
+			}
+		default:
+			return c.JSON(http.StatusBadRequest, map[string]string{
+				"error": "Invalid target type",
+				"index": string(rune(i)),
+			})
+		}
+	}
+
+	// Call service layer
+	response, err := h.notificationService.BulkTriggerNotifications(c.Request().Context(), &req)
+	if err != nil {
+		h.logger.Errorf("Error triggering bulk notifications: %v", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Failed to trigger notifications",
+		})
+	}
+
+	return c.JSON(http.StatusOK, response)
+}

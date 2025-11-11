@@ -230,3 +230,22 @@ type UserNotification struct {
 	SentAt     *time.Time             `db:"sent_at" json:"sent_at,omitempty"`
 	ReadAt     *time.Time             `db:"read_at" json:"read_at,omitempty"`
 }
+
+// #############################################################################
+// # OPS DASHBOARD DTOs
+// #############################################################################
+
+// OpsBulkTriggerRequest represents the request to trigger notifications for multiple businesses
+type OpsBulkTriggerRequest struct {
+	Targets   []TargetInfo     `json:"targets" validate:"required,min=1,dive"`
+	EventType string           `json:"event_type" validate:"required"`
+	Message   MessageContent   `json:"message" validate:"required"`
+	Actions   []ActionButton   `json:"actions,omitempty" validate:"omitempty,dive"`
+}
+
+// OpsBulkTriggerResponse represents the response after triggering bulk notifications
+type OpsBulkTriggerResponse struct {
+	Success        bool `json:"success"`
+	TriggeredCount int  `json:"triggered_count"`
+}
+
