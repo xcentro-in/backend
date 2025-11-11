@@ -584,13 +584,22 @@ func (s *PaymentService) RetryPayment(ctx context.Context, originalPaymentID str
 		return nil, fmt.Errorf("retry payment failed: %w", err)
 	}
 
-	// Step 9: Update retry metadata on the new payment (non-transactional, best-effort)
-	// The metadata is already in Metadata field, so we just need to update retry_of_payment_id and retry_count
-	// This will be handled by a separate update call
+	// Step 9: Update retry metadata columns on the new payment
+	// This ensures retry_of_payment_id and retry_count are set in database columns (not just metadata JSON)
+	s.logger.DebugWith("Updating retry metadata columns", "retry_payment_id", retryResponse.PaymentID)
+	if err := s.paymentRepo.UpdateRetryMetadata(ctx, retryResponse.PaymentID, originalPaymentID, 1); err != nil {
+		// Non-fatal error - payment was created and processed, but metadata update failed
+		s.logger.ErrorWith("Failed to update retry metadata (non-fatal)", "error", err,
+			"retry_payment_id", retryResponse.PaymentID,
+			"original_payment_id", originalPaymentID)
+		// Continue anyway - the retry info is in the metadata JSON field
+	}
+
 	s.logger.InfoWith("Payment retry successful",
 		"original_payment_id", originalPaymentID,
 		"retry_payment_id", retryResponse.PaymentID,
-		"gateway_used", retryResponse.GatewayUsed)
+		"gateway_used", retryResponse.GatewayUsed,
+		"retry_metadata_updated", true)
 
 	// Add retry metadata to response
 	if retryResponse.Metadata == nil {

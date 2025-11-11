@@ -992,3 +992,42 @@ func fetchBankAccountDetails(ctx context.Context, r *PgPaymentRepository, accoun
 	last4 := crypto.ExtractLastDigits(decryptedAccountNumber, 4)
 	return &bankDetailsResult{BankName: bankName, Last4: last4}
 }
+
+// UpdateRetryMetadata updates retry-related fields on a payment
+func (r *PgPaymentRepository) UpdateRetryMetadata(ctx context.Context, paymentID string, retryOfPaymentID string, retryCount int) error {
+	query := `
+		UPDATE xcentro.payments
+		SET retry_of_payment_id = $1, retry_count = $2, updated_at = NOW()
+		WHERE payment_id = $3
+	`
+
+	result, err := r.querier.Exec(ctx, query, retryOfPaymentID, retryCount, paymentID)
+	if err != nil {
+		return fmt.Errorf("failed to update retry metadata: %w", err)
+	}
+
+	rowsAffected := result.RowsAffected()
+	if rowsAffected == 0 {
+		return fmt.Errorf("payment not found: %s", paymentID)
+	}
+
+	fmt.Printf("[PgPaymentRepository] Updated retry metadata - PaymentID: %s, RetryOf: %s, RetryCount: %d\n",
+		paymentID, retryOfPaymentID, retryCount)
+
+	return nil
+}
+
+// UpdateHasSuccessfulRetry updates the has_successful_retry flag on the original payment
+// This is called when a retry payment succeeds
+func (r *PgPaymentRepository) UpdateHasSuccessfulRetry(ctx context.Context, paymentID string, hasSuccessfulRetry bool) error {
+	// Note: has_successful_retry is computed dynamically in the payment list query
+	// via EXISTS check. This method is a no-op since we don't store it.
+	// The flag is determined by: EXISTS(SELECT 1 FROM payments WHERE retry_of_payment_id = p.payment_id AND status = 'success')
+	// So we don't need to update anything - it will automatically reflect when the retry payment has status='success'
+	
+	r.logger.DebugWith("UpdateHasSuccessfulRetry called (no-op - computed dynamically)",
+		"payment_id", paymentID,
+		"has_successful_retry", hasSuccessfulRetry)
+	
+	return nil
+}
