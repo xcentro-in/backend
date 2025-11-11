@@ -22,6 +22,11 @@ type BusinessRepository interface {
 	GetBusinessWithKYBData(ctx context.Context, bid string) (*Business, *BusinessKYBData, error)
 	GetKYBDataByPAN(ctx context.Context, pan string) (*BusinessKYBData, error)
 	UpdateOnboardingFlag(ctx context.Context, bid string, flagName string, value bool) error
+
+	// Ops dashboard methods
+	ListBusinessesPaginated(ctx context.Context, page int, limit int) ([]*OpsBusinessListItem, int, error)
+	SearchBusinesses(ctx context.Context, searchTerm string) ([]*OpsBusinessSearchResult, error)
+	GetBusinessDetailsForOps(ctx context.Context, bid string) (*OpsBusinessDetails, error)
 }
 
 // BusinessUserRelationRepository defines the interface for the relationship data.

@@ -968,12 +968,29 @@ func (s *BusinessServiceImpl) UpdateOnboardingStatus(ctx context.Context, bid st
 	}
 
 	// Invalidate the cache asynchronously
-	
+
 	invalidationKey := keys.Business.OnboardingStatus(bid)
 	if err := s.rclient.Delete(ctx, invalidationKey); err != nil {
 		s.logger.Warnf("Failed to invalidate business onboarding status cache for BID %s: %v", bid, err)
 	}
-	
+
 
 	return nil
+}
+
+// Ops Dashboard Methods
+
+// ListBusinessesPaginated retrieves paginated list of businesses
+func (s *businessService) ListBusinessesPaginated(ctx context.Context, page int, limit int) ([]*coreBusiness.OpsBusinessListItem, int, error) {
+	return s.businessRepo.ListBusinessesPaginated(ctx, page, limit)
+}
+
+// SearchBusinesses searches businesses by name or GSTIN
+func (s *businessService) SearchBusinesses(ctx context.Context, searchTerm string) ([]*coreBusiness.OpsBusinessSearchResult, error) {
+	return s.businessRepo.SearchBusinesses(ctx, searchTerm)
+}
+
+// GetBusinessDetailsForOps retrieves complete business details for ops dashboard
+func (s *businessService) GetBusinessDetailsForOps(ctx context.Context, bid string) (*coreBusiness.OpsBusinessDetails, error) {
+	return s.businessRepo.GetBusinessDetailsForOps(ctx, bid)
 }
