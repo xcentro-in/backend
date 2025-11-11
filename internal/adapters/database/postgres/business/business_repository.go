@@ -487,6 +487,8 @@ func (r *PgBusinessRepository) GetBusinessDetailsForOps(ctx context.Context, bid
 			b.bid, b.name, b.gstin, COALESCE(b.gst_data::text, ''), b.income_tax_id,
 			b.kyb_status, b.business_type, b.business_model, b.business_turnover,
 			b.country_code, b.currency_code, COALESCE(b.updated_at::text, ''),
+			b.has_completed_onboarding, b.has_added_payment_method,
+			b.has_added_vendor, b.has_created_first_payment,
 			COALESCE(k.income_tax_id_data::text, ''), COALESCE(k.company_id, ''),
 			COALESCE(k.company_id_data::text, ''), COALESCE(k.business_deed, '')
 		FROM xcentro.business b
@@ -502,6 +504,8 @@ func (r *PgBusinessRepository) GetBusinessDetailsForOps(ctx context.Context, bid
 		&details.BID, &details.Name, &details.GSTIN, &details.GSTData, &details.ITID,
 		&kybStatusStr, &businessType, &businessModel, &businessTurnover,
 		&countryCode, &currencyCode, &details.UpdatedAt,
+		&details.HasCompletedOnboarding, &details.HasAddedPaymentMethod,
+		&details.HasAddedVendor, &details.HasCreatedFirstPayment,
 		&details.ITIDData, &details.CID, &details.CIDData, &details.DocUrl,
 	)
 

@@ -224,6 +224,12 @@ type OpsBusinessDetails struct {
 	CurrencyCode     string              `json:"currencyCode"`
 	UpdatedAt        string              `json:"updatedAt"`
 
+	// Onboarding tracking
+	HasCompletedOnboarding bool `json:"hasCompletedOnboarding"`
+	HasAddedPaymentMethod  bool `json:"hasAddedPaymentMethod"`
+	HasAddedVendor         bool `json:"hasAddedVendor"`
+	HasCreatedFirstPayment bool `json:"hasCreatedFirstPayment"`
+
 	// KYB data (embedded)
 	ITIDData string `json:"itidData"`
 	CID      string `json:"cid"`
