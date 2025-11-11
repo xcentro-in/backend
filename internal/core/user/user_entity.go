@@ -111,3 +111,12 @@ type UserProfileDTO struct {
 type UpdateProfileDTO struct {
 	Mobile string `json:"mobile" validate:"required,phone_in"`
 }
+
+// Ops Dashboard DTOs
+
+// OpsUserSearchResult represents a user search result for ops dashboard
+type OpsUserSearchResult struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	BusinessID string `json:"business_id"`
+}

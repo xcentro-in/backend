@@ -54,4 +54,7 @@ type UserRepository interface {
 
 	// Optimized queries for specific use cases
 	GetUserBasicInfo(ctx context.Context, userID string) (id, email, name string, err error)
+
+	// Ops dashboard queries
+	SearchUsersByBusinesses(ctx context.Context, businessIDs []string, searchTerm string) ([]*OpsUserSearchResult, error)
 }

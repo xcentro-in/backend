@@ -925,3 +925,8 @@ func (s *UserServiceImpl) CreateInvitedUser(ctx context.Context, email, name str
 	s.logger.Info("Invited user created successfully with ID: %s", createdUser.Id)
 	return createdUser, nil
 }
+
+// SearchUsersByBusinesses searches users by name or email within specified businesses (ops dashboard)
+func (s *UserServiceImpl) SearchUsersByBusinesses(ctx context.Context, businessIDs []string, searchTerm string) ([]*user.OpsUserSearchResult, error) {
+	return s.userRepo.SearchUsersByBusinesses(ctx, businessIDs, searchTerm)
+}

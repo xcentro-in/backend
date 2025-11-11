@@ -1,6 +1,8 @@
 package http
 
 import (
+	"net/http"
+
 	"github.com/labstack/echo/v4"
 	"xcentro.in/internal/core/auth"
 	"xcentro.in/internal/core/user"
@@ -29,20 +31,48 @@ func RegisterOpsUserRoutes(e *echo.Group, userService user.UserService, authServ
 
 	userGroup := e.Group("/users")
 
-	// TODO: Add ops dashboard user routes here
-	// Examples:
-	// userGroup.GET("", handler.ListUsers)
-	// userGroup.GET("/:user_id", handler.GetUserDetails)
-	// userGroup.PUT("/:user_id/status", handler.UpdateUserStatus)
-	// userGroup.GET("/:user_id/activity", handler.GetUserActivity)
-
-	_ = handler // Suppress unused variable warning
-	_ = userGroup
+	// User search endpoint
+	userGroup.GET("/search", handler.SearchUsers)
 }
 
-// TODO: Add handler methods here
-// Example:
-// func (h *OpsUserHandler) ListUsers(c echo.Context) error {
-//     // Implementation
-//     return c.JSON(200, map[string]string{"message": "list users"})
-// }
+// SearchUsers handles GET /users/search?business_id=biz-123&business_id=biz-456&q=john
+func (h *OpsUserHandler) SearchUsers(c echo.Context) error {
+	// Get business IDs from query params (can have multiple)
+	businessIDs := c.QueryParams()["business_id"]
+	if len(businessIDs) == 0 {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "At least one business_id is required",
+		})
+	}
+
+	// Get search term
+	searchTerm := c.QueryParam("q")
+	if searchTerm == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Search term 'q' is required",
+		})
+	}
+
+	// Validate search term length
+	if len(searchTerm) < 2 {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Search term must be at least 2 characters",
+		})
+	}
+
+	// Call service layer
+	results, err := h.userService.SearchUsersByBusinesses(c.Request().Context(), businessIDs, searchTerm)
+	if err != nil {
+		h.logger.Errorf("Error searching users: %v", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Failed to search users",
+		})
+	}
+
+	// Return results (empty array if no results)
+	if results == nil {
+		results = []*user.OpsUserSearchResult{}
+	}
+
+	return c.JSON(http.StatusOK, results)
+}

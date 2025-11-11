@@ -771,3 +771,38 @@ func (r *PgUserRepository) GetUserBasicInfo(ctx context.Context, userID string) 
 
 	return id, email, name, nil
 }
+
+// SearchUsersByBusinesses searches users by name or email within specified businesses
+func (r *PgUserRepository) SearchUsersByBusinesses(ctx context.Context, businessIDs []string, searchTerm string) ([]*user.OpsUserSearchResult, error) {
+	query := `
+		SELECT DISTINCT u.id, COALESCE(u.name, '') as name, bur.bid as business_id
+		FROM xcentro.user_table u
+		JOIN xcentro.business_user_relation bur ON u.id = bur.userid
+		WHERE bur.bid = ANY($1)
+		AND (u.name ILIKE $2 OR u.email ILIKE $2)
+		ORDER BY u.name
+		LIMIT 50
+	`
+
+	searchPattern := "%" + searchTerm + "%"
+	rows, err := r.querier.Query(ctx, query, businessIDs, searchPattern)
+	if err != nil {
+		return nil, fmt.Errorf("failed to search users by businesses: %w", err)
+	}
+	defer rows.Close()
+
+	var results []*user.OpsUserSearchResult
+	for rows.Next() {
+		var result user.OpsUserSearchResult
+		if err := rows.Scan(&result.ID, &result.Name, &result.BusinessID); err != nil {
+			return nil, fmt.Errorf("failed to scan user search result: %w", err)
+		}
+		results = append(results, &result)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating user search results: %w", err)
+	}
+
+	return results, nil
+}

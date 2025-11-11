@@ -4,9 +4,11 @@ import (
 	"github.com/labstack/echo/v4"
 	"xcentro.in/internal/adapters/database/postgres/business"
 	notificationRepo "xcentro.in/internal/adapters/database/postgres/notification"
+	userRepo "xcentro.in/internal/adapters/database/postgres/user"
 	httpHandlers "xcentro.in/internal/handlers/http"
 	businessSvc "xcentro.in/internal/services/business"
 	notificationSvc "xcentro.in/internal/services/notification"
+	userSvc "xcentro.in/internal/services/user"
 	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/logger"
 )
@@ -58,6 +60,25 @@ func registerOpsNotificationRoutes(clients *externalClients, cfg *config.Config,
 	httpHandlers.RegisterOpsNotificationRoutes(group, notificationService, nil)
 }
 
+// registerOpsUserRoutes registers ops dashboard user routes
+func registerOpsUserRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
+	// Create user repository
+	userRepository := userRepo.NewPgUserRepository(clients.db)
+
+	// Create user service
+	userService := userSvc.NewUserService(
+		userRepository,
+		nil, // businessRepository - not needed for ops endpoints
+		nil, // businessUserRelRepository - not needed for ops endpoints
+		nil, // verificationService - not needed for ops endpoints
+		clients,
+		cfg,
+	)
+
+	// Register routes
+	httpHandlers.RegisterOpsUserRoutes(group, userService, nil)
+}
+
 func registerOpsV1Routes(s *opsDashboardServer) {
 	v1 := s.echo.Group("/ops/v1")
 
@@ -71,9 +92,7 @@ func registerOpsV1Routes(s *opsDashboardServer) {
 	// Register route groups
 	registerOpsBusinessRoutes(clients, cfg, v1)
 	registerOpsNotificationRoutes(clients, cfg, v1)
-
-	// TODO: Register other route groups when ready
-	// registerOpsUserRoutes(clients, cfg, v1)
+	registerOpsUserRoutes(clients, cfg, v1)
 }
 
 func registerRouters(s *opsDashboardServer) {

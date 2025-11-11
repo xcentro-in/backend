@@ -38,4 +38,7 @@ type UserService interface {
 
 	// Invited user methods
 	CreateInvitedUser(ctx context.Context, email, name string, kycNeeded bool) (*User, error)
+
+	// Ops dashboard methods
+	SearchUsersByBusinesses(ctx context.Context, businessIDs []string, searchTerm string) ([]*OpsUserSearchResult, error)
 }
