@@ -2,6 +2,7 @@ package http
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/labstack/echo/v4"
 	"xcentro.in/internal/core/auth"
@@ -41,15 +42,34 @@ func RegisterOpsUserRoutes(e *echo.Group, userService user.UserService, authServ
 // SearchUsers handles GET /users/search?business_id=biz-123&business_id=biz-456&q=john
 func (h *OpsUserHandler) SearchUsers(c echo.Context) error {
 	// Get business IDs from query params (can have multiple)
-	businessIDs := c.QueryParams()["business_id"]
-	if len(businessIDs) == 0 {
+	rawBusinessIDs := c.QueryParams()["business_id"]
+	if len(rawBusinessIDs) == 0 {
 		return c.JSON(http.StatusBadRequest, map[string]string{
 			"error": "At least one business_id is required",
 		})
 	}
 
-	// Get search term
-	searchTerm := c.QueryParam("q")
+	// Validate number of business IDs (max 20 to prevent abuse)
+	if len(rawBusinessIDs) > 20 {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Maximum 20 business IDs allowed per request",
+		})
+	}
+
+	// Trim and validate business IDs
+	businessIDs := make([]string, 0, len(rawBusinessIDs))
+	for _, bid := range rawBusinessIDs {
+		trimmedBid := strings.TrimSpace(bid)
+		if trimmedBid == "" {
+			return c.JSON(http.StatusBadRequest, map[string]string{
+				"error": "Business ID cannot be empty",
+			})
+		}
+		businessIDs = append(businessIDs, trimmedBid)
+	}
+
+	// Get and trim search term
+	searchTerm := strings.TrimSpace(c.QueryParam("q"))
 	if searchTerm == "" {
 		return c.JSON(http.StatusBadRequest, map[string]string{
 			"error": "Search term 'q' is required",
@@ -60,6 +80,13 @@ func (h *OpsUserHandler) SearchUsers(c echo.Context) error {
 	if len(searchTerm) < 2 {
 		return c.JSON(http.StatusBadRequest, map[string]string{
 			"error": "Search term must be at least 2 characters",
+		})
+	}
+
+	// Validate search term length (max 100 chars to prevent abuse)
+	if len(searchTerm) > 100 {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Search term must not exceed 100 characters",
 		})
 	}
 
@@ -82,16 +109,16 @@ func (h *OpsUserHandler) SearchUsers(c echo.Context) error {
 
 // GetUserDetails handles GET /users/:user_id?bid=biz-123
 func (h *OpsUserHandler) GetUserDetails(c echo.Context) error {
-	// Get user ID from path parameter
-	userID := c.Param("user_id")
+	// Get and trim user ID from path parameter
+	userID := strings.TrimSpace(c.Param("user_id"))
 	if userID == "" {
 		return c.JSON(http.StatusBadRequest, map[string]string{
 			"error": "User ID is required",
 		})
 	}
 
-	// Get optional business ID from query parameter
-	businessID := c.QueryParam("bid")
+	// Get and trim optional business ID from query parameter
+	businessID := strings.TrimSpace(c.QueryParam("bid"))
 
 	// Call service layer
 	details, err := h.userService.GetUserDetailsForOps(c.Request().Context(), userID, businessID)
