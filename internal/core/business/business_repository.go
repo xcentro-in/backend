@@ -27,6 +27,13 @@ type BusinessRepository interface {
 	ListBusinessesPaginated(ctx context.Context, page int, limit int) ([]*OpsBusinessListItem, int, error)
 	SearchBusinesses(ctx context.Context, searchTerm string) ([]*OpsBusinessSearchResult, error)
 	GetBusinessDetailsForOps(ctx context.Context, bid string) (*OpsBusinessDetails, error)
+	UpdateGSTINData(ctx context.Context, bid string, gstDataJSON string) error
+	UpdateIncometTaxIDData(ctx context.Context, itid string, itidDataJSON string) error
+	UpdateCompanyIDData(ctx context.Context, itid string, cidDataJSON string) error
+	SetKYBStatusRejected(ctx context.Context, bid string) error
+	ClearKYBData(ctx context.Context, itid string) error
+	SetKYBStatusVerified(ctx context.Context, bid string) error
+	GetOwnerUserID(ctx context.Context, bid string) (string, error)
 }
 
 // BusinessUserRelationRepository defines the interface for the relationship data.
@@ -42,4 +49,6 @@ type BusinessUserRelationRepository interface {
 	UpdateKYBInitiated(ctx context.Context, uid string, bid string, initiated bool) error
 	UpdateKycNeeded(ctx context.Context, userID string, bid string, kycNeeded bool) error
 	RemoveUserFromBusiness(ctx context.Context, userID string, bid string) error
+	SetOwnerRoleToNull(ctx context.Context, bid string) error
+	ResetAllUserRelationsForRejectedKYC(ctx context.Context, userID string) error
 }

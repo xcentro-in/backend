@@ -58,4 +58,8 @@ type UserRepository interface {
 	// Ops dashboard queries
 	SearchUsersByBusinesses(ctx context.Context, businessIDs []string, searchTerm string) ([]*OpsUserSearchResult, error)
 	GetUserDetailsForOps(ctx context.Context, userID string, businessID string) (*OpsUserDetails, error)
+	UpdateTaxIDDataPartial(ctx context.Context, taxID string, field string, value string) error
+	SetKYCStatusRejected(ctx context.Context, userID string) error
+	ClearUserIdentityData(ctx context.Context, taxID string) error
+	SetKYCStatusVerified(ctx context.Context, userID string) error
 }

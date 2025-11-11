@@ -573,3 +573,88 @@ func (r *PgBusinessRepository) GetBusinessDetailsForOps(ctx context.Context, bid
 	details.Users = users
 	return &details, nil
 }
+
+// UpdateGSTINData updates the GST data for a business
+func (r *PgBusinessRepository) UpdateGSTINData(ctx context.Context, bid string, gstDataJSON string) error {
+	query := `UPDATE xcentro.business SET gst_data = $1::jsonb WHERE bid = $2`
+	_, err := r.querier.Exec(ctx, query, gstDataJSON, bid)
+	if err != nil {
+		return fmt.Errorf("failed to update GSTIN data: %w", err)
+	}
+	return nil
+}
+
+// UpdateIncometTaxIDData updates the income tax ID data in KYB data
+func (r *PgBusinessRepository) UpdateIncometTaxIDData(ctx context.Context, itid string, itidDataJSON string) error {
+	query := `UPDATE xcentro.kyb_data SET income_tax_id_data = $1::jsonb WHERE income_tax_id = $2`
+	_, err := r.querier.Exec(ctx, query, itidDataJSON, itid)
+	if err != nil {
+		return fmt.Errorf("failed to update income tax ID data: %w", err)
+	}
+	return nil
+}
+
+// UpdateCompanyIDData updates the company ID data in KYB data
+func (r *PgBusinessRepository) UpdateCompanyIDData(ctx context.Context, itid string, cidDataJSON string) error {
+	query := `UPDATE xcentro.kyb_data SET company_id_data = $1::jsonb WHERE income_tax_id = $2`
+	_, err := r.querier.Exec(ctx, query, cidDataJSON, itid)
+	if err != nil {
+		return fmt.Errorf("failed to update company ID data: %w", err)
+	}
+	return nil
+}
+
+// SetKYBStatusRejected sets business KYB status to rejected
+func (r *PgBusinessRepository) SetKYBStatusRejected(ctx context.Context, bid string) error {
+	query := `UPDATE xcentro.business SET kyb_status = 'kyb_rejected' WHERE bid = $1`
+	_, err := r.querier.Exec(ctx, query, bid)
+	if err != nil {
+		return fmt.Errorf("failed to set KYB status to rejected: %w", err)
+	}
+	return nil
+}
+
+// ClearKYBData clears all KYB data fields to empty JSON
+func (r *PgBusinessRepository) ClearKYBData(ctx context.Context, itid string) error {
+	query := `
+		UPDATE xcentro.kyb_data
+		SET income_tax_id_data = '{}'::jsonb,
+		    company_id_data = '{}'::jsonb,
+		    business_deed = ''
+		WHERE income_tax_id = $1
+	`
+	_, err := r.querier.Exec(ctx, query, itid)
+	if err != nil {
+		return fmt.Errorf("failed to clear KYB data: %w", err)
+	}
+	return nil
+}
+
+// SetKYBStatusVerified sets business KYB status to verified
+func (r *PgBusinessRepository) SetKYBStatusVerified(ctx context.Context, bid string) error {
+	query := `UPDATE xcentro.business SET kyb_status = 'kyb_verified' WHERE bid = $1`
+	_, err := r.querier.Exec(ctx, query, bid)
+	if err != nil {
+		return fmt.Errorf("failed to set KYB status to verified: %w", err)
+	}
+	return nil
+}
+
+// GetOwnerUserID retrieves the user ID of the owner (role='owner') for a business
+func (r *PgBusinessRepository) GetOwnerUserID(ctx context.Context, bid string) (string, error) {
+	query := `
+		SELECT userid
+		FROM xcentro.business_user_relation
+		WHERE bid = $1 AND role = 'owner'
+		LIMIT 1
+	`
+	var userID string
+	err := r.querier.QueryRow(ctx, query, bid).Scan(&userID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", fmt.Errorf("no owner found for business")
+		}
+		return "", fmt.Errorf("failed to get owner user ID: %w", err)
+	}
+	return userID, nil
+}

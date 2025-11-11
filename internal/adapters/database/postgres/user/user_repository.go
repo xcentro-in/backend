@@ -917,3 +917,53 @@ func parseUserRole(role string) shared.UserRole {
 		return shared.None
 	}
 }
+
+// UpdateTaxIDDataPartial updates a specific field in the tax_id_data JSON
+func (r *PgUserRepository) UpdateTaxIDDataPartial(ctx context.Context, taxID string, field string, value string) error {
+	query := `
+		UPDATE xcentro.user_identity
+		SET tax_id_data = jsonb_set(tax_id_data, $1, $2::jsonb)
+		WHERE tax_id = $3
+	`
+	fieldPath := fmt.Sprintf("{%s}", field)
+	_, err := r.querier.Exec(ctx, query, fieldPath, value, taxID)
+	if err != nil {
+		return fmt.Errorf("failed to update tax ID data field: %w", err)
+	}
+	return nil
+}
+
+// SetKYCStatusRejected sets user KYC status to rejected
+func (r *PgUserRepository) SetKYCStatusRejected(ctx context.Context, userID string) error {
+	query := `UPDATE xcentro.user_table SET kyc_status = 'kyc_rejected' WHERE id = $1`
+	_, err := r.querier.Exec(ctx, query, userID)
+	if err != nil {
+		return fmt.Errorf("failed to set KYC status to rejected: %w", err)
+	}
+	return nil
+}
+
+// ClearUserIdentityData clears all identity data fields to empty JSON
+func (r *PgUserRepository) ClearUserIdentityData(ctx context.Context, taxID string) error {
+	query := `
+		UPDATE xcentro.user_identity
+		SET tax_id_data = '{}'::jsonb,
+		    national_id_data = '{}'::jsonb
+		WHERE tax_id = $1
+	`
+	_, err := r.querier.Exec(ctx, query, taxID)
+	if err != nil {
+		return fmt.Errorf("failed to clear user identity data: %w", err)
+	}
+	return nil
+}
+
+// SetKYCStatusVerified sets user KYC status to verified
+func (r *PgUserRepository) SetKYCStatusVerified(ctx context.Context, userID string) error {
+	query := `UPDATE xcentro.user_table SET kyc_status = 'kyc_verified' WHERE id = $1`
+	_, err := r.querier.Exec(ctx, query, userID)
+	if err != nil {
+		return fmt.Errorf("failed to set KYC status to verified: %w", err)
+	}
+	return nil
+}

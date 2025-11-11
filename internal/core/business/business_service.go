@@ -38,4 +38,7 @@ type BusinessService interface {
 	ListBusinessesPaginated(ctx context.Context, page int, limit int) ([]*OpsBusinessListItem, int, error)
 	SearchBusinesses(ctx context.Context, searchTerm string) ([]*OpsBusinessSearchResult, error)
 	GetBusinessDetailsForOps(ctx context.Context, bid string) (*OpsBusinessDetails, error)
+	ReloadBusinessData(ctx context.Context, bid string, dataType string) error
+	RejectKYB(ctx context.Context, bid string) error
+	VerifyKYB(ctx context.Context, bid string) error
 }
