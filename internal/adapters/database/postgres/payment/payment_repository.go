@@ -105,13 +105,14 @@ func (r *PgPaymentRepository) GetPaymentByID(ctx context.Context, paymentID stri
 	query := `
 		SELECT payment_id, user_id, business_id, amount, currency, payment_method, status,
 		       description, gateway_used, gateway_payment_id, callback_url, redirect_url,
-		       payment_source_id, payment_source_type, fee_amount, total_amount,
-		       metadata, created_at, updated_at
+		       payment_source_id, payment_source_type, retry_of_payment_id, retry_count,
+		       fee_amount, total_amount, metadata, created_at, updated_at
 		FROM xcentro.payments WHERE payment_id = $1
 	`
 
 	var p payment.Payment
-	var gatewayUsed, gatewayPaymentID, redirectURL, paymentSourceID, paymentSourceType *string
+	var gatewayUsed, gatewayPaymentID, redirectURL, paymentSourceID, paymentSourceType, retryOfPaymentID *string
+	var retryCount *int
 	var metadataJSON []byte
 	var updatedAt *time.Time
 
@@ -130,6 +131,8 @@ func (r *PgPaymentRepository) GetPaymentByID(ctx context.Context, paymentID stri
 		&redirectURL,
 		&paymentSourceID,
 		&paymentSourceType,
+		&retryOfPaymentID,
+		&retryCount,
 		&p.FeeAmount,
 		&p.TotalAmount,
 		&metadataJSON,
@@ -159,6 +162,8 @@ func (r *PgPaymentRepository) GetPaymentByID(ctx context.Context, paymentID stri
 		pst := payment.PaymentSourceType(*paymentSourceType)
 		p.PaymentSourceType = &pst
 	}
+	p.RetryOfPaymentID = retryOfPaymentID
+	p.RetryCount = retryCount
 	if updatedAt != nil {
 		p.UpdatedAt = *updatedAt
 	}

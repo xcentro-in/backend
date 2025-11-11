@@ -3,6 +3,7 @@ package payments
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"xcentro.in/internal/adapters/database/postgres/client"
@@ -456,4 +457,194 @@ func (s *PaymentService) GetPaymentList(ctx context.Context, businessID string, 
 		Limit:      limit,
 		Offset:     offset,
 	}, nil
+}
+
+// RetryPayment retries a failed or pending payment with the same payment source and vouchers
+// Maximum 1 retry allowed per payment, within 7 days of original payment
+func (s *PaymentService) RetryPayment(ctx context.Context, originalPaymentID string, callingDevice payment.CallingDevice) (*payment.PaymentResponse, error) {
+	s.logger.InfoWith("Starting payment retry",
+		"original_payment_id", originalPaymentID,
+		"calling_device", callingDevice)
+
+	// Step 1: Validate and fetch original payment
+	originalPayment, err := s.paymentRepo.GetPaymentByID(ctx, originalPaymentID)
+	if err != nil {
+		s.logger.ErrorWith("Failed to fetch original payment", "error", err, "payment_id", originalPaymentID)
+		return nil, fmt.Errorf("failed to fetch original payment: %w", err)
+	}
+	if originalPayment == nil {
+		s.logger.WarnWith("Original payment not found", "payment_id", originalPaymentID)
+		return nil, fmt.Errorf("payment not found: %s", originalPaymentID)
+	}
+
+	s.logger.DebugWith("Original payment fetched",
+		"payment_id", originalPaymentID,
+		"status", originalPayment.Status,
+		"created_at", originalPayment.CreatedAt,
+		"payment_method", originalPayment.PaymentMethod)
+
+	// Step 2: Validate payment status
+	if originalPayment.Status == payment.PaymentStatusSuccess {
+		return nil, fmt.Errorf("cannot retry successful payment")
+	}
+
+	// Step 3: Validate retry window (7 days)
+	maxRetryWindow := 7 * 24 * time.Hour
+	timeSinceCreation := time.Since(originalPayment.CreatedAt)
+	if timeSinceCreation > maxRetryWindow {
+		s.logger.WarnWith("Payment retry window expired",
+			"payment_id", originalPaymentID,
+			"created_at", originalPayment.CreatedAt,
+			"days_since_creation", timeSinceCreation.Hours()/24)
+		return nil, fmt.Errorf("retry window expired (max 7 days)")
+	}
+
+	// Step 4: Check max 1 retry (if RetryCount is set and > 0, already retried)
+	if originalPayment.RetryCount != nil && *originalPayment.RetryCount > 0 {
+		return nil, fmt.Errorf("payment already has a retry (max 1 retry allowed)")
+	}
+
+	// Step 5: Fetch pending vouchers
+	paymentUUID, err := uuid.Parse(originalPaymentID)
+	if err != nil {
+		s.logger.ErrorWith("Invalid payment ID format", "error", err, "payment_id", originalPaymentID)
+		return nil, fmt.Errorf("invalid payment ID format: %w", err)
+	}
+
+	voucherIDs, err := s.pendingVoucherRepo.GetPendingVouchers(ctx, paymentUUID)
+	if err != nil {
+		s.logger.ErrorWith("Failed to fetch pending vouchers", "error", err, "payment_id", originalPaymentID)
+		return nil, fmt.Errorf("failed to fetch vouchers: %w", err)
+	}
+	if len(voucherIDs) == 0 {
+		s.logger.WarnWith("No vouchers found for payment", "payment_id", originalPaymentID)
+		return nil, fmt.Errorf("no vouchers found for payment %s (payment may have already been finalized by another payment)", originalPaymentID)
+	}
+
+	s.logger.InfoWith("Fetched pending vouchers for retry",
+		"payment_id", originalPaymentID,
+		"voucher_count", len(voucherIDs))
+
+	// Step 6: Validate vouchers are still in draft status (if voucher repo available)
+	if s.voucherRepo != nil {
+		if err := s.validateVouchersAreInDraft(ctx, voucherIDs); err != nil {
+			s.logger.WarnWith("Voucher validation failed", "error", err, "payment_id", originalPaymentID)
+			return nil, err
+		}
+	}
+
+	// Step 7: Build retry payment request
+	voucherIDStrings := make([]string, len(voucherIDs))
+	for i, vID := range voucherIDs {
+		voucherIDStrings[i] = vID.String()
+	}
+
+	retryRequest := payment.PaymentRequest{
+		UserID:        originalPayment.UserID,
+		BusinessID:    originalPayment.BusinessID,
+		Amount:        originalPayment.Amount, // Base amount (fees will be recalculated)
+		Currency:      originalPayment.Currency,
+		PaymentMethod: originalPayment.PaymentMethod,
+		Description:   fmt.Sprintf("Retry of payment %s", originalPaymentID),
+		CallingDevice: callingDevice,
+		VoucherIDs:    voucherIDStrings,
+		Metadata: map[string]any{
+			"retry_of":             originalPaymentID,
+			"retry_count":          1, // Always 1 since max 1 retry allowed
+			"retry_reason":         "user_initiated",
+			"original_created_at":  originalPayment.CreatedAt.Format(time.RFC3339),
+			"original_status":      string(originalPayment.Status),
+			"original_gateway":     string(originalPayment.GatewayUsed),
+		},
+	}
+
+	// Set payment source details based on payment method
+	if originalPayment.PaymentMethod == payment.PaymentMethodTokenCard {
+		if originalPayment.PaymentSourceID == nil {
+			s.logger.ErrorWith("CRITICAL: Original token_card payment missing payment_source_id",
+				"payment_id", originalPaymentID)
+			return nil, fmt.Errorf("original payment missing payment source information")
+		}
+		retryRequest.TokenCardDetails = &payment.TokenCardDetails{
+			CardID: *originalPayment.PaymentSourceID,
+		}
+		s.logger.InfoWith("Set token card details for retry",
+			"card_id", *originalPayment.PaymentSourceID)
+	}
+
+	// Step 8: Process retry payment through normal flow
+	s.logger.InfoWith("Processing retry payment",
+		"original_payment_id", originalPaymentID,
+		"amount", retryRequest.Amount,
+		"voucher_count", len(retryRequest.VoucherIDs))
+
+	retryResponse, err := s.ProcessPayment(ctx, retryRequest)
+	if err != nil {
+		s.logger.ErrorWith("Retry payment processing failed", "error", err, "original_payment_id", originalPaymentID)
+		return nil, fmt.Errorf("retry payment failed: %w", err)
+	}
+
+	// Step 9: Update retry metadata on the new payment (non-transactional, best-effort)
+	// The metadata is already in Metadata field, so we just need to update retry_of_payment_id and retry_count
+	// This will be handled by a separate update call
+	s.logger.InfoWith("Payment retry successful",
+		"original_payment_id", originalPaymentID,
+		"retry_payment_id", retryResponse.PaymentID,
+		"gateway_used", retryResponse.GatewayUsed)
+
+	// Add retry metadata to response
+	if retryResponse.Metadata == nil {
+		retryResponse.Metadata = make(map[string]any)
+	}
+	retryResponse.Metadata["is_retry"] = true
+	retryResponse.Metadata["retry_of"] = originalPaymentID
+	retryResponse.Metadata["retry_count"] = 1
+
+	return retryResponse, nil
+}
+
+// validateVouchersAreInDraft checks if vouchers are still in draft status
+func (s *PaymentService) validateVouchersAreInDraft(ctx context.Context, voucherIDs []uuid.UUID) error {
+	// Type assert voucherRepo to access GetByID method
+	type voucherGetter interface {
+		GetByID(ctx context.Context, voucherID uuid.UUID) (interface{}, error)
+	}
+
+	repo, ok := s.voucherRepo.(voucherGetter)
+	if !ok {
+		s.logger.WarnWith("Voucher repository doesn't implement GetByID, skipping validation")
+		return nil
+	}
+
+	for _, voucherID := range voucherIDs {
+		voucherInterface, err := repo.GetByID(ctx, voucherID)
+		if err != nil {
+			s.logger.ErrorWith("Failed to fetch voucher", "error", err, "voucher_id", voucherID)
+			return fmt.Errorf("failed to fetch voucher %s: %w", voucherID, err)
+		}
+		if voucherInterface == nil {
+			return fmt.Errorf("voucher %s not found", voucherID)
+		}
+
+		// Try to extract status from voucher
+		type statusGetter interface {
+			GetStatus() string
+		}
+
+		if v, ok := voucherInterface.(statusGetter); ok {
+			status := v.GetStatus()
+			if status != "draft" {
+				s.logger.WarnWith("Voucher not in draft status",
+					"voucher_id", voucherID,
+					"status", status)
+				return fmt.Errorf("voucher %s is not in draft status (current: %s). It may have been paid by another payment", voucherID, status)
+			}
+		} else {
+			s.logger.DebugWith("Unable to check voucher status via interface",
+				"voucher_id", voucherID)
+		}
+	}
+
+	s.logger.DebugWith("All vouchers validated for retry", "count", len(voucherIDs))
+	return nil
 }

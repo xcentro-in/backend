@@ -20,7 +20,10 @@ type Payment struct {
 	// Link to payment source used (for tokenized payments)
 	PaymentSourceID   *string            `json:"payment_source_id,omitempty"`   // UUID of card/bank account
 	PaymentSourceType *PaymentSourceType `json:"payment_source_type,omitempty"` // 'card', 'bank_account', etc.
-	CardDetails       *Card              `json:"card_details,omitempty"`
+	// Retry tracking
+	RetryOfPaymentID *string `json:"retry_of_payment_id,omitempty"` // UUID of original payment if this is a retry
+	RetryCount       *int    `json:"retry_count,omitempty"`         // Number of retries (0 = original, 1 = first retry, etc.)
+	CardDetails      *Card   `json:"card_details,omitempty"`
 	NetBankingDetails *NetBanking        `json:"net_banking_details,omitempty"`
 	UPIDetails        *UPI               `json:"upi_details,omitempty"`
 	WalletDetails     *Wallet            `json:"wallet_details,omitempty"`
