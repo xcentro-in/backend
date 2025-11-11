@@ -20,12 +20,6 @@ CREATE TABLE IF NOT EXISTS ops_user_table (
 -- Create index on email for faster lookups
 CREATE INDEX idx_ops_user_email ON ops_user_table(email);
 
--- Create index on status for filtering active users
-CREATE INDEX idx_ops_user_status ON ops_user_table(status);
-
--- Create GIN index on roles for efficient role-based queries
-CREATE INDEX idx_ops_user_roles ON ops_user_table USING GIN(roles);
-
 -- Add updated_at trigger
 CREATE TRIGGER update_ops_user_updated_at
     BEFORE UPDATE ON ops_user_table

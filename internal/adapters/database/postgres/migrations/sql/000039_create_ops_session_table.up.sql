@@ -19,15 +19,6 @@ CREATE TABLE IF NOT EXISTS ops_session_table (
     last_used_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Create index on ops_user_id for efficient session lookups by user
-CREATE INDEX idx_ops_session_user_id ON ops_session_table(ops_user_id);
-
--- Create index on token hash for session validation
-CREATE INDEX idx_ops_session_token_hash ON ops_session_table(refresh_token_hash);
-
--- Create index on expires_at for cleanup of expired sessions
-CREATE INDEX idx_ops_session_expires_at ON ops_session_table(expires_at);
-
 -- Create composite index for common query pattern (user_id + token_hash)
 CREATE INDEX idx_ops_session_user_token ON ops_session_table(ops_user_id, refresh_token_hash);
 
