@@ -755,12 +755,11 @@ func (r *PgPaymentRepository) GetPaymentListForBusiness(ctx context.Context, bus
 			return nil, 0, fmt.Errorf("failed to scan payment list item: %w", err)
 		}
 
-		// Convert amounts from paise to rupees
-		item.TotalAmount = float64(totalAmount) / 100.0
-		convenienceFee := float64(feeAmount) / 100.0
+		// Keep amounts in paise (no conversion)
+		item.TotalAmount = totalAmount
 
-		// Calculate GST on fee (18% of convenience fee)
-		gstOnFee := convenienceFee * 0.18
+		// Calculate GST on fee (18% of convenience fee) - keep in paise
+		gstOnFee := int64(float64(feeAmount) * 0.18)
 
 		// Map status
 		item.Status = status
@@ -778,21 +777,18 @@ func (r *PgPaymentRepository) GetPaymentListForBusiness(ctx context.Context, bus
 			r.encryptionKey,
 		)
 
-		// Parse bills
+		// Parse bills - amounts already in paise from database
 		var bills []payment.BillItem
 		if len(billsJSON) > 0 {
 			if err := json.Unmarshal(billsJSON, &bills); err != nil {
 				return nil, 0, fmt.Errorf("failed to unmarshal bills: %w", err)
 			}
-			// Convert bill amounts from paise to rupees
-			for i := range bills {
-				bills[i].Amount = bills[i].Amount / 100.0
-			}
+			// Bills already in paise, no conversion needed
 		}
 
 		item.Breakdown = payment.PaymentBreakdown{
 			Bills:          bills,
-			ConvenienceFee: convenienceFee,
+			ConvenienceFee: feeAmount,
 			GSTOnFee:       gstOnFee,
 		}
 
