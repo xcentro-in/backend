@@ -369,6 +369,64 @@ func (r *PostgresVoucherRepository) GetByPaymentID(ctx context.Context, paymentI
 	return vouchers, nil
 }
 
+// GetVouchersByPaymentIDWithStatus retrieves vouchers for a payment based on payment status
+// Handles both finalized (payment_id set) and pending (payment_voucher_pending table) states
+func (r *PostgresVoucherRepository) GetVouchersByPaymentIDWithStatus(ctx context.Context, paymentID uuid.UUID, paymentStatus string) ([]*voucher.Voucher, error) {
+	query := `
+		SELECT voucher_id, voucher_number, voucher_date, fiscal_year, accounting_period, voucher_type,
+		       business_id, payee_id, account_id,
+		       invoice_number, invoice_date, invoice_due_date,
+		       gross_amount, net_amount, currency,
+		       gst_amount, gst_rate, cgst_amount, sgst_amount, igst_amount,
+		       tds_amount, tds_rate, tds_section,
+		       fee_amount, discount_amount,
+		       financial_details, attachments,
+		       expense_category, description,
+		       status, payment_id,
+		       erp_sync_status, erp_reference_id, erp_posting_date, erp_last_sync_at, erp_sync_attempts, erp_metadata,
+		       payout_status, payout_initiated_at, payout_initiated_by, payout_completed_at, payout_reference_id, payout_utr, payout_metadata,
+		       cancellation_status, cancellation_requested_at, cancellation_requested_by, cancellation_reason,
+		       cancellation_approved_at, cancellation_approved_by, refund_status, refund_initiated_at, refund_reference_id, refund_metadata,
+		       gl_expense_account, gl_bank_account, cost_center,
+		       created_at, created_by_user_id, updated_at, metadata
+		FROM xcentro.payment_vouchers
+		WHERE CASE
+			WHEN $2 = 'success' THEN
+				-- For successful payments: query by payment_id (finalized vouchers)
+				payment_id = $1
+			ELSE
+				-- For pending/failed payments: query from payment_voucher_pending table
+				voucher_id IN (
+					SELECT voucher_id
+					FROM xcentro.payment_voucher_pending
+					WHERE payment_id = $1
+				)
+		END
+		ORDER BY voucher_number
+	`
+
+	rows, err := r.querier.Query(ctx, query, paymentID, paymentStatus)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query vouchers by payment_id and status: %w", err)
+	}
+	defer rows.Close()
+
+	var vouchers []*voucher.Voucher
+	for rows.Next() {
+		v, err := r.scanVoucherRow(rows)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan voucher row: %w", err)
+		}
+		vouchers = append(vouchers, v)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating voucher rows: %w", err)
+	}
+
+	return vouchers, nil
+}
+
 // ListByBusiness retrieves vouchers for a business with filters
 func (r *PostgresVoucherRepository) ListByBusiness(ctx context.Context, businessID uuid.UUID, filters voucher.VoucherFilters) ([]*voucher.Voucher, *voucher.PaginationResult, error) {
 	// Build dynamic query

@@ -29,6 +29,12 @@ type VoucherRepository interface {
 	// (supports multi-bill payments where multiple vouchers share same payment_id)
 	GetByPaymentID(ctx context.Context, paymentID uuid.UUID) ([]*Voucher, error)
 
+	// GetVouchersByPaymentIDWithStatus retrieves vouchers for a payment based on payment status
+	// For 'success' status: queries payment_vouchers where payment_id is set (finalized)
+	// For other statuses: queries payment_voucher_pending table (transient pending records)
+	// This method encapsulates the conditional logic for fetching vouchers in different payment states
+	GetVouchersByPaymentIDWithStatus(ctx context.Context, paymentID uuid.UUID, paymentStatus string) ([]*Voucher, error)
+
 	// ListByBusiness retrieves vouchers for a business with filters
 	ListByBusiness(ctx context.Context, businessID uuid.UUID, filters VoucherFilters) ([]*Voucher, *PaginationResult, error)
 
