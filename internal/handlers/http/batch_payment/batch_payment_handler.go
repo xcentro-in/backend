@@ -9,6 +9,7 @@ import (
 	"github.com/labstack/echo/v4"
 	"xcentro.in/internal/services/batch_payment"
 	"xcentro.in/internal/shared/logger"
+	"xcentro.in/internal/shared/utils"
 )
 
 // BatchPaymentHandler handles batch payment HTTP requests
@@ -73,15 +74,27 @@ func (h *BatchPaymentHandler) UploadCSV(c echo.Context) error {
 		})
 	}
 
-	// Validate file type
-	if file.Header.Get("Content-Type") != "text/csv" && !isSupportedFileExtension(file.Filename) {
+	// Security validation: file size, magic bytes, and file type
+	if err := utils.ValidateUploadedFile(file); err != nil {
+		h.logger.WarnWith("File validation failed",
+			"filename", file.Filename,
+			"size", file.Size,
+			"error", err)
+
+		if validationErr, ok := err.(*utils.FileValidationError); ok {
+			return c.JSON(http.StatusBadRequest, map[string]any{
+				"error":   validationErr.Code,
+				"message": validationErr.Message,
+			})
+		}
+
 		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "invalid_file_type",
-			"message": "Only CSV files are supported",
+			"error":   "file_validation_error",
+			"message": "File validation failed",
 		})
 	}
 
-	// Open file
+	// Open file for processing
 	src, err := file.Open()
 	if err != nil {
 		h.logger.ErrorWith("Failed to open uploaded file", "error", err)
@@ -285,17 +298,6 @@ func (h *BatchPaymentHandler) GetBatchList(c echo.Context) error {
 		"status":  "success",
 		"data":    list,
 	})
-}
-
-// isSupportedFileExtension checks if the file extension is supported
-func isSupportedFileExtension(filename string) bool {
-	supportedExtensions := []string{".csv", ".CSV"}
-	for _, ext := range supportedExtensions {
-		if len(filename) >= len(ext) && filename[len(filename)-len(ext):] == ext {
-			return true
-		}
-	}
-	return false
 }
 
 // handleError converts service errors to HTTP responses
