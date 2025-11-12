@@ -172,3 +172,19 @@ type VoucherPaymentDetails struct {
 	Description string                 `json:"description"`
 	Metadata    map[string]interface{} `json:"metadata"`
 }
+
+// VoucherWithPayeeDetails represents a voucher with its associated payee relationship details
+// Used by payment details endpoint to avoid N+1 queries
+type VoucherWithPayeeDetails struct {
+	// Voucher core details
+	VoucherID     string `json:"voucher_id"`
+	VoucherNumber string `json:"voucher_number"`
+	InvoiceNumber string `json:"invoice_number"`
+	NetAmount     int64  `json:"net_amount"`
+
+	// Payee relation details (from business_payee_relation JOIN)
+	RelationID         string                 `json:"relation_id"`
+	DisplayName        string                 `json:"display_name"`
+	PayeeType          string                 `json:"payee_type"`
+	TypeSpecificData   map[string]interface{} `json:"type_specific_data,omitempty"`
+}

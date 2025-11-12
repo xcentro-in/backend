@@ -1336,46 +1336,47 @@ func (h *PaymentHandler) fetchPaymentSourceDetails(ctx context.Context, sourceID
 }
 
 // fetchBillsForPayment retrieves vouchers/bills linked to a payment with payee details
+// Uses single JOIN query to avoid N+1 problem
 // Handles both successful payments (finalized vouchers) and pending/failed payments (transient table)
 func (h *PaymentHandler) fetchBillsForPayment(ctx context.Context, paymentUUID uuid.UUID, paymentStatus string) ([]BillDetails, error) {
-	// Fetch vouchers using repository method that handles status-based logic
-	vouchers, err := h.voucherRepo.GetVouchersByPaymentIDWithStatus(ctx, paymentUUID, paymentStatus)
+	// Fetch vouchers with payee details in a single JOIN query (avoids N+1 problem)
+	vouchersWithPayee, err := h.voucherRepo.GetVouchersWithPayeeDetailsByPaymentID(ctx, paymentUUID, paymentStatus)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch vouchers: %w", err)
+		return nil, fmt.Errorf("failed to fetch vouchers with payee details: %w", err)
 	}
 
-	// Transform vouchers to bill details
-	bills := []BillDetails{}
-	for _, v := range vouchers {
-		// Fetch payee relation details
-		businessID := v.BusinessID.String()
-		payeeID := v.PayeeID.String()
-		accountID := v.AccountID.String()
+	// Log if we get empty bills for debugging
+	if len(vouchersWithPayee) == 0 {
+		h.logger.WarnWith("No bills found for payment",
+			"payment_id", paymentUUID,
+			"payment_status", paymentStatus)
+	}
 
-		relation, err := h.payeeRelationRepo.FindRelation(ctx, businessID, payeeID, accountID)
-		if err != nil {
-			h.logger.WarnWith("Failed to fetch payee relation", "voucher_id", v.VoucherID, "error", err)
-			continue
-		}
-
+	// Transform to bill details
+	bills := make([]BillDetails, 0, len(vouchersWithPayee))
+	for _, v := range vouchersWithPayee {
 		bill := BillDetails{
-			VoucherID:     v.VoucherID.String(),
+			VoucherID:     v.VoucherID,
 			InvoiceNumber: v.InvoiceNumber,
-			PayeeName:     relation.DisplayName,
-			PayeeType:     string(relation.PayeeType),
-			RelationID:    relation.RelationID,
+			PayeeName:     v.DisplayName,
+			PayeeType:     v.PayeeType,
+			RelationID:    v.RelationID,
 			Amount:        v.NetAmount,
 		}
 
 		// Try to extract GSTIN from TypeSpecificData for vendors
-		if relation.PayeeType == payeeCore.PayeeTypeVendor && relation.TypeSpecificData != nil {
-			if gstin, ok := relation.TypeSpecificData["gstin"].(string); ok && gstin != "" {
+		if v.PayeeType == string(payeeCore.PayeeTypeVendor) && v.TypeSpecificData != nil {
+			if gstin, ok := v.TypeSpecificData["gstin"].(string); ok && gstin != "" {
 				bill.GSTIN = &gstin
 			}
 		}
 
 		bills = append(bills, bill)
 	}
+
+	h.logger.DebugWith("Bills fetched successfully",
+		"payment_id", paymentUUID,
+		"bill_count", len(bills))
 
 	return bills, nil
 }
