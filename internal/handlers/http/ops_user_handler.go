@@ -40,7 +40,7 @@ func RegisterOpsUserRoutes(e *echo.Group, userService user.UserService, authServ
 
 	// Ops verification endpoints
 	userGroup.POST("/:user_id/reload-pan", handler.ReloadUserPANData)
-	userGroup.POST("/:user_id/reject-kyc", handler.RejectKYC)
+	userGroup.POST("/:user_id/kyc-action", handler.KYCAction)
 }
 
 // SearchUsers handles GET /users/search?business_id=biz-123&business_id=biz-456&q=john
@@ -188,8 +188,8 @@ func (h *OpsUserHandler) ReloadUserPANData(c echo.Context) error {
 	})
 }
 
-// RejectKYC handles POST /users/:user_id/reject-kyc
-func (h *OpsUserHandler) RejectKYC(c echo.Context) error {
+// KYCAction handles POST /users/:user_id/kyc-action?action=reject
+func (h *OpsUserHandler) KYCAction(c echo.Context) error {
 	// Parse and validate user ID
 	userID := strings.TrimSpace(c.Param("user_id"))
 	if userID == "" {
@@ -198,20 +198,42 @@ func (h *OpsUserHandler) RejectKYC(c echo.Context) error {
 		})
 	}
 
-	// Call service layer
-	if err := h.userService.RejectKYC(c.Request().Context(), userID); err != nil {
-		h.logger.Errorf("Error rejecting KYC for user %s: %v", userID, err)
+	// Parse and validate action
+	action := strings.TrimSpace(c.QueryParam("action"))
+	if action == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Query parameter 'action' is required",
+		})
+	}
+
+	// Validate allowed actions
+	var err error
+	var successMessage string
+
+	switch action {
+	case "reject":
+		err = h.userService.RejectKYC(c.Request().Context(), userID)
+		successMessage = "KYC rejected successfully"
+	default:
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Invalid action. Allowed values: reject",
+		})
+	}
+
+	// Handle service errors
+	if err != nil {
+		h.logger.Errorf("Error performing KYC action '%s' for user %s: %v", action, userID, err)
 		if err.Error() == "user not found" {
 			return c.JSON(http.StatusNotFound, map[string]string{
 				"error": "User not found",
 			})
 		}
 		return c.JSON(http.StatusInternalServerError, map[string]string{
-			"error": "Failed to reject KYC",
+			"error": "Failed to perform KYC action",
 		})
 	}
 
 	return c.JSON(http.StatusOK, map[string]string{
-		"message": "KYC rejected successfully",
+		"message": successMessage,
 	})
 }

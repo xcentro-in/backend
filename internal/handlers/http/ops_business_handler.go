@@ -44,8 +44,7 @@ func RegisterOpsBusinessRoutes(e *echo.Group, businessService business.BusinessS
 
 	// Ops verification endpoints
 	businessGroup.POST("/:bid/reload-data", handler.ReloadBusinessData)
-	businessGroup.POST("/:bid/reject-kyb", handler.RejectKYB)
-	businessGroup.POST("/:bid/verify-kyb", handler.VerifyKYB)
+	businessGroup.POST("/:bid/kyb-action", handler.KYBAction)
 }
 
 // PaginationResponse represents pagination metadata
@@ -217,8 +216,8 @@ func (h *OpsBusinessHandler) ReloadBusinessData(c echo.Context) error {
 	})
 }
 
-// RejectKYB handles POST /businesses/:bid/reject-kyb
-func (h *OpsBusinessHandler) RejectKYB(c echo.Context) error {
+// KYBAction handles POST /businesses/:bid/kyb-action?action=reject|verify
+func (h *OpsBusinessHandler) KYBAction(c echo.Context) error {
 	// Parse and validate business ID
 	bid := strings.TrimSpace(c.Param("bid"))
 	if bid == "" {
@@ -227,48 +226,45 @@ func (h *OpsBusinessHandler) RejectKYB(c echo.Context) error {
 		})
 	}
 
-	// Call service layer
-	if err := h.businessService.RejectKYB(c.Request().Context(), bid); err != nil {
-		h.logger.Errorf("Error rejecting KYB for BID %s: %v", bid, err)
-		if err.Error() == "business not found" {
-			return c.JSON(http.StatusNotFound, map[string]string{
-				"error": "Business not found",
-			})
-		}
-		return c.JSON(http.StatusInternalServerError, map[string]string{
-			"error": "Failed to reject KYB",
-		})
-	}
-
-	return c.JSON(http.StatusOK, map[string]string{
-		"message": "KYB rejected successfully",
-	})
-}
-
-// VerifyKYB handles POST /businesses/:bid/verify-kyb
-func (h *OpsBusinessHandler) VerifyKYB(c echo.Context) error {
-	// Parse and validate business ID
-	bid := strings.TrimSpace(c.Param("bid"))
-	if bid == "" {
+	// Parse and validate action
+	action := strings.TrimSpace(c.QueryParam("action"))
+	if action == "" {
 		return c.JSON(http.StatusBadRequest, map[string]string{
-			"error": "Business ID is required",
+			"error": "Query parameter 'action' is required",
 		})
 	}
 
-	// Call service layer
-	if err := h.businessService.VerifyKYB(c.Request().Context(), bid); err != nil {
-		h.logger.Errorf("Error verifying KYB for BID %s: %v", bid, err)
+	// Validate allowed actions
+	var err error
+	var successMessage string
+
+	switch action {
+	case "reject":
+		err = h.businessService.RejectKYB(c.Request().Context(), bid)
+		successMessage = "KYB rejected successfully"
+	case "verify":
+		err = h.businessService.VerifyKYB(c.Request().Context(), bid)
+		successMessage = "KYB verified successfully"
+	default:
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Invalid action. Allowed values: reject, verify",
+		})
+	}
+
+	// Handle service errors
+	if err != nil {
+		h.logger.Errorf("Error performing KYB action '%s' for BID %s: %v", action, bid, err)
 		if err.Error() == "business not found" {
 			return c.JSON(http.StatusNotFound, map[string]string{
 				"error": "Business not found",
 			})
 		}
 		return c.JSON(http.StatusInternalServerError, map[string]string{
-			"error": "Failed to verify KYB",
+			"error": "Failed to perform KYB action",
 		})
 	}
 
 	return c.JSON(http.StatusOK, map[string]string{
-		"message": "KYB verified successfully",
+		"message": successMessage,
 	})
 }
