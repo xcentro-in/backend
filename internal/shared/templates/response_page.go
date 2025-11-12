@@ -25,7 +25,8 @@ type ResponsePageConfig struct {
 }
 
 // GenerateResponsePage generates a fully styled HTML response page
-func GenerateResponsePage(config ResponsePageConfig) string {
+// nonce is an optional CSP nonce for inline scripts and styles (pass empty string if not using)
+func GenerateResponsePage(config ResponsePageConfig, nonce string) string {
 	// Set defaults
 	if config.AutoCloseSec == 0 {
 		config.AutoCloseSec = 2 // Default 2 seconds
@@ -73,6 +74,12 @@ func GenerateResponsePage(config ResponsePageConfig) string {
 		additionalHTML = config.AdditionalHTML
 	}
 
+	// Build nonce attributes for script and style tags
+	nonceAttr := ""
+	if nonce != "" {
+		nonceAttr = fmt.Sprintf(` nonce="%s"`, nonce)
+	}
+
 	return fmt.Sprintf(`
 <!DOCTYPE html>
 <html lang="en">
@@ -80,7 +87,7 @@ func GenerateResponsePage(config ResponsePageConfig) string {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>%s - xcentro</title>
-    <style>
+    <style%s>
         * {
             margin: 0;
             padding: 0;
@@ -163,7 +170,7 @@ func GenerateResponsePage(config ResponsePageConfig) string {
             }
         }
     </style>
-    <script>
+    <script%s>
         %s
     </script>
 </head>
@@ -186,11 +193,13 @@ func GenerateResponsePage(config ResponsePageConfig) string {
 </html>
 `,
 		config.Title,                // Page title
+		nonceAttr,                   // Nonce attribute for <style> tag
 		theme.backgroundGradient,    // Background gradient
 		theme.iconColor,             // Icon background color
 		theme.messageBackground,     // Message box background
 		theme.iconColor,             // Message box border color
 		theme.messageTextColor,      // Message text color
+		nonceAttr,                   // Nonce attribute for <script> tag
 		autoCloseScript,             // Auto-close script
 		theme.iconSVG,               // Icon SVG
 		config.Title,                // H1 title
