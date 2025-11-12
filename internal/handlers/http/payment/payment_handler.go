@@ -11,6 +11,7 @@ import (
 	"github.com/labstack/echo/v4"
 	payeeCore "xcentro.in/internal/core/payee"
 	voucherCore "xcentro.in/internal/core/voucher"
+	paymentRepo "xcentro.in/internal/adapters/database/postgres/payment"
 	"xcentro.in/internal/core/auth"
 	"xcentro.in/internal/core/business_rules"
 	"xcentro.in/internal/core/payment"
@@ -24,12 +25,13 @@ type PaymentHandler struct {
 	paymentService       *payments.PaymentService
 	paymentSourceService *payments.PaymentSourceService // Phase 10
 	// Additional repositories for detailed payment information
-	voucherRepo       voucherCore.VoucherRepository
-	stateChangeRepo   payment.PaymentStateChangeRepository
-	payeeRelationRepo payeeCore.BusinessPayeeRelationRepository
-	storedCardRepo    payment.StoredCardRepository
-	bankAccountRepo   payment.BankAccountRepository
-	logger            *logger.Logger
+	voucherRepo        voucherCore.VoucherRepository
+	pendingVoucherRepo *paymentRepo.PaymentVoucherPendingRepository
+	stateChangeRepo    payment.PaymentStateChangeRepository
+	payeeRelationRepo  payeeCore.BusinessPayeeRelationRepository
+	storedCardRepo     payment.StoredCardRepository
+	bankAccountRepo    payment.BankAccountRepository
+	logger             *logger.Logger
 }
 
 // NewPaymentHandler creates a new payment handler
@@ -37,6 +39,7 @@ func NewPaymentHandler(
 	paymentService *payments.PaymentService,
 	paymentSourceService *payments.PaymentSourceService,
 	voucherRepo voucherCore.VoucherRepository,
+	pendingVoucherRepo *paymentRepo.PaymentVoucherPendingRepository,
 	stateChangeRepo payment.PaymentStateChangeRepository,
 	payeeRelationRepo payeeCore.BusinessPayeeRelationRepository,
 	storedCardRepo payment.StoredCardRepository,
@@ -47,6 +50,7 @@ func NewPaymentHandler(
 		paymentService:       paymentService,
 		paymentSourceService: paymentSourceService,
 		voucherRepo:          voucherRepo,
+		pendingVoucherRepo:   pendingVoucherRepo,
 		stateChangeRepo:      stateChangeRepo,
 		payeeRelationRepo:    payeeRelationRepo,
 		storedCardRepo:       storedCardRepo,
@@ -1115,13 +1119,14 @@ func RegisterPaymentRoutes(
 	paymentSourceService *payments.PaymentSourceService,
 	authService auth.AuthService,
 	voucherRepo voucherCore.VoucherRepository,
+	pendingVoucherRepo *paymentRepo.PaymentVoucherPendingRepository,
 	stateChangeRepo payment.PaymentStateChangeRepository,
 	payeeRelationRepo payeeCore.BusinessPayeeRelationRepository,
 	storedCardRepo payment.StoredCardRepository,
 	bankAccountRepo payment.BankAccountRepository,
 	log *logger.Logger,
 ) {
-	handler := NewPaymentHandler(paymentService, paymentSourceService, voucherRepo, stateChangeRepo, payeeRelationRepo, storedCardRepo, bankAccountRepo, log)
+	handler := NewPaymentHandler(paymentService, paymentSourceService, voucherRepo, pendingVoucherRepo, stateChangeRepo, payeeRelationRepo, storedCardRepo, bankAccountRepo, log)
 
 	// Apply JWT middleware to all payment routes
 	group.Use(middleware.JWTMiddleware(authService))
@@ -1143,7 +1148,7 @@ func RegisterPaymentRoutes(
 // RegisterWalletRoutes registers all wallet management routes
 func RegisterWalletRoutes(group *echo.Group, paymentService *payments.PaymentService, paymentSourceService *payments.PaymentSourceService, authService auth.AuthService, log *logger.Logger) {
 	// Wallet routes don't need the additional repositories for payment details
-	handler := NewPaymentHandler(paymentService, paymentSourceService, nil, nil, nil, nil, nil, log)
+	handler := NewPaymentHandler(paymentService, paymentSourceService, nil, nil, nil, nil, nil, nil, log)
 
 	// Apply JWT middleware to all wallet routes
 	group.Use(middleware.JWTMiddleware(authService))
@@ -1275,7 +1280,7 @@ func (h *PaymentHandler) GetPaymentByID(c echo.Context) error {
 	}
 
 	// Fetch bills/vouchers linked to this payment
-	bills, err := h.fetchBillsForPayment(c.Request().Context(), paymentUUID)
+	bills, err := h.fetchBillsForPayment(c.Request().Context(), paymentUUID, string(paymentRecord.Status))
 	if err != nil {
 		h.logger.WarnWith("Failed to fetch bills", "error", err)
 	} else {
@@ -1336,13 +1341,42 @@ func (h *PaymentHandler) fetchPaymentSourceDetails(ctx context.Context, sourceID
 }
 
 // fetchBillsForPayment retrieves vouchers/bills linked to a payment with payee details
-func (h *PaymentHandler) fetchBillsForPayment(ctx context.Context, paymentUUID uuid.UUID) ([]BillDetails, error) {
-	// Fetch vouchers by payment ID
-	vouchers, err := h.voucherRepo.GetByPaymentID(ctx, paymentUUID)
-	if err != nil {
-		return nil, err
+// Handles both successful payments (finalized vouchers) and pending/failed payments (transient table)
+func (h *PaymentHandler) fetchBillsForPayment(ctx context.Context, paymentUUID uuid.UUID, paymentStatus string) ([]BillDetails, error) {
+	var vouchers []*voucherCore.Voucher
+
+	// Conditional logic based on payment status
+	if paymentStatus == "success" {
+		// Payment is successful - fetch from payment_vouchers table (finalized)
+		var err error
+		vouchers, err = h.voucherRepo.GetByPaymentID(ctx, paymentUUID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to fetch finalized vouchers: %w", err)
+		}
+	} else {
+		// Payment is pending/failed - fetch from payment_voucher_pending table (transient)
+		if h.pendingVoucherRepo == nil {
+			h.logger.Warn("pendingVoucherRepo is nil, cannot fetch pending vouchers")
+			return []BillDetails{}, nil
+		}
+
+		voucherIDs, err := h.pendingVoucherRepo.GetPendingVouchers(ctx, paymentUUID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to fetch pending voucher IDs: %w", err)
+		}
+
+		// Fetch full voucher details by IDs
+		for _, voucherID := range voucherIDs {
+			v, err := h.voucherRepo.GetByID(ctx, voucherID)
+			if err != nil {
+				h.logger.WarnWith("Failed to fetch voucher", "voucher_id", voucherID, "error", err)
+				continue
+			}
+			vouchers = append(vouchers, v)
+		}
 	}
 
+	// Transform vouchers to bill details
 	bills := []BillDetails{}
 	for _, v := range vouchers {
 		// Fetch payee relation details
