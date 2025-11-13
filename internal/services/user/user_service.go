@@ -925,3 +925,113 @@ func (s *UserServiceImpl) CreateInvitedUser(ctx context.Context, email, name str
 	s.logger.Info("Invited user created successfully with ID: %s", createdUser.Id)
 	return createdUser, nil
 }
+
+// SearchUsersByBusinesses searches users by name or email within specified businesses (ops dashboard)
+func (s *UserServiceImpl) SearchUsersByBusinesses(ctx context.Context, businessIDs []string, searchTerm string) ([]*user.OpsUserSearchResult, error) {
+	return s.userRepo.SearchUsersByBusinesses(ctx, businessIDs, searchTerm)
+}
+
+// GetUserDetailsForOps retrieves detailed user information with identity data (ops dashboard)
+// If businessID is provided, also fetches role information for that business
+func (s *UserServiceImpl) GetUserDetailsForOps(ctx context.Context, userID string, businessID string) (*user.OpsUserDetails, error) {
+	return s.userRepo.GetUserDetailsForOps(ctx, userID, businessID)
+}
+
+// ReloadUserPANData reloads PAN verification data (pan_com or pan_aadhaar_link)
+func (s *UserServiceImpl) ReloadUserPANData(ctx context.Context, userID string, dataType string) error {
+	s.logger.Info("Reloading PAN data for user: %s, type: %s", userID, dataType)
+
+	// Get user to fetch tax ID
+	userData, err := s.userRepo.GetUserByID(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("user not found: %w", err)
+	}
+
+	if userData.TaxID == "" {
+		return fmt.Errorf("user has no tax ID set")
+	}
+
+	// Generate transaction ID
+	transID := fmt.Sprintf("reload_pan_%s_%s_%d", dataType, userID, time.Now().Unix())
+
+	switch dataType {
+	case "pan_com":
+		// Verify PAN_COM
+		panData, err := s.verificationService.VerifyPANCOM(ctx, userData.TaxID, transID)
+		if err != nil {
+			return fmt.Errorf("PAN_COM verification failed: %w", err)
+		}
+
+		// Convert to JSON string
+		panComJSON, err := json.Marshal(panData.PANCOMResponse)
+		if err != nil {
+			return fmt.Errorf("failed to marshal PAN_COM data: %w", err)
+		}
+
+		// Update only the pan_com_data field in the JSON
+		return s.userRepo.UpdateTaxIDDataPartial(ctx, userData.TaxID, "pan_com_data", string(panComJSON))
+
+	case "pan_aadhaar_link":
+		// Get user identity to fetch national ID (Aadhaar)
+		identity, err := s.userRepo.GetUserIdentity(ctx, userData.TaxID)
+		if err != nil || identity == nil || identity.NationalID == "" {
+			return fmt.Errorf("user has no national ID set")
+		}
+
+		// Verify PAN-Aadhaar link
+		// Note: NationalID is masked, but we need full Aadhaar for verification
+		// This might fail if we only have masked Aadhaar
+		panAadhaarData, err := s.verificationService.VerifyPANAadhaar(ctx, userData.TaxID, identity.NationalID, transID)
+		if err != nil {
+			return fmt.Errorf("PAN-Aadhaar link verification failed: %w", err)
+		}
+
+		// Convert to JSON string
+		panAadhaarJSON, err := json.Marshal(panAadhaarData)
+		if err != nil {
+			return fmt.Errorf("failed to marshal PAN-Aadhaar data: %w", err)
+		}
+
+		// Update only the pan_aadhaar_link_data field in the JSON
+		return s.userRepo.UpdateTaxIDDataPartial(ctx, userData.TaxID, "pan_aadhaar_link_data", string(panAadhaarJSON))
+
+	default:
+		return fmt.Errorf("invalid data type: %s (must be pan_com or pan_aadhaar_link)", dataType)
+	}
+}
+
+// RejectKYC marks user KYC as rejected, resets all business relations, and clears identity data
+func (s *UserServiceImpl) RejectKYC(ctx context.Context, userID string) error {
+	s.logger.Info("Rejecting KYC for user: %s", userID)
+
+	// Get user to check tax ID
+	userData, err := s.userRepo.GetUserByID(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("user not found: %w", err)
+	}
+
+	// Use transaction to ensure atomicity
+	return s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
+		txUserRepo := s.userRepo.WithTx(tx)
+
+		// 1. Set KYC status to rejected
+		if err := txUserRepo.SetKYCStatusRejected(ctx, userID); err != nil {
+			return err
+		}
+
+		// 2. Reset all business_user_relation entries (role='none', kyc_needed=true)
+		if err := s.businessUserRelRepo.ResetAllUserRelationsForRejectedKYC(ctx, userID); err != nil {
+			return err
+		}
+
+		// 3. Clear identity data
+		if userData.TaxID != "" {
+			if err := txUserRepo.ClearUserIdentityData(ctx, userData.TaxID); err != nil {
+				return err
+			}
+		}
+
+		s.logger.Infof("KYC rejected successfully for user: %s", userID)
+		return nil
+	})
+}

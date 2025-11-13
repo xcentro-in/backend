@@ -369,3 +369,292 @@ func (r *PgBusinessRepository) UpdateOnboardingFlag(ctx context.Context, bid str
 
 	return nil
 }
+
+// ListBusinessesPaginated retrieves paginated businesses sorted by KYB status
+func (r *PgBusinessRepository) ListBusinessesPaginated(ctx context.Context, page int, limit int) ([]*business.OpsBusinessListItem, int, error) {
+	offset := (page - 1) * limit
+
+	// Get total count
+	countQuery := `SELECT COUNT(*) FROM xcentro.business`
+	var totalCount int
+	err := r.querier.QueryRow(ctx, countQuery).Scan(&totalCount)
+	if err != nil {
+		return nil, 0, fmt.Errorf("error counting businesses: %w", err)
+	}
+
+	// Get paginated results with custom sort
+	query := `
+		SELECT
+			bid,
+			name,
+			gstin,
+			kyb_status,
+			business_type,
+			COALESCE(updated_at::text, '') as updated_at
+		FROM
+			xcentro.business
+		ORDER BY
+			CASE kyb_status
+				WHEN 'kyc_completed' THEN 1
+				WHEN 'kyc_inprogress' THEN 2
+				WHEN 'kyb_verified' THEN 99
+				ELSE 3
+			END ASC,
+			updated_at DESC
+		LIMIT $1
+		OFFSET $2
+	`
+
+	rows, err := r.querier.Query(ctx, query, limit, offset)
+	if err != nil {
+		return nil, 0, fmt.Errorf("error querying businesses: %w", err)
+	}
+	defer rows.Close()
+
+	var businesses []*business.OpsBusinessListItem
+	for rows.Next() {
+		var item business.OpsBusinessListItem
+		var kybStatusStr string
+		var businessType sql.NullString
+
+		err := rows.Scan(
+			&item.BID,
+			&item.Name,
+			&item.GSTIN,
+			&kybStatusStr,
+			&businessType,
+			&item.UpdatedAt,
+		)
+		if err != nil {
+			return nil, 0, fmt.Errorf("error scanning business row: %w", err)
+		}
+
+		item.KybStatus = shared.KYBstatus(kybStatusStr)
+		item.BusinessType = shared.BusinessType(businessType.String)
+		businesses = append(businesses, &item)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("error iterating business rows: %w", err)
+	}
+
+	return businesses, totalCount, nil
+}
+
+// SearchBusinesses searches businesses by name or GSTIN
+func (r *PgBusinessRepository) SearchBusinesses(ctx context.Context, searchTerm string) ([]*business.OpsBusinessSearchResult, error) {
+	query := `
+		SELECT
+			bid,
+			name,
+			gstin
+		FROM
+			xcentro.business
+		WHERE
+			name ILIKE $1 OR
+			gstin ILIKE $1
+		LIMIT 10
+	`
+
+	searchPattern := searchTerm + "%"
+	rows, err := r.querier.Query(ctx, query, searchPattern)
+	if err != nil {
+		return nil, fmt.Errorf("error searching businesses: %w", err)
+	}
+	defer rows.Close()
+
+	var results []*business.OpsBusinessSearchResult
+	for rows.Next() {
+		var result business.OpsBusinessSearchResult
+		err := rows.Scan(&result.BID, &result.Name, &result.GSTIN)
+		if err != nil {
+			return nil, fmt.Errorf("error scanning search result: %w", err)
+		}
+		results = append(results, &result)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating search results: %w", err)
+	}
+
+	return results, nil
+}
+
+// GetBusinessDetailsForOps retrieves complete business details with KYB data and users
+func (r *PgBusinessRepository) GetBusinessDetailsForOps(ctx context.Context, bid string) (*business.OpsBusinessDetails, error) {
+	query := `
+		SELECT
+			b.bid, b.name, b.gstin, COALESCE(b.gst_data::text, ''), b.income_tax_id,
+			b.kyb_status, b.business_type, b.business_model, b.business_turnover,
+			b.country_code, b.currency_code, COALESCE(b.updated_at::text, ''),
+			b.has_completed_onboarding, b.has_added_payment_method,
+			b.has_added_vendor, b.has_created_first_payment,
+			COALESCE(k.income_tax_id_data::text, ''), COALESCE(k.company_id, ''),
+			COALESCE(k.company_id_data::text, ''), COALESCE(k.business_deed, '')
+		FROM xcentro.business b
+		LEFT JOIN xcentro.kyb_data k ON b.income_tax_id = k.income_tax_id
+		WHERE b.bid = $1
+	`
+
+	var details business.OpsBusinessDetails
+	var kybStatusStr string
+	var businessType, businessModel, businessTurnover, countryCode, currencyCode sql.NullString
+
+	err := r.querier.QueryRow(ctx, query, bid).Scan(
+		&details.BID, &details.Name, &details.GSTIN, &details.GSTData, &details.ITID,
+		&kybStatusStr, &businessType, &businessModel, &businessTurnover,
+		&countryCode, &currencyCode, &details.UpdatedAt,
+		&details.HasCompletedOnboarding, &details.HasAddedPaymentMethod,
+		&details.HasAddedVendor, &details.HasCreatedFirstPayment,
+		&details.ITIDData, &details.CID, &details.CIDData, &details.DocUrl,
+	)
+
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, fmt.Errorf("business not found")
+		}
+		return nil, fmt.Errorf("error fetching business details: %w", err)
+	}
+
+	details.KybStatus = shared.KYBstatus(kybStatusStr)
+	details.BusinessType = shared.BusinessType(businessType.String)
+	details.BusinessModel = businessModel.String
+	details.BusinessTurnover = businessTurnover.String
+	details.CountryCode = countryCode.String
+	details.CurrencyCode = currencyCode.String
+
+	// Fetch users related to this business
+	usersQuery := `
+		SELECT
+			u.id, u.email, u.name, u.mobile,
+			bur.role, bur.role_claim, u.kyc_status, bur.kyc_needed,
+			COALESCE(ui.tax_id, ''), COALESCE(ui.national_id, ''),
+			u.email_verified, u.mobile_verified,
+			bur.added_at::text, COALESCE(bur.updated_at::text, '')
+		FROM xcentro.business_user_relation bur
+		JOIN xcentro.user_table u ON bur.userid = u.id
+		LEFT JOIN xcentro.user_identity ui ON u.tax_id = ui.tax_id
+		WHERE bur.bid = $1
+		ORDER BY bur.added_at DESC
+	`
+
+	rows, err := r.querier.Query(ctx, usersQuery, bid)
+	if err != nil {
+		return nil, fmt.Errorf("error fetching business users: %w", err)
+	}
+	defer rows.Close()
+
+	var users []*business.OpsUserDetails
+	for rows.Next() {
+		var user business.OpsUserDetails
+		var roleStr, roleClaimStr, kycStatusStr string
+
+		err := rows.Scan(
+			&user.UserID, &user.Email, &user.Name, &user.Mobile,
+			&roleStr, &roleClaimStr, &kycStatusStr, &user.KycNeeded,
+			&user.TaxID, &user.NationalID,
+			&user.EmailVerified, &user.MobileVerified,
+			&user.AddedAt, &user.UpdatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("error scanning user row: %w", err)
+		}
+
+		user.Role = shared.UserRole(roleStr)
+		user.RoleClaim = shared.UserRole(roleClaimStr)
+		user.KycStatus = shared.KYCStatus(kycStatusStr)
+		users = append(users, &user)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating user rows: %w", err)
+	}
+
+	details.Users = users
+	return &details, nil
+}
+
+// UpdateGSTINData updates the GST data for a business
+func (r *PgBusinessRepository) UpdateGSTINData(ctx context.Context, bid string, gstDataJSON string) error {
+	query := `UPDATE xcentro.business SET gst_data = $1::jsonb WHERE bid = $2`
+	_, err := r.querier.Exec(ctx, query, gstDataJSON, bid)
+	if err != nil {
+		return fmt.Errorf("failed to update GSTIN data: %w", err)
+	}
+	return nil
+}
+
+// UpdateIncometTaxIDData updates the income tax ID data in KYB data
+func (r *PgBusinessRepository) UpdateIncometTaxIDData(ctx context.Context, itid string, itidDataJSON string) error {
+	query := `UPDATE xcentro.kyb_data SET income_tax_id_data = $1::jsonb WHERE income_tax_id = $2`
+	_, err := r.querier.Exec(ctx, query, itidDataJSON, itid)
+	if err != nil {
+		return fmt.Errorf("failed to update income tax ID data: %w", err)
+	}
+	return nil
+}
+
+// UpdateCompanyIDData updates the company ID data in KYB data
+func (r *PgBusinessRepository) UpdateCompanyIDData(ctx context.Context, itid string, cidDataJSON string) error {
+	query := `UPDATE xcentro.kyb_data SET company_id_data = $1::jsonb WHERE income_tax_id = $2`
+	_, err := r.querier.Exec(ctx, query, cidDataJSON, itid)
+	if err != nil {
+		return fmt.Errorf("failed to update company ID data: %w", err)
+	}
+	return nil
+}
+
+// SetKYBStatusRejected sets business KYB status to rejected
+func (r *PgBusinessRepository) SetKYBStatusRejected(ctx context.Context, bid string) error {
+	query := `UPDATE xcentro.business SET kyb_status = 'kyb_rejected' WHERE bid = $1`
+	_, err := r.querier.Exec(ctx, query, bid)
+	if err != nil {
+		return fmt.Errorf("failed to set KYB status to rejected: %w", err)
+	}
+	return nil
+}
+
+// ClearKYBData clears all KYB data fields to empty JSON
+func (r *PgBusinessRepository) ClearKYBData(ctx context.Context, itid string) error {
+	query := `
+		UPDATE xcentro.kyb_data
+		SET income_tax_id_data = '{}'::jsonb,
+		    company_id_data = '{}'::jsonb,
+		    business_deed = ''
+		WHERE income_tax_id = $1
+	`
+	_, err := r.querier.Exec(ctx, query, itid)
+	if err != nil {
+		return fmt.Errorf("failed to clear KYB data: %w", err)
+	}
+	return nil
+}
+
+// SetKYBStatusVerified sets business KYB status to verified
+func (r *PgBusinessRepository) SetKYBStatusVerified(ctx context.Context, bid string) error {
+	query := `UPDATE xcentro.business SET kyb_status = 'kyb_verified' WHERE bid = $1`
+	_, err := r.querier.Exec(ctx, query, bid)
+	if err != nil {
+		return fmt.Errorf("failed to set KYB status to verified: %w", err)
+	}
+	return nil
+}
+
+// GetOwnerUserID retrieves the user ID of the owner (role='owner') for a business
+func (r *PgBusinessRepository) GetOwnerUserID(ctx context.Context, bid string) (string, error) {
+	query := `
+		SELECT userid
+		FROM xcentro.business_user_relation
+		WHERE bid = $1 AND role = 'owner'
+		LIMIT 1
+	`
+	var userID string
+	err := r.querier.QueryRow(ctx, query, bid).Scan(&userID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", fmt.Errorf("no owner found for business")
+		}
+		return "", fmt.Errorf("failed to get owner user ID: %w", err)
+	}
+	return userID, nil
+}

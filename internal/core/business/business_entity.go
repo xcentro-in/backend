@@ -170,3 +170,72 @@ type UpdateBusinessUserRequest struct {
 type RemoveBusinessUserRequest struct {
 	UserID string `json:"userId" validate:"required"`
 }
+
+// Ops Dashboard DTOs
+
+// OpsBusinessListItem represents a business item in the paginated list
+type OpsBusinessListItem struct {
+	BID          string              `json:"bid"`
+	Name         string              `json:"name"`
+	GSTIN        string              `json:"gstin"`
+	KybStatus    shared.KYBstatus    `json:"kybStatus"`
+	BusinessType shared.BusinessType `json:"businessType"`
+	UpdatedAt    string              `json:"updatedAt"`
+}
+
+// OpsBusinessSearchResult represents a search result item
+type OpsBusinessSearchResult struct {
+	BID   string `json:"bid"`
+	Name  string `json:"name"`
+	GSTIN string `json:"gstin"`
+}
+
+// OpsUserDetails represents user information in business details
+type OpsUserDetails struct {
+	UserID         string           `json:"userId"`
+	Email          string           `json:"email"`
+	Name           string           `json:"name"`
+	Mobile         string           `json:"mobile"`
+	Role           shared.UserRole  `json:"role"`
+	RoleClaim      shared.UserRole  `json:"roleClaim"`
+	KycStatus      shared.KYCStatus `json:"kycStatus"`
+	KycNeeded      bool             `json:"kycNeeded"`
+	TaxID          string           `json:"taxId"`
+	NationalID     string           `json:"nationalId"`
+	EmailVerified  bool             `json:"emailVerified"`
+	MobileVerified bool             `json:"mobileVerified"`
+	AddedAt        string           `json:"addedAt"`
+	UpdatedAt      string           `json:"updatedAt"`
+}
+
+// OpsBusinessDetails represents complete business details for ops dashboard
+type OpsBusinessDetails struct {
+	// Business data
+	BID              string              `json:"bid"`
+	Name             string              `json:"name"`
+	GSTIN            string              `json:"gstin"`
+	GSTData          string              `json:"gstData"`
+	ITID             string              `json:"itid"`
+	KybStatus        shared.KYBstatus    `json:"kybStatus"`
+	BusinessType     shared.BusinessType `json:"businessType"`
+	BusinessModel    string              `json:"businessModel"`
+	BusinessTurnover string              `json:"businessTurnover"`
+	CountryCode      string              `json:"countryCode"`
+	CurrencyCode     string              `json:"currencyCode"`
+	UpdatedAt        string              `json:"updatedAt"`
+
+	// Onboarding tracking
+	HasCompletedOnboarding bool `json:"hasCompletedOnboarding"`
+	HasAddedPaymentMethod  bool `json:"hasAddedPaymentMethod"`
+	HasAddedVendor         bool `json:"hasAddedVendor"`
+	HasCreatedFirstPayment bool `json:"hasCreatedFirstPayment"`
+
+	// KYB data (embedded)
+	ITIDData string `json:"itidData"`
+	CID      string `json:"cid"`
+	CIDData  string `json:"cidData"`
+	DocUrl   string `json:"docUrl"`
+
+	// Users array
+	Users []*OpsUserDetails `json:"users"`
+}

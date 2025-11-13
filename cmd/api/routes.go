@@ -277,7 +277,7 @@ func registerV1NotificationRoutes(clients *externalClients, cfg *config.Config, 
 	userNotifRepo := notificationRepo.NewPgUserNotificationRepository(clients.db)
 	prefsRepo := notificationRepo.NewPgNotificationPreferencesRepository(clients.db)
 	eventRepo := notificationRepo.NewPgNotificationEventRepository(clients.db)
-	notifService := notificationService.NewUserFacingNotificationService(eventRepo, userNotifRepo, prefsRepo, clients.rcache.Client, logger.GetDefault())
+	notifService := notificationService.NewUserFacingNotificationService(eventRepo, userNotifRepo, prefsRepo, clients.txManager, clients.rcache.Client, logger.GetDefault())
 
 	_, _, _, _, _, _, authSvc := factory.createCoreServices(nil)
 	notificationHandler.RegisterNotificationRoutes(group, notifService, authSvc)
