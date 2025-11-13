@@ -151,9 +151,11 @@ type VoucherPaymentDetails struct {
 	BankName       string `json:"bank_name"`
 
 	// Payment amounts (in paise)
-	Amount      int64 `json:"amount"`       // Original voucher amount
-	FeeAmount   int64 `json:"fee_amount"`   // Total fee (convenience fee + GST)
-	TotalAmount int64 `json:"total_amount"` // amount + fee_amount (what customer paid)
+	Amount            int64 `json:"amount"`              // Original voucher amount
+	FeeAmount         int64 `json:"fee_amount"`          // Total fee (convenience fee + GST)
+	ConvenienceFee    int64 `json:"convenience_fee"`     // Base convenience fee before GST
+	ConvenienceFeeGST int64 `json:"convenience_fee_gst"` // GST on convenience fee (18%)
+	TotalAmount       int64 `json:"total_amount"`        // amount + fee_amount (what customer paid)
 
 	// Payout details
 	PayoutUTR         string     `json:"payout_utr"`          // Bank UTR from payout provider (empty if not yet paid to vendor)

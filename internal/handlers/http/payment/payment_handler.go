@@ -1246,15 +1246,9 @@ func (h *PaymentHandler) GetPaymentByID(c echo.Context) error {
 		})
 	}
 
-	// Calculate service charge breakdown from total fee
-	// FeeAmount = convenience_fee + GST (18%)
-	// Reverse calculate: convenience_fee = fee_amount / 1.18
-	convenienceFee := int64(0)
-	gstOnFee := int64(0)
-	if paymentRecord.FeeAmount > 0 {
-		convenienceFee = (paymentRecord.FeeAmount * 100) / 118 // Reverse calculate base fee
-		gstOnFee = paymentRecord.FeeAmount - convenienceFee    // GST is the difference
-	}
+	// Use stored fee breakdown (no reverse calculation needed)
+	convenienceFee := paymentRecord.ConvenienceFee
+	gstOnFee := paymentRecord.ConvenienceFeeGST
 
 	// Build comprehensive response
 	response := &PaymentDetailsResponse{

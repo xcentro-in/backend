@@ -1976,6 +1976,8 @@ func (r *PostgresVoucherRepository) GetPaymentDetailsByVoucher(ctx context.Conte
 			-- Payment amounts (in paise)
 			p.amount,
 			p.fee_amount,
+			p.convenience_fee,
+			p.convenience_fee_gst,
 			p.total_amount,
 
 			-- Payout details (from payout_transfer_requests)
@@ -2013,6 +2015,8 @@ func (r *PostgresVoucherRepository) GetPaymentDetailsByVoucher(ctx context.Conte
 		&bankName,
 		&details.Amount,
 		&details.FeeAmount,
+		&details.ConvenienceFee,
+		&details.ConvenienceFeeGST,
 		&details.TotalAmount,
 		&details.PayoutUTR,
 		&payoutCompletedAt,

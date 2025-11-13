@@ -1230,16 +1230,9 @@ func (s *VoucherServiceImpl) GetVoucherPaymentDetails(ctx context.Context, vouch
 		return nil, fmt.Errorf("failed to get payment details: %w", err)
 	}
 
-	// Calculate convenience fee breakdown
-	// Total fee = convenience_fee + GST_on_fee
-	// We need to reverse calculate: convenience_fee = total_fee / 1.18
-	convenienceFee := int64(0)
-	gstOnFee := int64(0)
-	if details.FeeAmount > 0 {
-		// Assuming 18% GST (can be made configurable later)
-		convenienceFee = (details.FeeAmount * 100) / 118 // Reverse calculate base fee
-		gstOnFee = details.FeeAmount - convenienceFee    // GST is the difference
-	}
+	// Use stored fee breakdown (no reverse calculation needed)
+	convenienceFee := details.ConvenienceFee
+	gstOnFee := details.ConvenienceFeeGST
 
 	// Format convenience fee rate
 	convenienceFeeRate := ""
