@@ -151,20 +151,29 @@ func (c *CastlerClient) GetBeneficiaryStatus(ctx context.Context, providerBenefi
 
 // CreateTransferRequest initiates a payout transfer with Castler
 func (c *CastlerClient) CreateTransferRequest(ctx context.Context, req *payout.CreateTransferRequest) (*payout.CreateTransferResponse, error) {
-	// Build Castler transfer request
-	castlerReq := CastlerTransferRequest{
-		BeneficiaryID: req.ProviderBeneficiaryID,
-		Amount:        float64(req.Amount) / 100.0, // Convert paise to rupees
-		Currency:      req.Currency,
-		Purpose:       req.Purpose,
-		Reference:     req.Reference,
-		Narration:     req.Narration,
-		TransferMode:  req.TransferMode,
+	// Prepare notes with invoice number or other metadata
+	notes := make(map[string]interface{})
+	if req.Reference != "" {
+		notes["invoice_number"] = req.Reference
+	}
+	if req.Narration != "" {
+		notes["narration"] = req.Narration
 	}
 
-	// Call Castler API
+	// Build Castler transfer request with exact API format
+	castlerReq := CastlerTransferRequest{
+		EscrowID:      req.EscrowID,              // Escrow account ID (from config/env)
+		PayeeID:       req.ProviderBeneficiaryID, // Castler payee ID
+		Mode:          req.TransferMode,          // neft, rtgs, imps
+		Amount:        float64(req.Amount) / 100.0, // Convert paise to rupees
+		CustomerRefID: req.TransferRequestID,     // Our payout_id for tracking
+		Purpose:       req.Purpose,               // Purpose of payment
+		Notes:         notes,                     // Additional metadata
+	}
+
+	// Call Castler payout API
 	var castlerResp CastlerTransferResponse
-	if err := c.post(ctx, "/v1/transfers", castlerReq, &castlerResp); err != nil {
+	if err := c.post(ctx, "/api/v1/payout", castlerReq, &castlerResp); err != nil {
 		return nil, &payout.PayoutProviderError{
 			Provider:    payout.ProviderCastler,
 			ErrorCode:   payout.ErrCodeAPITimeout,
@@ -173,22 +182,40 @@ func (c *CastlerClient) CreateTransferRequest(ctx context.Context, req *payout.C
 		}
 	}
 
+	// Check if request was successful
+	if !castlerResp.Success {
+		errMsg := "Unknown error"
+		if castlerResp.Message != nil {
+			errMsg = *castlerResp.Message
+		}
+		if len(castlerResp.Errors) > 0 {
+			errMsg = fmt.Sprintf("%s: %v", errMsg, castlerResp.Errors)
+		}
+		return nil, &payout.PayoutProviderError{
+			Provider:    payout.ProviderCastler,
+			ErrorCode:   payout.ErrCodeTransferFailed,
+			Message:     fmt.Sprintf("Castler payout failed: %s", errMsg),
+			IsRetryable: false,
+		}
+	}
+
 	// Map Castler response to domain response
-	// With simplified workflow, Castler auto-initiates transfers
-	status := payout.TransferStatusInitiated
-	if castlerResp.Status == "processing" {
-		status = payout.TransferStatusProcessing
+	// Transfer is initiated immediately with Castler
+	message := "Transfer initiated successfully"
+	if castlerResp.Message != nil {
+		message = *castlerResp.Message
 	}
 
 	return &payout.CreateTransferResponse{
-		ProviderTransferID:  castlerResp.TransferID,
-		Status:              status,
-		RequiresApproval:    false, // No approval workflow in simplified design
-		Message:             castlerResp.Message,
-		EstimatedSettlement: &castlerResp.EstimatedSettlement,
+		ProviderTransferID:  castlerResp.Result.TransferID, // Use transferId from result
+		Status:              payout.TransferStatusInitiated, // Always initiated
+		RequiresApproval:    false,                          // No approval workflow
+		Message:             message,
+		EstimatedSettlement: nil, // Settlement info comes via webhook
 		Metadata: map[string]interface{}{
-			"castler_transfer_id": castlerResp.TransferID,
-			"castler_status":      castlerResp.Status,
+			"castler_transfer_id": castlerResp.Result.TransferID,
+			"customer_ref_id":     req.TransferRequestID,
+			"success":             castlerResp.Success,
 		},
 	}, nil
 }

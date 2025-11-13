@@ -104,11 +104,15 @@ const (
 
 // CreateTransferRequest represents payout transfer initiation
 type CreateTransferRequest struct {
-	// Voucher reference
-	VoucherID string // UUID stored as string
+	// Transfer identifiers
+	TransferRequestID string // Our internal transfer request ID (used as customerRefId in Castler)
+	VoucherID         string // UUID stored as string
 
 	// Beneficiary
 	ProviderBeneficiaryID string
+
+	// Escrow configuration
+	EscrowID string // Castler escrow account ID
 
 	// Amount (in paise)
 	Amount   int64
