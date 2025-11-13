@@ -15,6 +15,7 @@ import (
 	"github.com/labstack/echo/v4"
 	"xcentro.in/internal/core/payment"
 	"xcentro.in/internal/core/payout"
+	"xcentro.in/internal/shared/logger"
 )
 
 // PayoutWebhookHandler handles webhook callbacks from payout providers
@@ -22,6 +23,7 @@ type PayoutWebhookHandler struct {
 	transferRepo    payout.PayoutTransferRepository
 	stateChangeRepo payment.PaymentStateChangeRepository
 	webhookSecret   string // Castler webhook secret for signature verification
+	logger          *logger.Logger
 }
 
 // NewPayoutWebhookHandler creates a new webhook handler
@@ -34,6 +36,7 @@ func NewPayoutWebhookHandler(
 		transferRepo:    transferRepo,
 		stateChangeRepo: stateChangeRepo,
 		webhookSecret:   webhookSecret,
+		logger:          logger.GetDefault(),
 	}
 }
 
@@ -51,12 +54,12 @@ type CastlerWebhookPayload struct {
 
 // HandleCastlerWebhook processes webhook callbacks from Castler
 func (h *PayoutWebhookHandler) HandleCastlerWebhook(c echo.Context) error {
-	fmt.Println("=== CASTLER WEBHOOK: Received callback ===")
+	h.logger.InfoWith("Castler webhook received")
 
 	// Step 1: Read request body
 	bodyBytes, err := io.ReadAll(c.Request().Body)
 	if err != nil {
-		fmt.Printf("❌ Failed to read request body: %v\n", err)
+		h.logger.ErrorWith("Failed to read webhook request body", "error", err)
 		return c.JSON(http.StatusBadRequest, map[string]string{
 			"error": "invalid_request",
 			"message": "Failed to read request body",
@@ -66,27 +69,29 @@ func (h *PayoutWebhookHandler) HandleCastlerWebhook(c echo.Context) error {
 	// Step 2: Verify webhook signature
 	signature := c.Request().Header.Get("X-Castler-Signature")
 	if !h.verifyCastlerSignature(signature, bodyBytes) {
-		fmt.Printf("❌ Invalid webhook signature: %s\n", signature)
+		h.logger.WarnWith("Invalid webhook signature", "signature", signature)
 		return c.JSON(http.StatusUnauthorized, map[string]string{
 			"error": "invalid_signature",
 			"message": "Webhook signature verification failed",
 		})
 	}
 
-	fmt.Println("✅ Webhook signature verified")
+	h.logger.DebugWith("Webhook signature verified successfully")
 
 	// Step 3: Parse webhook payload
 	var payload CastlerWebhookPayload
 	if err := json.Unmarshal(bodyBytes, &payload); err != nil {
-		fmt.Printf("❌ Failed to parse webhook payload: %v\n", err)
+		h.logger.ErrorWith("Failed to parse webhook payload", "error", err)
 		return c.JSON(http.StatusBadRequest, map[string]string{
 			"error": "invalid_payload",
 			"message": "Failed to parse webhook payload",
 		})
 	}
 
-	fmt.Printf("📦 Webhook event: %s, TransferID: %s, Status: %s\n",
-		payload.EventType, payload.TransferID, payload.Status)
+	h.logger.InfoWith("Webhook event received",
+		"event_type", payload.EventType,
+		"transfer_id", payload.TransferID,
+		"status", payload.Status)
 
 	// Get context early for all operations
 	ctx := c.Request().Context()
@@ -94,14 +99,18 @@ func (h *PayoutWebhookHandler) HandleCastlerWebhook(c echo.Context) error {
 	// Step 4: Find transfer request by provider_transfer_id
 	transfer, err := h.transferRepo.GetByProviderTransferID(ctx, payload.TransferID)
 	if err != nil {
-		fmt.Printf("❌ Transfer not found for provider_transfer_id: %s, error: %v\n", payload.TransferID, err)
+		h.logger.ErrorWith("Transfer not found",
+			"provider_transfer_id", payload.TransferID,
+			"error", err)
 		return c.JSON(http.StatusNotFound, map[string]string{
 			"error": "transfer_not_found",
 			"message": fmt.Sprintf("Transfer not found: %s", payload.TransferID),
 		})
 	}
 
-	fmt.Printf("✅ Found transfer: %s (voucher: %s)\n", transfer.TransferRequestID, transfer.VoucherID)
+	h.logger.InfoWith("Transfer found",
+		"transfer_request_id", transfer.TransferRequestID,
+		"voucher_id", transfer.VoucherID)
 
 	// Step 5: Handle event based on type
 	// NOTE: Castler webhooks only send settlement events (completed/failed)
@@ -111,7 +120,7 @@ func (h *PayoutWebhookHandler) HandleCastlerWebhook(c echo.Context) error {
 	case "transfer.processing":
 		// DEPRECATED: Castler does not send processing events via webhook
 		// Processing status is set immediately when API call succeeds
-		fmt.Println("  ⚠️  Received unexpected 'transfer.processing' event - ignoring")
+		h.logger.WarnWith("Received unexpected 'transfer.processing' event - ignoring")
 		return c.JSON(http.StatusOK, map[string]string{
 			"status": "ok",
 			"message": "Processing event not expected - status already set on API success",
@@ -119,7 +128,7 @@ func (h *PayoutWebhookHandler) HandleCastlerWebhook(c echo.Context) error {
 
 	case "transfer.completed":
 		if err := h.handleCompleted(ctx, transfer, payload); err != nil {
-			fmt.Printf("❌ Failed to handle completed event: %v\n", err)
+			h.logger.ErrorWith("Failed to handle completed event", "error", err)
 			return c.JSON(http.StatusInternalServerError, map[string]string{
 				"error": "completion_failed",
 				"message": err.Error(),
@@ -128,7 +137,7 @@ func (h *PayoutWebhookHandler) HandleCastlerWebhook(c echo.Context) error {
 
 	case "transfer.failed":
 		if err := h.handleFailed(ctx, transfer, payload); err != nil {
-			fmt.Printf("❌ Failed to handle failed event: %v\n", err)
+			h.logger.ErrorWith("Failed to handle failed event", "error", err)
 			return c.JSON(http.StatusInternalServerError, map[string]string{
 				"error": "failure_handling_failed",
 				"message": err.Error(),
@@ -136,7 +145,7 @@ func (h *PayoutWebhookHandler) HandleCastlerWebhook(c echo.Context) error {
 		}
 
 	default:
-		fmt.Printf("⚠️  Unknown webhook event type: %s\n", payload.EventType)
+		h.logger.WarnWith("Unknown webhook event type", "event_type", payload.EventType)
 		return c.JSON(http.StatusBadRequest, map[string]string{
 			"error": "unknown_event",
 			"message": fmt.Sprintf("Unknown event type: %s", payload.EventType),
@@ -154,12 +163,14 @@ func (h *PayoutWebhookHandler) HandleCastlerWebhook(c echo.Context) error {
 
 	if err := h.transferRepo.AppendWebhookHistory(ctx, transfer.TransferRequestID, webhookData); err != nil {
 		// Log error but don't fail the webhook
-		fmt.Printf("⚠️  Failed to append webhook history: %v\n", err)
+		h.logger.WarnWith("Failed to append webhook history", "error", err)
 	} else {
-		fmt.Println("✅ Webhook stored in history")
+		h.logger.DebugWith("Webhook stored in history")
 	}
 
-	fmt.Println("=== CASTLER WEBHOOK: Processing complete ===")
+	h.logger.InfoWith("Castler webhook processing complete",
+		"event_type", payload.EventType,
+		"transfer_id", payload.TransferID)
 
 	return c.JSON(http.StatusOK, map[string]string{
 		"status": "ok",
@@ -171,20 +182,23 @@ func (h *PayoutWebhookHandler) HandleCastlerWebhook(c echo.Context) error {
 // DEPRECATED: Castler does not send processing events via webhook
 // Processing status is set immediately when payout API call succeeds
 func (h *PayoutWebhookHandler) handleProcessing(ctx context.Context, transfer *payout.PayoutTransferRequest, payload CastlerWebhookPayload) error {
-	fmt.Println("  🔄 Processing: transfer.processing event (DEPRECATED - should not receive this)")
+	h.logger.WarnWith("Received DEPRECATED transfer.processing event",
+		"transfer_id", transfer.TransferRequestID)
 
 	// Update transfer status to 'processing'
 	if err := h.transferRepo.UpdateStatus(ctx, transfer.TransferRequestID, payout.TransferStatusProcessing, payload.Timestamp); err != nil {
 		return fmt.Errorf("failed to update transfer status: %w", err)
 	}
 
-	fmt.Println("  ✅ Transfer marked as processing")
+	h.logger.InfoWith("Transfer marked as processing", "transfer_id", transfer.TransferRequestID)
 	return nil
 }
 
 // handleCompleted handles the "transfer.completed" webhook event
 func (h *PayoutWebhookHandler) handleCompleted(ctx context.Context, transfer *payout.PayoutTransferRequest, payload CastlerWebhookPayload) error {
-	fmt.Printf("  ✅ Success: transfer.completed event (UTR: %s)\n", payload.UTR)
+	h.logger.InfoWith("Handling transfer.completed event",
+		"transfer_id", transfer.TransferRequestID,
+		"utr", payload.UTR)
 
 	// Mark transfer as completed
 	if err := h.transferRepo.MarkCompleted(ctx, transfer.TransferRequestID, payload.UTR, payload.Timestamp); err != nil {
@@ -194,11 +208,11 @@ func (h *PayoutWebhookHandler) handleCompleted(ctx context.Context, transfer *pa
 	// Record activity: Payout completed
 	transferUUID, err := uuid.Parse(transfer.TransferRequestID)
 	if err != nil {
-		fmt.Printf("  ⚠️  Invalid transfer_request_id UUID: %v\n", err)
+		h.logger.WarnWith("Invalid transfer_request_id UUID", "error", err)
 	} else {
 		paymentUUID, err := uuid.Parse(transfer.PaymentID)
 		if err != nil {
-			fmt.Printf("  ⚠️  Invalid payment_id UUID: %v\n", err)
+			h.logger.WarnWith("Invalid payment_id UUID", "error", err)
 		} else {
 			_, err = h.stateChangeRepo.Create(ctx, &payment.CreatePaymentStateChangeRequest{
 				PaymentID:       paymentUUID,
@@ -220,19 +234,23 @@ func (h *PayoutWebhookHandler) handleCompleted(ctx context.Context, transfer *pa
 				Remarks: fmt.Sprintf("Payout completed successfully via settlement webhook (UTR: %s)", payload.UTR),
 			})
 			if err != nil {
-				fmt.Printf("  ⚠️  Failed to create activity record (completed): %v\n", err)
+				h.logger.WarnWith("Failed to create activity record for completed transfer", "error", err)
 			}
 		}
 	}
 
-	fmt.Printf("  ✅ Transfer completed successfully (UTR: %s)\n", payload.UTR)
+	h.logger.InfoWith("Transfer completed successfully",
+		"transfer_id", transfer.TransferRequestID,
+		"utr", payload.UTR)
 	return nil
 }
 
 // handleFailed handles the "transfer.failed" webhook event
 func (h *PayoutWebhookHandler) handleFailed(ctx context.Context, transfer *payout.PayoutTransferRequest, payload CastlerWebhookPayload) error {
 	failureReason := fmt.Sprintf("%s: %s", payload.FailureCode, payload.FailureMsg)
-	fmt.Printf("  ❌ Failure: transfer.failed event (reason: %s)\n", failureReason)
+	h.logger.WarnWith("Handling transfer.failed event",
+		"transfer_id", transfer.TransferRequestID,
+		"failure_reason", failureReason)
 
 	// Mark transfer as failed
 	if err := h.transferRepo.MarkFailed(ctx, transfer.TransferRequestID, failureReason, payload.Timestamp); err != nil {
@@ -242,11 +260,11 @@ func (h *PayoutWebhookHandler) handleFailed(ctx context.Context, transfer *payou
 	// Record activity: Payout failed
 	transferUUID, err := uuid.Parse(transfer.TransferRequestID)
 	if err != nil {
-		fmt.Printf("  ⚠️  Invalid transfer_request_id UUID: %v\n", err)
+		h.logger.WarnWith("Invalid transfer_request_id UUID", "error", err)
 	} else {
 		paymentUUID, err := uuid.Parse(transfer.PaymentID)
 		if err != nil {
-			fmt.Printf("  ⚠️  Invalid payment_id UUID: %v\n", err)
+			h.logger.WarnWith("Invalid payment_id UUID", "error", err)
 		} else {
 			_, err = h.stateChangeRepo.Create(ctx, &payment.CreatePaymentStateChangeRequest{
 				PaymentID:       paymentUUID,
@@ -269,17 +287,17 @@ func (h *PayoutWebhookHandler) handleFailed(ctx context.Context, transfer *payou
 				Remarks: fmt.Sprintf("Payout failed via webhook: %s", failureReason),
 			})
 			if err != nil {
-				fmt.Printf("  ⚠️  Failed to create activity record (failed): %v\n", err)
+				h.logger.WarnWith("Failed to create activity record for failed transfer", "error", err)
 			}
 		}
 	}
 
 	// TODO: Implement retry strategy
-	fmt.Println("  TODO: Implement retry strategy for failed transfer:", transfer.TransferRequestID)
-	fmt.Println("  TODO: Consider unified retry strategy across payments/payouts")
-	fmt.Println("  ℹ️  For MVP: Ops team handles failed transfers manually")
+	h.logger.InfoWith("Transfer marked as failed - manual intervention required",
+		"transfer_id", transfer.TransferRequestID,
+		"failure_reason", failureReason,
+		"note", "MVP: Ops team handles failed transfers manually")
 
-	fmt.Printf("  ✅ Transfer marked as failed (reason: %s)\n", failureReason)
 	return nil
 }
 
