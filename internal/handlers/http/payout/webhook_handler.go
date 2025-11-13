@@ -11,24 +11,29 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
+	"xcentro.in/internal/core/payment"
 	"xcentro.in/internal/core/payout"
 )
 
 // PayoutWebhookHandler handles webhook callbacks from payout providers
 type PayoutWebhookHandler struct {
-	transferRepo  payout.PayoutTransferRepository
-	webhookSecret string // Castler webhook secret for signature verification
+	transferRepo    payout.PayoutTransferRepository
+	stateChangeRepo payment.PaymentStateChangeRepository
+	webhookSecret   string // Castler webhook secret for signature verification
 }
 
 // NewPayoutWebhookHandler creates a new webhook handler
 func NewPayoutWebhookHandler(
 	transferRepo payout.PayoutTransferRepository,
+	stateChangeRepo payment.PaymentStateChangeRepository,
 	webhookSecret string,
 ) *PayoutWebhookHandler {
 	return &PayoutWebhookHandler{
-		transferRepo:  transferRepo,
-		webhookSecret: webhookSecret,
+		transferRepo:    transferRepo,
+		stateChangeRepo: stateChangeRepo,
+		webhookSecret:   webhookSecret,
 	}
 }
 
@@ -186,6 +191,40 @@ func (h *PayoutWebhookHandler) handleCompleted(ctx context.Context, transfer *pa
 		return fmt.Errorf("failed to mark transfer completed: %w", err)
 	}
 
+	// Record activity: Payout completed
+	transferUUID, err := uuid.Parse(transfer.TransferRequestID)
+	if err != nil {
+		fmt.Printf("  ⚠️  Invalid transfer_request_id UUID: %v\n", err)
+	} else {
+		paymentUUID, err := uuid.Parse(transfer.PaymentID)
+		if err != nil {
+			fmt.Printf("  ⚠️  Invalid payment_id UUID: %v\n", err)
+		} else {
+			_, err = h.stateChangeRepo.Create(ctx, &payment.CreatePaymentStateChangeRequest{
+				PaymentID:       paymentUUID,
+				TransferID:      &transferUUID,
+				Action:          payment.PayoutActionCompleted,
+				ActionTimestamp: payload.Timestamp,
+				ActorType:       payment.ActorTypeWebhook,
+				ActorName:       "castler_webhook",
+				PreviousState:   "processing",
+				NewState:        "completed",
+				Amount:          transfer.Amount,
+				Currency:        transfer.Currency,
+				UTR:             payload.UTR,
+				Provider:        string(transfer.Provider),
+				Metadata: map[string]any{
+					"provider_transfer_id": transfer.ProviderTransferID,
+					"event_type":           payload.EventType,
+				},
+				Remarks: fmt.Sprintf("Payout completed successfully via settlement webhook (UTR: %s)", payload.UTR),
+			})
+			if err != nil {
+				fmt.Printf("  ⚠️  Failed to create activity record (completed): %v\n", err)
+			}
+		}
+	}
+
 	fmt.Printf("  ✅ Transfer completed successfully (UTR: %s)\n", payload.UTR)
 	return nil
 }
@@ -198,6 +237,41 @@ func (h *PayoutWebhookHandler) handleFailed(ctx context.Context, transfer *payou
 	// Mark transfer as failed
 	if err := h.transferRepo.MarkFailed(ctx, transfer.TransferRequestID, failureReason, payload.Timestamp); err != nil {
 		return fmt.Errorf("failed to mark transfer failed: %w", err)
+	}
+
+	// Record activity: Payout failed
+	transferUUID, err := uuid.Parse(transfer.TransferRequestID)
+	if err != nil {
+		fmt.Printf("  ⚠️  Invalid transfer_request_id UUID: %v\n", err)
+	} else {
+		paymentUUID, err := uuid.Parse(transfer.PaymentID)
+		if err != nil {
+			fmt.Printf("  ⚠️  Invalid payment_id UUID: %v\n", err)
+		} else {
+			_, err = h.stateChangeRepo.Create(ctx, &payment.CreatePaymentStateChangeRequest{
+				PaymentID:       paymentUUID,
+				TransferID:      &transferUUID,
+				Action:          payment.PayoutActionFailed,
+				ActionTimestamp: payload.Timestamp,
+				ActorType:       payment.ActorTypeWebhook,
+				ActorName:       "castler_webhook",
+				PreviousState:   "processing",
+				NewState:        "failed",
+				Amount:          transfer.Amount,
+				Currency:        transfer.Currency,
+				Provider:        string(transfer.Provider),
+				Metadata: map[string]any{
+					"provider_transfer_id": transfer.ProviderTransferID,
+					"failure_code":         payload.FailureCode,
+					"failure_message":      payload.FailureMsg,
+					"event_type":           payload.EventType,
+				},
+				Remarks: fmt.Sprintf("Payout failed via webhook: %s", failureReason),
+			})
+			if err != nil {
+				fmt.Printf("  ⚠️  Failed to create activity record (failed): %v\n", err)
+			}
+		}
 	}
 
 	// TODO: Implement retry strategy

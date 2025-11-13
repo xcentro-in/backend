@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
+	"xcentro.in/internal/core/payment"
 	"xcentro.in/internal/core/payout"
 	"xcentro.in/internal/core/voucher"
 	payoutService "xcentro.in/internal/services/payout"
@@ -15,8 +17,8 @@ import (
 type PayoutWorker struct {
 	voucherRepo     voucher.VoucherRepository
 	transferRepo    payout.PayoutTransferRepository
-	mappingRepo     payout.PayoutProviderMappingRepository
 	configRepo      payout.PayoutConfigurationRepository
+	stateChangeRepo payment.PaymentStateChangeRepository
 	payoutService   *payoutService.PayoutService
 	providerFactory payoutService.PayoutProviderFactory
 }
@@ -25,16 +27,16 @@ type PayoutWorker struct {
 func NewPayoutWorker(
 	voucherRepo voucher.VoucherRepository,
 	transferRepo payout.PayoutTransferRepository,
-	mappingRepo payout.PayoutProviderMappingRepository,
 	configRepo payout.PayoutConfigurationRepository,
+	stateChangeRepo payment.PaymentStateChangeRepository,
 	payoutService *payoutService.PayoutService,
 	providerFactory payoutService.PayoutProviderFactory,
 ) *PayoutWorker {
 	return &PayoutWorker{
 		voucherRepo:     voucherRepo,
 		transferRepo:    transferRepo,
-		mappingRepo:     mappingRepo,
 		configRepo:      configRepo,
+		stateChangeRepo: stateChangeRepo,
 		payoutService:   payoutService,
 		providerFactory: providerFactory,
 	}
@@ -140,6 +142,42 @@ func (w *PayoutWorker) initiateApprovedTransfers(ctx context.Context) error {
 func (w *PayoutWorker) initiateTransfer(ctx context.Context, transfer *payout.PayoutTransferRequest, config *payout.PayoutConfiguration) error {
 	fmt.Printf("  📤 Sending transfer to provider: %s (amount=%d)\n", transfer.TransferRequestID, transfer.Amount)
 
+	// Parse transfer_request_id and payment_id as UUIDs
+	transferUUID, err := uuid.Parse(transfer.TransferRequestID)
+	if err != nil {
+		return fmt.Errorf("invalid transfer_request_id UUID: %w", err)
+	}
+
+	paymentUUID, err := uuid.Parse(transfer.PaymentID)
+	if err != nil {
+		return fmt.Errorf("invalid payment_id UUID: %w", err)
+	}
+
+	// Record activity: Payout initiated
+	now := time.Now()
+	_, err = w.stateChangeRepo.Create(ctx, &payment.CreatePaymentStateChangeRequest{
+		PaymentID:       paymentUUID,
+		TransferID:      &transferUUID,
+		Action:          payment.PayoutActionInitiated,
+		ActionTimestamp: now,
+		ActorType:       payment.ActorTypeSystem,
+		ActorName:       "payout_worker",
+		PreviousState:   "initiated",
+		NewState:        "processing",
+		Amount:          transfer.Amount,
+		Currency:        transfer.Currency,
+		Provider:        string(transfer.Provider),
+		Metadata: map[string]any{
+			"transfer_mode": transfer.TransferMode,
+			"purpose":       transfer.Purpose,
+		},
+		Remarks: fmt.Sprintf("Payout initiated for transfer %s", transfer.TransferRequestID),
+	})
+	if err != nil {
+		// Log error but don't fail the transfer
+		fmt.Printf("  ⚠️  Failed to create activity record (initiated): %v\n", err)
+	}
+
 	// Get provider
 	provider, err := w.providerFactory.GetProvider(transfer.Provider)
 	if err != nil {
@@ -172,8 +210,8 @@ func (w *PayoutWorker) initiateTransfer(ctx context.Context, transfer *payout.Pa
 
 	// Update transfer status to 'processing' (Castler auto-processes)
 	// No separate approval step - Castler confirms via settlement webhook
-	now := time.Now()
-	if err := w.transferRepo.UpdateStatus(ctx, transfer.TransferRequestID, payout.TransferStatusProcessing, now); err != nil {
+	processingTime := time.Now()
+	if err := w.transferRepo.UpdateStatus(ctx, transfer.TransferRequestID, payout.TransferStatusProcessing, processingTime); err != nil {
 		return fmt.Errorf("failed to update status: %w", err)
 	}
 
@@ -182,8 +220,32 @@ func (w *PayoutWorker) initiateTransfer(ctx context.Context, transfer *payout.Pa
 		return fmt.Errorf("failed to update provider transfer ID: %w", err)
 	}
 
+	// Record activity: Payout processing (API success = processing status)
+	_, err = w.stateChangeRepo.Create(ctx, &payment.CreatePaymentStateChangeRequest{
+		PaymentID:       paymentUUID,
+		TransferID:      &transferUUID,
+		Action:          payment.PayoutActionProcessing,
+		ActionTimestamp: processingTime,
+		ActorType:       payment.ActorTypeSystem,
+		ActorName:       "payout_worker",
+		PreviousState:   "initiated",
+		NewState:        "processing",
+		Amount:          transfer.Amount,
+		Currency:        transfer.Currency,
+		Provider:        string(transfer.Provider),
+		Metadata: map[string]any{
+			"provider_transfer_id": resp.ProviderTransferID,
+			"transfer_mode":        transfer.TransferMode,
+		},
+		Remarks: fmt.Sprintf("Payout API success - now processing (Castler transferId: %s)", resp.ProviderTransferID),
+	})
+	if err != nil {
+		// Log error but don't fail the transfer
+		fmt.Printf("  ⚠️  Failed to create activity record (processing): %v\n", err)
+	}
+
 	// Set webhook timeout (processing_at + timeout_minutes)
-	timeoutAt := now.Add(time.Duration(config.WebhookTimeoutMinutes) * time.Minute)
+	timeoutAt := processingTime.Add(time.Duration(config.WebhookTimeoutMinutes) * time.Minute)
 	if err := w.transferRepo.SetWebhookTimeout(ctx, transfer.TransferRequestID, timeoutAt); err != nil {
 		return fmt.Errorf("failed to set webhook timeout: %w", err)
 	}
@@ -226,6 +288,35 @@ func (w *PayoutWorker) flagTimeoutTransfers(ctx context.Context) error {
 		if err := w.transferRepo.UpdateStatus(ctx, transfer.TransferRequestID, payout.TransferStatusTimeout, now); err != nil {
 			fmt.Printf("  ❌ Failed to update status: %v\n", err)
 			continue
+		}
+
+		// Record activity: Payout timeout
+		transferUUID, err := uuid.Parse(transfer.TransferRequestID)
+		if err != nil {
+			fmt.Printf("  ⚠️  Invalid transfer_request_id UUID: %v\n", err)
+		} else {
+			paymentUUID, err := uuid.Parse(transfer.PaymentID)
+			if err != nil {
+				fmt.Printf("  ⚠️  Invalid payment_id UUID: %v\n", err)
+			} else {
+				_, err = w.stateChangeRepo.Create(ctx, &payment.CreatePaymentStateChangeRequest{
+					PaymentID:       paymentUUID,
+					TransferID:      &transferUUID,
+					Action:          payment.PayoutActionTimeout,
+					ActionTimestamp: now,
+					ActorType:       payment.ActorTypeSystem,
+					ActorName:       "payout_worker",
+					PreviousState:   "processing",
+					NewState:        "timeout",
+					Amount:          transfer.Amount,
+					Currency:        transfer.Currency,
+					Provider:        string(transfer.Provider),
+					Remarks:         fmt.Sprintf("No webhook received after %d minutes - flagged for manual investigation", config.WebhookTimeoutMinutes),
+				})
+				if err != nil {
+					fmt.Printf("  ⚠️  Failed to create activity record (timeout): %v\n", err)
+				}
+			}
 		}
 
 		// TODO: Send alert to ops team for manual investigation
