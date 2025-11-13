@@ -116,10 +116,10 @@ func (s *xcentroServer) registerGlobalMiddleware() {
 func buildSecureConfig(env, frontendURL string) middleware.SecureConfig {
 	if env == "production" {
 		return middleware.SecureConfig{
-			XSSProtection:         "",                         // Modern browsers ignore this header, rely on CSP
-			ContentTypeNosniff:    "nosniff",                  // Prevent MIME type sniffing
-			XFrameOptions:         "DENY",                     // Prevent clickjacking
-			HSTSMaxAge:            31536000,                   // 1 year
+			XSSProtection:         "",        // Modern browsers ignore this header, rely on CSP
+			ContentTypeNosniff:    "nosniff", // Prevent MIME type sniffing
+			XFrameOptions:         "DENY",    // Prevent clickjacking
+			HSTSMaxAge:            31536000,  // 1 year
 			HSTSExcludeSubdomains: false,
 			HSTSPreloadEnabled:    false,
 			ContentSecurityPolicy: utils.GenerateCSPHeader(""), // Use common CSP function without nonce
@@ -143,7 +143,7 @@ func buildSecureConfig(env, frontendURL string) middleware.SecureConfig {
 }
 
 func (s *xcentroServer) loadConfig() {
-	cfg, err := config.Load("")
+	cfg, err := config.Load(".env")
 	if err != nil {
 		s.log.Errorf("Failed to load config: %v", err)
 		panic(err)

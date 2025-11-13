@@ -115,10 +115,10 @@ func (s *opsDashboardServer) registerGlobalMiddleware() {
 func buildSecureConfig(env, frontendURL string) middleware.SecureConfig {
 	if env == "production" {
 		return middleware.SecureConfig{
-			XSSProtection:         "",       // Modern browsers ignore this header, rely on CSP
+			XSSProtection:         "",        // Modern browsers ignore this header, rely on CSP
 			ContentTypeNosniff:    "nosniff", // Prevent MIME type sniffing
-			XFrameOptions:         "DENY",   // Prevent clickjacking
-			HSTSMaxAge:            31536000, // 1 year
+			XFrameOptions:         "DENY",    // Prevent clickjacking
+			HSTSMaxAge:            31536000,  // 1 year
 			HSTSExcludeSubdomains: false,
 			HSTSPreloadEnabled:    false,
 			ContentSecurityPolicy: "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; script-src 'self'; style-src 'self';",
@@ -142,7 +142,8 @@ func buildSecureConfig(env, frontendURL string) middleware.SecureConfig {
 }
 
 func (s *opsDashboardServer) loadConfig() {
-	cfg, err := config.Load("")
+	// Load from environment variables (in dev, Air sources ops.env before running)
+	cfg, err := config.Load("ops.env")
 	if err != nil {
 		s.log.Errorf("Failed to load config: %v", err)
 		panic(err)
@@ -225,7 +226,7 @@ func (s *opsDashboardServer) registerRouters() {
 
 func (s *opsDashboardServer) start() {
 	// Use separate port for ops dashboard - default to 8081 if not configured
-	port := s.meta.config.Server.Port + 1
+	port := s.meta.config.Server.Port
 	addr := fmt.Sprintf("%s:%d", s.meta.config.Server.Host, port)
 	s.log.Infof("Starting Ops Dashboard server at %s", addr)
 	err := s.echo.Start(addr)
