@@ -81,9 +81,7 @@ COMMENT ON COLUMN xcentro.payout_transfer_requests.escrow_id IS
 CREATE INDEX idx_payout_transfers_payment_id
   ON xcentro.payout_transfer_requests(payment_id);
 
--- Create composite index for common queries
-CREATE INDEX idx_payout_transfers_payment_status
-  ON xcentro.payout_transfer_requests(payment_id, status);
+-- Note: Composite index with status will be created after enum migration (Part 5)
 
 
 -- ============================================================================
@@ -97,9 +95,13 @@ DROP COLUMN IF EXISTS approval_mode,
 DROP COLUMN IF EXISTS approved_by,
 DROP COLUMN IF EXISTS approved_at;
 
--- Drop indexes for approval workflow
+-- Drop ALL indexes that reference status column (must be done before enum rename)
+DROP INDEX IF EXISTS xcentro.idx_payout_transfers_status;
 DROP INDEX IF EXISTS xcentro.idx_payout_pending_approval;
 DROP INDEX IF EXISTS xcentro.idx_payout_approved;
+DROP INDEX IF EXISTS xcentro.idx_payout_initiated;
+DROP INDEX IF EXISTS xcentro.idx_payout_timeout;
+DROP INDEX IF EXISTS xcentro.idx_payout_retry;
 
 
 -- ============================================================================
@@ -121,9 +123,12 @@ CREATE TYPE xcentro.payout_transfer_status_enum AS ENUM (
 -- Update table to use new enum
 -- First update any 'pending_approval' or 'approved' to 'initiated'
 UPDATE xcentro.payout_transfer_requests
-SET status = 'initiated'::text::xcentro.payout_transfer_status_enum_old
-WHERE status IN ('pending_approval'::xcentro.payout_transfer_status_enum_old,
-                 'approved'::xcentro.payout_transfer_status_enum_old);
+SET status = 'initiated'::xcentro.payout_transfer_status_enum_old
+WHERE status::text IN ('pending_approval', 'approved');
+
+-- Drop the old default before changing column type (avoids casting issues)
+ALTER TABLE xcentro.payout_transfer_requests
+  ALTER COLUMN status DROP DEFAULT;
 
 -- Now alter column type
 ALTER TABLE xcentro.payout_transfer_requests
@@ -133,19 +138,24 @@ ALTER TABLE xcentro.payout_transfer_requests
 -- Drop old enum
 DROP TYPE xcentro.payout_transfer_status_enum_old;
 
--- Update default value for new records
+-- Set the new default value for new records
 ALTER TABLE xcentro.payout_transfer_requests
   ALTER COLUMN status SET DEFAULT 'initiated'::xcentro.payout_transfer_status_enum;
 
 
 -- ============================================================================
--- PART 5: UPDATE INDEXES
+-- PART 5: RECREATE INDEXES WITH NEW ENUM
 -- ============================================================================
 
--- Update status-based indexes to reflect new enum values
-DROP INDEX IF EXISTS xcentro.idx_payout_initiated;
+-- Create composite index for common queries
+CREATE INDEX idx_payout_transfers_payment_status
+  ON xcentro.payout_transfer_requests(payment_id, status);
 
--- Recreate with new status values
+-- Create index for status-based queries
+CREATE INDEX idx_payout_transfers_status
+  ON xcentro.payout_transfer_requests(status);
+
+-- Create index for initiated/processing statuses
 CREATE INDEX idx_payout_initiated
   ON xcentro.payout_transfer_requests(status, initiated_at)
   WHERE status IN ('initiated', 'processing');

@@ -42,6 +42,10 @@ CREATE TYPE xcentro.payout_transfer_status_enum AS ENUM (
   'timeout'
 );
 
+-- Drop the current default before changing column type (avoids casting issues)
+ALTER TABLE xcentro.payout_transfer_requests
+  ALTER COLUMN status DROP DEFAULT;
+
 -- Update table to use old enum
 ALTER TABLE xcentro.payout_transfer_requests
   ALTER COLUMN status TYPE xcentro.payout_transfer_status_enum

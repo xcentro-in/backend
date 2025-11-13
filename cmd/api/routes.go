@@ -220,7 +220,7 @@ func registerV1PayoutRoutes(clients *externalClients, cfg *config.Config, group 
 	settlementService := settlementSvc.NewSettlementVerificationService(logger.GetDefault())
 
 	webhookHandler := payoutHandler.NewPayoutWebhookHandler(transferRepository, stateChangeRepository, cfg.Castler.WebhookSecret)
-	dashboardHandler := payoutHandler.NewPayoutHandler(payoutService, transferRepository, configRepository, voucherRepository, settlementService, providerFactory, stateChangeRepository, logger.GetDefault())
+	payoutHandler := payoutHandler.NewPayoutHandler(payoutService, transferRepository, configRepository, voucherRepository, settlementService, providerFactory, stateChangeRepository, logger.GetDefault())
 
 	// Payout routes - separated by purpose
 	payoutGroup := group.Group("/payout")
@@ -230,17 +230,17 @@ func registerV1PayoutRoutes(clients *externalClients, cfg *config.Config, group 
 
 	// Dashboard/Operations endpoints (internal - admin/ops team)
 	dashboardGroup := payoutGroup.Group("/dashboard")
-	dashboardGroup.POST("/initiate", dashboardHandler.InitiatePayoutManually)
-	dashboardGroup.GET("/pending-approvals", dashboardHandler.GetPendingApprovals) // DEPRECATED
-	dashboardGroup.POST("/:transfer_id/approve", dashboardHandler.ApproveTransfer) // DEPRECATED
-	dashboardGroup.POST("/:transfer_id/cancel", dashboardHandler.CancelTransfer)
-	dashboardGroup.GET("/:transfer_id", dashboardHandler.GetTransferDetails)
-	dashboardGroup.GET("/:transfer_id/webhooks", dashboardHandler.GetWebhookHistory)
-	dashboardGroup.GET("/timeouts", dashboardHandler.GetTimeoutTransfers)
-	dashboardGroup.POST("/:transfer_id/mark-completed", dashboardHandler.MarkCompletedManually)
-	dashboardGroup.GET("/config", dashboardHandler.GetConfig)
-	dashboardGroup.PUT("/config", dashboardHandler.UpdateConfig)
-	dashboardGroup.POST("/config", dashboardHandler.CreateConfig)
+	dashboardGroup.POST("/initiate", payoutHandler.InitiatePayoutManually)
+	dashboardGroup.GET("/pending-approvals", payoutHandler.GetPendingApprovals) // DEPRECATED
+	dashboardGroup.POST("/:transfer_id/approve", payoutHandler.ApproveTransfer) // DEPRECATED
+	dashboardGroup.POST("/:transfer_id/cancel", payoutHandler.CancelTransfer)
+	dashboardGroup.GET("/:transfer_id", payoutHandler.GetTransferDetails)
+	dashboardGroup.GET("/:transfer_id/webhooks", payoutHandler.GetWebhookHistory)
+	dashboardGroup.GET("/timeouts", payoutHandler.GetTimeoutTransfers)
+	dashboardGroup.POST("/:transfer_id/mark-completed", payoutHandler.MarkCompletedManually)
+	dashboardGroup.GET("/config", payoutHandler.GetConfig)
+	dashboardGroup.PUT("/config", payoutHandler.UpdateConfig)
+	dashboardGroup.POST("/config", payoutHandler.CreateConfig)
 }
 
 func registerV1BatchPaymentRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
