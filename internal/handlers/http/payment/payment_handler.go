@@ -1246,16 +1246,23 @@ func (h *PaymentHandler) GetPaymentByID(c echo.Context) error {
 		})
 	}
 
-	// Calculate GST on service charge (18%)
-	serviceChargeGST := int64(float64(paymentRecord.FeeAmount) * 0.18)
+	// Calculate service charge breakdown from total fee
+	// FeeAmount = convenience_fee + GST (18%)
+	// Reverse calculate: convenience_fee = fee_amount / 1.18
+	convenienceFee := int64(0)
+	gstOnFee := int64(0)
+	if paymentRecord.FeeAmount > 0 {
+		convenienceFee = (paymentRecord.FeeAmount * 100) / 118 // Reverse calculate base fee
+		gstOnFee = paymentRecord.FeeAmount - convenienceFee    // GST is the difference
+	}
 
 	// Build comprehensive response
 	response := &PaymentDetailsResponse{
 		PaymentID:        paymentRecord.ID,
 		Status:           string(paymentRecord.Status),
 		NetAmount:        paymentRecord.Amount,
-		ServiceCharge:    paymentRecord.FeeAmount,
-		ServiceChargeGST: serviceChargeGST,
+		ServiceCharge:    convenienceFee,
+		ServiceChargeGST: gstOnFee,
 		TotalAmount:      paymentRecord.TotalAmount,
 		Currency:         string(paymentRecord.Currency),
 		PaymentMethod:    string(paymentRecord.PaymentMethod),

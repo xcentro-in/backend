@@ -1967,7 +1967,7 @@ func (r *PostgresVoucherRepository) GetPaymentDetailsByVoucher(ctx context.Conte
 			COALESCE(sc.card_type::text, '') as card_type,
 			COALESCE(sc.card_category::text, '') as card_category,
 			COALESCE(sc.last_four_digits, '') as card_last_four,
-			COALESCE(sc.card_type::text, '') as card_network,
+			COALESCE(sc.issuer_bank, '') as card_issuer_bank,
 
 			-- Bank account details (encrypted, will decrypt in Go)
 			COALESCE(ba.account_number_encrypted, '') as bank_account_encrypted,
@@ -1994,7 +1994,7 @@ func (r *PostgresVoucherRepository) GetPaymentDetailsByVoucher(ctx context.Conte
 	`
 
 	var details voucher.VoucherPaymentDetails
-	var cardLastFour, cardNetwork string
+	var cardLastFour, cardIssuerBank string
 	var bankAccountEncrypted, bankName string
 	var payoutCompletedAt sql.NullTime
 
@@ -2008,7 +2008,7 @@ func (r *PostgresVoucherRepository) GetPaymentDetailsByVoucher(ctx context.Conte
 		&details.CardType,
 		&details.CardCategory,
 		&cardLastFour,
-		&cardNetwork,
+		&cardIssuerBank,
 		&bankAccountEncrypted,
 		&bankName,
 		&details.Amount,
@@ -2029,7 +2029,7 @@ func (r *PostgresVoucherRepository) GetPaymentDetailsByVoucher(ctx context.Conte
 	// Handle card vs bank account display info
 	if details.PaymentMethod == "card" || details.PaymentMethod == "token_card" {
 		details.LastFourDigits = cardLastFour
-		details.BankName = cardNetwork // For cards, this is the card network
+		details.BankName = cardIssuerBank // For cards, this is the issuer bank (HDFC, SBI, etc.)
 	} else if (details.PaymentMethod == "net_banking" || details.PaymentMethod == "upi") && bankAccountEncrypted != "" {
 		// Decrypt bank account number to get last digits
 		decryptedAccountNumber, err := crypto.DecryptBankAccountNumber(bankAccountEncrypted, r.encryptionKey)
