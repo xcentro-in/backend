@@ -1978,8 +1978,9 @@ func (r *PostgresVoucherRepository) GetPaymentDetailsByVoucher(ctx context.Conte
 			p.fee_amount,
 			p.total_amount,
 
-			-- Payout UTR (from payout_transfer_requests)
+			-- Payout details (from payout_transfer_requests)
 			COALESCE(ptr.utr, '') as payout_utr,
+			ptr.completed_at as payout_completed_at,
 
 			-- Additional metadata
 			COALESCE(p.description, '') as description
@@ -1995,6 +1996,7 @@ func (r *PostgresVoucherRepository) GetPaymentDetailsByVoucher(ctx context.Conte
 	var details voucher.VoucherPaymentDetails
 	var cardLastFour, cardNetwork string
 	var bankAccountEncrypted, bankName string
+	var payoutCompletedAt sql.NullTime
 
 	err := r.querier.QueryRow(ctx, query, voucherID).Scan(
 		&details.PaymentID,
@@ -2013,6 +2015,7 @@ func (r *PostgresVoucherRepository) GetPaymentDetailsByVoucher(ctx context.Conte
 		&details.FeeAmount,
 		&details.TotalAmount,
 		&details.PayoutUTR,
+		&payoutCompletedAt,
 		&details.Description,
 	)
 
@@ -2035,6 +2038,11 @@ func (r *PostgresVoucherRepository) GetPaymentDetailsByVoucher(ctx context.Conte
 		}
 		details.LastFourDigits = crypto.ExtractLastDigits(decryptedAccountNumber, 4)
 		details.BankName = bankName
+	}
+
+	// Handle nullable payout completed_at
+	if payoutCompletedAt.Valid {
+		details.PayoutCompletedAt = &payoutCompletedAt.Time
 	}
 
 	return &details, nil

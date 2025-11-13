@@ -383,7 +383,8 @@ type VoucherPaymentDetailsResponse struct {
 	TotalAmountPaid    int64  `json:"total_amount_paid"`    // voucher_amount + total_fee_amount (what customer paid)
 
 	// Payout details (vendor/payee receipt)
-	PayoutUTR string `json:"payout_utr"` // Bank UTR from payout provider (if payout completed to vendor)
+	PayoutUTR         string     `json:"payout_utr"`          // Bank UTR from payout provider (if payout completed to vendor)
+	PayoutCompletedAt *time.Time `json:"payout_completed_at"` // When payout completed to vendor (null if not yet completed)
 
 	Description string `json:"description"`
 }

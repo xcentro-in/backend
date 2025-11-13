@@ -1275,7 +1275,8 @@ func (s *VoucherServiceImpl) GetVoucherPaymentDetails(ctx context.Context, vouch
 		TotalFeeAmount:     details.FeeAmount,
 		TotalAmountPaid:    details.TotalAmount,
 
-		PayoutUTR: details.PayoutUTR,
+		PayoutUTR:         details.PayoutUTR,
+		PayoutCompletedAt: details.PayoutCompletedAt,
 
 		Description: details.Description,
 	}
