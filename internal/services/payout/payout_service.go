@@ -129,18 +129,10 @@ func (s *PayoutService) InitiateManualPayout(ctx context.Context, paymentID stri
 	var transfers []*payout.PayoutTransferRequest
 
 	for _, vch := range targetVouchers {
-		// Get bank account with Castler beneficiary ID
-		bankAccount, err := s.bankAccountRepo.FindByID(ctx, vch.AccountID.String())
+		// Get Castler beneficiary ID (lightweight query - no decryption)
+		castlerBeneficiaryID, err := s.bankAccountRepo.GetCastlerBeneficiaryID(ctx, vch.AccountID.String())
 		if err != nil {
-			return nil, fmt.Errorf("failed to get bank account for voucher %s: %w", vch.VoucherID.String(), err)
-		}
-
-		if bankAccount == nil {
-			return nil, fmt.Errorf("bank account not found for voucher %s: %s", vch.VoucherID.String(), vch.AccountID.String())
-		}
-
-		if bankAccount.CastlerBeneficiaryID == "" {
-			return nil, fmt.Errorf("payee not onboarded to Castler for voucher %s: missing beneficiary ID", vch.VoucherID.String())
+			return nil, fmt.Errorf("failed to get Castler beneficiary ID for voucher %s: %w", vch.VoucherID.String(), err)
 		}
 
 		// Create transfer request
@@ -149,7 +141,7 @@ func (s *PayoutService) InitiateManualPayout(ctx context.Context, paymentID stri
 			PaymentID:             paymentID,
 			VoucherID:             vch.VoucherID.String(),
 			Provider:              payout.ProviderCastler, // Always Castler for now
-			ProviderBeneficiaryID: bankAccount.CastlerBeneficiaryID,
+			ProviderBeneficiaryID: castlerBeneficiaryID,
 			EscrowID:              "", // TODO: Get from config/environment
 			Amount:                vch.NetAmount,
 			Currency:              vch.Currency,
@@ -210,18 +202,10 @@ func (s *PayoutService) InitiatePayoutForVoucher(ctx context.Context, voucherID 
 		return existing, nil
 	}
 
-	// Step 4: Get bank account with Castler beneficiary ID
-	bankAccount, err := s.bankAccountRepo.FindByID(ctx, vch.AccountID.String())
+	// Step 4: Get Castler beneficiary ID (lightweight query - no decryption)
+	castlerBeneficiaryID, err := s.bankAccountRepo.GetCastlerBeneficiaryID(ctx, vch.AccountID.String())
 	if err != nil {
-		return nil, fmt.Errorf("failed to get bank account for payee: %w", err)
-	}
-
-	if bankAccount == nil {
-		return nil, fmt.Errorf("bank account not found: %s", vch.AccountID.String())
-	}
-
-	if bankAccount.CastlerBeneficiaryID == "" {
-		return nil, fmt.Errorf("payee not onboarded to Castler: missing beneficiary ID")
+		return nil, fmt.Errorf("failed to get Castler beneficiary ID: %w", err)
 	}
 
 	// Step 5: Get configuration
@@ -236,7 +220,7 @@ func (s *PayoutService) InitiatePayoutForVoucher(ctx context.Context, voucherID 
 		PaymentID:             vch.PaymentID.String(),
 		VoucherID:             voucherID,
 		Provider:              payout.ProviderCastler, // Always Castler for now
-		ProviderBeneficiaryID: bankAccount.CastlerBeneficiaryID,
+		ProviderBeneficiaryID: castlerBeneficiaryID,
 		EscrowID:              "", // TODO: Get from config/environment
 		Amount:                vch.NetAmount,
 		Currency:              vch.Currency,
