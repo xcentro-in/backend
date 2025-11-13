@@ -112,18 +112,18 @@ func (w *PayoutWorker) initiateApprovedTransfers(ctx context.Context) error {
 		return fmt.Errorf("failed to get config: %w", err)
 	}
 
-	// Get all transfers with status='approved'
-	transfers, err := w.transferRepo.GetByStatus(ctx, payout.TransferStatusApproved, config.BatchSize)
+	// Get all transfers with status='initiated' (created but not yet sent to Castler)
+	transfers, err := w.transferRepo.GetByStatus(ctx, payout.TransferStatusInitiated, config.BatchSize)
 	if err != nil {
-		return fmt.Errorf("failed to get approved transfers: %w", err)
+		return fmt.Errorf("failed to get initiated transfers: %w", err)
 	}
 
 	if len(transfers) == 0 {
-		fmt.Println("✅ No approved transfers to initiate")
+		fmt.Println("✅ No initiated transfers to send to provider")
 		return nil
 	}
 
-	fmt.Printf("📦 Found %d approved transfers to initiate\n", len(transfers))
+	fmt.Printf("📦 Found %d initiated transfers to send to provider\n", len(transfers))
 
 	// Process each transfer
 	for _, transfer := range transfers {
@@ -138,7 +138,7 @@ func (w *PayoutWorker) initiateApprovedTransfers(ctx context.Context) error {
 
 // initiateTransfer sends a single transfer to the provider
 func (w *PayoutWorker) initiateTransfer(ctx context.Context, transfer *payout.PayoutTransferRequest, config *payout.PayoutConfiguration) error {
-	fmt.Printf("  📤 Initiating transfer: %s (amount=%d)\n", transfer.TransferRequestID, transfer.Amount)
+	fmt.Printf("  📤 Sending transfer to provider: %s (amount=%d)\n", transfer.TransferRequestID, transfer.Amount)
 
 	// Get provider
 	provider, err := w.providerFactory.GetProvider(transfer.Provider)
@@ -146,10 +146,12 @@ func (w *PayoutWorker) initiateTransfer(ctx context.Context, transfer *payout.Pa
 		return fmt.Errorf("failed to get provider: %w", err)
 	}
 
-	// Call Castler API (fire transfer)
+	// Call Castler payout API with our transfer_request_id as customerRefId
 	createReq := &payout.CreateTransferRequest{
+		TransferRequestID:     transfer.TransferRequestID, // Used as customerRefId in Castler
 		VoucherID:             transfer.VoucherID,
 		ProviderBeneficiaryID: transfer.ProviderBeneficiaryID,
+		EscrowID:              transfer.EscrowID, // Castler escrow account ID
 		Amount:                transfer.Amount,
 		Currency:              transfer.Currency,
 		Purpose:               transfer.Purpose,
@@ -160,51 +162,30 @@ func (w *PayoutWorker) initiateTransfer(ctx context.Context, transfer *payout.Pa
 
 	resp, err := provider.CreateTransferRequest(ctx, createReq)
 	if err != nil {
-		// Log error but don't fail - ops can manually intervene
+		// Log error - ops can manually intervene
 		fmt.Printf("  ⚠️  Provider API error: %v\n", err)
 		return fmt.Errorf("provider API error: %w", err)
 	}
 
-	fmt.Printf("  ✅ Transfer created with provider: %s\n", resp.ProviderTransferID)
+	fmt.Printf("  ✅ Transfer sent to provider: %s (Castler transferId: %s)\n",
+		transfer.TransferRequestID, resp.ProviderTransferID)
 
-	// If two-step provider (Castler), approve immediately
-	if provider.SupportsTwoStepApproval() {
-		fmt.Println("  🔑 Provider requires two-step approval, approving now...")
-
-		approveReq := &payout.ApproveTransferRequest{
-			ProviderTransferID: resp.ProviderTransferID,
-			ApprovedBy:         transfer.ApprovedBy,
-		}
-
-		_, err := provider.ApproveTransferRequest(ctx, approveReq)
-		if err != nil {
-			fmt.Printf("  ⚠️  Approval failed: %v\n", err)
-			return fmt.Errorf("approval failed: %w", err)
-		}
-
-		fmt.Println("  ✅ Transfer approved with provider")
-	}
-
-	// Update transfer status to 'initiated'
+	// Update transfer status to 'processing' (Castler auto-processes)
+	// No separate approval step - Castler confirms via settlement webhook
 	now := time.Now()
-	if err := w.transferRepo.UpdateStatus(ctx, transfer.TransferRequestID, payout.TransferStatusInitiated, now); err != nil {
+	if err := w.transferRepo.UpdateStatus(ctx, transfer.TransferRequestID, payout.TransferStatusProcessing, now); err != nil {
 		return fmt.Errorf("failed to update status: %w", err)
 	}
 
-	// Store provider transfer ID
+	// Store Castler's provider transfer ID (their transferId)
 	if err := w.transferRepo.UpdateProviderTransferID(ctx, transfer.TransferRequestID, resp.ProviderTransferID); err != nil {
 		return fmt.Errorf("failed to update provider transfer ID: %w", err)
 	}
 
-	// Set webhook timeout (initiated_at + timeout_minutes)
+	// Set webhook timeout (processing_at + timeout_minutes)
 	timeoutAt := now.Add(time.Duration(config.WebhookTimeoutMinutes) * time.Minute)
 	if err := w.transferRepo.SetWebhookTimeout(ctx, transfer.TransferRequestID, timeoutAt); err != nil {
 		return fmt.Errorf("failed to set webhook timeout: %w", err)
-	}
-
-	// Update voucher payout status to 'initiated'
-	if err := w.voucherRepo.UpdatePayoutStatus(ctx, transfer.VoucherID, voucher.PayoutStatusInitiated, ""); err != nil {
-		return fmt.Errorf("failed to update voucher status: %w", err)
 	}
 
 	fmt.Printf("  ✅ Transfer initiated successfully (timeout_at: %s)\n", timeoutAt.Format(time.RFC3339))
@@ -247,14 +228,9 @@ func (w *PayoutWorker) flagTimeoutTransfers(ctx context.Context) error {
 			continue
 		}
 
-		// Update voucher to 'needs_attention'
-		if err := w.voucherRepo.UpdatePayoutStatus(ctx, transfer.VoucherID, voucher.PayoutStatusNeedsAttention, "Webhook timeout - manual check required"); err != nil {
-			fmt.Printf("  ❌ Failed to update voucher: %v\n", err)
-			continue
-		}
-
-		// TODO: Send alert to ops team
+		// TODO: Send alert to ops team for manual investigation
 		fmt.Printf("  🚨 TODO: Send alert to ops team for transfer: %s\n", transfer.TransferRequestID)
+		fmt.Printf("  ℹ️  Ops team can check payout status with Castler and manually complete if needed\n")
 
 		fmt.Printf("  ✅ Transfer flagged as timeout\n")
 	}

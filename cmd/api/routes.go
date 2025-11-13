@@ -218,7 +218,7 @@ func registerV1PayoutRoutes(clients *externalClients, cfg *config.Config, group 
 	payoutService := payoutSvc.NewPayoutService(voucherRepository, transferRepository, bankAccountRepository, configRepository, providerFactory)
 	settlementService := settlementSvc.NewSettlementVerificationService(logger.GetDefault())
 
-	webhookHandler := payoutHandler.NewPayoutWebhookHandler(transferRepository, voucherRepository, cfg.Castler.WebhookSecret)
+	webhookHandler := payoutHandler.NewPayoutWebhookHandler(transferRepository, cfg.Castler.WebhookSecret)
 	dashboardHandler := payoutHandler.NewPayoutHandler(payoutService, transferRepository, configRepository, voucherRepository, settlementService, logger.GetDefault())
 
 	payoutGroup := group.Group("/payout")

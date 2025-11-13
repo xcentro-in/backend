@@ -99,16 +99,18 @@ func (h *PayoutWebhookHandler) HandleCastlerWebhook(c echo.Context) error {
 	fmt.Printf("✅ Found transfer: %s (voucher: %s)\n", transfer.TransferRequestID, transfer.VoucherID)
 
 	// Step 5: Handle event based on type
+	// NOTE: Castler webhooks only send settlement events (completed/failed)
+	// Processing status is set when API call succeeds (not via webhook)
 
 	switch payload.EventType {
 	case "transfer.processing":
-		if err := h.handleProcessing(ctx, transfer, payload); err != nil {
-			fmt.Printf("❌ Failed to handle processing event: %v\n", err)
-			return c.JSON(http.StatusInternalServerError, map[string]string{
-				"error": "processing_failed",
-				"message": err.Error(),
-			})
-		}
+		// DEPRECATED: Castler does not send processing events via webhook
+		// Processing status is set immediately when API call succeeds
+		fmt.Println("  ⚠️  Received unexpected 'transfer.processing' event - ignoring")
+		return c.JSON(http.StatusOK, map[string]string{
+			"status": "ok",
+			"message": "Processing event not expected - status already set on API success",
+		})
 
 	case "transfer.completed":
 		if err := h.handleCompleted(ctx, transfer, payload); err != nil {
@@ -161,8 +163,10 @@ func (h *PayoutWebhookHandler) HandleCastlerWebhook(c echo.Context) error {
 }
 
 // handleProcessing handles the "transfer.processing" webhook event
+// DEPRECATED: Castler does not send processing events via webhook
+// Processing status is set immediately when payout API call succeeds
 func (h *PayoutWebhookHandler) handleProcessing(ctx context.Context, transfer *payout.PayoutTransferRequest, payload CastlerWebhookPayload) error {
-	fmt.Println("  🔄 Processing: transfer.processing event")
+	fmt.Println("  🔄 Processing: transfer.processing event (DEPRECATED - should not receive this)")
 
 	// Update transfer status to 'processing'
 	if err := h.transferRepo.UpdateStatus(ctx, transfer.TransferRequestID, payout.TransferStatusProcessing, payload.Timestamp); err != nil {

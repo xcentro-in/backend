@@ -186,7 +186,6 @@ func (s *VoucherServiceImpl) CreateDraftVoucher(ctx context.Context, req *Create
 		GLBankAccount:         req.GLBankAccount,
 		CostCenter:            req.CostCenter,
 		PaymentTerms:          req.PaymentTerms,
-		VendorReferenceNumber: req.VendorReferenceNumber,
 		CreatedAt:             now,
 		CreatedByID:           &req.UserID,
 		Metadata:              req.Metadata,
@@ -820,100 +819,17 @@ func (s *VoucherServiceImpl) FinalizeVoucherByID(ctx context.Context, voucherIDS
 }
 
 // RequestCancellation requests cancellation of a voucher (Phase 7)
+// NOTE: Cancellation functionality removed in payout redesign
+// Voucher cancellation/refund workflow has been deprecated
 func (s *VoucherServiceImpl) RequestCancellation(ctx context.Context, req *RequestCancellationRequest) (*RequestCancellationResponse, error) {
-	// 1. Get voucher
-	v, err := s.voucherRepo.GetByID(ctx, req.VoucherID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get voucher: %w", err)
-	}
-
-	// 2. Validate voucher can be cancelled
-	// Can only cancel finalized vouchers that haven't been paid out yet
-	if v.Status != voucher.StatusFinalized {
-		return nil, fmt.Errorf("can only cancel finalized vouchers (current status: %s)", v.Status)
-	}
-
-	// Check if already cancelled or cancellation requested
-	if v.CancellationStatus != voucher.CancellationStatusNotCancelled {
-		return nil, fmt.Errorf("voucher already has cancellation status: %s", v.CancellationStatus)
-	}
-
-	// Check if payout already initiated
-	if v.PayoutStatus == "completed" {
-		return nil, fmt.Errorf("cannot cancel voucher - payout already completed")
-	}
-
-	// 3. Update voucher cancellation status
-	now := time.Now()
-	if err := s.voucherRepo.RequestCancellation(ctx, req.VoucherID, req.UserID, req.Reason, now); err != nil {
-		return nil, fmt.Errorf("failed to request cancellation: %w", err)
-	}
-
-	// 4. Return response
-	return &RequestCancellationResponse{
-		VoucherID:          req.VoucherID,
-		VoucherNumber:      v.VoucherNumber,
-		CancellationStatus: string(voucher.CancellationStatusCancellationRequested),
-		Message:            fmt.Sprintf("Cancellation request submitted for voucher %s", v.VoucherNumber),
-	}, nil
+	return nil, fmt.Errorf("voucher cancellation functionality has been removed - cancellation/refund fields deleted from schema")
 }
 
 // ApproveCancellation approves or rejects a cancellation request (Phase 7)
+// NOTE: Cancellation functionality removed in payout redesign
+// Voucher cancellation/refund workflow has been deprecated
 func (s *VoucherServiceImpl) ApproveCancellation(ctx context.Context, req *ApproveCancellationRequest) (*ApproveCancellationResponse, error) {
-	// 1. Get voucher
-	v, err := s.voucherRepo.GetByID(ctx, req.VoucherID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get voucher: %w", err)
-	}
-
-	// 2. Validate voucher is in cancellation_requested status
-	if v.CancellationStatus != voucher.CancellationStatusCancellationRequested {
-		return nil, fmt.Errorf("voucher not in cancellation_requested status (current: %s)", v.CancellationStatus)
-	}
-
-	// 3. Process approval or rejection
-	now := time.Now()
-	var newCancellationStatus voucher.CancellationStatus
-	var refundStatus voucher.RefundStatus
-	var message string
-
-	if req.Action == "approve" {
-		// Approve cancellation
-		newCancellationStatus = voucher.CancellationStatusCancelled
-		refundStatus = voucher.RefundStatusPending // Mark refund as pending
-
-		// Update voucher
-		if err := s.voucherRepo.ApproveCancellation(ctx, req.VoucherID, req.UserID, now, refundStatus); err != nil {
-			return nil, fmt.Errorf("failed to approve cancellation: %w", err)
-		}
-
-		// TODO: Trigger refund worker to process refund to customer
-		// This will be implemented in Phase 7.5 or 8
-
-		message = fmt.Sprintf("Cancellation approved for voucher %s. Refund will be initiated.", v.VoucherNumber)
-	} else if req.Action == "reject" {
-		// Reject cancellation - revert to not_cancelled
-		newCancellationStatus = voucher.CancellationStatusNotCancelled
-		refundStatus = voucher.RefundStatusNotApplicable
-
-		// Update voucher
-		if err := s.voucherRepo.RejectCancellation(ctx, req.VoucherID); err != nil {
-			return nil, fmt.Errorf("failed to reject cancellation: %w", err)
-		}
-
-		message = fmt.Sprintf("Cancellation rejected for voucher %s. Payout will proceed.", v.VoucherNumber)
-	} else {
-		return nil, fmt.Errorf("invalid action: %s (must be 'approve' or 'reject')", req.Action)
-	}
-
-	// 4. Return response
-	return &ApproveCancellationResponse{
-		VoucherID:          req.VoucherID,
-		VoucherNumber:      v.VoucherNumber,
-		CancellationStatus: string(newCancellationStatus),
-		RefundStatus:       string(refundStatus),
-		Message:            message,
-	}, nil
+	return nil, fmt.Errorf("voucher cancellation functionality has been removed - cancellation/refund fields deleted from schema")
 }
 
 // Helper functions

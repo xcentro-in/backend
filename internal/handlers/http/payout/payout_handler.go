@@ -46,134 +46,34 @@ func NewPayoutHandler(
 
 // GetPendingApprovals retrieves transfers pending approval
 // GET /payout/pending-approvals?limit=50
+// DEPRECATED: Approval workflow removed in payout redesign
 func (h *PayoutHandler) GetPendingApprovals(c echo.Context) error {
-	h.logger.InfoWith("GetPendingApprovals API called")
-	ctx := c.Request().Context()
-
-	// Parse limit query parameter
-	limit := 50 // default
-	if limitStr := c.QueryParam("limit"); limitStr != "" {
-		if parsedLimit, err := strconv.Atoi(limitStr); err == nil && parsedLimit > 0 {
-			limit = parsedLimit
-		}
-	}
-
-	h.logger.DebugWith("Query parameters", "limit", limit)
-
-	// Get pending approvals
-	transfers, err := h.transferRepo.GetPendingApprovals(ctx, limit)
-	if err != nil {
-		h.logger.ErrorWith("Failed to fetch pending approvals", "error", err)
-		return c.JSON(http.StatusInternalServerError, map[string]interface{}{
-			"error":   "failed_to_fetch_pending_approvals",
-			"message": err.Error(),
-		})
-	}
-
-	h.logger.InfoWith("Pending approvals fetched", "count", len(transfers))
-	return c.JSON(http.StatusOK, map[string]interface{}{
-		"data": transfers,
-		"meta": map[string]interface{}{
-			"count": len(transfers),
-			"limit": limit,
-		},
+	h.logger.WarnWith("GetPendingApprovals API called - DEPRECATED")
+	return c.JSON(http.StatusGone, map[string]interface{}{
+		"error":   "feature_removed",
+		"message": "Approval workflow has been removed - all payouts are auto-initiated after settlement",
 	})
 }
 
 // ApproveTransfer approves a pending transfer
 // POST /payout/:transfer_id/approve
-// Body: {"approved_by": "user_uuid", "remarks": "optional remarks"}
+// DEPRECATED: Approval workflow removed in payout redesign
 func (h *PayoutHandler) ApproveTransfer(c echo.Context) error {
-	h.logger.InfoWith("ApproveTransfer API called")
-	ctx := c.Request().Context()
-	transferID := c.Param("transfer_id")
-
-	var req struct {
-		ApprovedBy string `json:"approved_by" validate:"required"`
-		Remarks    string `json:"remarks"`
-	}
-
-	if err := c.Bind(&req); err != nil {
-		h.logger.ErrorWith("Error binding request", "error", err)
-		return c.JSON(http.StatusBadRequest, map[string]interface{}{
-			"error":   "invalid_request",
-			"message": "Invalid request body",
-		})
-	}
-
-	h.logger.DebugWith("Approve transfer request",
-		"transfer_id", transferID,
-		"approved_by", req.ApprovedBy,
-		"has_remarks", req.Remarks != "")
-
-	// Call service to approve transfer
-	if err := h.service.ApproveTransfer(ctx, transferID, req.ApprovedBy, req.Remarks); err != nil {
-		h.logger.ErrorWith("Failed to approve transfer", "transfer_id", transferID, "error", err)
-		return c.JSON(http.StatusInternalServerError, map[string]interface{}{
-			"error":   "failed_to_approve_transfer",
-			"message": err.Error(),
-		})
-	}
-
-	h.logger.InfoWith("Transfer approved successfully",
-		"transfer_id", transferID,
-		"approved_by", req.ApprovedBy)
-
-	return c.JSON(http.StatusOK, map[string]interface{}{
-		"message": "Transfer approved successfully",
-		"data": map[string]interface{}{
-			"transfer_id": transferID,
-			"approved_by": req.ApprovedBy,
-		},
+	h.logger.WarnWith("ApproveTransfer API called - DEPRECATED")
+	return c.JSON(http.StatusGone, map[string]interface{}{
+		"error":   "feature_removed",
+		"message": "Approval workflow has been removed - all payouts are auto-initiated after settlement",
 	})
 }
 
 // CancelTransfer cancels a pending transfer
 // POST /payout/:transfer_id/cancel
-// Body: {"cancelled_by": "user_uuid", "reason": "cancellation reason"}
+// DEPRECATED: Cancellation workflow removed in payout redesign
 func (h *PayoutHandler) CancelTransfer(c echo.Context) error {
-	h.logger.InfoWith("CancelTransfer API called")
-	ctx := c.Request().Context()
-	transferID := c.Param("transfer_id")
-
-	var req struct {
-		CancelledBy string `json:"cancelled_by" validate:"required"`
-		Reason      string `json:"reason" validate:"required"`
-	}
-
-	if err := c.Bind(&req); err != nil {
-		h.logger.ErrorWith("Error binding request", "error", err)
-		return c.JSON(http.StatusBadRequest, map[string]interface{}{
-			"error":   "invalid_request",
-			"message": "Invalid request body",
-		})
-	}
-
-	h.logger.DebugWith("Cancel transfer request",
-		"transfer_id", transferID,
-		"cancelled_by", req.CancelledBy,
-		"reason", req.Reason)
-
-	// Call service to cancel transfer
-	if err := h.service.CancelTransfer(ctx, transferID, req.CancelledBy, req.Reason); err != nil {
-		h.logger.ErrorWith("Failed to cancel transfer", "transfer_id", transferID, "error", err)
-		return c.JSON(http.StatusInternalServerError, map[string]interface{}{
-			"error":   "failed_to_cancel_transfer",
-			"message": err.Error(),
-		})
-	}
-
-	h.logger.InfoWith("Transfer cancelled successfully",
-		"transfer_id", transferID,
-		"cancelled_by", req.CancelledBy)
-
-	return c.JSON(http.StatusOK, map[string]interface{}{
-		"message": "Transfer cancelled successfully",
-		"data": map[string]interface{}{
-			"transfer_id":  transferID,
-			"cancelled_by": req.CancelledBy,
-			"reason":       req.Reason,
-		},
+	h.logger.WarnWith("CancelTransfer API called - DEPRECATED")
+	return c.JSON(http.StatusGone, map[string]interface{}{
+		"error":   "feature_removed",
+		"message": "Cancellation workflow has been removed - contact support for payout issues",
 	})
 }
 
@@ -532,16 +432,10 @@ func (h *PayoutHandler) InitiatePayoutManually(c echo.Context) error {
 		"data": map[string]interface{}{
 			"transfer_request_id": transfer.TransferRequestID,
 			"voucher_id":          req.VoucherID,
-			"amount":              transfer.Amount,
-			"currency":            transfer.Currency,
-			"status":              transfer.Status,
-			"requires_approval":   transfer.RequiresApproval,
-			"next_action": func() string {
-				if transfer.RequiresApproval {
-					return "Transfer pending approval - use POST /payout/:transfer_id/approve"
-				}
-				return "Transfer auto-approved - worker will initiate to Castler"
-			}(),
+			"amount":      transfer.Amount,
+			"currency":    transfer.Currency,
+			"status":      transfer.Status,
+			"next_action": "Transfer will be auto-processed by worker and sent to Castler",
 		},
 	})
 }
@@ -564,9 +458,7 @@ func (h *PayoutHandler) validateVoucherForPayout(ctx context.Context, voucherID 
 
 	h.logger.DebugWith("Voucher retrieved",
 		"voucher_number", vch.VoucherNumber,
-		"status", vch.Status,
-		"payout_status", vch.PayoutStatus,
-		"cancellation_status", vch.CancellationStatus)
+		"status", vch.Status)
 
 	// Check 1: Voucher must be finalized
 	if vch.Status != voucher.StatusFinalized {
@@ -578,17 +470,7 @@ func (h *PayoutHandler) validateVoucherForPayout(ctx context.Context, voucherID 
 		return fmt.Errorf("voucher has no linked payment (still in draft or payment failed)")
 	}
 
-	// Check 3: Must not be cancelled
-	if vch.CancellationStatus != voucher.CancellationStatusNotCancelled {
-		return fmt.Errorf("voucher is cancelled (cancellation_status: %s)", vch.CancellationStatus)
-	}
-
-	// Check 4: Payout must be pending (not already initiated/completed)
-	if vch.PayoutStatus != "" && voucher.PayoutStatus(vch.PayoutStatus) != voucher.PayoutStatusPending {
-		return fmt.Errorf("payout already initiated (payout_status: %s)", vch.PayoutStatus)
-	}
-
-	// Check 5: No existing transfer request (idempotency)
+	// Check 3: No existing transfer request (idempotency check)
 	existing, err := h.transferRepo.GetByVoucherID(ctx, voucherID)
 	if err == nil && existing != nil {
 		return fmt.Errorf("transfer already exists (transfer_id: %s, status: %s)",
