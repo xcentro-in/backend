@@ -164,18 +164,15 @@ type TransferStatus struct {
 	Metadata           map[string]interface{}
 }
 
-// TransferStatusType represents transfer lifecycle states
+// TransferStatusType represents transfer lifecycle states (simplified - no approval workflow)
 type TransferStatusType string
 
 const (
-	TransferStatusPendingApproval TransferStatusType = "pending_approval" // Awaiting manual approval (> ₹2L)
-	TransferStatusApproved        TransferStatusType = "approved"         // Approved, ready to initiate
-	TransferStatusInitiated       TransferStatusType = "initiated"        // Sent to Castler, awaiting webhook
-	TransferStatusProcessing      TransferStatusType = "processing"       // Castler confirmed processing (from webhook)
-	TransferStatusCompleted       TransferStatusType = "completed"        // Successfully completed (from webhook)
-	TransferStatusFailed          TransferStatusType = "failed"           // Failed (from webhook)
-	TransferStatusCancelled       TransferStatusType = "cancelled"        // Cancelled by ops
-	TransferStatusTimeout         TransferStatusType = "timeout"          // No webhook received (needs investigation)
+	TransferStatusInitiated  TransferStatusType = "initiated"  // Sent to Castler, awaiting webhook
+	TransferStatusProcessing TransferStatusType = "processing" // Castler confirmed processing (from webhook)
+	TransferStatusCompleted  TransferStatusType = "completed"  // Successfully completed (from webhook)
+	TransferStatusFailed     TransferStatusType = "failed"     // Failed (from webhook)
+	TransferStatusTimeout    TransferStatusType = "timeout"    // No webhook received (needs investigation)
 )
 
 // PayoutProviderError represents provider-specific errors
