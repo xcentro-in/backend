@@ -1959,13 +1959,9 @@ func (r *PostgresVoucherRepository) GetPaymentDetailsByVoucher(ctx context.Conte
 			v.voucher_number,
 			p.status::text as payment_status,
 			p.created_at as payment_date,
-			COALESCE(p.gateway_used::text, '') as gateway_used,
-			COALESCE(p.gateway_payment_id, '') as gateway_payment_id,
 
 			-- Payment source details
 			p.payment_method::text,
-			COALESCE(p.payment_source_type::text, '') as payment_source_type,
-			COALESCE(p.payment_source_id::text, '') as payment_source_id,
 
 			-- Card details (from stored_cards)
 			COALESCE(sc.card_type::text, '') as card_type,
@@ -1982,29 +1978,21 @@ func (r *PostgresVoucherRepository) GetPaymentDetailsByVoucher(ctx context.Conte
 			p.fee_amount,
 			p.total_amount,
 
-			-- Settlement details
-			COALESCE(p.settlement_status::text, 'pending') as settlement_status,
-			p.settled_at,
-			COALESCE(p.settlement_amount, 0) as settlement_amount,
-			COALESCE(p.mdr_amount, 0) as mdr_amount,
-			COALESCE(p.net_settlement_amount, 0) as net_settlement_amount,
-			COALESCE(p.settlement_reference_id, '') as settlement_reference_id,
-			COALESCE(p.settlement_utr, '') as settlement_utr,
+			-- Payout UTR (from payout_transfer_requests)
+			COALESCE(ptr.utr, '') as payout_utr,
 
 			-- Additional metadata
-			COALESCE(p.description, '') as description,
-			COALESCE(p.metadata, '{}'::jsonb) as metadata
+			COALESCE(p.description, '') as description
 
 		FROM xcentro.payment_vouchers v
 		INNER JOIN xcentro.payments p ON v.payment_id = p.payment_id
 		LEFT JOIN xcentro.stored_cards sc ON p.payment_source_id = sc.card_id AND p.payment_source_type = 'card'
 		LEFT JOIN xcentro.bank_accounts ba ON p.payment_source_id = ba.account_id AND p.payment_source_type = 'bank_account'
+		LEFT JOIN xcentro.payout_transfer_requests ptr ON v.voucher_id = ptr.voucher_id
 		WHERE v.voucher_id = $1
 	`
 
 	var details voucher.VoucherPaymentDetails
-	var metadataJSON []byte
-	var settledAt sql.NullTime
 	var cardLastFour, cardNetwork string
 	var bankAccountEncrypted, bankName string
 
@@ -2014,11 +2002,7 @@ func (r *PostgresVoucherRepository) GetPaymentDetailsByVoucher(ctx context.Conte
 		&details.VoucherNumber,
 		&details.PaymentStatus,
 		&details.PaymentDate,
-		&details.GatewayUsed,
-		&details.GatewayPaymentID,
 		&details.PaymentMethod,
-		&details.PaymentSourceType,
-		&details.PaymentSourceID,
 		&details.CardType,
 		&details.CardCategory,
 		&cardLastFour,
@@ -2028,15 +2012,8 @@ func (r *PostgresVoucherRepository) GetPaymentDetailsByVoucher(ctx context.Conte
 		&details.Amount,
 		&details.FeeAmount,
 		&details.TotalAmount,
-		&details.SettlementStatus,
-		&settledAt,
-		&details.SettlementAmount,
-		&details.MDRAmount,
-		&details.NetSettlementAmount,
-		&details.SettlementReferenceID,
-		&details.SettlementUTR,
+		&details.PayoutUTR,
 		&details.Description,
-		&metadataJSON,
 	)
 
 	if err != nil {
@@ -2047,10 +2024,10 @@ func (r *PostgresVoucherRepository) GetPaymentDetailsByVoucher(ctx context.Conte
 	}
 
 	// Handle card vs bank account display info
-	if details.PaymentSourceType == "card" {
+	if details.PaymentMethod == "card" {
 		details.LastFourDigits = cardLastFour
 		details.BankName = cardNetwork // For cards, this is the card network
-	} else if details.PaymentSourceType == "bank_account" && bankAccountEncrypted != "" {
+	} else if (details.PaymentMethod == "net_banking" || details.PaymentMethod == "upi") && bankAccountEncrypted != "" {
 		// Decrypt bank account number to get last digits
 		decryptedAccountNumber, err := crypto.DecryptBankAccountNumber(bankAccountEncrypted, r.encryptionKey)
 		if err != nil {
@@ -2058,18 +2035,6 @@ func (r *PostgresVoucherRepository) GetPaymentDetailsByVoucher(ctx context.Conte
 		}
 		details.LastFourDigits = crypto.ExtractLastDigits(decryptedAccountNumber, 4)
 		details.BankName = bankName
-	}
-
-	// Handle nullable settled_at
-	if settledAt.Valid {
-		details.SettledAt = &settledAt.Time
-	}
-
-	// Unmarshal metadata
-	if len(metadataJSON) > 0 {
-		if err := json.Unmarshal(metadataJSON, &details.Metadata); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal metadata: %w", err)
-		}
 	}
 
 	return &details, nil

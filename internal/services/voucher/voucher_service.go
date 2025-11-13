@@ -1254,28 +1254,18 @@ func (s *VoucherServiceImpl) GetVoucherPaymentDetails(ctx context.Context, vouch
 		convenienceFeeRate = fmt.Sprintf("₹%.2f (fixed)", float64(convenienceFee)/100.0)
 	}
 
-	// Format MDR rate
-	mdrRate := ""
-	if details.SettlementAmount > 0 && details.MDRAmount > 0 {
-		rate := (float64(details.MDRAmount) / float64(details.SettlementAmount)) * 100
-		mdrRate = fmt.Sprintf("%.2f%%", rate)
-	}
-
 	response := &VoucherPaymentDetailsResponse{
-		PaymentID:        details.PaymentID,
-		VoucherID:        details.VoucherID,
-		VoucherNumber:    details.VoucherNumber,
-		PaymentStatus:    details.PaymentStatus,
-		PaymentDate:      details.PaymentDate,
-		GatewayUsed:      details.GatewayUsed,
-		GatewayPaymentID: details.GatewayPaymentID,
+		PaymentID:     details.PaymentID,
+		VoucherID:     details.VoucherID,
+		VoucherNumber: details.VoucherNumber,
+		PaymentStatus: details.PaymentStatus,
+		PaymentDate:   details.PaymentDate,
 
-		PaymentMethod:     details.PaymentMethod,
-		PaymentSourceType: details.PaymentSourceType,
-		CardType:          details.CardType,
-		CardCategory:      details.CardCategory,
-		LastFourDigits:    details.LastFourDigits,
-		BankName:          details.BankName,
+		PaymentMethod:  details.PaymentMethod,
+		CardType:       details.CardType,
+		CardCategory:   details.CardCategory,
+		LastFourDigits: details.LastFourDigits,
+		BankName:       details.BankName,
 
 		VoucherAmount:      details.Amount,
 		ConvenienceFee:     convenienceFee,
@@ -1285,17 +1275,9 @@ func (s *VoucherServiceImpl) GetVoucherPaymentDetails(ctx context.Context, vouch
 		TotalFeeAmount:     details.FeeAmount,
 		TotalAmountPaid:    details.TotalAmount,
 
-		SettlementStatus:      details.SettlementStatus,
-		SettledAt:             details.SettledAt,
-		SettlementAmount:      details.SettlementAmount,
-		MDRAmount:             details.MDRAmount,
-		MDRRate:               mdrRate,
-		NetSettlementAmount:   details.NetSettlementAmount,
-		SettlementReferenceID: details.SettlementReferenceID,
-		SettlementUTR:         details.SettlementUTR,
+		PayoutUTR: details.PayoutUTR,
 
 		Description: details.Description,
-		Metadata:    ensureEmptyObject(details.Metadata),
 	}
 
 	return response, nil
