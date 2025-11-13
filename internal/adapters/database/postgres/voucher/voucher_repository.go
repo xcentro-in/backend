@@ -188,12 +188,9 @@ func (r *PostgresVoucherRepository) GetByID(ctx context.Context, voucherID uuid.
 		       fee_amount, discount_amount,
 		       financial_details, attachments,
 		       expense_category, description,
-		       payment_terms, vendor_reference_number,
+		       payment_terms,
 		       status, payment_id,
 		       erp_sync_status, erp_reference_id, erp_posting_date, erp_last_sync_at, erp_sync_attempts, erp_metadata,
-		       payout_status, payout_initiated_at, payout_initiated_by, payout_completed_at, payout_reference_id, payout_utr, payout_metadata,
-		       cancellation_status, cancellation_requested_at, cancellation_requested_by, cancellation_reason,
-		       cancellation_approved_at, cancellation_approved_by, refund_status, refund_initiated_at, refund_reference_id, refund_metadata,
 		       gl_expense_account, gl_bank_account, cost_center,
 		       created_at, created_by_user_id, updated_at, metadata
 		FROM xcentro.payment_vouchers
@@ -300,11 +297,9 @@ func (r *PostgresVoucherRepository) GetByVoucherNumber(ctx context.Context, vouc
 		       fee_amount, discount_amount,
 		       financial_details, attachments,
 		       expense_category, description,
+		       payment_terms,
 		       status, payment_id,
 		       erp_sync_status, erp_reference_id, erp_posting_date, erp_last_sync_at, erp_sync_attempts, erp_metadata,
-		       payout_status, payout_initiated_at, payout_initiated_by, payout_completed_at, payout_reference_id, payout_utr, payout_metadata,
-		       cancellation_status, cancellation_requested_at, cancellation_requested_by, cancellation_reason,
-		       cancellation_approved_at, cancellation_approved_by, refund_status, refund_initiated_at, refund_reference_id, refund_metadata,
 		       gl_expense_account, gl_bank_account, cost_center,
 		       created_at, created_by_user_id, updated_at, metadata
 		FROM xcentro.payment_vouchers
@@ -335,11 +330,9 @@ func (r *PostgresVoucherRepository) GetByPaymentID(ctx context.Context, paymentI
 		       fee_amount, discount_amount,
 		       financial_details, attachments,
 		       expense_category, description,
+		       payment_terms,
 		       status, payment_id,
 		       erp_sync_status, erp_reference_id, erp_posting_date, erp_last_sync_at, erp_sync_attempts, erp_metadata,
-		       payout_status, payout_initiated_at, payout_initiated_by, payout_completed_at, payout_reference_id, payout_utr, payout_metadata,
-		       cancellation_status, cancellation_requested_at, cancellation_requested_by, cancellation_reason,
-		       cancellation_approved_at, cancellation_approved_by, refund_status, refund_initiated_at, refund_reference_id, refund_metadata,
 		       gl_expense_account, gl_bank_account, cost_center,
 		       created_at, created_by_user_id, updated_at, metadata
 		FROM xcentro.payment_vouchers
@@ -382,11 +375,9 @@ func (r *PostgresVoucherRepository) GetVouchersByPaymentIDWithStatus(ctx context
 		       fee_amount, discount_amount,
 		       financial_details, attachments,
 		       expense_category, description,
+		       payment_terms,
 		       status, payment_id,
 		       erp_sync_status, erp_reference_id, erp_posting_date, erp_last_sync_at, erp_sync_attempts, erp_metadata,
-		       payout_status, payout_initiated_at, payout_initiated_by, payout_completed_at, payout_reference_id, payout_utr, payout_metadata,
-		       cancellation_status, cancellation_requested_at, cancellation_requested_by, cancellation_reason,
-		       cancellation_approved_at, cancellation_approved_by, refund_status, refund_initiated_at, refund_reference_id, refund_metadata,
 		       gl_expense_account, gl_bank_account, cost_center,
 		       created_at, created_by_user_id, updated_at, metadata
 		FROM xcentro.payment_vouchers
@@ -1150,11 +1141,9 @@ func (r *PostgresVoucherRepository) buildFilterQuery(businessID uuid.UUID, filte
 		       fee_amount, discount_amount,
 		       financial_details, attachments,
 		       expense_category, description,
+		       payment_terms,
 		       status, payment_id,
 		       erp_sync_status, erp_reference_id, erp_posting_date, erp_last_sync_at, erp_sync_attempts, erp_metadata,
-		       payout_status, payout_initiated_at, payout_initiated_by, payout_completed_at, payout_reference_id, payout_utr, payout_metadata,
-		       cancellation_status, cancellation_requested_at, cancellation_requested_by, cancellation_reason,
-		       cancellation_approved_at, cancellation_approved_by, refund_status, refund_initiated_at, refund_reference_id, refund_metadata,
 		       gl_expense_account, gl_bank_account, cost_center,
 		       created_at, created_by_user_id, updated_at, metadata
 		FROM xcentro.payment_vouchers
