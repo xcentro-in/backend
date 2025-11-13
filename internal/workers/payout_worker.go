@@ -51,9 +51,10 @@ func (w *PayoutWorker) Run(ctx context.Context) error {
 		fmt.Printf("❌ Error processing ready vouchers: %v\n", err)
 	}
 
-	// Task 2: Initiate approved transfers
-	if err := w.initiateApprovedTransfers(ctx); err != nil {
-		fmt.Printf("❌ Error initiating approved transfers: %v\n", err)
+	// Task 2: DEPRECATED - Manual payouts now process immediately (no worker delay)
+	// Keeping placeholder for monitoring/metrics purposes
+	if err := w.monitorInitiatedTransfers(ctx); err != nil {
+		fmt.Printf("❌ Error monitoring initiated transfers: %v\n", err)
 	}
 
 	// Task 3: Flag timeout transfers
@@ -104,9 +105,11 @@ func (w *PayoutWorker) processReadyVouchers(ctx context.Context) error {
 	return nil
 }
 
-// initiateApprovedTransfers sends approved transfers to Castler
-func (w *PayoutWorker) initiateApprovedTransfers(ctx context.Context) error {
-	fmt.Println("\n🚀 Task 2: Initiating approved transfers...")
+// monitorInitiatedTransfers monitors transfers stuck in 'initiated' status
+// DEPRECATED: Manual payouts now process immediately, so this should rarely find anything
+// Kept for monitoring orphaned transfers that failed async processing
+func (w *PayoutWorker) monitorInitiatedTransfers(ctx context.Context) error {
+	fmt.Println("\n📊 Task 2: Monitoring initiated transfers (should be rare)...")
 
 	// Get global config
 	config, err := w.configRepo.GetConfig(ctx, nil)
@@ -114,26 +117,32 @@ func (w *PayoutWorker) initiateApprovedTransfers(ctx context.Context) error {
 		return fmt.Errorf("failed to get config: %w", err)
 	}
 
-	// Get all transfers with status='initiated' (created but not yet sent to Castler)
+	// Get all transfers with status='initiated' (should be empty or very few)
 	transfers, err := w.transferRepo.GetByStatus(ctx, payout.TransferStatusInitiated, config.BatchSize)
 	if err != nil {
 		return fmt.Errorf("failed to get initiated transfers: %w", err)
 	}
 
 	if len(transfers) == 0 {
-		fmt.Println("✅ No initiated transfers to send to provider")
+		fmt.Println("✅ No initiated transfers found (as expected)")
 		return nil
 	}
 
-	fmt.Printf("📦 Found %d initiated transfers to send to provider\n", len(transfers))
+	// WARNING: Finding initiated transfers indicates async processing failed
+	fmt.Printf("⚠️  WARNING: Found %d transfers stuck in 'initiated' status\n", len(transfers))
+	fmt.Println("⚠️  This indicates async processing failure - manual intervention required")
+	fmt.Println("⚠️  Check application logs for goroutine errors or Castler API failures")
 
-	// Process each transfer
+	// Log each stuck transfer for investigation
 	for _, transfer := range transfers {
-		if err := w.initiateTransfer(ctx, transfer, config); err != nil {
-			fmt.Printf("❌ Failed to initiate transfer %s: %v\n", transfer.TransferRequestID, err)
-			continue
-		}
+		fmt.Printf("  ⚠️  Stuck transfer: %s (voucher: %s, created: %s)\n",
+			transfer.TransferRequestID,
+			transfer.VoucherID,
+			transfer.CreatedAt.Format(time.RFC3339))
 	}
+
+	// TODO: Send alert to ops team
+	fmt.Println("  🚨 TODO: Send alert to ops team about stuck transfers")
 
 	return nil
 }
@@ -306,7 +315,7 @@ func (w *PayoutWorker) flagTimeoutTransfers(ctx context.Context) error {
 					ActionTimestamp: now,
 					ActorType:       payment.ActorTypeSystem,
 					ActorName:       "payout_worker",
-					PreviousState:   "processing",
+					PreviousState:   "pending",
 					NewState:        "timeout",
 					Amount:          transfer.Amount,
 					Currency:        transfer.Currency,

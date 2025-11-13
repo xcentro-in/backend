@@ -46,6 +46,140 @@ func NewPayoutService(
 	}
 }
 
+// InitiateManualPayout creates payout transfer requests for a payment
+// New flow: payment_id (required) + voucher_ids[] (optional)
+// If voucher_ids empty: processes all unpaid vouchers for the payment
+// Returns all created transfer requests (status='initiated')
+func (s *PayoutService) InitiateManualPayout(ctx context.Context, paymentID string, voucherIDs []string) ([]*payout.PayoutTransferRequest, error) {
+	s.logger.InfoWith("InitiateManualPayout called", "payment_id", paymentID, "voucher_ids", voucherIDs)
+
+	// Step 1: Parse payment ID
+	paymentUUID, err := uuid.Parse(paymentID)
+	if err != nil {
+		return nil, fmt.Errorf("invalid payment_id format: %w", err)
+	}
+
+	// Step 2: Get all vouchers for this payment
+	allVouchers, err := s.voucherRepo.GetByPaymentID(ctx, paymentUUID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get vouchers for payment: %w", err)
+	}
+
+	if len(allVouchers) == 0 {
+		return nil, fmt.Errorf("no vouchers found for payment_id: %s", paymentID)
+	}
+
+	s.logger.DebugWith("Found vouchers for payment", "count", len(allVouchers))
+
+	// Step 3: Filter vouchers based on voucher_ids[] (if provided)
+	var targetVouchers []*voucher.Voucher
+	if len(voucherIDs) == 0 {
+		// Empty list → process all unpaid vouchers
+		s.logger.DebugWith("No voucher_ids specified - processing all unpaid vouchers")
+		for _, v := range allVouchers {
+			// Check if already paid (has existing transfer)
+			existing, err := s.transferRepo.GetByVoucherID(ctx, v.VoucherID.String())
+			if err == nil && existing != nil {
+				s.logger.DebugWith("Skipping voucher - already has transfer",
+					"voucher_id", v.VoucherID.String(),
+					"transfer_id", existing.TransferRequestID,
+					"status", existing.Status)
+				continue
+			}
+			targetVouchers = append(targetVouchers, v)
+		}
+	} else {
+		// Specific voucher_ids provided → process only those
+		s.logger.DebugWith("Processing specific voucher_ids", "count", len(voucherIDs))
+		voucherIDSet := make(map[string]bool)
+		for _, vid := range voucherIDs {
+			voucherIDSet[vid] = true
+		}
+
+		for _, v := range allVouchers {
+			if voucherIDSet[v.VoucherID.String()] {
+				// Idempotency check
+				existing, err := s.transferRepo.GetByVoucherID(ctx, v.VoucherID.String())
+				if err == nil && existing != nil {
+					return nil, fmt.Errorf("voucher %s already has transfer (transfer_id: %s, status: %s)",
+						v.VoucherID.String(), existing.TransferRequestID, existing.Status)
+				}
+				targetVouchers = append(targetVouchers, v)
+			}
+		}
+
+		if len(targetVouchers) != len(voucherIDs) {
+			return nil, fmt.Errorf("some voucher_ids not found or not linked to payment_id: %s", paymentID)
+		}
+	}
+
+	if len(targetVouchers) == 0 {
+		return nil, fmt.Errorf("no vouchers to process (all already have transfers)")
+	}
+
+	s.logger.InfoWith("Target vouchers identified", "count", len(targetVouchers))
+
+	// Step 4: Get configuration
+	config, err := s.configRepo.GetConfig(ctx, nil) // Use global config for MVP
+	if err != nil {
+		return nil, fmt.Errorf("failed to get payout configuration: %w", err)
+	}
+
+	// Step 5: Create transfer requests for each voucher
+	var transfers []*payout.PayoutTransferRequest
+
+	for _, vch := range targetVouchers {
+		// Get bank account with Castler beneficiary ID
+		bankAccount, err := s.bankAccountRepo.FindByID(ctx, vch.AccountID.String())
+		if err != nil {
+			return nil, fmt.Errorf("failed to get bank account for voucher %s: %w", vch.VoucherID.String(), err)
+		}
+
+		if bankAccount == nil {
+			return nil, fmt.Errorf("bank account not found for voucher %s: %s", vch.VoucherID.String(), vch.AccountID.String())
+		}
+
+		if bankAccount.CastlerBeneficiaryID == "" {
+			return nil, fmt.Errorf("payee not onboarded to Castler for voucher %s: missing beneficiary ID", vch.VoucherID.String())
+		}
+
+		// Create transfer request
+		transferReq := &payout.PayoutTransferRequest{
+			TransferRequestID:     uuid.Must(uuid.NewV7()).String(),
+			PaymentID:             paymentID,
+			VoucherID:             vch.VoucherID.String(),
+			Provider:              payout.ProviderCastler, // Always Castler for now
+			ProviderBeneficiaryID: bankAccount.CastlerBeneficiaryID,
+			EscrowID:              "", // TODO: Get from config/environment
+			Amount:                vch.NetAmount,
+			Currency:              vch.Currency,
+			Purpose:               "vendor_payment",
+			Reference:             vch.VoucherNumber,
+			Narration:             fmt.Sprintf("Payment for %s", vch.VoucherNumber),
+			TransferMode:          config.PreferredTransferMode,
+			Status:                payout.TransferStatusInitiated,
+			RetryCount:            0,
+			MaxRetries:            config.MaxRetryAttempts,
+			CreatedAt:             time.Now(),
+		}
+
+		// Save transfer request
+		if err := s.transferRepo.Create(ctx, transferReq); err != nil {
+			return nil, fmt.Errorf("failed to create transfer for voucher %s: %w", vch.VoucherID.String(), err)
+		}
+
+		s.logger.DebugWith("Transfer request created",
+			"transfer_request_id", transferReq.TransferRequestID,
+			"voucher_id", vch.VoucherID.String(),
+			"amount", transferReq.Amount)
+
+		transfers = append(transfers, transferReq)
+	}
+
+	s.logger.InfoWith("Transfer requests created successfully", "count", len(transfers))
+	return transfers, nil
+}
+
 // InitiatePayoutForVoucher creates a transfer request for a voucher
 // DEPRECATED: Use InitiateManualPayout with payment_id instead
 // Kept for backward compatibility during transition
