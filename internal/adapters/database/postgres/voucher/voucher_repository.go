@@ -2027,7 +2027,7 @@ func (r *PostgresVoucherRepository) GetPaymentDetailsByVoucher(ctx context.Conte
 	}
 
 	// Handle card vs bank account display info
-	if details.PaymentMethod == "card" {
+	if details.PaymentMethod == "card" || details.PaymentMethod == "token_card" {
 		details.LastFourDigits = cardLastFour
 		details.BankName = cardNetwork // For cards, this is the card network
 	} else if (details.PaymentMethod == "net_banking" || details.PaymentMethod == "upi") && bankAccountEncrypted != "" {
