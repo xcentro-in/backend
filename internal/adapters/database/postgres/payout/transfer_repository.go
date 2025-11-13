@@ -192,14 +192,15 @@ func (r *PostgresPayoutTransferRepository) GetByProviderTransferID(ctx context.C
 
 	var transfer payout.PayoutTransferRequest
 	var metadataJSON, historyJSON []byte
-	var escrowID sql.NullString
+	var escrowID, purpose, reference, narration, transferMode, failureReason, utr sql.NullString
+	var processingAt, completedAt, failedAt, nextRetryAt, lastRetryAt, lastWebhookAt, webhookTimeoutAt sql.NullTime
 
 	err := r.querier.QueryRow(ctx, query, providerTransferID).Scan(
 		&transfer.TransferRequestID, &transfer.PaymentID, &transfer.VoucherID, &transfer.Provider, &transfer.ProviderBeneficiaryID, &transfer.ProviderTransferID, &escrowID,
-		&transfer.Amount, &transfer.Currency, &transfer.Purpose, &transfer.Reference, &transfer.Narration, &transfer.TransferMode,
-		&transfer.Status, &transfer.InitiatedAt, &transfer.ProcessingAt, &transfer.CompletedAt, &transfer.FailedAt, &transfer.FailureReason, &transfer.UTR,
-		&transfer.RetryCount, &transfer.MaxRetries, &transfer.NextRetryAt, &transfer.LastRetryAt,
-		&transfer.LastWebhookAt, &transfer.WebhookTimeoutAt, &historyJSON, &metadataJSON,
+		&transfer.Amount, &transfer.Currency, &purpose, &reference, &narration, &transferMode,
+		&transfer.Status, &transfer.InitiatedAt, &processingAt, &completedAt, &failedAt, &failureReason, &utr,
+		&transfer.RetryCount, &transfer.MaxRetries, &nextRetryAt, &lastRetryAt,
+		&lastWebhookAt, &webhookTimeoutAt, &historyJSON, &metadataJSON,
 		&transfer.CreatedAt, &transfer.UpdatedAt,
 	)
 
@@ -210,9 +211,50 @@ func (r *PostgresPayoutTransferRepository) GetByProviderTransferID(ctx context.C
 		return nil, fmt.Errorf("failed to get transfer request: %w", err)
 	}
 
-	// Handle nullable escrow_id
+	// Handle nullable string fields
 	if escrowID.Valid {
 		transfer.EscrowID = escrowID.String
+	}
+	if purpose.Valid {
+		transfer.Purpose = purpose.String
+	}
+	if reference.Valid {
+		transfer.Reference = reference.String
+	}
+	if narration.Valid {
+		transfer.Narration = narration.String
+	}
+	if transferMode.Valid {
+		transfer.TransferMode = transferMode.String
+	}
+	if failureReason.Valid {
+		transfer.FailureReason = failureReason.String
+	}
+	if utr.Valid {
+		transfer.UTR = utr.String
+	}
+
+	// Handle nullable timestamp fields
+	if processingAt.Valid {
+		transfer.ProcessingAt = &processingAt.Time
+	}
+	if completedAt.Valid {
+		transfer.CompletedAt = &completedAt.Time
+	}
+	if failedAt.Valid {
+		transfer.FailedAt = &failedAt.Time
+	}
+	if nextRetryAt.Valid {
+		transfer.NextRetryAt = &nextRetryAt.Time
+	}
+	if lastRetryAt.Valid {
+		transfer.LastRetryAt = &lastRetryAt.Time
+	}
+	if lastWebhookAt.Valid {
+		transfer.LastWebhookAt = &lastWebhookAt.Time
+	}
+	if webhookTimeoutAt.Valid {
+		transfer.WebhookTimeoutAt = &webhookTimeoutAt.Time
 	}
 
 	// Unmarshal JSONB fields
@@ -308,7 +350,7 @@ func (r *PostgresPayoutTransferRepository) UpdateStatus(ctx context.Context, tra
 	switch status {
 	case payout.TransferStatusInitiated:
 		timestampField = "initiated_at"
-	case payout.TransferStatusProcessing:
+	case payout.TransferStatusPending, payout.TransferStatusProcessing:
 		timestampField = "processing_at"
 	case payout.TransferStatusCompleted:
 		timestampField = "completed_at"
