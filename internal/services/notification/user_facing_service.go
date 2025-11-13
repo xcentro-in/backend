@@ -125,49 +125,46 @@ func (s *UserFacingNotificationService) TriggerManualNotification(ctx context.Co
 // BulkTriggerNotifications triggers notifications for multiple businesses in a single transaction
 // If any trigger fails, the entire transaction is rolled back
 func (s *UserFacingNotificationService) BulkTriggerNotifications(ctx context.Context, request *notification.OpsBulkTriggerRequest) (*notification.OpsBulkTriggerResponse, error) {
-	// Start transaction
-	tx, err := s.txManager.BeginTx(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer s.txManager.RollbackTx(ctx, tx)
-
-	// Get transaction-aware event repository
-	txEventRepo := s.notifEventRepo.WithTx(tx)
-
 	// Counter for successfully triggered notifications
-	triggeredCount := 0
+	var triggeredCount int
 	timestamp := time.Now().Format(time.RFC3339)
 
-	// Loop through each target and create individual notification event
-	for _, target := range request.Targets {
-		// Build payload for this target
-		payload := notification.NotificationEventPayload{
-			Timestamp: timestamp,
-			EventType: request.EventType,
-			Target:    target,
-			Entities:  notification.EntityReferences{}, // Empty as per requirements
-			Message:   request.Message,
-			Actions:   request.Actions,
+	// Execute within transaction
+	err := s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
+		// Get transaction-aware event repository
+		txEventRepo := s.notifEventRepo.WithTx(tx)
+
+		// Loop through each target and create individual notification event
+		for _, target := range request.Targets {
+			// Build payload for this target
+			payload := notification.NotificationEventPayload{
+				Timestamp: timestamp,
+				EventType: request.EventType,
+				Target:    target,
+				Entities:  notification.EntityReferences{}, // Empty as per requirements
+				Message:   request.Message,
+				Actions:   request.Actions,
+			}
+
+			// Create event in transaction
+			event := &notification.NotificationEvent{
+				EventType: payload.EventType,
+				Payload:   payload,
+			}
+
+			if err := txEventRepo.CreateEvent(ctx, event); err != nil {
+				// Fail fast: return error and transaction will be rolled back
+				return fmt.Errorf("failed to create notification event for business %s: %w", target.BusinessID, err)
+			}
+
+			triggeredCount++
 		}
 
-		// Create event in transaction
-		event := &notification.NotificationEvent{
-			EventType: payload.EventType,
-			Payload:   payload,
-		}
+		return nil
+	})
 
-		if err := txEventRepo.CreateEvent(ctx, event); err != nil {
-			// Fail fast: return error and transaction will be rolled back
-			return nil, fmt.Errorf("failed to create notification event for business %s: %w", target.BusinessID, err)
-		}
-
-		triggeredCount++
-	}
-
-	// Commit transaction
-	if err := s.txManager.CommitTx(ctx, tx); err != nil {
-		return nil, fmt.Errorf("failed to commit transaction: %w", err)
+	if err != nil {
+		return nil, err
 	}
 
 	// Return success response

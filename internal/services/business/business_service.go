@@ -982,17 +982,17 @@ func (s *BusinessServiceImpl) UpdateOnboardingStatus(ctx context.Context, bid st
 // Ops Dashboard Methods
 
 // ListBusinessesPaginated retrieves paginated list of businesses
-func (s *businessService) ListBusinessesPaginated(ctx context.Context, page int, limit int) ([]*coreBusiness.OpsBusinessListItem, int, error) {
+func (s *BusinessServiceImpl) ListBusinessesPaginated(ctx context.Context, page int, limit int) ([]*business.OpsBusinessListItem, int, error) {
 	return s.businessRepo.ListBusinessesPaginated(ctx, page, limit)
 }
 
 // SearchBusinesses searches businesses by name or GSTIN
-func (s *businessService) SearchBusinesses(ctx context.Context, searchTerm string) ([]*coreBusiness.OpsBusinessSearchResult, error) {
+func (s *BusinessServiceImpl) SearchBusinesses(ctx context.Context, searchTerm string) ([]*business.OpsBusinessSearchResult, error) {
 	return s.businessRepo.SearchBusinesses(ctx, searchTerm)
 }
 
 // GetBusinessDetailsForOps retrieves complete business details for ops dashboard
-func (s *businessService) GetBusinessDetailsForOps(ctx context.Context, bid string) (*coreBusiness.OpsBusinessDetails, error) {
+func (s *BusinessServiceImpl) GetBusinessDetailsForOps(ctx context.Context, bid string) (*business.OpsBusinessDetails, error) {
 	return s.businessRepo.GetBusinessDetailsForOps(ctx, bid)
 }
 

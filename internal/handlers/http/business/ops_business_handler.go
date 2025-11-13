@@ -1,14 +1,13 @@
-package http
+package business
 
 import (
 	"net/http"
-	"strconv"
-	"strings"
 
 	"github.com/labstack/echo/v4"
 	"xcentro.in/internal/core/auth"
 	"xcentro.in/internal/core/business"
 	"xcentro.in/internal/shared/logger"
+	"xcentro.in/internal/shared/validator"
 )
 
 // OpsBusinessHandler handles ops dashboard business-related endpoints
@@ -31,7 +30,7 @@ func NewOpsBusinessHandler(businessService business.BusinessService, authService
 func RegisterOpsBusinessRoutes(e *echo.Group, businessService business.BusinessService, authService auth.AuthService) {
 	handler := NewOpsBusinessHandler(businessService, authService)
 
-	businessGroup := e.Group("/businesses")
+	businessGroup := e.Group("/business")
 
 	// Endpoint 1: Paginated list of businesses
 	businessGroup.GET("", handler.ListBusinesses)
@@ -47,42 +46,41 @@ func RegisterOpsBusinessRoutes(e *echo.Group, businessService business.BusinessS
 	businessGroup.POST("/:bid/kyb-action", handler.KYBAction)
 }
 
-// PaginationResponse represents pagination metadata
-type PaginationResponse struct {
-	CurrentPage int `json:"currentPage"`
-	PageSize    int `json:"pageSize"`
-	TotalItems  int `json:"totalItems"`
-	TotalPages  int `json:"totalPages"`
-}
-
-// ListBusinessesResponse represents the response for listing businesses
-type ListBusinessesResponse struct {
-	Data       []*business.OpsBusinessListItem `json:"data"`
-	Pagination PaginationResponse              `json:"pagination"`
-}
-
 // ListBusinesses handles GET /businesses?page=1&limit=20
 func (h *OpsBusinessHandler) ListBusinesses(c echo.Context) error {
-	// Parse and validate pagination parameters
-	page, err := strconv.Atoi(c.QueryParam("page"))
-	if err != nil || page < 1 {
-		page = 1 // Default to page 1
-	}
+	var req business.OpsListBusinessesRequest
 
-	limit, err := strconv.Atoi(c.QueryParam("limit"))
-	if err != nil || limit < 1 {
-		limit = 20 // Default page size
-	}
-
-	// Validate max limit
-	if limit > 100 {
+	// Bind query parameters
+	if err := c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]string{
-			"error": "Page size cannot exceed 100",
+			"error": "Invalid request parameters",
+		})
+	}
+
+	// Set defaults
+	if req.Page == 0 {
+		req.Page = 1
+	}
+	if req.Limit == 0 {
+		req.Limit = 20
+	}
+
+	// Trim and validate
+	validator.TrimStrings(&req)
+	if err := c.Validate(&req); err != nil {
+		if ve, ok := err.(*validator.ValidationError); ok {
+			return c.JSON(http.StatusBadRequest, map[string]interface{}{
+				"error":  "Validation failed",
+				"errors": ve.Errors,
+			})
+		}
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": err.Error(),
 		})
 	}
 
 	// Call service layer
-	businesses, totalCount, err := h.businessService.ListBusinessesPaginated(c.Request().Context(), page, limit)
+	businesses, totalCount, err := h.businessService.ListBusinessesPaginated(c.Request().Context(), req.Page, req.Limit)
 	if err != nil {
 		h.logger.Errorf("Error listing businesses: %v", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{
@@ -91,14 +89,14 @@ func (h *OpsBusinessHandler) ListBusinesses(c echo.Context) error {
 	}
 
 	// Calculate total pages
-	totalPages := (totalCount + limit - 1) / limit
+	totalPages := (totalCount + req.Limit - 1) / req.Limit
 
 	// Build response
-	response := ListBusinessesResponse{
+	response := business.OpsListBusinessesResponse{
 		Data: businesses,
-		Pagination: PaginationResponse{
-			CurrentPage: page,
-			PageSize:    limit,
+		Pagination: business.PaginationResponse{
+			CurrentPage: req.Page,
+			PageSize:    req.Limit,
 			TotalItems:  totalCount,
 			TotalPages:  totalPages,
 		},
@@ -109,23 +107,31 @@ func (h *OpsBusinessHandler) ListBusinesses(c echo.Context) error {
 
 // SearchBusinesses handles GET /businesses/search?q=term
 func (h *OpsBusinessHandler) SearchBusinesses(c echo.Context) error {
-	// Parse and validate search query
-	searchTerm := c.QueryParam("q")
-	if searchTerm == "" {
+	var req business.OpsSearchBusinessesRequest
+
+	// Bind query parameters
+	if err := c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]string{
-			"error": "Search query parameter 'q' is required",
+			"error": "Invalid request parameters",
 		})
 	}
 
-	// Validate minimum search length
-	if len(searchTerm) < 2 {
+	// Trim and validate
+	validator.TrimStrings(&req)
+	if err := c.Validate(&req); err != nil {
+		if ve, ok := err.(*validator.ValidationError); ok {
+			return c.JSON(http.StatusBadRequest, map[string]interface{}{
+				"error":  "Validation failed",
+				"errors": ve.Errors,
+			})
+		}
 		return c.JSON(http.StatusBadRequest, map[string]string{
-			"error": "Search term must be at least 2 characters",
+			"error": err.Error(),
 		})
 	}
 
 	// Call service layer
-	results, err := h.businessService.SearchBusinesses(c.Request().Context(), searchTerm)
+	results, err := h.businessService.SearchBusinesses(c.Request().Context(), req.SearchTerm)
 	if err != nil {
 		h.logger.Errorf("Error searching businesses: %v", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{
@@ -143,18 +149,33 @@ func (h *OpsBusinessHandler) SearchBusinesses(c echo.Context) error {
 
 // GetBusinessDetails handles GET /businesses/:bid
 func (h *OpsBusinessHandler) GetBusinessDetails(c echo.Context) error {
-	// Parse and validate business ID
-	bid := c.Param("bid")
-	if bid == "" {
+	var req business.OpsGetBusinessDetailsRequest
+
+	// Bind path parameter
+	if err := c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]string{
-			"error": "Business ID is required",
+			"error": "Invalid request parameters",
+		})
+	}
+
+	// Trim and validate
+	validator.TrimStrings(&req)
+	if err := c.Validate(&req); err != nil {
+		if ve, ok := err.(*validator.ValidationError); ok {
+			return c.JSON(http.StatusBadRequest, map[string]interface{}{
+				"error":  "Validation failed",
+				"errors": ve.Errors,
+			})
+		}
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": err.Error(),
 		})
 	}
 
 	// Call service layer
-	details, err := h.businessService.GetBusinessDetailsForOps(c.Request().Context(), bid)
+	details, err := h.businessService.GetBusinessDetailsForOps(c.Request().Context(), req.BusinessID)
 	if err != nil {
-		h.logger.Errorf("Error fetching business details for BID %s: %v", bid, err)
+		h.logger.Errorf("Error fetching business details for BID %s: %v", req.BusinessID, err)
 		if err.Error() == "business not found" {
 			return c.JSON(http.StatusNotFound, map[string]string{
 				"error": "Business not found",
@@ -170,37 +191,32 @@ func (h *OpsBusinessHandler) GetBusinessDetails(c echo.Context) error {
 
 // ReloadBusinessData handles POST /businesses/:bid/reload-data?type=gstin|income_tax_id|company_id
 func (h *OpsBusinessHandler) ReloadBusinessData(c echo.Context) error {
-	// Parse and validate business ID
-	bid := strings.TrimSpace(c.Param("bid"))
-	if bid == "" {
+	var req business.OpsReloadBusinessDataRequest
+
+	// Bind path and query parameters
+	if err := c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]string{
-			"error": "Business ID is required",
+			"error": "Invalid request parameters",
 		})
 	}
 
-	// Parse and validate data type
-	dataType := strings.TrimSpace(c.QueryParam("type"))
-	if dataType == "" {
+	// Trim and validate
+	validator.TrimStrings(&req)
+	if err := c.Validate(&req); err != nil {
+		if ve, ok := err.(*validator.ValidationError); ok {
+			return c.JSON(http.StatusBadRequest, map[string]interface{}{
+				"error":  "Validation failed",
+				"errors": ve.Errors,
+			})
+		}
 		return c.JSON(http.StatusBadRequest, map[string]string{
-			"error": "Query parameter 'type' is required",
-		})
-	}
-
-	// Validate allowed types
-	allowedTypes := map[string]bool{
-		"gstin":          true,
-		"income_tax_id":  true,
-		"company_id":     true,
-	}
-	if !allowedTypes[dataType] {
-		return c.JSON(http.StatusBadRequest, map[string]string{
-			"error": "Invalid type. Allowed values: gstin, income_tax_id, company_id",
+			"error": err.Error(),
 		})
 	}
 
 	// Call service layer
-	if err := h.businessService.ReloadBusinessData(c.Request().Context(), bid, dataType); err != nil {
-		h.logger.Errorf("Error reloading business data for BID %s, type %s: %v", bid, dataType, err)
+	if err := h.businessService.ReloadBusinessData(c.Request().Context(), req.BusinessID, req.DataType); err != nil {
+		h.logger.Errorf("Error reloading business data for BID %s, type %s: %v", req.BusinessID, req.DataType, err)
 		if err.Error() == "business not found" {
 			return c.JSON(http.StatusNotFound, map[string]string{
 				"error": "Business not found",
@@ -218,42 +234,45 @@ func (h *OpsBusinessHandler) ReloadBusinessData(c echo.Context) error {
 
 // KYBAction handles POST /businesses/:bid/kyb-action?action=reject|verify
 func (h *OpsBusinessHandler) KYBAction(c echo.Context) error {
-	// Parse and validate business ID
-	bid := strings.TrimSpace(c.Param("bid"))
-	if bid == "" {
+	var req business.OpsKYBActionRequest
+
+	// Bind path and query parameters
+	if err := c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]string{
-			"error": "Business ID is required",
+			"error": "Invalid request parameters",
 		})
 	}
 
-	// Parse and validate action
-	action := strings.TrimSpace(c.QueryParam("action"))
-	if action == "" {
+	// Trim and validate
+	validator.TrimStrings(&req)
+	if err := c.Validate(&req); err != nil {
+		if ve, ok := err.(*validator.ValidationError); ok {
+			return c.JSON(http.StatusBadRequest, map[string]interface{}{
+				"error":  "Validation failed",
+				"errors": ve.Errors,
+			})
+		}
 		return c.JSON(http.StatusBadRequest, map[string]string{
-			"error": "Query parameter 'action' is required",
+			"error": err.Error(),
 		})
 	}
 
-	// Validate allowed actions
+	// Call service layer based on action
 	var err error
 	var successMessage string
 
-	switch action {
+	switch req.Action {
 	case "reject":
-		err = h.businessService.RejectKYB(c.Request().Context(), bid)
+		err = h.businessService.RejectKYB(c.Request().Context(), req.BusinessID)
 		successMessage = "KYB rejected successfully"
 	case "verify":
-		err = h.businessService.VerifyKYB(c.Request().Context(), bid)
+		err = h.businessService.VerifyKYB(c.Request().Context(), req.BusinessID)
 		successMessage = "KYB verified successfully"
-	default:
-		return c.JSON(http.StatusBadRequest, map[string]string{
-			"error": "Invalid action. Allowed values: reject, verify",
-		})
 	}
 
 	// Handle service errors
 	if err != nil {
-		h.logger.Errorf("Error performing KYB action '%s' for BID %s: %v", action, bid, err)
+		h.logger.Errorf("Error performing KYB action '%s' for BID %s: %v", req.Action, req.BusinessID, err)
 		if err.Error() == "business not found" {
 			return c.JSON(http.StatusNotFound, map[string]string{
 				"error": "Business not found",

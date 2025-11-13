@@ -1,4 +1,4 @@
-package http
+package notification
 
 import (
 	"net/http"
@@ -6,19 +6,19 @@ import (
 	"github.com/labstack/echo/v4"
 	"xcentro.in/internal/core/auth"
 	coreNotification "xcentro.in/internal/core/notification"
-	"xcentro.in/internal/services/notification"
 	"xcentro.in/internal/shared/logger"
+	"xcentro.in/internal/shared/validator"
 )
 
 // OpsNotificationHandler handles ops dashboard notification-related endpoints
 type OpsNotificationHandler struct {
-	notificationService notification.NotificationService
+	notificationService coreNotification.NotificationService
 	authService         auth.AuthService
 	logger              *logger.Logger
 }
 
 // NewOpsNotificationHandler creates a new ops notification handler instance
-func NewOpsNotificationHandler(notificationService notification.NotificationService, authService auth.AuthService) *OpsNotificationHandler {
+func NewOpsNotificationHandler(notificationService coreNotification.NotificationService, authService auth.AuthService) *OpsNotificationHandler {
 	return &OpsNotificationHandler{
 		notificationService: notificationService,
 		authService:         authService,
@@ -27,10 +27,10 @@ func NewOpsNotificationHandler(notificationService notification.NotificationServ
 }
 
 // RegisterOpsNotificationRoutes registers all ops dashboard notification routes
-func RegisterOpsNotificationRoutes(e *echo.Group, notificationService notification.NotificationService, authService auth.AuthService) {
+func RegisterOpsNotificationRoutes(e *echo.Group, notificationService coreNotification.NotificationService, authService auth.AuthService) {
 	handler := NewOpsNotificationHandler(notificationService, authService)
 
-	notificationGroup := e.Group("/notifications")
+	notificationGroup := e.Group("/notification")
 
 	// Bulk trigger endpoint
 	notificationGroup.POST("/trigger", handler.TriggerNotifications)
@@ -38,7 +38,7 @@ func RegisterOpsNotificationRoutes(e *echo.Group, notificationService notificati
 
 // TriggerNotifications handles POST /notifications/trigger
 func (h *OpsNotificationHandler) TriggerNotifications(c echo.Context) error {
-	// Parse and validate request body
+	// Parse request body
 	var req coreNotification.OpsBulkTriggerRequest
 	if err := c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]string{
@@ -46,8 +46,15 @@ func (h *OpsNotificationHandler) TriggerNotifications(c echo.Context) error {
 		})
 	}
 
-	// Validate using the validator
+	// Trim and validate
+	validator.TrimStrings(&req)
 	if err := c.Validate(&req); err != nil {
+		if ve, ok := err.(*validator.ValidationError); ok {
+			return c.JSON(http.StatusBadRequest, map[string]interface{}{
+				"error":  "Validation failed",
+				"errors": ve.Errors,
+			})
+		}
 		return c.JSON(http.StatusBadRequest, map[string]string{
 			"error": err.Error(),
 		})

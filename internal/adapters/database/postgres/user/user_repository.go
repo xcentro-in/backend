@@ -907,10 +907,10 @@ func parseUserRole(role string) shared.UserRole {
 		return shared.Owner
 	case "admin":
 		return shared.Admin
-	case "finance":
-		return shared.Finance
-	case "support":
-		return shared.Support
+	case "manager":
+		return shared.Manager
+	case "auditor":
+		return shared.Auditor
 	case "none":
 		return shared.None
 	default:

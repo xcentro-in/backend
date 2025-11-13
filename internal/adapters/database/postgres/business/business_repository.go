@@ -3,6 +3,7 @@ package business
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/jackc/pgx/v5"

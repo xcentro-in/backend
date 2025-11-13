@@ -5,7 +5,9 @@ import (
 	"xcentro.in/internal/adapters/database/postgres/business"
 	notificationRepo "xcentro.in/internal/adapters/database/postgres/notification"
 	userRepo "xcentro.in/internal/adapters/database/postgres/user"
-	httpHandlers "xcentro.in/internal/handlers/http"
+	businessHandler "xcentro.in/internal/handlers/http/business"
+	notificationHandler "xcentro.in/internal/handlers/http/notification"
+	userHandler "xcentro.in/internal/handlers/http/user"
 	businessSvc "xcentro.in/internal/services/business"
 	notificationSvc "xcentro.in/internal/services/notification"
 	userSvc "xcentro.in/internal/services/user"
@@ -36,7 +38,7 @@ func registerOpsBusinessRoutes(clients *externalClients, cfg *config.Config, gro
 	)
 
 	// Register routes
-	httpHandlers.RegisterOpsBusinessRoutes(group, businessService, nil)
+	businessHandler.RegisterOpsBusinessRoutes(group, businessService, nil)
 }
 
 // registerOpsNotificationRoutes registers ops dashboard notification routes
@@ -57,7 +59,7 @@ func registerOpsNotificationRoutes(clients *externalClients, cfg *config.Config,
 	)
 
 	// Register routes
-	httpHandlers.RegisterOpsNotificationRoutes(group, notificationService, nil)
+	notificationHandler.RegisterOpsNotificationRoutes(group, notificationService, nil)
 }
 
 // registerOpsUserRoutes registers ops dashboard user routes
@@ -76,7 +78,7 @@ func registerOpsUserRoutes(clients *externalClients, cfg *config.Config, group *
 	)
 
 	// Register routes
-	httpHandlers.RegisterOpsUserRoutes(group, userService, nil)
+	userHandler.RegisterOpsUserRoutes(group, userService, nil)
 }
 
 func registerOpsV1Routes(s *opsDashboardServer) {

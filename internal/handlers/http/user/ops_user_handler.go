@@ -1,13 +1,13 @@
-package http
+package user
 
 import (
 	"net/http"
-	"strings"
 
 	"github.com/labstack/echo/v4"
 	"xcentro.in/internal/core/auth"
 	"xcentro.in/internal/core/user"
 	"xcentro.in/internal/shared/logger"
+	"xcentro.in/internal/shared/validator"
 )
 
 // OpsUserHandler handles ops dashboard user-related endpoints
@@ -30,7 +30,7 @@ func NewOpsUserHandler(userService user.UserService, authService auth.AuthServic
 func RegisterOpsUserRoutes(e *echo.Group, userService user.UserService, authService auth.AuthService) {
 	handler := NewOpsUserHandler(userService, authService)
 
-	userGroup := e.Group("/users")
+	userGroup := e.Group("/user")
 
 	// User search endpoint
 	userGroup.GET("/search", handler.SearchUsers)
@@ -45,57 +45,31 @@ func RegisterOpsUserRoutes(e *echo.Group, userService user.UserService, authServ
 
 // SearchUsers handles GET /users/search?business_id=biz-123&business_id=biz-456&q=john
 func (h *OpsUserHandler) SearchUsers(c echo.Context) error {
-	// Get business IDs from query params (can have multiple)
-	rawBusinessIDs := c.QueryParams()["business_id"]
-	if len(rawBusinessIDs) == 0 {
+	var req user.OpsUserSearchRequest
+
+	// Bind query parameters
+	if err := c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]string{
-			"error": "At least one business_id is required",
+			"error": "Invalid request parameters",
 		})
 	}
 
-	// Validate number of business IDs (max 20 to prevent abuse)
-	if len(rawBusinessIDs) > 20 {
-		return c.JSON(http.StatusBadRequest, map[string]string{
-			"error": "Maximum 20 business IDs allowed per request",
-		})
-	}
-
-	// Trim and validate business IDs
-	businessIDs := make([]string, 0, len(rawBusinessIDs))
-	for _, bid := range rawBusinessIDs {
-		trimmedBid := strings.TrimSpace(bid)
-		if trimmedBid == "" {
-			return c.JSON(http.StatusBadRequest, map[string]string{
-				"error": "Business ID cannot be empty",
+	// Trim and validate
+	validator.TrimStrings(&req)
+	if err := c.Validate(&req); err != nil {
+		if ve, ok := err.(*validator.ValidationError); ok {
+			return c.JSON(http.StatusBadRequest, map[string]interface{}{
+				"error":  "Validation failed",
+				"errors": ve.Errors,
 			})
 		}
-		businessIDs = append(businessIDs, trimmedBid)
-	}
-
-	// Get and trim search term
-	searchTerm := strings.TrimSpace(c.QueryParam("q"))
-	if searchTerm == "" {
 		return c.JSON(http.StatusBadRequest, map[string]string{
-			"error": "Search term 'q' is required",
-		})
-	}
-
-	// Validate search term length
-	if len(searchTerm) < 2 {
-		return c.JSON(http.StatusBadRequest, map[string]string{
-			"error": "Search term must be at least 2 characters",
-		})
-	}
-
-	// Validate search term length (max 100 chars to prevent abuse)
-	if len(searchTerm) > 100 {
-		return c.JSON(http.StatusBadRequest, map[string]string{
-			"error": "Search term must not exceed 100 characters",
+			"error": err.Error(),
 		})
 	}
 
 	// Call service layer
-	results, err := h.userService.SearchUsersByBusinesses(c.Request().Context(), businessIDs, searchTerm)
+	results, err := h.userService.SearchUsersByBusinesses(c.Request().Context(), req.BusinessIDs, req.SearchTerm)
 	if err != nil {
 		h.logger.Errorf("Error searching users: %v", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{
@@ -113,19 +87,31 @@ func (h *OpsUserHandler) SearchUsers(c echo.Context) error {
 
 // GetUserDetails handles GET /users/:user_id?bid=biz-123
 func (h *OpsUserHandler) GetUserDetails(c echo.Context) error {
-	// Get and trim user ID from path parameter
-	userID := strings.TrimSpace(c.Param("user_id"))
-	if userID == "" {
+	var req user.OpsUserDetailsRequest
+
+	// Bind path and query parameters
+	if err := c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]string{
-			"error": "User ID is required",
+			"error": "Invalid request parameters",
 		})
 	}
 
-	// Get and trim optional business ID from query parameter
-	businessID := strings.TrimSpace(c.QueryParam("bid"))
+	// Trim and validate
+	validator.TrimStrings(&req)
+	if err := c.Validate(&req); err != nil {
+		if ve, ok := err.(*validator.ValidationError); ok {
+			return c.JSON(http.StatusBadRequest, map[string]interface{}{
+				"error":  "Validation failed",
+				"errors": ve.Errors,
+			})
+		}
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": err.Error(),
+		})
+	}
 
 	// Call service layer
-	details, err := h.userService.GetUserDetailsForOps(c.Request().Context(), userID, businessID)
+	details, err := h.userService.GetUserDetailsForOps(c.Request().Context(), req.UserID, req.BusinessID)
 	if err != nil {
 		if err.Error() == "user not found" {
 			return c.JSON(http.StatusNotFound, map[string]string{
@@ -143,36 +129,32 @@ func (h *OpsUserHandler) GetUserDetails(c echo.Context) error {
 
 // ReloadUserPANData handles POST /users/:user_id/reload-pan?type=pan_com|pan_aadhaar_link
 func (h *OpsUserHandler) ReloadUserPANData(c echo.Context) error {
-	// Parse and validate user ID
-	userID := strings.TrimSpace(c.Param("user_id"))
-	if userID == "" {
+	var req user.OpsReloadUserPANRequest
+
+	// Bind path and query parameters
+	if err := c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]string{
-			"error": "User ID is required",
+			"error": "Invalid request parameters",
 		})
 	}
 
-	// Parse and validate data type
-	dataType := strings.TrimSpace(c.QueryParam("type"))
-	if dataType == "" {
+	// Trim and validate
+	validator.TrimStrings(&req)
+	if err := c.Validate(&req); err != nil {
+		if ve, ok := err.(*validator.ValidationError); ok {
+			return c.JSON(http.StatusBadRequest, map[string]interface{}{
+				"error":  "Validation failed",
+				"errors": ve.Errors,
+			})
+		}
 		return c.JSON(http.StatusBadRequest, map[string]string{
-			"error": "Query parameter 'type' is required",
-		})
-	}
-
-	// Validate allowed types
-	allowedTypes := map[string]bool{
-		"pan_com":          true,
-		"pan_aadhaar_link": true,
-	}
-	if !allowedTypes[dataType] {
-		return c.JSON(http.StatusBadRequest, map[string]string{
-			"error": "Invalid type. Allowed values: pan_com, pan_aadhaar_link",
+			"error": err.Error(),
 		})
 	}
 
 	// Call service layer
-	if err := h.userService.ReloadUserPANData(c.Request().Context(), userID, dataType); err != nil {
-		h.logger.Errorf("Error reloading user PAN data for user %s, type %s: %v", userID, dataType, err)
+	if err := h.userService.ReloadUserPANData(c.Request().Context(), req.UserID, req.DataType); err != nil {
+		h.logger.Errorf("Error reloading user PAN data for user %s, type %s: %v", req.UserID, req.DataType, err)
 		if err.Error() == "user not found" {
 			return c.JSON(http.StatusNotFound, map[string]string{
 				"error": "User not found",
@@ -190,39 +172,42 @@ func (h *OpsUserHandler) ReloadUserPANData(c echo.Context) error {
 
 // KYCAction handles POST /users/:user_id/kyc-action?action=reject
 func (h *OpsUserHandler) KYCAction(c echo.Context) error {
-	// Parse and validate user ID
-	userID := strings.TrimSpace(c.Param("user_id"))
-	if userID == "" {
+	var req user.OpsKYCActionRequest
+
+	// Bind path and query parameters
+	if err := c.Bind(&req); err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]string{
-			"error": "User ID is required",
+			"error": "Invalid request parameters",
 		})
 	}
 
-	// Parse and validate action
-	action := strings.TrimSpace(c.QueryParam("action"))
-	if action == "" {
+	// Trim and validate
+	validator.TrimStrings(&req)
+	if err := c.Validate(&req); err != nil {
+		if ve, ok := err.(*validator.ValidationError); ok {
+			return c.JSON(http.StatusBadRequest, map[string]interface{}{
+				"error":  "Validation failed",
+				"errors": ve.Errors,
+			})
+		}
 		return c.JSON(http.StatusBadRequest, map[string]string{
-			"error": "Query parameter 'action' is required",
+			"error": err.Error(),
 		})
 	}
 
-	// Validate allowed actions
+	// Call service layer based on action
 	var err error
 	var successMessage string
 
-	switch action {
+	switch req.Action {
 	case "reject":
-		err = h.userService.RejectKYC(c.Request().Context(), userID)
+		err = h.userService.RejectKYC(c.Request().Context(), req.UserID)
 		successMessage = "KYC rejected successfully"
-	default:
-		return c.JSON(http.StatusBadRequest, map[string]string{
-			"error": "Invalid action. Allowed values: reject",
-		})
 	}
 
 	// Handle service errors
 	if err != nil {
-		h.logger.Errorf("Error performing KYC action '%s' for user %s: %v", action, userID, err)
+		h.logger.Errorf("Error performing KYC action '%s' for user %s: %v", req.Action, req.UserID, err)
 		if err.Error() == "user not found" {
 			return c.JSON(http.StatusNotFound, map[string]string{
 				"error": "User not found",

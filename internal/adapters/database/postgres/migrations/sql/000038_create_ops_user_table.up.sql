@@ -1,6 +1,6 @@
 -- Create ops_user_table for ops dashboard users with OIDC authentication
-CREATE TABLE IF NOT EXISTS ops_user_table (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v7(),
+CREATE TABLE IF NOT EXISTS xcentro.ops_user_table (
+    id UUID PRIMARY KEY DEFAULT uuidv7(),
     name VARCHAR(255) NOT NULL,
     email VARCHAR(255) NOT NULL UNIQUE,
 
@@ -17,15 +17,12 @@ CREATE TABLE IF NOT EXISTS ops_user_table (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- Create index on email for faster lookups
-CREATE INDEX idx_ops_user_email ON ops_user_table(email);
-
 -- Add updated_at trigger
 CREATE TRIGGER update_ops_user_updated_at
-    BEFORE UPDATE ON ops_user_table
+    BEFORE UPDATE ON xcentro.ops_user_table
     FOR EACH ROW
-    EXECUTE FUNCTION update_updated_at_column();
+    EXECUTE FUNCTION xcentro.trigger_set_timestamp();
 
 -- Add comments for documentation
-COMMENT ON TABLE ops_user_table IS 'Stores ops dashboard user accounts with OIDC authentication';
-COMMENT ON COLUMN ops_user_table.roles IS 'Array of role strings extracted from OIDC token claims, e.g., ["admin", "viewer"]';
+COMMENT ON TABLE xcentro.ops_user_table IS 'Stores ops dashboard user accounts with OIDC authentication';
+COMMENT ON COLUMN xcentro.ops_user_table.roles IS 'Array of role strings extracted from OIDC token claims, e.g., ["admin", "viewer"]';
