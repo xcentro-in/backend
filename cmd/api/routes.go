@@ -222,19 +222,25 @@ func registerV1PayoutRoutes(clients *externalClients, cfg *config.Config, group 
 	webhookHandler := payoutHandler.NewPayoutWebhookHandler(transferRepository, stateChangeRepository, cfg.Castler.WebhookSecret)
 	dashboardHandler := payoutHandler.NewPayoutHandler(payoutService, transferRepository, configRepository, voucherRepository, settlementService, providerFactory, stateChangeRepository, logger.GetDefault())
 
+	// Payout routes - separated by purpose
 	payoutGroup := group.Group("/payout")
+
+	// Webhook endpoints (external - called by Castler)
 	payoutGroup.POST("/webhooks/castler", webhookHandler.HandleCastlerWebhook)
-	payoutGroup.GET("/pending-approvals", dashboardHandler.GetPendingApprovals)
-	payoutGroup.POST("/:transfer_id/approve", dashboardHandler.ApproveTransfer)
-	payoutGroup.POST("/:transfer_id/cancel", dashboardHandler.CancelTransfer)
-	payoutGroup.GET("/:transfer_id", dashboardHandler.GetTransferDetails)
-	payoutGroup.GET("/:transfer_id/webhooks", dashboardHandler.GetWebhookHistory)
-	payoutGroup.GET("/timeouts", dashboardHandler.GetTimeoutTransfers)
-	payoutGroup.POST("/:transfer_id/mark-completed", dashboardHandler.MarkCompletedManually)
-	payoutGroup.GET("/config", dashboardHandler.GetConfig)
-	payoutGroup.PUT("/config", dashboardHandler.UpdateConfig)
-	payoutGroup.POST("/config", dashboardHandler.CreateConfig)
-	payoutGroup.POST("/initiate", dashboardHandler.InitiatePayoutManually)
+
+	// Dashboard/Operations endpoints (internal - admin/ops team)
+	dashboardGroup := payoutGroup.Group("/dashboard")
+	dashboardGroup.POST("/initiate", dashboardHandler.InitiatePayoutManually)
+	dashboardGroup.GET("/pending-approvals", dashboardHandler.GetPendingApprovals) // DEPRECATED
+	dashboardGroup.POST("/:transfer_id/approve", dashboardHandler.ApproveTransfer) // DEPRECATED
+	dashboardGroup.POST("/:transfer_id/cancel", dashboardHandler.CancelTransfer)
+	dashboardGroup.GET("/:transfer_id", dashboardHandler.GetTransferDetails)
+	dashboardGroup.GET("/:transfer_id/webhooks", dashboardHandler.GetWebhookHistory)
+	dashboardGroup.GET("/timeouts", dashboardHandler.GetTimeoutTransfers)
+	dashboardGroup.POST("/:transfer_id/mark-completed", dashboardHandler.MarkCompletedManually)
+	dashboardGroup.GET("/config", dashboardHandler.GetConfig)
+	dashboardGroup.PUT("/config", dashboardHandler.UpdateConfig)
+	dashboardGroup.POST("/config", dashboardHandler.CreateConfig)
 }
 
 func registerV1BatchPaymentRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
