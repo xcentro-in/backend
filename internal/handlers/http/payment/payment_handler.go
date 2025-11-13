@@ -1401,10 +1401,58 @@ func (h *PaymentHandler) fetchPaymentActivity(ctx context.Context, paymentUUID u
 			item.ActorName = string(sc.ActorType)
 		}
 
+		// Redact system/internal actor names for customer-facing response
+		item.ActorName = redactActorName(item.ActorName)
+
 		activity = append(activity, item)
 	}
 
 	return activity, nil
+}
+
+// redactActorName redacts internal system/third-party actor names to "system"
+// for customer-facing API responses. Keeps database unchanged for internal debugging.
+func redactActorName(actorName string) string {
+	// List of internal/system actors that should be redacted
+	internalActors := map[string]bool{
+		// Payment gateway webhooks/callbacks
+		"mockpg_callback":    true,
+		"jiopay_callback":    true,
+		"jiopay_webhook":     true,
+		"easebuzz_callback":  true,
+		"easebuzz_webhook":   true,
+
+		// Payout provider webhooks
+		"castler_webhook":    true,
+		"castler_api":        true,
+
+		// Internal handlers/workers
+		"payout_handler":     true,
+		"payout_worker":      true,
+		"payment_handler":    true,
+		"webhook_handler":    true,
+
+		// Generic system actors
+		"system":             true,
+		"webhook":            true,
+		"user":               false, // Keep user as-is
+		"admin":              false, // Keep admin as-is
+	}
+
+	// Check if this is an internal actor that should be redacted
+	if shouldRedact, exists := internalActors[actorName]; exists && shouldRedact {
+		return "system"
+	}
+
+	// If actor name looks like a UUID (user ID), keep it as "user"
+	// This handles cases where actual user UUIDs are used as actor_name
+	if len(actorName) == 36 && actorName[8] == '-' && actorName[13] == '-' {
+		return "user"
+	}
+
+	// Default: assume it's a user name/ID, return as-is
+	// (could be business user names, etc.)
+	return actorName
 }
 
 // RetryPayment handles POST /process_payment/retry
