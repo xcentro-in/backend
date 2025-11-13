@@ -1967,7 +1967,7 @@ func (r *PostgresVoucherRepository) GetPaymentDetailsByVoucher(ctx context.Conte
 			COALESCE(sc.card_type::text, '') as card_type,
 			COALESCE(sc.card_category::text, '') as card_category,
 			COALESCE(sc.last_four_digits, '') as card_last_four,
-			COALESCE(sc.card_category::text, '') as card_network,
+			COALESCE(sc.card_type::text, '') as card_network,
 
 			-- Bank account details (encrypted, will decrypt in Go)
 			COALESCE(ba.account_number_encrypted, '') as bank_account_encrypted,
