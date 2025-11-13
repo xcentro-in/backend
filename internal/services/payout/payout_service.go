@@ -47,9 +47,10 @@ func NewPayoutService(
 }
 
 // InitiatePayoutForVoucher creates a transfer request for a voucher
-// Determines if auto-approval is needed based on amount
+// DEPRECATED: Use InitiateManualPayout with payment_id instead
+// Kept for backward compatibility during transition
 func (s *PayoutService) InitiatePayoutForVoucher(ctx context.Context, voucherID string) (*payout.PayoutTransferRequest, error) {
-	s.logger.InfoWith("InitiatePayoutForVoucher called", "voucher_id", voucherID)
+	s.logger.InfoWith("InitiatePayoutForVoucher called (DEPRECATED)", "voucher_id", voucherID)
 
 	// Step 1: Get voucher
 	voucherUUID, err := uuid.Parse(voucherID)
@@ -66,14 +67,6 @@ func (s *PayoutService) InitiatePayoutForVoucher(ctx context.Context, voucherID 
 	// Note: PaymentID must exist (voucher finalized after payment)
 	if vch.PaymentID == nil {
 		return nil, fmt.Errorf("voucher not linked to payment (still in draft)")
-	}
-
-	if voucher.PayoutStatus(vch.PayoutStatus) != voucher.PayoutStatusPending {
-		return nil, fmt.Errorf("voucher already has payout_status: %s", vch.PayoutStatus)
-	}
-
-	if vch.CancellationStatus != voucher.CancellationStatusNotCancelled {
-		return nil, fmt.Errorf("voucher is cancelled: %s", vch.CancellationStatus)
 	}
 
 	// Step 3: Check for existing transfer (idempotent)
@@ -97,57 +90,33 @@ func (s *PayoutService) InitiatePayoutForVoucher(ctx context.Context, voucherID 
 		return nil, fmt.Errorf("payee not onboarded to Castler: missing beneficiary ID")
 	}
 
-	// Step 5: Get configuration for auto-approval logic
+	// Step 5: Get configuration
 	config, err := s.configRepo.GetConfig(ctx, nil) // Use global config for MVP
 	if err != nil {
 		return nil, fmt.Errorf("failed to get payout configuration: %w", err)
 	}
 
-	// Step 6: Determine if needs approval
-	requiresApproval := !config.ShouldAutoApprove(vch.NetAmount)
-	status := payout.TransferStatusApproved
-	approvalMode := payout.ApprovalModeAuto
-	var approvedBy string
-	var approvedAt *time.Time
-
-	if requiresApproval {
-		status = payout.TransferStatusPendingApproval
-		approvalMode = payout.ApprovalModeManual
-		s.logger.WarnWith("Amount exceeds auto-approval limit, requires manual approval",
-			"amount", vch.NetAmount,
-			"auto_approval_limit", config.AutoApprovalLimit)
-	} else {
-		approvedBy = "SYSTEM"
-		now := time.Now()
-		approvedAt = &now
-		s.logger.InfoWith("Amount within auto-approval limit, auto-approved",
-			"amount", vch.NetAmount,
-			"auto_approval_limit", config.AutoApprovalLimit)
-	}
-
-	// Step 7: Create transfer request
+	// Step 6: Create transfer request (simplified - no approval workflow)
 	transferReq := &payout.PayoutTransferRequest{
 		TransferRequestID:     uuid.Must(uuid.NewV7()).String(),
+		PaymentID:             vch.PaymentID.String(),
 		VoucherID:             voucherID,
 		Provider:              payout.ProviderCastler, // Always Castler for now
 		ProviderBeneficiaryID: bankAccount.CastlerBeneficiaryID,
+		EscrowID:              "", // TODO: Get from config/environment
 		Amount:                vch.NetAmount,
 		Currency:              vch.Currency,
-		Purpose:               "vendor_payment", // TODO: Make configurable
-		Reference:             vch.VoucherNumber,
+		Purpose:               "vendor_payment",
+		Reference:             vch.VoucherNumber, // Will use transfer_request_id in new flow
 		Narration:             fmt.Sprintf("Payment for %s", vch.VoucherNumber),
 		TransferMode:          config.PreferredTransferMode,
-		RequiresApproval:      requiresApproval,
-		ApprovalMode:          approvalMode,
-		ApprovedBy:            approvedBy,
-		ApprovedAt:            approvedAt,
-		Status:                status,
+		Status:                payout.TransferStatusInitiated,
 		RetryCount:            0,
 		MaxRetries:            config.MaxRetryAttempts,
 		CreatedAt:             time.Now(),
 	}
 
-	// Step 8: Save transfer request
+	// Step 7: Save transfer request
 	if err := s.transferRepo.Create(ctx, transferReq); err != nil {
 		return nil, fmt.Errorf("failed to create transfer request: %w", err)
 	}
@@ -157,65 +126,6 @@ func (s *PayoutService) InitiatePayoutForVoucher(ctx context.Context, voucherID 
 		"status", transferReq.Status,
 		"amount", transferReq.Amount)
 	return transferReq, nil
-}
-
-// ApproveTransfer manually approves a pending transfer
-func (s *PayoutService) ApproveTransfer(ctx context.Context, transferRequestID string, approvedBy string, remarks string) error {
-	s.logger.InfoWith("ApproveTransfer called",
-		"transfer_request_id", transferRequestID,
-		"approved_by", approvedBy)
-
-	// Get transfer
-	transfer, err := s.transferRepo.GetByID(ctx, transferRequestID)
-	if err != nil {
-		return fmt.Errorf("failed to get transfer: %w", err)
-	}
-
-	// Validate status
-	if transfer.Status != payout.TransferStatusPendingApproval {
-		return fmt.Errorf("transfer not pending approval: status=%s", transfer.Status)
-	}
-
-	// Approve
-	now := time.Now()
-	if err := s.transferRepo.ApproveTransfer(ctx, transferRequestID, approvedBy, payout.ApprovalModeManual, now); err != nil {
-		return fmt.Errorf("failed to approve transfer: %w", err)
-	}
-
-	s.logger.InfoWith("Transfer approved successfully", "transfer_request_id", transferRequestID)
-	return nil
-}
-
-// CancelTransfer cancels a pending transfer
-func (s *PayoutService) CancelTransfer(ctx context.Context, transferRequestID string, cancelledBy string, reason string) error {
-	s.logger.InfoWith("CancelTransfer called",
-		"transfer_request_id", transferRequestID,
-		"cancelled_by", cancelledBy,
-		"reason", reason)
-
-	// Get transfer
-	transfer, err := s.transferRepo.GetByID(ctx, transferRequestID)
-	if err != nil {
-		return fmt.Errorf("failed to get transfer: %w", err)
-	}
-
-	// Validate can be cancelled
-	if transfer.Status == payout.TransferStatusInitiated ||
-		transfer.Status == payout.TransferStatusProcessing ||
-		transfer.Status == payout.TransferStatusCompleted {
-		return fmt.Errorf("cannot cancel transfer in status: %s", transfer.Status)
-	}
-
-	// Cancel
-	now := time.Now()
-	if err := s.transferRepo.UpdateStatus(ctx, transferRequestID, payout.TransferStatusCancelled, now); err != nil {
-		return fmt.Errorf("failed to cancel transfer: %w", err)
-	}
-
-	s.logger.InfoWith("Transfer cancelled successfully",
-		"transfer_request_id", transferRequestID,
-		"reason", reason)
-	return nil
 }
 
 // GetTransferDetails retrieves transfer details
@@ -269,11 +179,6 @@ func (s *PayoutService) MarkCompletedManually(ctx context.Context, transferReque
 	now := time.Now()
 	if err := s.transferRepo.MarkCompleted(ctx, transferRequestID, utr, now); err != nil {
 		return fmt.Errorf("failed to mark completed: %w", err)
-	}
-
-	// Update voucher payout status
-	if err := s.voucherRepo.UpdatePayoutStatus(ctx, transfer.VoucherID, voucher.PayoutStatusCompleted, utr); err != nil {
-		return fmt.Errorf("failed to update voucher status: %w", err)
 	}
 
 	s.logger.InfoWith("Transfer manually completed successfully",

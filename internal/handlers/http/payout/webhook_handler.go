@@ -13,25 +13,21 @@ import (
 
 	"github.com/labstack/echo/v4"
 	"xcentro.in/internal/core/payout"
-	"xcentro.in/internal/core/voucher"
 )
 
 // PayoutWebhookHandler handles webhook callbacks from payout providers
 type PayoutWebhookHandler struct {
-	transferRepo    payout.PayoutTransferRepository
-	voucherRepo     voucher.VoucherRepository
-	webhookSecret   string // Castler webhook secret for signature verification
+	transferRepo  payout.PayoutTransferRepository
+	webhookSecret string // Castler webhook secret for signature verification
 }
 
 // NewPayoutWebhookHandler creates a new webhook handler
 func NewPayoutWebhookHandler(
 	transferRepo payout.PayoutTransferRepository,
-	voucherRepo voucher.VoucherRepository,
 	webhookSecret string,
 ) *PayoutWebhookHandler {
 	return &PayoutWebhookHandler{
 		transferRepo:  transferRepo,
-		voucherRepo:   voucherRepo,
 		webhookSecret: webhookSecret,
 	}
 }
@@ -173,11 +169,6 @@ func (h *PayoutWebhookHandler) handleProcessing(ctx context.Context, transfer *p
 		return fmt.Errorf("failed to update transfer status: %w", err)
 	}
 
-	// Update voucher payout status to 'processing'
-	if err := h.voucherRepo.UpdatePayoutStatus(ctx, transfer.VoucherID, voucher.PayoutStatusProcessing, ""); err != nil {
-		return fmt.Errorf("failed to update voucher status: %w", err)
-	}
-
 	fmt.Println("  ✅ Transfer marked as processing")
 	return nil
 }
@@ -189,11 +180,6 @@ func (h *PayoutWebhookHandler) handleCompleted(ctx context.Context, transfer *pa
 	// Mark transfer as completed
 	if err := h.transferRepo.MarkCompleted(ctx, transfer.TransferRequestID, payload.UTR, payload.Timestamp); err != nil {
 		return fmt.Errorf("failed to mark transfer completed: %w", err)
-	}
-
-	// Update voucher payout status to 'completed' with UTR
-	if err := h.voucherRepo.UpdatePayoutStatus(ctx, transfer.VoucherID, voucher.PayoutStatusCompleted, payload.UTR); err != nil {
-		return fmt.Errorf("failed to update voucher status: %w", err)
 	}
 
 	fmt.Printf("  ✅ Transfer completed successfully (UTR: %s)\n", payload.UTR)
@@ -208,11 +194,6 @@ func (h *PayoutWebhookHandler) handleFailed(ctx context.Context, transfer *payou
 	// Mark transfer as failed
 	if err := h.transferRepo.MarkFailed(ctx, transfer.TransferRequestID, failureReason, payload.Timestamp); err != nil {
 		return fmt.Errorf("failed to mark transfer failed: %w", err)
-	}
-
-	// Update voucher payout status to 'failed'
-	if err := h.voucherRepo.UpdatePayoutStatus(ctx, transfer.VoucherID, voucher.PayoutStatusFailed, failureReason); err != nil {
-		return fmt.Errorf("failed to update voucher status: %w", err)
 	}
 
 	// TODO: Implement retry strategy

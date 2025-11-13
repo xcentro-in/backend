@@ -174,7 +174,8 @@ func (c *CastlerClient) CreateTransferRequest(ctx context.Context, req *payout.C
 	}
 
 	// Map Castler response to domain response
-	status := payout.TransferStatusApproved // Castler creates in pending state
+	// With simplified workflow, Castler auto-initiates transfers
+	status := payout.TransferStatusInitiated
 	if castlerResp.Status == "processing" {
 		status = payout.TransferStatusProcessing
 	}
@@ -182,7 +183,7 @@ func (c *CastlerClient) CreateTransferRequest(ctx context.Context, req *payout.C
 	return &payout.CreateTransferResponse{
 		ProviderTransferID:  castlerResp.TransferID,
 		Status:              status,
-		RequiresApproval:    true, // Castler always requires approval
+		RequiresApproval:    false, // No approval workflow in simplified design
 		Message:             castlerResp.Message,
 		EstimatedSettlement: &castlerResp.EstimatedSettlement,
 		Metadata: map[string]interface{}{
