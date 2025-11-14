@@ -2,8 +2,9 @@ package business
 
 // OpsListBusinessesRequest represents the request for listing businesses
 type OpsListBusinessesRequest struct {
-	Page  int `query:"page" validate:"omitempty,gte=1"`
-	Limit int `query:"limit" validate:"omitempty,gte=1,lte=100"`
+	Page      int    `query:"page" validate:"omitempty,gte=1"`
+	Limit     int    `query:"limit" validate:"omitempty,gte=1,lte=100"`
+	KYBStatus string `query:"kyb_status" validate:"omitempty,oneof=kyc_not_started kyc_in_progress kyc_completed kyc_verified kyc_needs_update kyc_rejected"`
 }
 
 // OpsSearchBusinessesRequest represents the request for searching businesses

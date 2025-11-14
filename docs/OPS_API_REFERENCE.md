@@ -12,13 +12,14 @@ This document provides a complete reference for all operations dashboard (ops) A
 
 **Endpoint:** `GET /ops/business`
 
-**Description:** Retrieves a paginated list of all businesses.
+**Description:** Retrieves a paginated list of all businesses, with optional KYB status filter.
 
 **Query Parameters:**
 | Parameter | Type | Required | Validation | Default | Description |
 |-----------|------|----------|------------|---------|-------------|
 | `page` | integer | No | >= 1 | 1 | Page number |
 | `limit` | integer | No | >= 1, <= 100 | 20 | Items per page |
+| `kyb_status` | string | No | One of: `kyc_not_started`, `kyc_in_progress`, `kyc_completed`, `kyc_verified`, `kyc_needs_update`, `kyc_rejected` | - | Filter by KYB status |
 
 **Response:** `200 OK`
 ```json
@@ -42,6 +43,10 @@ This document provides a complete reference for all operations dashboard (ops) A
 }
 ```
 
+**Notes:**
+- When `kyb_status` filter is provided, only businesses with that status are returned
+- Results are sorted by KYB status priority (completed > in_progress > verified > others), then by updated date
+
 ---
 
 ### 2. Search Businesses
@@ -62,7 +67,11 @@ This document provides a complete reference for all operations dashboard (ops) A
   {
     "bid": "string",
     "name": "string",
-    "gstin": "string"
+    "gstin": "string",
+    "hasCompletedOnboarding": false,
+    "hasAddedPaymentMethod": false,
+    "hasAddedVendor": false,
+    "hasCreatedFirstPayment": false
   }
 ]
 ```
@@ -71,6 +80,7 @@ This document provides a complete reference for all operations dashboard (ops) A
 - Returns empty array `[]` if no matches found
 - Limited to 10 results
 - Search is case-insensitive prefix match
+- Includes onboarding tracking flags to show business progress
 
 ---
 

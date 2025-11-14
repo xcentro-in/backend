@@ -80,7 +80,7 @@ func (h *OpsBusinessHandler) ListBusinesses(c echo.Context) error {
 	}
 
 	// Call service layer
-	businesses, totalCount, err := h.businessService.ListBusinessesPaginated(c.Request().Context(), req.Page, req.Limit)
+	businesses, totalCount, err := h.businessService.ListBusinessesPaginated(c.Request().Context(), req.Page, req.Limit, req.KYBStatus)
 	if err != nil {
 		h.logger.Errorf("Error listing businesses: %v", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{

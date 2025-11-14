@@ -981,9 +981,9 @@ func (s *BusinessServiceImpl) UpdateOnboardingStatus(ctx context.Context, bid st
 
 // Ops Dashboard Methods
 
-// ListBusinessesPaginated retrieves paginated list of businesses
-func (s *BusinessServiceImpl) ListBusinessesPaginated(ctx context.Context, page int, limit int) ([]*business.OpsBusinessListItem, int, error) {
-	return s.businessRepo.ListBusinessesPaginated(ctx, page, limit)
+// ListBusinessesPaginated retrieves paginated list of businesses, optionally filtered by KYB status
+func (s *BusinessServiceImpl) ListBusinessesPaginated(ctx context.Context, page int, limit int, kybStatus string) ([]*business.OpsBusinessListItem, int, error) {
+	return s.businessRepo.ListBusinessesPaginated(ctx, page, limit, kybStatus)
 }
 
 // SearchBusinesses searches businesses by name or GSTIN, optionally filtered by KYB status

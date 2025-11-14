@@ -371,19 +371,30 @@ func (r *PgBusinessRepository) UpdateOnboardingFlag(ctx context.Context, bid str
 	return nil
 }
 
-// ListBusinessesPaginated retrieves paginated businesses sorted by KYB status
-func (r *PgBusinessRepository) ListBusinessesPaginated(ctx context.Context, page int, limit int) ([]*business.OpsBusinessListItem, int, error) {
+// ListBusinessesPaginated retrieves paginated businesses sorted by KYB status, optionally filtered
+func (r *PgBusinessRepository) ListBusinessesPaginated(ctx context.Context, page int, limit int, kybStatus string) ([]*business.OpsBusinessListItem, int, error) {
 	offset := (page - 1) * limit
 
+	// Build WHERE clause for kyb_status filter
+	var whereClause string
+	var countArgs []interface{}
+	var queryArgs []interface{}
+
+	if kybStatus != "" {
+		whereClause = " WHERE kyb_status = $1"
+		countArgs = append(countArgs, kybStatus)
+		queryArgs = append(queryArgs, kybStatus)
+	}
+
 	// Get total count
-	countQuery := `SELECT COUNT(*) FROM xcentro.business`
+	countQuery := `SELECT COUNT(*) FROM xcentro.business` + whereClause
 	var totalCount int
-	err := r.querier.QueryRow(ctx, countQuery).Scan(&totalCount)
+	err := r.querier.QueryRow(ctx, countQuery, countArgs...).Scan(&totalCount)
 	if err != nil {
 		return nil, 0, fmt.Errorf("error counting businesses: %w", err)
 	}
 
-	// Get paginated results with custom sort
+	// Build paginated query with custom sort
 	query := `
 		SELECT
 			bid,
@@ -393,7 +404,8 @@ func (r *PgBusinessRepository) ListBusinessesPaginated(ctx context.Context, page
 			business_type,
 			COALESCE(updated_at::text, '') as updated_at
 		FROM
-			xcentro.business
+			xcentro.business` +
+		whereClause + `
 		ORDER BY
 			CASE kyb_status
 				WHEN 'kyc_completed' THEN 1
@@ -402,11 +414,12 @@ func (r *PgBusinessRepository) ListBusinessesPaginated(ctx context.Context, page
 				ELSE 3
 			END ASC,
 			updated_at DESC
-		LIMIT $1
-		OFFSET $2
-	`
+		LIMIT $` + fmt.Sprintf("%d", len(queryArgs)+1) + `
+		OFFSET $` + fmt.Sprintf("%d", len(queryArgs)+2)
 
-	rows, err := r.querier.Query(ctx, query, limit, offset)
+	queryArgs = append(queryArgs, limit, offset)
+
+	rows, err := r.querier.Query(ctx, query, queryArgs...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("error querying businesses: %w", err)
 	}
