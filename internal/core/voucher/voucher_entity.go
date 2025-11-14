@@ -35,6 +35,37 @@ const (
 	VoucherTypeJournal VoucherType = "journal" // Journal voucher (future)
 )
 
+// CancellationStatus represents voucher cancellation state (Phase 7)
+type CancellationStatus string
+
+const (
+	CancellationStatusNotCancelled          CancellationStatus = "not_cancelled"
+	CancellationStatusCancellationRequested CancellationStatus = "cancellation_requested"
+	CancellationStatusCancelled             CancellationStatus = "cancelled"
+)
+
+// RefundStatus represents refund status for cancelled vouchers (Phase 7)
+type RefundStatus string
+
+const (
+	RefundStatusNotApplicable RefundStatus = "not_applicable"
+	RefundStatusPending       RefundStatus = "pending"
+	RefundStatusInitiated     RefundStatus = "initiated"
+	RefundStatusCompleted     RefundStatus = "completed"
+	RefundStatusFailed        RefundStatus = "failed"
+)
+
+// PayoutStatus represents payout status for vouchers (Phase 9)
+type PayoutStatus string
+
+const (
+	PayoutStatusPending        PayoutStatus = "pending"         // Awaiting payout
+	PayoutStatusInitiated      PayoutStatus = "initiated"       // Payout initiated with provider
+	PayoutStatusProcessing     PayoutStatus = "processing"      // Provider is processing
+	PayoutStatusCompleted      PayoutStatus = "completed"       // Payout completed
+	PayoutStatusFailed         PayoutStatus = "failed"          // Payout failed
+	PayoutStatusNeedsAttention PayoutStatus = "needs_attention" // Manual intervention needed
+)
 
 // Voucher represents a payment voucher domain entity
 // It serves as the accounting document linking payments to ERP systems
@@ -94,7 +125,8 @@ type Voucher struct {
 	Description     string `json:"description,omitempty"`
 
 	// Vendor/payment details
-	PaymentTerms string `json:"payment_terms,omitempty"` // e.g., "net30", "eom", "cod"
+	PaymentTerms          string `json:"payment_terms,omitempty"`           // e.g., "net30", "eom", "cod"
+	VendorReferenceNumber string `json:"vendor_reference_number,omitempty"` // Vendor's internal reference
 
 	// Payment link (NULL when voucher is in draft)
 	PaymentID *uuid.UUID `json:"payment_id,omitempty"`
@@ -106,6 +138,27 @@ type Voucher struct {
 	ERPLastSyncAt   *time.Time             `json:"erp_last_sync_at,omitempty"`
 	ERPSyncAttempts int                    `json:"erp_sync_attempts"`
 	ERPMetadata     map[string]interface{} `json:"erp_metadata,omitempty"`
+
+	// Payout tracking (Phase 6)
+	PayoutStatus      string                 `json:"payout_status"` // pending, initiated, completed, failed
+	PayoutInitiatedAt *time.Time             `json:"payout_initiated_at,omitempty"`
+	PayoutInitiatedBy *uuid.UUID             `json:"payout_initiated_by,omitempty"` // Operations user who initiated payout
+	PayoutCompletedAt *time.Time             `json:"payout_completed_at,omitempty"`
+	PayoutReferenceID string                 `json:"payout_reference_id,omitempty"` // Payout gateway txn ID
+	PayoutUTR         string                 `json:"payout_utr,omitempty"`          // Bank UTR number
+	PayoutMetadata    map[string]interface{} `json:"payout_metadata,omitempty"`
+
+	// Cancellation & refund tracking (Phase 7)
+	CancellationStatus      CancellationStatus     `json:"cancellation_status"`
+	CancellationRequestedAt *time.Time             `json:"cancellation_requested_at,omitempty"`
+	CancellationRequestedBy *uuid.UUID             `json:"cancellation_requested_by,omitempty"`
+	CancellationReason      string                 `json:"cancellation_reason,omitempty"`
+	CancellationApprovedAt  *time.Time             `json:"cancellation_approved_at,omitempty"`
+	CancellationApprovedBy  *uuid.UUID             `json:"cancellation_approved_by,omitempty"`
+	RefundStatus            RefundStatus           `json:"refund_status"`
+	RefundInitiatedAt       *time.Time             `json:"refund_initiated_at,omitempty"`
+	RefundReferenceID       string                 `json:"refund_reference_id,omitempty"`
+	RefundMetadata          map[string]interface{} `json:"refund_metadata,omitempty"`
 
 	// General ledger codes
 	GLExpenseAccount string `json:"gl_expense_account,omitempty"` // e.g., 5000

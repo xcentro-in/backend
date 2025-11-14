@@ -27,11 +27,8 @@ type Payment struct {
 	NetBankingDetails *NetBanking        `json:"net_banking_details,omitempty"`
 	UPIDetails        *UPI               `json:"upi_details,omitempty"`
 	WalletDetails     *Wallet            `json:"wallet_details,omitempty"`
-	// Fee breakdown
-	ConvenienceFee    int64              `json:"convenience_fee"`     // Base convenience fee before GST (in paise)
-	ConvenienceFeeGST int64              `json:"convenience_fee_gst"` // GST on convenience fee (in paise)
-	FeeAmount         int64              `json:"fee_amount"`          // Total fee (convenience_fee + convenience_fee_gst) - kept for backward compatibility
-	TotalAmount       int64              `json:"total_amount"`        // Amount + FeeAmount
+	FeeAmount         int64              `json:"fee_amount"`
+	TotalAmount       int64              `json:"total_amount"` // Amount + Fee
 	Metadata          map[string]any     `json:"metadata,omitempty"`
 	// Settlement tracking (Phase 7)
 	SettlementStatus      SettlementStatus       `json:"settlement_status"`

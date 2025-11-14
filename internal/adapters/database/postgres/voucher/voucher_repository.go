@@ -188,9 +188,12 @@ func (r *PostgresVoucherRepository) GetByID(ctx context.Context, voucherID uuid.
 		       fee_amount, discount_amount,
 		       financial_details, attachments,
 		       expense_category, description,
-		       payment_terms,
+		       payment_terms, vendor_reference_number,
 		       status, payment_id,
 		       erp_sync_status, erp_reference_id, erp_posting_date, erp_last_sync_at, erp_sync_attempts, erp_metadata,
+		       payout_status, payout_initiated_at, payout_initiated_by, payout_completed_at, payout_reference_id, payout_utr, payout_metadata,
+		       cancellation_status, cancellation_requested_at, cancellation_requested_by, cancellation_reason,
+		       cancellation_approved_at, cancellation_approved_by, refund_status, refund_initiated_at, refund_reference_id, refund_metadata,
 		       gl_expense_account, gl_bank_account, cost_center,
 		       created_at, created_by_user_id, updated_at, metadata
 		FROM xcentro.payment_vouchers
@@ -297,9 +300,11 @@ func (r *PostgresVoucherRepository) GetByVoucherNumber(ctx context.Context, vouc
 		       fee_amount, discount_amount,
 		       financial_details, attachments,
 		       expense_category, description,
-		       payment_terms,
 		       status, payment_id,
 		       erp_sync_status, erp_reference_id, erp_posting_date, erp_last_sync_at, erp_sync_attempts, erp_metadata,
+		       payout_status, payout_initiated_at, payout_initiated_by, payout_completed_at, payout_reference_id, payout_utr, payout_metadata,
+		       cancellation_status, cancellation_requested_at, cancellation_requested_by, cancellation_reason,
+		       cancellation_approved_at, cancellation_approved_by, refund_status, refund_initiated_at, refund_reference_id, refund_metadata,
 		       gl_expense_account, gl_bank_account, cost_center,
 		       created_at, created_by_user_id, updated_at, metadata
 		FROM xcentro.payment_vouchers
@@ -330,9 +335,11 @@ func (r *PostgresVoucherRepository) GetByPaymentID(ctx context.Context, paymentI
 		       fee_amount, discount_amount,
 		       financial_details, attachments,
 		       expense_category, description,
-		       payment_terms,
 		       status, payment_id,
 		       erp_sync_status, erp_reference_id, erp_posting_date, erp_last_sync_at, erp_sync_attempts, erp_metadata,
+		       payout_status, payout_initiated_at, payout_initiated_by, payout_completed_at, payout_reference_id, payout_utr, payout_metadata,
+		       cancellation_status, cancellation_requested_at, cancellation_requested_by, cancellation_reason,
+		       cancellation_approved_at, cancellation_approved_by, refund_status, refund_initiated_at, refund_reference_id, refund_metadata,
 		       gl_expense_account, gl_bank_account, cost_center,
 		       created_at, created_by_user_id, updated_at, metadata
 		FROM xcentro.payment_vouchers
@@ -375,9 +382,11 @@ func (r *PostgresVoucherRepository) GetVouchersByPaymentIDWithStatus(ctx context
 		       fee_amount, discount_amount,
 		       financial_details, attachments,
 		       expense_category, description,
-		       payment_terms,
 		       status, payment_id,
 		       erp_sync_status, erp_reference_id, erp_posting_date, erp_last_sync_at, erp_sync_attempts, erp_metadata,
+		       payout_status, payout_initiated_at, payout_initiated_by, payout_completed_at, payout_reference_id, payout_utr, payout_metadata,
+		       cancellation_status, cancellation_requested_at, cancellation_requested_by, cancellation_reason,
+		       cancellation_approved_at, cancellation_approved_by, refund_status, refund_initiated_at, refund_reference_id, refund_metadata,
 		       gl_expense_account, gl_bank_account, cost_center,
 		       created_at, created_by_user_id, updated_at, metadata
 		FROM xcentro.payment_vouchers
@@ -678,6 +687,81 @@ func (r *PostgresVoucherRepository) UpdateERPStatus(ctx context.Context, voucher
 	return nil
 }
 
+// RequestCancellation requests cancellation of a voucher (Phase 7)
+func (r *PostgresVoucherRepository) RequestCancellation(ctx context.Context, voucherID uuid.UUID, userID uuid.UUID, reason string, timestamp time.Time) error {
+	query := `
+		UPDATE xcentro.payment_vouchers
+		SET cancellation_status = $2,
+		    cancellation_requested_at = $3,
+		    cancellation_requested_by = $4,
+		    cancellation_reason = $5,
+		    updated_at = NOW()
+		WHERE voucher_id = $1
+	`
+
+	result, err := r.querier.Exec(ctx, query, voucherID, voucher.CancellationStatusCancellationRequested, timestamp, userID, reason)
+	if err != nil {
+		return fmt.Errorf("failed to request cancellation: %w", err)
+	}
+
+	rowsAffected := result.RowsAffected()
+	if rowsAffected == 0 {
+		return voucher.ErrVoucherNotFound
+	}
+
+	return nil
+}
+
+// ApproveCancellation approves a cancellation request (Phase 7)
+func (r *PostgresVoucherRepository) ApproveCancellation(ctx context.Context, voucherID uuid.UUID, userID uuid.UUID, timestamp time.Time, refundStatus voucher.RefundStatus) error {
+	query := `
+		UPDATE xcentro.payment_vouchers
+		SET cancellation_status = $2,
+		    cancellation_approved_at = $3,
+		    cancellation_approved_by = $4,
+		    refund_status = $5,
+		    updated_at = NOW()
+		WHERE voucher_id = $1
+	`
+
+	result, err := r.querier.Exec(ctx, query, voucherID, voucher.CancellationStatusCancelled, timestamp, userID, refundStatus)
+	if err != nil {
+		return fmt.Errorf("failed to approve cancellation: %w", err)
+	}
+
+	rowsAffected := result.RowsAffected()
+	if rowsAffected == 0 {
+		return voucher.ErrVoucherNotFound
+	}
+
+	return nil
+}
+
+// RejectCancellation rejects a cancellation request (Phase 7)
+func (r *PostgresVoucherRepository) RejectCancellation(ctx context.Context, voucherID uuid.UUID) error {
+	query := `
+		UPDATE xcentro.payment_vouchers
+		SET cancellation_status = $2,
+		    cancellation_requested_at = NULL,
+		    cancellation_requested_by = NULL,
+		    cancellation_reason = NULL,
+		    updated_at = NOW()
+		WHERE voucher_id = $1
+	`
+
+	result, err := r.querier.Exec(ctx, query, voucherID, voucher.CancellationStatusNotCancelled)
+	if err != nil {
+		return fmt.Errorf("failed to reject cancellation: %w", err)
+	}
+
+	rowsAffected := result.RowsAffected()
+	if rowsAffected == 0 {
+		return voucher.ErrVoucherNotFound
+	}
+
+	return nil
+}
+
 // GetNextVoucherNumber generates the next sequential voucher number for a business and fiscal year
 func (r *PostgresVoucherRepository) GetNextVoucherNumber(ctx context.Context, businessID uuid.UUID, fiscalYear string) (int, error) {
 	query := `
@@ -798,13 +882,13 @@ func (r *PostgresVoucherRepository) GetVouchersForERPSync(ctx context.Context, l
 // scanVoucher scans a single row into a Voucher struct
 func (r *PostgresVoucherRepository) scanVoucher(row pgx.Row) (*voucher.Voucher, error) {
 	var v voucher.Voucher
-	var financialDetailsJSON, attachmentsJSON, erpMetadataJSON, metadataJSON []byte
+	var financialDetailsJSON, attachmentsJSON, erpMetadataJSON, payoutMetadataJSON, refundMetadataJSON, metadataJSON []byte
 
 	// Nullable string fields
 	var invoiceNumber, expenseCategory, description sql.NullString
-	var paymentTerms sql.NullString
+	var paymentTerms, vendorReferenceNumber sql.NullString
 	var tdsSection sql.NullString
-	var erpReferenceID sql.NullString
+	var erpReferenceID, payoutReferenceID, payoutUTR, cancellationReason, refundReferenceID sql.NullString
 	var glExpenseAccount, glBankAccount, costCenter sql.NullString
 
 	// Nullable numeric fields
@@ -820,9 +904,12 @@ func (r *PostgresVoucherRepository) scanVoucher(row pgx.Row) (*voucher.Voucher, 
 		&v.FeeAmount, &v.DiscountAmount,
 		&financialDetailsJSON, &attachmentsJSON,
 		&expenseCategory, &description,
-		&paymentTerms,
+		&paymentTerms, &vendorReferenceNumber,
 		&v.Status, &v.PaymentID,
 		&v.ERPSyncStatus, &erpReferenceID, &v.ERPPostingDate, &v.ERPLastSyncAt, &v.ERPSyncAttempts, &erpMetadataJSON,
+		&v.PayoutStatus, &v.PayoutInitiatedAt, &v.PayoutInitiatedBy, &v.PayoutCompletedAt, &payoutReferenceID, &payoutUTR, &payoutMetadataJSON,
+		&v.CancellationStatus, &v.CancellationRequestedAt, &v.CancellationRequestedBy, &cancellationReason,
+		&v.CancellationApprovedAt, &v.CancellationApprovedBy, &v.RefundStatus, &v.RefundInitiatedAt, &refundReferenceID, &refundMetadataJSON,
 		&glExpenseAccount, &glBankAccount, &costCenter,
 		&v.CreatedAt, &v.CreatedByID, &v.UpdatedAt, &metadataJSON,
 	)
@@ -843,11 +930,26 @@ func (r *PostgresVoucherRepository) scanVoucher(row pgx.Row) (*voucher.Voucher, 
 	if paymentTerms.Valid {
 		v.PaymentTerms = paymentTerms.String
 	}
+	if vendorReferenceNumber.Valid {
+		v.VendorReferenceNumber = vendorReferenceNumber.String
+	}
 	if tdsSection.Valid {
 		v.TDSSection = tdsSection.String
 	}
 	if erpReferenceID.Valid {
 		v.ERPReferenceID = erpReferenceID.String
+	}
+	if payoutReferenceID.Valid {
+		v.PayoutReferenceID = payoutReferenceID.String
+	}
+	if payoutUTR.Valid {
+		v.PayoutUTR = payoutUTR.String
+	}
+	if cancellationReason.Valid {
+		v.CancellationReason = cancellationReason.String
+	}
+	if refundReferenceID.Valid {
+		v.RefundReferenceID = refundReferenceID.String
 	}
 	if glExpenseAccount.Valid {
 		v.GLExpenseAccount = glExpenseAccount.String
@@ -883,6 +985,18 @@ func (r *PostgresVoucherRepository) scanVoucher(row pgx.Row) (*voucher.Voucher, 
 	if len(erpMetadataJSON) > 0 {
 		if err := json.Unmarshal(erpMetadataJSON, &v.ERPMetadata); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal erp_metadata: %w", err)
+		}
+	}
+
+	if len(payoutMetadataJSON) > 0 {
+		if err := json.Unmarshal(payoutMetadataJSON, &v.PayoutMetadata); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal payout_metadata: %w", err)
+		}
+	}
+
+	if len(refundMetadataJSON) > 0 {
+		if err := json.Unmarshal(refundMetadataJSON, &v.RefundMetadata); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal refund_metadata: %w", err)
 		}
 	}
 
@@ -898,12 +1012,13 @@ func (r *PostgresVoucherRepository) scanVoucher(row pgx.Row) (*voucher.Voucher, 
 // scanVoucherRow scans rows (for Query) into a Voucher struct
 func (r *PostgresVoucherRepository) scanVoucherRow(rows pgx.Rows) (*voucher.Voucher, error) {
 	var v voucher.Voucher
-	var financialDetailsJSON, attachmentsJSON, erpMetadataJSON, metadataJSON []byte
+	var financialDetailsJSON, attachmentsJSON, erpMetadataJSON, payoutMetadataJSON, refundMetadataJSON, metadataJSON []byte
 
 	// Nullable string fields
-	var paymentTerms sql.NullString
+	var invoiceNumber, expenseCategory, description sql.NullString
+	var paymentTerms, vendorReferenceNumber sql.NullString
 	var tdsSection sql.NullString
-	var erpReferenceID sql.NullString
+	var erpReferenceID, payoutReferenceID, payoutUTR, cancellationReason, refundReferenceID sql.NullString
 	var glExpenseAccount, glBankAccount, costCenter sql.NullString
 
 	// Nullable numeric fields
@@ -919,9 +1034,11 @@ func (r *PostgresVoucherRepository) scanVoucherRow(rows pgx.Rows) (*voucher.Vouc
 		&v.FeeAmount, &v.DiscountAmount,
 		&financialDetailsJSON, &attachmentsJSON,
 		&v.ExpenseCategory, &v.Description,
-		&paymentTerms,
 		&v.Status, &v.PaymentID,
 		&v.ERPSyncStatus, &erpReferenceID, &v.ERPPostingDate, &v.ERPLastSyncAt, &v.ERPSyncAttempts, &erpMetadataJSON,
+		&v.PayoutStatus, &v.PayoutInitiatedAt, &v.PayoutInitiatedBy, &v.PayoutCompletedAt, &payoutReferenceID, &payoutUTR, &payoutMetadataJSON,
+		&v.CancellationStatus, &v.CancellationRequestedAt, &v.CancellationRequestedBy, &cancellationReason,
+		&v.CancellationApprovedAt, &v.CancellationApprovedBy, &v.RefundStatus, &v.RefundInitiatedAt, &refundReferenceID, &refundMetadataJSON,
 		&glExpenseAccount, &glBankAccount, &costCenter,
 		&v.CreatedAt, &v.CreatedByID, &v.UpdatedAt, &metadataJSON,
 	)
@@ -930,14 +1047,38 @@ func (r *PostgresVoucherRepository) scanVoucherRow(rows pgx.Rows) (*voucher.Vouc
 	}
 
 	// Handle nullable strings
+	if invoiceNumber.Valid {
+		v.InvoiceNumber = invoiceNumber.String
+	}
+	if expenseCategory.Valid {
+		v.ExpenseCategory = expenseCategory.String
+	}
+	if description.Valid {
+		v.Description = description.String
+	}
 	if paymentTerms.Valid {
 		v.PaymentTerms = paymentTerms.String
+	}
+	if vendorReferenceNumber.Valid {
+		v.VendorReferenceNumber = vendorReferenceNumber.String
 	}
 	if tdsSection.Valid {
 		v.TDSSection = tdsSection.String
 	}
 	if erpReferenceID.Valid {
 		v.ERPReferenceID = erpReferenceID.String
+	}
+	if payoutReferenceID.Valid {
+		v.PayoutReferenceID = payoutReferenceID.String
+	}
+	if payoutUTR.Valid {
+		v.PayoutUTR = payoutUTR.String
+	}
+	if cancellationReason.Valid {
+		v.CancellationReason = cancellationReason.String
+	}
+	if refundReferenceID.Valid {
+		v.RefundReferenceID = refundReferenceID.String
 	}
 	if glExpenseAccount.Valid {
 		v.GLExpenseAccount = glExpenseAccount.String
@@ -973,6 +1114,18 @@ func (r *PostgresVoucherRepository) scanVoucherRow(rows pgx.Rows) (*voucher.Vouc
 	if len(erpMetadataJSON) > 0 {
 		if err := json.Unmarshal(erpMetadataJSON, &v.ERPMetadata); err != nil {
 			return nil, fmt.Errorf("failed to unmarshal erp_metadata: %w", err)
+		}
+	}
+
+	if len(payoutMetadataJSON) > 0 {
+		if err := json.Unmarshal(payoutMetadataJSON, &v.PayoutMetadata); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal payout_metadata: %w", err)
+		}
+	}
+
+	if len(refundMetadataJSON) > 0 {
+		if err := json.Unmarshal(refundMetadataJSON, &v.RefundMetadata); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal refund_metadata: %w", err)
 		}
 	}
 
@@ -997,9 +1150,11 @@ func (r *PostgresVoucherRepository) buildFilterQuery(businessID uuid.UUID, filte
 		       fee_amount, discount_amount,
 		       financial_details, attachments,
 		       expense_category, description,
-		       payment_terms,
 		       status, payment_id,
 		       erp_sync_status, erp_reference_id, erp_posting_date, erp_last_sync_at, erp_sync_attempts, erp_metadata,
+		       payout_status, payout_initiated_at, payout_initiated_by, payout_completed_at, payout_reference_id, payout_utr, payout_metadata,
+		       cancellation_status, cancellation_requested_at, cancellation_requested_by, cancellation_reason,
+		       cancellation_approved_at, cancellation_approved_by, refund_status, refund_initiated_at, refund_reference_id, refund_metadata,
 		       gl_expense_account, gl_bank_account, cost_center,
 		       created_at, created_by_user_id, updated_at, metadata
 		FROM xcentro.payment_vouchers
@@ -1090,6 +1245,85 @@ func (r *PostgresVoucherRepository) buildFilterQuery(businessID uuid.UUID, filte
 	args = append(args, limit, offset)
 
 	return baseQuery, args
+}
+
+// UpdatePayoutStatus updates the payout status of a voucher (Phase 9)
+func (r *PostgresVoucherRepository) UpdatePayoutStatus(ctx context.Context, voucherID string, status voucher.PayoutStatus, utr string) error {
+	query := `
+		UPDATE xcentro.payment_vouchers
+		SET payout_status = $2,
+		    payout_reference = $3,
+		    updated_at = NOW()
+		WHERE voucher_id = $1
+	`
+
+	result, err := r.querier.Exec(ctx, query, voucherID, status, utr)
+	if err != nil {
+		return fmt.Errorf("failed to update payout status: %w", err)
+	}
+
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("voucher not found: %s", voucherID)
+	}
+
+	return nil
+}
+
+// GetVouchersReadyForPayout retrieves vouchers ready for payout processing (Phase 9)
+// Returns finalized, paid, non-cancelled vouchers with payout_status = 'pending'
+func (r *PostgresVoucherRepository) GetVouchersReadyForPayout(ctx context.Context, limit int) ([]*voucher.Voucher, error) {
+	query := `
+		SELECT
+			voucher_id, voucher_number, voucher_date, fiscal_year, accounting_period, voucher_type,
+			business_id, payee_id, account_id,
+			invoice_number, invoice_date, invoice_due_date,
+			gross_amount, net_amount, currency,
+			gst_amount, gst_rate, cgst_amount, sgst_amount, igst_amount,
+			tds_amount, tds_rate, tds_section,
+			fee_amount, discount_amount,
+			financial_details, attachments,
+			expense_category, description,
+			status, payment_id,
+			erp_sync_status, erp_reference_id, erp_posting_date, erp_last_sync_at, erp_sync_attempts, erp_metadata,
+			payout_status, payout_initiated_at, payout_initiated_by, payout_completed_at, payout_reference_id, payout_utr, payout_metadata,
+			cancellation_status, cancellation_requested_at, cancellation_requested_by, cancellation_reason,
+			cancellation_approved_at, cancellation_approved_by, refund_status, refund_metadata,
+			gl_expense_account, gl_bank_account, cost_center,
+			created_at, created_by_user_id, updated_at, metadata
+		FROM xcentro.payment_vouchers
+		WHERE status = $1
+			AND payment_id IS NOT NULL
+			AND cancellation_status = $2
+			AND payout_status = $3
+		ORDER BY voucher_date ASC, created_at ASC
+		LIMIT $4
+	`
+
+	rows, err := r.querier.Query(ctx, query,
+		voucher.StatusFinalized,
+		voucher.CancellationStatusNotCancelled,
+		voucher.PayoutStatusPending,
+		limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query vouchers ready for payout: %w", err)
+	}
+	defer rows.Close()
+
+	var vouchers []*voucher.Voucher
+	for rows.Next() {
+		v, err := r.scanVoucherRow(rows)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan voucher row: %w", err)
+		}
+		vouchers = append(vouchers, v)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating voucher rows: %w", err)
+	}
+
+	return vouchers, nil
 }
 
 // GetVoucherListForBusiness retrieves paginated voucher/bill list for a business
@@ -1879,10 +2113,6 @@ func (r *PostgresVoucherRepository) GetVoucherActivity(ctx context.Context, vouc
 			WHERE v.voucher_id = $1
 			  -- Exclude settlement lifecycle (internal step, not user-facing)
 			  AND psc.action NOT IN ('settlement_pending', 'settlement_received', 'settlement_failed')
-			  -- Exclude payout_initiated to avoid duplicate "Payment Processing" entries
-			  -- (both payout_initiated and payout_processing map to same display text,
-			  --  but payout_processing is more meaningful as it happens after API success)
-			  AND psc.action != 'payout_initiated'
 		)
 		SELECT
 			activity_id,
@@ -1963,15 +2193,19 @@ func (r *PostgresVoucherRepository) GetPaymentDetailsByVoucher(ctx context.Conte
 			v.voucher_number,
 			p.status::text as payment_status,
 			p.created_at as payment_date,
+			COALESCE(p.gateway_used::text, '') as gateway_used,
+			COALESCE(p.gateway_payment_id, '') as gateway_payment_id,
 
 			-- Payment source details
 			p.payment_method::text,
+			COALESCE(p.payment_source_type::text, '') as payment_source_type,
+			COALESCE(p.payment_source_id::text, '') as payment_source_id,
 
 			-- Card details (from stored_cards)
 			COALESCE(sc.card_type::text, '') as card_type,
 			COALESCE(sc.card_category::text, '') as card_category,
 			COALESCE(sc.last_four_digits, '') as card_last_four,
-			COALESCE(sc.issuer_bank, '') as card_issuer_bank,
+			COALESCE(sc.card_category::text, '') as card_network,
 
 			-- Bank account details (encrypted, will decrypt in Go)
 			COALESCE(ba.account_number_encrypted, '') as bank_account_encrypted,
@@ -1980,29 +2214,33 @@ func (r *PostgresVoucherRepository) GetPaymentDetailsByVoucher(ctx context.Conte
 			-- Payment amounts (in paise)
 			p.amount,
 			p.fee_amount,
-			p.convenience_fee,
-			p.convenience_fee_gst,
 			p.total_amount,
 
-			-- Payout details (from payout_transfer_requests)
-			COALESCE(ptr.utr, '') as payout_utr,
-			ptr.completed_at as payout_completed_at,
+			-- Settlement details
+			COALESCE(p.settlement_status::text, 'pending') as settlement_status,
+			p.settled_at,
+			COALESCE(p.settlement_amount, 0) as settlement_amount,
+			COALESCE(p.mdr_amount, 0) as mdr_amount,
+			COALESCE(p.net_settlement_amount, 0) as net_settlement_amount,
+			COALESCE(p.settlement_reference_id, '') as settlement_reference_id,
+			COALESCE(p.settlement_utr, '') as settlement_utr,
 
 			-- Additional metadata
-			COALESCE(p.description, '') as description
+			COALESCE(p.description, '') as description,
+			COALESCE(p.metadata, '{}'::jsonb) as metadata
 
 		FROM xcentro.payment_vouchers v
 		INNER JOIN xcentro.payments p ON v.payment_id = p.payment_id
 		LEFT JOIN xcentro.stored_cards sc ON p.payment_source_id = sc.card_id AND p.payment_source_type = 'card'
 		LEFT JOIN xcentro.bank_accounts ba ON p.payment_source_id = ba.account_id AND p.payment_source_type = 'bank_account'
-		LEFT JOIN xcentro.payout_transfer_requests ptr ON v.voucher_id = ptr.voucher_id
 		WHERE v.voucher_id = $1
 	`
 
 	var details voucher.VoucherPaymentDetails
-	var cardLastFour, cardIssuerBank string
+	var metadataJSON []byte
+	var settledAt sql.NullTime
+	var cardLastFour, cardNetwork string
 	var bankAccountEncrypted, bankName string
-	var payoutCompletedAt sql.NullTime
 
 	err := r.querier.QueryRow(ctx, query, voucherID).Scan(
 		&details.PaymentID,
@@ -2010,21 +2248,29 @@ func (r *PostgresVoucherRepository) GetPaymentDetailsByVoucher(ctx context.Conte
 		&details.VoucherNumber,
 		&details.PaymentStatus,
 		&details.PaymentDate,
+		&details.GatewayUsed,
+		&details.GatewayPaymentID,
 		&details.PaymentMethod,
+		&details.PaymentSourceType,
+		&details.PaymentSourceID,
 		&details.CardType,
 		&details.CardCategory,
 		&cardLastFour,
-		&cardIssuerBank,
+		&cardNetwork,
 		&bankAccountEncrypted,
 		&bankName,
 		&details.Amount,
 		&details.FeeAmount,
-		&details.ConvenienceFee,
-		&details.ConvenienceFeeGST,
 		&details.TotalAmount,
-		&details.PayoutUTR,
-		&payoutCompletedAt,
+		&details.SettlementStatus,
+		&settledAt,
+		&details.SettlementAmount,
+		&details.MDRAmount,
+		&details.NetSettlementAmount,
+		&details.SettlementReferenceID,
+		&details.SettlementUTR,
 		&details.Description,
+		&metadataJSON,
 	)
 
 	if err != nil {
@@ -2035,10 +2281,10 @@ func (r *PostgresVoucherRepository) GetPaymentDetailsByVoucher(ctx context.Conte
 	}
 
 	// Handle card vs bank account display info
-	if details.PaymentMethod == "card" || details.PaymentMethod == "token_card" {
+	if details.PaymentSourceType == "card" {
 		details.LastFourDigits = cardLastFour
-		details.BankName = cardIssuerBank // For cards, this is the issuer bank (HDFC, SBI, etc.)
-	} else if (details.PaymentMethod == "net_banking" || details.PaymentMethod == "upi") && bankAccountEncrypted != "" {
+		details.BankName = cardNetwork // For cards, this is the card network
+	} else if details.PaymentSourceType == "bank_account" && bankAccountEncrypted != "" {
 		// Decrypt bank account number to get last digits
 		decryptedAccountNumber, err := crypto.DecryptBankAccountNumber(bankAccountEncrypted, r.encryptionKey)
 		if err != nil {
@@ -2048,9 +2294,16 @@ func (r *PostgresVoucherRepository) GetPaymentDetailsByVoucher(ctx context.Conte
 		details.BankName = bankName
 	}
 
-	// Handle nullable payout completed_at
-	if payoutCompletedAt.Valid {
-		details.PayoutCompletedAt = &payoutCompletedAt.Time
+	// Handle nullable settled_at
+	if settledAt.Valid {
+		details.SettledAt = &settledAt.Time
+	}
+
+	// Unmarshal metadata
+	if len(metadataJSON) > 0 {
+		if err := json.Unmarshal(metadataJSON, &details.Metadata); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal metadata: %w", err)
+		}
 	}
 
 	return &details, nil

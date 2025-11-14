@@ -57,9 +57,8 @@ func (r *PgPaymentRepository) CreatePayment(ctx context.Context, p *payment.Paym
 	query := `
 		INSERT INTO xcentro.payments (
 			payment_id, user_id, business_id, amount, currency, payment_method, payment_type, status,
-			description, callback_url, fee_amount, convenience_fee, convenience_fee_gst, total_amount,
-			metadata, payment_source_id, payment_source_type
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+			description, callback_url, fee_amount, total_amount, metadata, payment_source_id, payment_source_type
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 		RETURNING created_at
 	`
 
@@ -74,23 +73,21 @@ func (r *PgPaymentRepository) CreatePayment(ctx context.Context, p *payment.Paym
 	}
 
 	err := r.querier.QueryRow(ctx, query,
-		p.ID,                 // $1 - payment_id (now explicitly provided)
-		p.UserID,             // $2
-		p.BusinessID,         // $3
-		p.Amount,             // $4
-		p.Currency,           // $5
-		p.PaymentMethod,      // $6
-		p.PaymentType,        // $7
-		p.Status,             // $8
-		p.Description,        // $9
-		p.CallbackURL,        // $10
-		p.FeeAmount,          // $11 - Total fee (kept for backward compatibility)
-		p.ConvenienceFee,     // $12 - Base convenience fee before GST
-		p.ConvenienceFeeGST,  // $13 - GST on convenience fee (18%)
-		p.TotalAmount,        // $14
-		metadataJSON,         // $15
-		p.PaymentSourceID,    // $16 - CRITICAL: Must be set for tokenized payments
-		p.PaymentSourceType,  // $17 - CRITICAL: Must be set for tokenized payments
+		p.ID,                // $1 - payment_id (now explicitly provided)
+		p.UserID,            // $2
+		p.BusinessID,        // $3
+		p.Amount,            // $4
+		p.Currency,          // $5
+		p.PaymentMethod,     // $6
+		p.PaymentType,       // $7
+		p.Status,            // $8
+		p.Description,       // $9
+		p.CallbackURL,       // $10
+		p.FeeAmount,         // $11
+		p.TotalAmount,       // $12
+		metadataJSON,        // $13
+		p.PaymentSourceID,   // $14 - CRITICAL: Must be set for tokenized payments
+		p.PaymentSourceType, // $15 - CRITICAL: Must be set for tokenized payments
 	).Scan(&p.CreatedAt)
 
 	if err != nil {
@@ -109,7 +106,7 @@ func (r *PgPaymentRepository) GetPaymentByID(ctx context.Context, paymentID stri
 		SELECT payment_id, user_id, business_id, amount, currency, payment_method, status,
 		       description, gateway_used, gateway_payment_id, callback_url, redirect_url,
 		       payment_source_id, payment_source_type, retry_of_payment_id, retry_count,
-		       fee_amount, convenience_fee, convenience_fee_gst, total_amount, metadata, created_at, updated_at
+		       fee_amount, total_amount, metadata, created_at, updated_at
 		FROM xcentro.payments WHERE payment_id = $1
 	`
 
@@ -137,8 +134,6 @@ func (r *PgPaymentRepository) GetPaymentByID(ctx context.Context, paymentID stri
 		&retryOfPaymentID,
 		&retryCount,
 		&p.FeeAmount,
-		&p.ConvenienceFee,
-		&p.ConvenienceFeeGST,
 		&p.TotalAmount,
 		&metadataJSON,
 		&p.CreatedAt,
@@ -194,8 +189,8 @@ func (r *PgPaymentRepository) GetPaymentByGatewayPaymentID(ctx context.Context, 
 	query := `
 		SELECT payment_id, user_id, business_id, amount, currency, payment_method, status,
 		       description, gateway_used, gateway_payment_id, callback_url, redirect_url,
-		       payment_source_id, payment_source_type, fee_amount, convenience_fee, convenience_fee_gst,
-		       total_amount, metadata, created_at, updated_at
+		       payment_source_id, payment_source_type, fee_amount, total_amount,
+		       metadata, created_at, updated_at
 		FROM xcentro.payments
 		WHERE gateway_payment_id = $1 OR payment_id = $1
 	`
@@ -221,8 +216,6 @@ func (r *PgPaymentRepository) GetPaymentByGatewayPaymentID(ctx context.Context, 
 		&paymentSourceID,
 		&paymentSourceType,
 		&p.FeeAmount,
-		&p.ConvenienceFee,
-		&p.ConvenienceFeeGST,
 		&p.TotalAmount,
 		&metadataJSON,
 		&p.CreatedAt,
@@ -338,8 +331,8 @@ func (r *PgPaymentRepository) GetPaymentsByBusinessID(ctx context.Context, busin
 	query := `
 		SELECT payment_id, user_id, business_id, amount, currency, payment_method, status,
 		       description, gateway_used, gateway_payment_id, callback_url, redirect_url,
-		       payment_source_id, payment_source_type, fee_amount, convenience_fee, convenience_fee_gst,
-		       total_amount, metadata, created_at, updated_at
+		       payment_source_id, payment_source_type, fee_amount, total_amount,
+		       metadata, created_at, updated_at
 		FROM xcentro.payments
 		WHERE business_id = $1
 		ORDER BY created_at DESC
@@ -375,8 +368,6 @@ func (r *PgPaymentRepository) GetPaymentsByBusinessID(ctx context.Context, busin
 			&paymentSourceID,
 			&paymentSourceType,
 			&p.FeeAmount,
-			&p.ConvenienceFee,
-			&p.ConvenienceFeeGST,
 			&p.TotalAmount,
 			&metadataJSON,
 			&p.CreatedAt,
@@ -484,8 +475,8 @@ func (r *PgPaymentRepository) GetPendingSettlements(ctx context.Context, busines
 	query := `
 		SELECT payment_id, user_id, business_id, amount, currency, payment_method, status,
 		       description, gateway_used, gateway_payment_id, callback_url, redirect_url,
-		       payment_source_id, payment_source_type, fee_amount, convenience_fee, convenience_fee_gst,
-		       total_amount, metadata, created_at, updated_at
+		       payment_source_id, payment_source_type, fee_amount, total_amount,
+		       metadata, created_at, updated_at
 		FROM xcentro.payments
 		WHERE business_id = $1
 		  AND status = 'success'
@@ -522,8 +513,6 @@ func (r *PgPaymentRepository) GetPendingSettlements(ctx context.Context, busines
 			&paymentSourceID,
 			&paymentSourceType,
 			&p.FeeAmount,
-			&p.ConvenienceFee,
-			&p.ConvenienceFeeGST,
 			&p.TotalAmount,
 			&metadataJSON,
 			&p.CreatedAt,
@@ -680,8 +669,6 @@ func (r *PgPaymentRepository) GetPaymentListForBusiness(ctx context.Context, bus
 			p.total_amount,
 			p.amount,
 			p.fee_amount,
-			p.convenience_fee,
-			p.convenience_fee_gst,
 			p.status,
 			p.payment_source_id,
 			p.payment_source_type,
@@ -733,7 +720,7 @@ func (r *PgPaymentRepository) GetPaymentListForBusiness(ctx context.Context, bus
 	for rows.Next() {
 		var item payment.PaymentListItem
 		var paymentMethod string
-		var totalAmount, baseAmount, feeAmount, convenienceFee, convenienceFeeGST int64
+		var totalAmount, baseAmount, feeAmount int64
 		var status string
 		var paymentSourceID, paymentSourceType *string
 		var retryOfPaymentID *string
@@ -750,8 +737,6 @@ func (r *PgPaymentRepository) GetPaymentListForBusiness(ctx context.Context, bus
 			&totalAmount,
 			&baseAmount,
 			&feeAmount,
-			&convenienceFee,
-			&convenienceFeeGST,
 			&status,
 			&paymentSourceID,
 			&paymentSourceType,
@@ -772,6 +757,9 @@ func (r *PgPaymentRepository) GetPaymentListForBusiness(ctx context.Context, bus
 
 		// Keep amounts in paise (no conversion)
 		item.TotalAmount = totalAmount
+
+		// Calculate GST on fee (18% of convenience fee) - keep in paise
+		gstOnFee := int64(float64(feeAmount) * 0.18)
 
 		// Map status
 		item.Status = status
@@ -800,8 +788,8 @@ func (r *PgPaymentRepository) GetPaymentListForBusiness(ctx context.Context, bus
 
 		item.Breakdown = payment.PaymentBreakdown{
 			Bills:          bills,
-			ConvenienceFee: convenienceFee,    // Use stored convenience fee
-			GSTOnFee:       convenienceFeeGST, // Use stored GST on fee
+			ConvenienceFee: feeAmount,
+			GSTOnFee:       gstOnFee,
 		}
 
 		// Set retry-related fields

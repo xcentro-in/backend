@@ -104,15 +104,11 @@ const (
 
 // CreateTransferRequest represents payout transfer initiation
 type CreateTransferRequest struct {
-	// Transfer identifiers
-	TransferRequestID string // Our internal transfer request ID (used as customerRefId in Castler)
-	VoucherID         string // UUID stored as string
+	// Voucher reference
+	VoucherID string // UUID stored as string
 
 	// Beneficiary
 	ProviderBeneficiaryID string
-
-	// Escrow configuration
-	EscrowID string // Castler escrow account ID
 
 	// Amount (in paise)
 	Amount   int64
@@ -168,16 +164,18 @@ type TransferStatus struct {
 	Metadata           map[string]interface{}
 }
 
-// TransferStatusType represents transfer lifecycle states (simplified - no approval workflow)
+// TransferStatusType represents transfer lifecycle states
 type TransferStatusType string
 
 const (
-	TransferStatusInitiated  TransferStatusType = "initiated"  // Created in DB, awaiting Castler API call
-	TransferStatusPending    TransferStatusType = "pending"    // Castler API success, awaiting settlement webhook
-	TransferStatusCompleted  TransferStatusType = "completed"  // Successfully completed (from webhook)
-	TransferStatusFailed     TransferStatusType = "failed"     // Failed (API error or webhook)
-	TransferStatusTimeout    TransferStatusType = "timeout"    // No webhook received (needs investigation)
-	TransferStatusProcessing TransferStatusType = "processing" // DEPRECATED: Use 'pending' instead
+	TransferStatusPendingApproval TransferStatusType = "pending_approval" // Awaiting manual approval (> ₹2L)
+	TransferStatusApproved        TransferStatusType = "approved"         // Approved, ready to initiate
+	TransferStatusInitiated       TransferStatusType = "initiated"        // Sent to Castler, awaiting webhook
+	TransferStatusProcessing      TransferStatusType = "processing"       // Castler confirmed processing (from webhook)
+	TransferStatusCompleted       TransferStatusType = "completed"        // Successfully completed (from webhook)
+	TransferStatusFailed          TransferStatusType = "failed"           // Failed (from webhook)
+	TransferStatusCancelled       TransferStatusType = "cancelled"        // Cancelled by ops
+	TransferStatusTimeout         TransferStatusType = "timeout"          // No webhook received (needs investigation)
 )
 
 // PayoutProviderError represents provider-specific errors

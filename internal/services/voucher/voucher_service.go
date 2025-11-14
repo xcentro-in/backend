@@ -186,6 +186,7 @@ func (s *VoucherServiceImpl) CreateDraftVoucher(ctx context.Context, req *Create
 		GLBankAccount:         req.GLBankAccount,
 		CostCenter:            req.CostCenter,
 		PaymentTerms:          req.PaymentTerms,
+		VendorReferenceNumber: req.VendorReferenceNumber,
 		CreatedAt:             now,
 		CreatedByID:           &req.UserID,
 		Metadata:              req.Metadata,
@@ -819,17 +820,100 @@ func (s *VoucherServiceImpl) FinalizeVoucherByID(ctx context.Context, voucherIDS
 }
 
 // RequestCancellation requests cancellation of a voucher (Phase 7)
-// NOTE: Cancellation functionality removed in payout redesign
-// Voucher cancellation/refund workflow has been deprecated
 func (s *VoucherServiceImpl) RequestCancellation(ctx context.Context, req *RequestCancellationRequest) (*RequestCancellationResponse, error) {
-	return nil, fmt.Errorf("voucher cancellation functionality has been removed - cancellation/refund fields deleted from schema")
+	// 1. Get voucher
+	v, err := s.voucherRepo.GetByID(ctx, req.VoucherID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get voucher: %w", err)
+	}
+
+	// 2. Validate voucher can be cancelled
+	// Can only cancel finalized vouchers that haven't been paid out yet
+	if v.Status != voucher.StatusFinalized {
+		return nil, fmt.Errorf("can only cancel finalized vouchers (current status: %s)", v.Status)
+	}
+
+	// Check if already cancelled or cancellation requested
+	if v.CancellationStatus != voucher.CancellationStatusNotCancelled {
+		return nil, fmt.Errorf("voucher already has cancellation status: %s", v.CancellationStatus)
+	}
+
+	// Check if payout already initiated
+	if v.PayoutStatus == "completed" {
+		return nil, fmt.Errorf("cannot cancel voucher - payout already completed")
+	}
+
+	// 3. Update voucher cancellation status
+	now := time.Now()
+	if err := s.voucherRepo.RequestCancellation(ctx, req.VoucherID, req.UserID, req.Reason, now); err != nil {
+		return nil, fmt.Errorf("failed to request cancellation: %w", err)
+	}
+
+	// 4. Return response
+	return &RequestCancellationResponse{
+		VoucherID:          req.VoucherID,
+		VoucherNumber:      v.VoucherNumber,
+		CancellationStatus: string(voucher.CancellationStatusCancellationRequested),
+		Message:            fmt.Sprintf("Cancellation request submitted for voucher %s", v.VoucherNumber),
+	}, nil
 }
 
 // ApproveCancellation approves or rejects a cancellation request (Phase 7)
-// NOTE: Cancellation functionality removed in payout redesign
-// Voucher cancellation/refund workflow has been deprecated
 func (s *VoucherServiceImpl) ApproveCancellation(ctx context.Context, req *ApproveCancellationRequest) (*ApproveCancellationResponse, error) {
-	return nil, fmt.Errorf("voucher cancellation functionality has been removed - cancellation/refund fields deleted from schema")
+	// 1. Get voucher
+	v, err := s.voucherRepo.GetByID(ctx, req.VoucherID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get voucher: %w", err)
+	}
+
+	// 2. Validate voucher is in cancellation_requested status
+	if v.CancellationStatus != voucher.CancellationStatusCancellationRequested {
+		return nil, fmt.Errorf("voucher not in cancellation_requested status (current: %s)", v.CancellationStatus)
+	}
+
+	// 3. Process approval or rejection
+	now := time.Now()
+	var newCancellationStatus voucher.CancellationStatus
+	var refundStatus voucher.RefundStatus
+	var message string
+
+	if req.Action == "approve" {
+		// Approve cancellation
+		newCancellationStatus = voucher.CancellationStatusCancelled
+		refundStatus = voucher.RefundStatusPending // Mark refund as pending
+
+		// Update voucher
+		if err := s.voucherRepo.ApproveCancellation(ctx, req.VoucherID, req.UserID, now, refundStatus); err != nil {
+			return nil, fmt.Errorf("failed to approve cancellation: %w", err)
+		}
+
+		// TODO: Trigger refund worker to process refund to customer
+		// This will be implemented in Phase 7.5 or 8
+
+		message = fmt.Sprintf("Cancellation approved for voucher %s. Refund will be initiated.", v.VoucherNumber)
+	} else if req.Action == "reject" {
+		// Reject cancellation - revert to not_cancelled
+		newCancellationStatus = voucher.CancellationStatusNotCancelled
+		refundStatus = voucher.RefundStatusNotApplicable
+
+		// Update voucher
+		if err := s.voucherRepo.RejectCancellation(ctx, req.VoucherID); err != nil {
+			return nil, fmt.Errorf("failed to reject cancellation: %w", err)
+		}
+
+		message = fmt.Sprintf("Cancellation rejected for voucher %s. Payout will proceed.", v.VoucherNumber)
+	} else {
+		return nil, fmt.Errorf("invalid action: %s (must be 'approve' or 'reject')", req.Action)
+	}
+
+	// 4. Return response
+	return &ApproveCancellationResponse{
+		VoucherID:          req.VoucherID,
+		VoucherNumber:      v.VoucherNumber,
+		CancellationStatus: string(newCancellationStatus),
+		RefundStatus:       string(refundStatus),
+		Message:            message,
+	}, nil
 }
 
 // Helper functions
@@ -1230,9 +1314,16 @@ func (s *VoucherServiceImpl) GetVoucherPaymentDetails(ctx context.Context, vouch
 		return nil, fmt.Errorf("failed to get payment details: %w", err)
 	}
 
-	// Use stored fee breakdown (no reverse calculation needed)
-	convenienceFee := details.ConvenienceFee
-	gstOnFee := details.ConvenienceFeeGST
+	// Calculate convenience fee breakdown
+	// Total fee = convenience_fee + GST_on_fee
+	// We need to reverse calculate: convenience_fee = total_fee / 1.18
+	convenienceFee := int64(0)
+	gstOnFee := int64(0)
+	if details.FeeAmount > 0 {
+		// Assuming 18% GST (can be made configurable later)
+		convenienceFee = (details.FeeAmount * 100) / 118 // Reverse calculate base fee
+		gstOnFee = details.FeeAmount - convenienceFee    // GST is the difference
+	}
 
 	// Format convenience fee rate
 	convenienceFeeRate := ""
@@ -1247,18 +1338,28 @@ func (s *VoucherServiceImpl) GetVoucherPaymentDetails(ctx context.Context, vouch
 		convenienceFeeRate = fmt.Sprintf("₹%.2f (fixed)", float64(convenienceFee)/100.0)
 	}
 
-	response := &VoucherPaymentDetailsResponse{
-		PaymentID:     details.PaymentID,
-		VoucherID:     details.VoucherID,
-		VoucherNumber: details.VoucherNumber,
-		PaymentStatus: details.PaymentStatus,
-		PaymentDate:   details.PaymentDate,
+	// Format MDR rate
+	mdrRate := ""
+	if details.SettlementAmount > 0 && details.MDRAmount > 0 {
+		rate := (float64(details.MDRAmount) / float64(details.SettlementAmount)) * 100
+		mdrRate = fmt.Sprintf("%.2f%%", rate)
+	}
 
-		PaymentMethod:  details.PaymentMethod,
-		CardType:       details.CardType,
-		CardCategory:   details.CardCategory,
-		LastFourDigits: details.LastFourDigits,
-		BankName:       details.BankName,
+	response := &VoucherPaymentDetailsResponse{
+		PaymentID:        details.PaymentID,
+		VoucherID:        details.VoucherID,
+		VoucherNumber:    details.VoucherNumber,
+		PaymentStatus:    details.PaymentStatus,
+		PaymentDate:      details.PaymentDate,
+		GatewayUsed:      details.GatewayUsed,
+		GatewayPaymentID: details.GatewayPaymentID,
+
+		PaymentMethod:     details.PaymentMethod,
+		PaymentSourceType: details.PaymentSourceType,
+		CardType:          details.CardType,
+		CardCategory:      details.CardCategory,
+		LastFourDigits:    details.LastFourDigits,
+		BankName:          details.BankName,
 
 		VoucherAmount:      details.Amount,
 		ConvenienceFee:     convenienceFee,
@@ -1268,10 +1369,17 @@ func (s *VoucherServiceImpl) GetVoucherPaymentDetails(ctx context.Context, vouch
 		TotalFeeAmount:     details.FeeAmount,
 		TotalAmountPaid:    details.TotalAmount,
 
-		PayoutUTR:         details.PayoutUTR,
-		PayoutCompletedAt: details.PayoutCompletedAt,
+		SettlementStatus:      details.SettlementStatus,
+		SettledAt:             details.SettledAt,
+		SettlementAmount:      details.SettlementAmount,
+		MDRAmount:             details.MDRAmount,
+		MDRRate:               mdrRate,
+		NetSettlementAmount:   details.NetSettlementAmount,
+		SettlementReferenceID: details.SettlementReferenceID,
+		SettlementUTR:         details.SettlementUTR,
 
 		Description: details.Description,
+		Metadata:    ensureEmptyObject(details.Metadata),
 	}
 
 	return response, nil

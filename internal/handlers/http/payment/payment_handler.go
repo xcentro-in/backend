@@ -14,7 +14,6 @@ import (
 	"xcentro.in/internal/core/auth"
 	"xcentro.in/internal/core/business_rules"
 	"xcentro.in/internal/core/payment"
-	"xcentro.in/internal/handlers/http/common"
 	"xcentro.in/internal/middleware"
 	"xcentro.in/internal/services/payments"
 	"xcentro.in/internal/shared/logger"
@@ -1246,17 +1245,16 @@ func (h *PaymentHandler) GetPaymentByID(c echo.Context) error {
 		})
 	}
 
-	// Use stored fee breakdown (no reverse calculation needed)
-	convenienceFee := paymentRecord.ConvenienceFee
-	gstOnFee := paymentRecord.ConvenienceFeeGST
+	// Calculate GST on service charge (18%)
+	serviceChargeGST := int64(float64(paymentRecord.FeeAmount) * 0.18)
 
 	// Build comprehensive response
 	response := &PaymentDetailsResponse{
 		PaymentID:        paymentRecord.ID,
 		Status:           string(paymentRecord.Status),
 		NetAmount:        paymentRecord.Amount,
-		ServiceCharge:    convenienceFee,
-		ServiceChargeGST: gstOnFee,
+		ServiceCharge:    paymentRecord.FeeAmount,
+		ServiceChargeGST: serviceChargeGST,
 		TotalAmount:      paymentRecord.TotalAmount,
 		Currency:         string(paymentRecord.Currency),
 		PaymentMethod:    string(paymentRecord.PaymentMethod),
@@ -1402,9 +1400,6 @@ func (h *PaymentHandler) fetchPaymentActivity(ctx context.Context, paymentUUID u
 		if item.ActorName == "" {
 			item.ActorName = string(sc.ActorType)
 		}
-
-		// Redact system/internal actor names for customer-facing response
-		item.ActorName = common.RedactActorName(item.ActorName)
 
 		activity = append(activity, item)
 	}

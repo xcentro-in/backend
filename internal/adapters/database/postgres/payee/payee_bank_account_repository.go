@@ -319,37 +319,6 @@ func (r *PgPayeeBankAccountRepository) FindByAccountHash(ctx context.Context, ac
 	return &account, nil
 }
 
-// GetCastlerBeneficiaryID fetches only the Castler beneficiary ID for a bank account
-// Lightweight method for payout processing - no decryption needed
-func (r *PgPayeeBankAccountRepository) GetCastlerBeneficiaryID(ctx context.Context, accountID string) (string, error) {
-	query := `
-		SELECT castler_beneficiary_id
-		FROM xcentro.payee_bank_accounts
-		WHERE account_id = $1
-	`
-
-	var castlerBeneficiaryID sql.NullString
-	err := r.querier.QueryRow(ctx, query, accountID).Scan(&castlerBeneficiaryID)
-
-	if err != nil {
-		if err == pgx.ErrNoRows {
-			r.logger.DebugWith("payee bank account not found",
-				"account_id", accountID)
-			return "", fmt.Errorf("account not found: %s", accountID)
-		}
-		r.logger.ErrorWith("failed to get castler_beneficiary_id",
-			"error", err,
-			"account_id", accountID)
-		return "", fmt.Errorf("failed to get castler_beneficiary_id: %w", err)
-	}
-
-	if !castlerBeneficiaryID.Valid || castlerBeneficiaryID.String == "" {
-		return "", fmt.Errorf("account not onboarded to Castler (castler_beneficiary_id is null)")
-	}
-
-	return castlerBeneficiaryID.String, nil
-}
-
 // UpdateBankAccount updates a payee bank account record
 func (r *PgPayeeBankAccountRepository) UpdateBankAccount(ctx context.Context, account *payee.PayeeBankAccount) error {
 	query := `

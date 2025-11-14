@@ -2,7 +2,6 @@ package payout
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -34,15 +33,17 @@ func (r *PostgresPayoutTransferRepository) Create(ctx context.Context, transfer 
 
 	query := `
 		INSERT INTO xcentro.payout_transfer_requests (
-			transfer_request_id, payment_id, voucher_id, provider, provider_beneficiary_id, escrow_id,
+			transfer_request_id, voucher_id, provider, provider_beneficiary_id,
 			amount, currency, purpose, reference, narration, transfer_mode,
+			requires_approval, approval_mode, approved_by, approved_at,
 			status, retry_count, max_retries,
 			provider_metadata, created_at
 		) VALUES (
-			$1, $2, $3, $4, $5, $6,
-			$7, $8, $9, $10, $11, $12,
-			$13, $14, $15,
-			$16, $17
+			$1, $2, $3, $4,
+			$5, $6, $7, $8, $9, $10,
+			$11, $12, $13, $14,
+			$15, $16, $17,
+			$18, $19
 		)
 	`
 
@@ -53,8 +54,9 @@ func (r *PostgresPayoutTransferRepository) Create(ctx context.Context, transfer 
 	}
 
 	_, err = r.querier.Exec(ctx, query,
-		transfer.TransferRequestID, transfer.PaymentID, transfer.VoucherID, transfer.Provider, transfer.ProviderBeneficiaryID, transfer.EscrowID,
+		transfer.TransferRequestID, transfer.VoucherID, transfer.Provider, transfer.ProviderBeneficiaryID,
 		transfer.Amount, transfer.Currency, transfer.Purpose, transfer.Reference, transfer.Narration, transfer.TransferMode,
+		transfer.RequiresApproval, transfer.ApprovalMode, transfer.ApprovedBy, transfer.ApprovedAt,
 		transfer.Status, transfer.RetryCount, transfer.MaxRetries,
 		metadataJSON, time.Now(),
 	)
@@ -70,8 +72,9 @@ func (r *PostgresPayoutTransferRepository) Create(ctx context.Context, transfer 
 func (r *PostgresPayoutTransferRepository) GetByID(ctx context.Context, transferRequestID string) (*payout.PayoutTransferRequest, error) {
 	query := `
 		SELECT
-			transfer_request_id, payment_id, voucher_id, provider, provider_beneficiary_id, provider_transfer_id, escrow_id,
+			transfer_request_id, voucher_id, provider, provider_beneficiary_id, provider_transfer_id,
 			amount, currency, purpose, reference, narration, transfer_mode,
+			requires_approval, approval_mode, approved_by, approved_at,
 			status, initiated_at, processing_at, completed_at, failed_at, failure_reason, utr,
 			retry_count, max_retries, next_retry_at, last_retry_at,
 			last_webhook_at, webhook_timeout_at, webhook_history, provider_metadata,
@@ -82,11 +85,11 @@ func (r *PostgresPayoutTransferRepository) GetByID(ctx context.Context, transfer
 
 	var transfer payout.PayoutTransferRequest
 	var metadataJSON, historyJSON []byte
-	var escrowID sql.NullString
 
 	err := r.querier.QueryRow(ctx, query, transferRequestID).Scan(
-		&transfer.TransferRequestID, &transfer.PaymentID, &transfer.VoucherID, &transfer.Provider, &transfer.ProviderBeneficiaryID, &transfer.ProviderTransferID, &escrowID,
+		&transfer.TransferRequestID, &transfer.VoucherID, &transfer.Provider, &transfer.ProviderBeneficiaryID, &transfer.ProviderTransferID,
 		&transfer.Amount, &transfer.Currency, &transfer.Purpose, &transfer.Reference, &transfer.Narration, &transfer.TransferMode,
+		&transfer.RequiresApproval, &transfer.ApprovalMode, &transfer.ApprovedBy, &transfer.ApprovedAt,
 		&transfer.Status, &transfer.InitiatedAt, &transfer.ProcessingAt, &transfer.CompletedAt, &transfer.FailedAt, &transfer.FailureReason, &transfer.UTR,
 		&transfer.RetryCount, &transfer.MaxRetries, &transfer.NextRetryAt, &transfer.LastRetryAt,
 		&transfer.LastWebhookAt, &transfer.WebhookTimeoutAt, &historyJSON, &metadataJSON,
@@ -98,11 +101,6 @@ func (r *PostgresPayoutTransferRepository) GetByID(ctx context.Context, transfer
 			return nil, fmt.Errorf("transfer request not found: %s", transferRequestID)
 		}
 		return nil, fmt.Errorf("failed to get transfer request: %w", err)
-	}
-
-	// Handle nullable escrow_id
-	if escrowID.Valid {
-		transfer.EscrowID = escrowID.String
 	}
 
 	// Unmarshal JSONB fields
@@ -125,8 +123,9 @@ func (r *PostgresPayoutTransferRepository) GetByID(ctx context.Context, transfer
 func (r *PostgresPayoutTransferRepository) GetByVoucherID(ctx context.Context, voucherID string) (*payout.PayoutTransferRequest, error) {
 	query := `
 		SELECT
-			transfer_request_id, payment_id, voucher_id, provider, provider_beneficiary_id, provider_transfer_id, escrow_id,
+			transfer_request_id, voucher_id, provider, provider_beneficiary_id, provider_transfer_id,
 			amount, currency, purpose, reference, narration, transfer_mode,
+			requires_approval, approval_mode, approved_by, approved_at,
 			status, initiated_at, processing_at, completed_at, failed_at, failure_reason, utr,
 			retry_count, max_retries, next_retry_at, last_retry_at,
 			last_webhook_at, webhook_timeout_at, webhook_history, provider_metadata,
@@ -137,11 +136,11 @@ func (r *PostgresPayoutTransferRepository) GetByVoucherID(ctx context.Context, v
 
 	var transfer payout.PayoutTransferRequest
 	var metadataJSON, historyJSON []byte
-	var escrowID sql.NullString
 
 	err := r.querier.QueryRow(ctx, query, voucherID).Scan(
-		&transfer.TransferRequestID, &transfer.PaymentID, &transfer.VoucherID, &transfer.Provider, &transfer.ProviderBeneficiaryID, &transfer.ProviderTransferID, &escrowID,
+		&transfer.TransferRequestID, &transfer.VoucherID, &transfer.Provider, &transfer.ProviderBeneficiaryID, &transfer.ProviderTransferID,
 		&transfer.Amount, &transfer.Currency, &transfer.Purpose, &transfer.Reference, &transfer.Narration, &transfer.TransferMode,
+		&transfer.RequiresApproval, &transfer.ApprovalMode, &transfer.ApprovedBy, &transfer.ApprovedAt,
 		&transfer.Status, &transfer.InitiatedAt, &transfer.ProcessingAt, &transfer.CompletedAt, &transfer.FailedAt, &transfer.FailureReason, &transfer.UTR,
 		&transfer.RetryCount, &transfer.MaxRetries, &transfer.NextRetryAt, &transfer.LastRetryAt,
 		&transfer.LastWebhookAt, &transfer.WebhookTimeoutAt, &historyJSON, &metadataJSON,
@@ -153,11 +152,6 @@ func (r *PostgresPayoutTransferRepository) GetByVoucherID(ctx context.Context, v
 			return nil, fmt.Errorf("transfer request not found for voucher: %s", voucherID)
 		}
 		return nil, fmt.Errorf("failed to get transfer request: %w", err)
-	}
-
-	// Handle nullable escrow_id
-	if escrowID.Valid {
-		transfer.EscrowID = escrowID.String
 	}
 
 	// Unmarshal JSONB fields
@@ -180,8 +174,9 @@ func (r *PostgresPayoutTransferRepository) GetByVoucherID(ctx context.Context, v
 func (r *PostgresPayoutTransferRepository) GetByProviderTransferID(ctx context.Context, providerTransferID string) (*payout.PayoutTransferRequest, error) {
 	query := `
 		SELECT
-			transfer_request_id, payment_id, voucher_id, provider, provider_beneficiary_id, provider_transfer_id, escrow_id,
+			transfer_request_id, voucher_id, provider, provider_beneficiary_id, provider_transfer_id,
 			amount, currency, purpose, reference, narration, transfer_mode,
+			requires_approval, approval_mode, approved_by, approved_at,
 			status, initiated_at, processing_at, completed_at, failed_at, failure_reason, utr,
 			retry_count, max_retries, next_retry_at, last_retry_at,
 			last_webhook_at, webhook_timeout_at, webhook_history, provider_metadata,
@@ -192,15 +187,14 @@ func (r *PostgresPayoutTransferRepository) GetByProviderTransferID(ctx context.C
 
 	var transfer payout.PayoutTransferRequest
 	var metadataJSON, historyJSON []byte
-	var escrowID, purpose, reference, narration, transferMode, failureReason, utr sql.NullString
-	var processingAt, completedAt, failedAt, nextRetryAt, lastRetryAt, lastWebhookAt, webhookTimeoutAt sql.NullTime
 
 	err := r.querier.QueryRow(ctx, query, providerTransferID).Scan(
-		&transfer.TransferRequestID, &transfer.PaymentID, &transfer.VoucherID, &transfer.Provider, &transfer.ProviderBeneficiaryID, &transfer.ProviderTransferID, &escrowID,
-		&transfer.Amount, &transfer.Currency, &purpose, &reference, &narration, &transferMode,
-		&transfer.Status, &transfer.InitiatedAt, &processingAt, &completedAt, &failedAt, &failureReason, &utr,
-		&transfer.RetryCount, &transfer.MaxRetries, &nextRetryAt, &lastRetryAt,
-		&lastWebhookAt, &webhookTimeoutAt, &historyJSON, &metadataJSON,
+		&transfer.TransferRequestID, &transfer.VoucherID, &transfer.Provider, &transfer.ProviderBeneficiaryID, &transfer.ProviderTransferID,
+		&transfer.Amount, &transfer.Currency, &transfer.Purpose, &transfer.Reference, &transfer.Narration, &transfer.TransferMode,
+		&transfer.RequiresApproval, &transfer.ApprovalMode, &transfer.ApprovedBy, &transfer.ApprovedAt,
+		&transfer.Status, &transfer.InitiatedAt, &transfer.ProcessingAt, &transfer.CompletedAt, &transfer.FailedAt, &transfer.FailureReason, &transfer.UTR,
+		&transfer.RetryCount, &transfer.MaxRetries, &transfer.NextRetryAt, &transfer.LastRetryAt,
+		&transfer.LastWebhookAt, &transfer.WebhookTimeoutAt, &historyJSON, &metadataJSON,
 		&transfer.CreatedAt, &transfer.UpdatedAt,
 	)
 
@@ -209,52 +203,6 @@ func (r *PostgresPayoutTransferRepository) GetByProviderTransferID(ctx context.C
 			return nil, fmt.Errorf("transfer request not found for provider_transfer_id: %s", providerTransferID)
 		}
 		return nil, fmt.Errorf("failed to get transfer request: %w", err)
-	}
-
-	// Handle nullable string fields
-	if escrowID.Valid {
-		transfer.EscrowID = escrowID.String
-	}
-	if purpose.Valid {
-		transfer.Purpose = purpose.String
-	}
-	if reference.Valid {
-		transfer.Reference = reference.String
-	}
-	if narration.Valid {
-		transfer.Narration = narration.String
-	}
-	if transferMode.Valid {
-		transfer.TransferMode = transferMode.String
-	}
-	if failureReason.Valid {
-		transfer.FailureReason = failureReason.String
-	}
-	if utr.Valid {
-		transfer.UTR = utr.String
-	}
-
-	// Handle nullable timestamp fields
-	if processingAt.Valid {
-		transfer.ProcessingAt = &processingAt.Time
-	}
-	if completedAt.Valid {
-		transfer.CompletedAt = &completedAt.Time
-	}
-	if failedAt.Valid {
-		transfer.FailedAt = &failedAt.Time
-	}
-	if nextRetryAt.Valid {
-		transfer.NextRetryAt = &nextRetryAt.Time
-	}
-	if lastRetryAt.Valid {
-		transfer.LastRetryAt = &lastRetryAt.Time
-	}
-	if lastWebhookAt.Valid {
-		transfer.LastWebhookAt = &lastWebhookAt.Time
-	}
-	if webhookTimeoutAt.Valid {
-		transfer.WebhookTimeoutAt = &webhookTimeoutAt.Time
 	}
 
 	// Unmarshal JSONB fields
@@ -277,8 +225,9 @@ func (r *PostgresPayoutTransferRepository) GetByProviderTransferID(ctx context.C
 func (r *PostgresPayoutTransferRepository) GetByStatus(ctx context.Context, status payout.TransferStatusType, limit int) ([]*payout.PayoutTransferRequest, error) {
 	query := `
 		SELECT
-			transfer_request_id, payment_id, voucher_id, provider, provider_beneficiary_id, provider_transfer_id, escrow_id,
+			transfer_request_id, voucher_id, provider, provider_beneficiary_id, provider_transfer_id,
 			amount, currency, purpose, reference, narration, transfer_mode,
+			requires_approval, approval_mode, approved_by, approved_at,
 			status, initiated_at, processing_at, completed_at, failed_at, failure_reason, utr,
 			retry_count, max_retries, next_retry_at, last_retry_at,
 			last_webhook_at, webhook_timeout_at, webhook_history, provider_metadata,
@@ -300,11 +249,11 @@ func (r *PostgresPayoutTransferRepository) GetByStatus(ctx context.Context, stat
 	for rows.Next() {
 		var transfer payout.PayoutTransferRequest
 		var metadataJSON, historyJSON []byte
-		var escrowID sql.NullString
 
 		err := rows.Scan(
-			&transfer.TransferRequestID, &transfer.PaymentID, &transfer.VoucherID, &transfer.Provider, &transfer.ProviderBeneficiaryID, &transfer.ProviderTransferID, &escrowID,
+			&transfer.TransferRequestID, &transfer.VoucherID, &transfer.Provider, &transfer.ProviderBeneficiaryID, &transfer.ProviderTransferID,
 			&transfer.Amount, &transfer.Currency, &transfer.Purpose, &transfer.Reference, &transfer.Narration, &transfer.TransferMode,
+			&transfer.RequiresApproval, &transfer.ApprovalMode, &transfer.ApprovedBy, &transfer.ApprovedAt,
 			&transfer.Status, &transfer.InitiatedAt, &transfer.ProcessingAt, &transfer.CompletedAt, &transfer.FailedAt, &transfer.FailureReason, &transfer.UTR,
 			&transfer.RetryCount, &transfer.MaxRetries, &transfer.NextRetryAt, &transfer.LastRetryAt,
 			&transfer.LastWebhookAt, &transfer.WebhookTimeoutAt, &historyJSON, &metadataJSON,
@@ -313,11 +262,6 @@ func (r *PostgresPayoutTransferRepository) GetByStatus(ctx context.Context, stat
 
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan transfer: %w", err)
-		}
-
-		// Handle nullable escrow_id
-		if escrowID.Valid {
-			transfer.EscrowID = escrowID.String
 		}
 
 		// Unmarshal JSONB fields
@@ -350,7 +294,7 @@ func (r *PostgresPayoutTransferRepository) UpdateStatus(ctx context.Context, tra
 	switch status {
 	case payout.TransferStatusInitiated:
 		timestampField = "initiated_at"
-	case payout.TransferStatusPending, payout.TransferStatusProcessing:
+	case payout.TransferStatusProcessing:
 		timestampField = "processing_at"
 	case payout.TransferStatusCompleted:
 		timestampField = "completed_at"
@@ -387,6 +331,26 @@ func (r *PostgresPayoutTransferRepository) UpdateProviderTransferID(ctx context.
 	result, err := r.querier.Exec(ctx, query, transferRequestID, providerTransferID)
 	if err != nil {
 		return fmt.Errorf("failed to update provider_transfer_id: %w", err)
+	}
+
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("transfer request not found: %s", transferRequestID)
+	}
+
+	return nil
+}
+
+// ApproveTransfer records transfer approval
+func (r *PostgresPayoutTransferRepository) ApproveTransfer(ctx context.Context, transferRequestID string, approvedBy string, approvalMode payout.ApprovalMode, timestamp time.Time) error {
+	query := `
+		UPDATE xcentro.payout_transfer_requests
+		SET status = $2, approved_by = $3, approval_mode = $4, approved_at = $5, updated_at = NOW()
+		WHERE transfer_request_id = $1
+	`
+
+	result, err := r.querier.Exec(ctx, query, transferRequestID, payout.TransferStatusApproved, approvedBy, approvalMode, timestamp)
+	if err != nil {
+		return fmt.Errorf("failed to approve transfer: %w", err)
 	}
 
 	if result.RowsAffected() == 0 {
@@ -487,8 +451,9 @@ func (r *PostgresPayoutTransferRepository) AppendWebhookHistory(ctx context.Cont
 func (r *PostgresPayoutTransferRepository) GetWebhookTimeouts(ctx context.Context, limit int) ([]*payout.PayoutTransferRequest, error) {
 	query := `
 		SELECT
-			transfer_request_id, payment_id, voucher_id, provider, provider_beneficiary_id, provider_transfer_id, escrow_id,
+			transfer_request_id, voucher_id, provider, provider_beneficiary_id, provider_transfer_id,
 			amount, currency, purpose, reference, narration, transfer_mode,
+			requires_approval, approval_mode, approved_by, approved_at,
 			status, initiated_at, processing_at, completed_at, failed_at, failure_reason, utr,
 			retry_count, max_retries, next_retry_at, last_retry_at,
 			last_webhook_at, webhook_timeout_at, webhook_history, provider_metadata,
@@ -512,11 +477,11 @@ func (r *PostgresPayoutTransferRepository) GetWebhookTimeouts(ctx context.Contex
 	for rows.Next() {
 		var transfer payout.PayoutTransferRequest
 		var metadataJSON, historyJSON []byte
-		var escrowID sql.NullString
 
 		err := rows.Scan(
-			&transfer.TransferRequestID, &transfer.PaymentID, &transfer.VoucherID, &transfer.Provider, &transfer.ProviderBeneficiaryID, &transfer.ProviderTransferID, &escrowID,
+			&transfer.TransferRequestID, &transfer.VoucherID, &transfer.Provider, &transfer.ProviderBeneficiaryID, &transfer.ProviderTransferID,
 			&transfer.Amount, &transfer.Currency, &transfer.Purpose, &transfer.Reference, &transfer.Narration, &transfer.TransferMode,
+			&transfer.RequiresApproval, &transfer.ApprovalMode, &transfer.ApprovedBy, &transfer.ApprovedAt,
 			&transfer.Status, &transfer.InitiatedAt, &transfer.ProcessingAt, &transfer.CompletedAt, &transfer.FailedAt, &transfer.FailureReason, &transfer.UTR,
 			&transfer.RetryCount, &transfer.MaxRetries, &transfer.NextRetryAt, &transfer.LastRetryAt,
 			&transfer.LastWebhookAt, &transfer.WebhookTimeoutAt, &historyJSON, &metadataJSON,
@@ -527,9 +492,70 @@ func (r *PostgresPayoutTransferRepository) GetWebhookTimeouts(ctx context.Contex
 			return nil, fmt.Errorf("failed to scan transfer: %w", err)
 		}
 
-		// Handle nullable escrow_id
-		if escrowID.Valid {
-			transfer.EscrowID = escrowID.String
+		// Unmarshal JSONB fields
+		if len(metadataJSON) > 0 {
+			if err := json.Unmarshal(metadataJSON, &transfer.ProviderMetadata); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal provider_metadata: %w", err)
+			}
+		}
+
+		if len(historyJSON) > 0 {
+			if err := json.Unmarshal(historyJSON, &transfer.WebhookHistory); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal webhook_history: %w", err)
+			}
+		}
+
+		transfers = append(transfers, &transfer)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating transfer rows: %w", err)
+	}
+
+	return transfers, nil
+}
+
+// GetPendingApprovals retrieves transfers pending approval (for operations dashboard)
+func (r *PostgresPayoutTransferRepository) GetPendingApprovals(ctx context.Context, limit int) ([]*payout.PayoutTransferRequest, error) {
+	query := `
+		SELECT
+			transfer_request_id, voucher_id, provider, provider_beneficiary_id, provider_transfer_id,
+			amount, currency, purpose, reference, narration, transfer_mode,
+			requires_approval, approval_mode, approved_by, approved_at,
+			status, initiated_at, processing_at, completed_at, failed_at, failure_reason, utr,
+			retry_count, max_retries, next_retry_at, last_retry_at,
+			last_webhook_at, webhook_timeout_at, webhook_history, provider_metadata,
+			created_at, updated_at
+		FROM xcentro.payout_transfer_requests
+		WHERE status = 'pending_approval'
+		ORDER BY created_at ASC
+		LIMIT $1
+	`
+
+	rows, err := r.querier.Query(ctx, query, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get pending approvals: %w", err)
+	}
+	defer rows.Close()
+
+	var transfers []*payout.PayoutTransferRequest
+
+	for rows.Next() {
+		var transfer payout.PayoutTransferRequest
+		var metadataJSON, historyJSON []byte
+
+		err := rows.Scan(
+			&transfer.TransferRequestID, &transfer.VoucherID, &transfer.Provider, &transfer.ProviderBeneficiaryID, &transfer.ProviderTransferID,
+			&transfer.Amount, &transfer.Currency, &transfer.Purpose, &transfer.Reference, &transfer.Narration, &transfer.TransferMode,
+			&transfer.RequiresApproval, &transfer.ApprovalMode, &transfer.ApprovedBy, &transfer.ApprovedAt,
+			&transfer.Status, &transfer.InitiatedAt, &transfer.ProcessingAt, &transfer.CompletedAt, &transfer.FailedAt, &transfer.FailureReason, &transfer.UTR,
+			&transfer.RetryCount, &transfer.MaxRetries, &transfer.NextRetryAt, &transfer.LastRetryAt,
+			&transfer.LastWebhookAt, &transfer.WebhookTimeoutAt, &historyJSON, &metadataJSON,
+			&transfer.CreatedAt, &transfer.UpdatedAt,
+		)
+
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan transfer: %w", err)
 		}
 
 		// Unmarshal JSONB fields

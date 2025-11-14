@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"xcentro.in/internal/adapters/database/postgres/client"
-	paymentRepo "xcentro.in/internal/adapters/database/postgres/payment"
 	payoutRepo "xcentro.in/internal/adapters/database/postgres/payout"
 	voucherRepo "xcentro.in/internal/adapters/database/postgres/voucher"
 	"xcentro.in/internal/adapters/external/payout/factory"
@@ -43,7 +42,7 @@ func main() {
 	voucherRepository := voucherRepo.NewPostgresVoucherRepository(db, cfg.BankAccountEncryption.EncryptionKey)
 	transferRepository := payoutRepo.NewPostgresPayoutTransferRepository(db)
 	configRepository := payoutRepo.NewPostgresPayoutConfigurationRepository(db)
-	stateChangeRepository := paymentRepo.NewPostgresPaymentStateChangeRepository(db)
+	mappingRepository := payoutRepo.NewPostgresProviderMappingRepository(db)
 
 	fmt.Println("✅ Repositories initialized")
 
@@ -53,11 +52,10 @@ func main() {
 	fmt.Println("✅ Payout provider factory initialized (using config: Castler)")
 
 	// Initialize payout service (business logic layer)
-	// Note: PayoutService doesn't use mappingRepository (payee provider mapping is in payee module)
 	payoutSvc := payout.NewPayoutService(
 		voucherRepository,
 		transferRepository,
-		nil, // bankAccountRepository - not used in worker, only in API handlers
+		mappingRepository,
 		configRepository,
 		providerFactory,
 	)
@@ -68,8 +66,8 @@ func main() {
 	worker := workers.NewPayoutWorker(
 		voucherRepository,
 		transferRepository,
+		mappingRepository,
 		configRepository,
-		stateChangeRepository,
 		payoutSvc,
 		providerFactory,
 	)

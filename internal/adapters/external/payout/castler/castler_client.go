@@ -151,29 +151,20 @@ func (c *CastlerClient) GetBeneficiaryStatus(ctx context.Context, providerBenefi
 
 // CreateTransferRequest initiates a payout transfer with Castler
 func (c *CastlerClient) CreateTransferRequest(ctx context.Context, req *payout.CreateTransferRequest) (*payout.CreateTransferResponse, error) {
-	// Prepare notes with invoice number or other metadata
-	notes := make(map[string]interface{})
-	if req.Reference != "" {
-		notes["invoice_number"] = req.Reference
-	}
-	if req.Narration != "" {
-		notes["narration"] = req.Narration
-	}
-
-	// Build Castler transfer request with exact API format
+	// Build Castler transfer request
 	castlerReq := CastlerTransferRequest{
-		EscrowID:      req.EscrowID,              // Escrow account ID (from config/env)
-		PayeeID:       req.ProviderBeneficiaryID, // Castler payee ID
-		Mode:          req.TransferMode,          // neft, rtgs, imps
+		BeneficiaryID: req.ProviderBeneficiaryID,
 		Amount:        float64(req.Amount) / 100.0, // Convert paise to rupees
-		CustomerRefID: req.TransferRequestID,     // Our payout_id for tracking
-		Purpose:       req.Purpose,               // Purpose of payment
-		Notes:         notes,                     // Additional metadata
+		Currency:      req.Currency,
+		Purpose:       req.Purpose,
+		Reference:     req.Reference,
+		Narration:     req.Narration,
+		TransferMode:  req.TransferMode,
 	}
 
-	// Call Castler payout API
+	// Call Castler API
 	var castlerResp CastlerTransferResponse
-	if err := c.post(ctx, "/api/v1/payout", castlerReq, &castlerResp); err != nil {
+	if err := c.post(ctx, "/v1/transfers", castlerReq, &castlerResp); err != nil {
 		return nil, &payout.PayoutProviderError{
 			Provider:    payout.ProviderCastler,
 			ErrorCode:   payout.ErrCodeAPITimeout,
@@ -182,66 +173,98 @@ func (c *CastlerClient) CreateTransferRequest(ctx context.Context, req *payout.C
 		}
 	}
 
-	// Check if request was successful
-	if !castlerResp.Success {
-		errMsg := "Unknown error"
-		if castlerResp.Message != nil {
-			errMsg = *castlerResp.Message
-		}
-		if len(castlerResp.Errors) > 0 {
-			errMsg = fmt.Sprintf("%s: %v", errMsg, castlerResp.Errors)
-		}
-		return nil, &payout.PayoutProviderError{
-			Provider:    payout.ProviderCastler,
-			ErrorCode:   payout.ErrCodeAPITimeout,
-			Message:     fmt.Sprintf("Castler payout failed: %s", errMsg),
-			IsRetryable: true, // May be retryable depending on error
-		}
-	}
-
 	// Map Castler response to domain response
-	// Transfer is initiated immediately with Castler
-	message := "Transfer initiated successfully"
-	if castlerResp.Message != nil {
-		message = *castlerResp.Message
+	status := payout.TransferStatusApproved // Castler creates in pending state
+	if castlerResp.Status == "processing" {
+		status = payout.TransferStatusProcessing
 	}
 
 	return &payout.CreateTransferResponse{
-		ProviderTransferID:  castlerResp.Result.TransferID, // Use transferId from result
-		Status:              payout.TransferStatusInitiated, // Always initiated
-		RequiresApproval:    false,                          // No approval workflow
-		Message:             message,
-		EstimatedSettlement: nil, // Settlement info comes via webhook
+		ProviderTransferID:  castlerResp.TransferID,
+		Status:              status,
+		RequiresApproval:    true, // Castler always requires approval
+		Message:             castlerResp.Message,
+		EstimatedSettlement: &castlerResp.EstimatedSettlement,
 		Metadata: map[string]interface{}{
-			"castler_transfer_id": castlerResp.Result.TransferID,
-			"customer_ref_id":     req.TransferRequestID,
-			"success":             castlerResp.Success,
+			"castler_transfer_id": castlerResp.TransferID,
+			"castler_status":      castlerResp.Status,
 		},
 	}, nil
 }
 
 // ApproveTransferRequest approves a pending transfer with Castler
-// DEPRECATED: Approval workflow removed - Castler auto-processes payouts
 func (c *CastlerClient) ApproveTransferRequest(ctx context.Context, req *payout.ApproveTransferRequest) (*payout.ApproveTransferResponse, error) {
-	return nil, &payout.PayoutProviderError{
-		Provider:    payout.ProviderCastler,
-		ErrorCode:   payout.ErrCodeAPITimeout,
-		Message:     "Approval not supported - Castler auto-processes payouts after initiation",
-		IsRetryable: false,
+	// Build Castler approval request
+	endpoint := fmt.Sprintf("/v1/transfers/%s/approve", req.ProviderTransferID)
+	castlerReq := CastlerApprovalRequest{
+		Remarks: req.Remarks,
 	}
+
+	// Call Castler API
+	var castlerResp CastlerTransferResponse
+	if err := c.post(ctx, endpoint, castlerReq, &castlerResp); err != nil {
+		return nil, &payout.PayoutProviderError{
+			Provider:    payout.ProviderCastler,
+			ErrorCode:   payout.ErrCodeAPITimeout,
+			Message:     fmt.Sprintf("Castler transfer approval failed: %v", err),
+			IsRetryable: true,
+		}
+	}
+
+	// Map Castler response to domain response
+	status := payout.TransferStatusProcessing
+	if castlerResp.Status == "completed" {
+		status = payout.TransferStatusCompleted
+	}
+
+	return &payout.ApproveTransferResponse{
+		ProviderTransferID: castlerResp.TransferID,
+		Status:             status,
+		Message:            castlerResp.Message,
+		UTR:                castlerResp.UTR,
+		Metadata: map[string]interface{}{
+			"castler_transfer_id": castlerResp.TransferID,
+			"castler_status":      castlerResp.Status,
+		},
+	}, nil
 }
 
 // GetTransferStatus queries the status of a transfer
-// NOTE: Status updates come via webhooks - this is for manual debugging only
 func (c *CastlerClient) GetTransferStatus(ctx context.Context, providerTransferID string) (*payout.TransferStatus, error) {
-	// TODO: Implement if needed for debugging/manual status checks
-	// Would need to update to use new Castler response format
-	return nil, &payout.PayoutProviderError{
-		Provider:    payout.ProviderCastler,
-		ErrorCode:   payout.ErrCodeTransferNotFound,
-		Message:     "Manual status check not implemented - use settlement webhooks",
-		IsRetryable: false,
+	endpoint := fmt.Sprintf("/v1/transfers/%s", providerTransferID)
+
+	var castlerResp CastlerTransferResponse
+	if err := c.get(ctx, endpoint, &castlerResp); err != nil {
+		return nil, &payout.PayoutProviderError{
+			Provider:    payout.ProviderCastler,
+			ErrorCode:   payout.ErrCodeTransferNotFound,
+			Message:     fmt.Sprintf("Failed to get transfer status: %v", err),
+			IsRetryable: true,
+		}
 	}
+
+	// Map Castler status to domain status
+	status := payout.TransferStatusInitiated // After approval, it's initiated
+	switch castlerResp.Status {
+	case "processing":
+		status = payout.TransferStatusProcessing
+	case "completed":
+		status = payout.TransferStatusCompleted
+	case "failed":
+		status = payout.TransferStatusFailed
+	}
+
+	return &payout.TransferStatus{
+		ProviderTransferID: castlerResp.TransferID,
+		Status:             status,
+		UTR:                castlerResp.UTR,
+		FailureReason:      castlerResp.FailureReason,
+		ProcessedAt:        &castlerResp.ProcessedAt,
+		SettledAt:          &castlerResp.SettledAt,
+		Metadata: map[string]interface{}{
+			"castler_status": castlerResp.Status,
+		},
+	}, nil
 }
 
 // OnboardPayeeToCastler registers a payee with Castler after penny-drop verification
