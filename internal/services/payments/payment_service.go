@@ -120,20 +120,28 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 
 		// Sub-step 1: Create payment record within transaction
 		s.logger.DebugWith("Creating payment record within transaction")
+
+		// Calculate GST breakdown (18% GST on convenience fee)
+		convenienceFee := feeCalculation.FeeAmount
+		convenienceFeeGST := int64(float64(convenienceFee) * 0.18)
+		totalFee := convenienceFee + convenienceFeeGST
+
 		p := &payment.Payment{
-			ID:            paymentID,
-			UserID:        req.UserID,
-			BusinessID:    req.BusinessID,
-			Amount:        req.Amount,
-			Currency:      req.Currency,
-			PaymentMethod: req.PaymentMethod,
-			PaymentType:   payment.PaymentTypePayment,
-			Status:        payment.PaymentStatusPending,
-			Description:   req.Description,
-			CallbackURL:   callbackURL,
-			FeeAmount:     feeCalculation.FeeAmount,
-			TotalAmount:   feeCalculation.TotalAmount,
-			Metadata:      req.Metadata,
+			ID:               paymentID,
+			UserID:           req.UserID,
+			BusinessID:       req.BusinessID,
+			Amount:           req.Amount,
+			Currency:         req.Currency,
+			PaymentMethod:    req.PaymentMethod,
+			PaymentType:      payment.PaymentTypePayment,
+			Status:           payment.PaymentStatusPending,
+			Description:      req.Description,
+			CallbackURL:      callbackURL,
+			FeeAmount:        totalFee,              // Total fee (base + GST)
+			ConvenienceFee:   convenienceFee,        // Base convenience fee before GST
+			ConvenienceFeeGST: convenienceFeeGST,    // 18% GST on convenience fee
+			TotalAmount:      req.Amount + totalFee, // Base amount + total fee
+			Metadata:         req.Metadata,
 		}
 
 		// Set payment source details for tokenized payments

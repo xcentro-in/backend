@@ -137,40 +137,31 @@ type VoucherActivityResponse struct {
 // Used by repository layer to return raw payment data
 type VoucherPaymentDetails struct {
 	// Payment identification
-	PaymentID        string    `json:"payment_id"`
-	VoucherID        string    `json:"voucher_id"`
-	VoucherNumber    string    `json:"voucher_number"`
-	PaymentStatus    string    `json:"payment_status"`
-	PaymentDate      time.Time `json:"payment_date"`
-	GatewayUsed      string    `json:"gateway_used"`
-	GatewayPaymentID string    `json:"gateway_payment_id"`
+	PaymentID     string    `json:"payment_id"`
+	VoucherID     string    `json:"voucher_id"`
+	VoucherNumber string    `json:"voucher_number"`
+	PaymentStatus string    `json:"payment_status"`
+	PaymentDate   time.Time `json:"payment_date"`
 
 	// Payment source details
-	PaymentMethod      string `json:"payment_method"`
-	PaymentSourceType  string `json:"payment_source_type"`
-	PaymentSourceID    string `json:"payment_source_id"`
-	CardType           string `json:"card_type"`
-	CardCategory       string `json:"card_category"`
-	LastFourDigits     string `json:"last_four_digits"`
-	BankName           string `json:"bank_name"`
+	PaymentMethod  string `json:"payment_method"`
+	CardType       string `json:"card_type"`
+	CardCategory   string `json:"card_category"`
+	LastFourDigits string `json:"last_four_digits"`
+	BankName       string `json:"bank_name"`
 
 	// Payment amounts (in paise)
-	Amount      int64 `json:"amount"`       // Original voucher amount
-	FeeAmount   int64 `json:"fee_amount"`   // Total fee (convenience fee + GST)
-	TotalAmount int64 `json:"total_amount"` // amount + fee_amount (what customer paid)
+	Amount            int64 `json:"amount"`              // Original voucher amount
+	FeeAmount         int64 `json:"fee_amount"`          // Total fee (convenience fee + GST)
+	ConvenienceFee    int64 `json:"convenience_fee"`     // Base convenience fee before GST
+	ConvenienceFeeGST int64 `json:"convenience_fee_gst"` // GST on convenience fee (18%)
+	TotalAmount       int64 `json:"total_amount"`        // amount + fee_amount (what customer paid)
 
-	// Settlement details
-	SettlementStatus      string     `json:"settlement_status"`
-	SettledAt             *time.Time `json:"settled_at"`
-	SettlementAmount      int64      `json:"settlement_amount"`
-	MDRAmount             int64      `json:"mdr_amount"`
-	NetSettlementAmount   int64      `json:"net_settlement_amount"`
-	SettlementReferenceID string     `json:"settlement_reference_id"`
-	SettlementUTR         string     `json:"settlement_utr"`
+	// Payout details
+	PayoutUTR         string     `json:"payout_utr"`          // Bank UTR from payout provider (empty if not yet paid to vendor)
+	PayoutCompletedAt *time.Time `json:"payout_completed_at"` // When payout completed to vendor (null if not yet completed)
 
-	// Additional metadata
-	Description string                 `json:"description"`
-	Metadata    map[string]interface{} `json:"metadata"`
+	Description string `json:"description"`
 }
 
 // VoucherWithPayeeDetails represents a voucher with its associated payee relationship details

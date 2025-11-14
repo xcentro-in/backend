@@ -213,27 +213,34 @@ func registerV1PayoutRoutes(clients *externalClients, cfg *config.Config, group 
 	configRepository := payoutRepo.NewPostgresPayoutConfigurationRepository(clients.db)
 	voucherRepository := voucherRepo.NewPostgresVoucherRepository(clients.db, cfg.BankAccountEncryption.EncryptionKey)
 	bankAccountRepository := payeeRepo.NewPgPayeeBankAccountRepository(clients.db, cfg.BankAccountEncryption.EncryptionKey)
+	stateChangeRepository := paymentRepo.NewPostgresPaymentStateChangeRepository(clients.db)
 
 	providerFactory := factory.NewPayoutProviderFactory(cfg)
 	payoutService := payoutSvc.NewPayoutService(voucherRepository, transferRepository, bankAccountRepository, configRepository, providerFactory)
 	settlementService := settlementSvc.NewSettlementVerificationService(logger.GetDefault())
 
-	webhookHandler := payoutHandler.NewPayoutWebhookHandler(transferRepository, voucherRepository, cfg.Castler.WebhookSecret)
-	dashboardHandler := payoutHandler.NewPayoutHandler(payoutService, transferRepository, configRepository, voucherRepository, settlementService, logger.GetDefault())
+	webhookHandler := payoutHandler.NewPayoutWebhookHandler(transferRepository, stateChangeRepository, cfg.Castler.WebhookSecret)
+	payoutHandler := payoutHandler.NewPayoutHandler(payoutService, transferRepository, configRepository, voucherRepository, settlementService, providerFactory, stateChangeRepository, logger.GetDefault())
 
+	// Payout routes - separated by purpose
 	payoutGroup := group.Group("/payout")
+
+	// Webhook endpoints (external - called by Castler)
 	payoutGroup.POST("/webhooks/castler", webhookHandler.HandleCastlerWebhook)
-	payoutGroup.GET("/pending-approvals", dashboardHandler.GetPendingApprovals)
-	payoutGroup.POST("/:transfer_id/approve", dashboardHandler.ApproveTransfer)
-	payoutGroup.POST("/:transfer_id/cancel", dashboardHandler.CancelTransfer)
-	payoutGroup.GET("/:transfer_id", dashboardHandler.GetTransferDetails)
-	payoutGroup.GET("/:transfer_id/webhooks", dashboardHandler.GetWebhookHistory)
-	payoutGroup.GET("/timeouts", dashboardHandler.GetTimeoutTransfers)
-	payoutGroup.POST("/:transfer_id/mark-completed", dashboardHandler.MarkCompletedManually)
-	payoutGroup.GET("/config", dashboardHandler.GetConfig)
-	payoutGroup.PUT("/config", dashboardHandler.UpdateConfig)
-	payoutGroup.POST("/config", dashboardHandler.CreateConfig)
-	payoutGroup.POST("/initiate", dashboardHandler.InitiatePayoutManually)
+
+	// Dashboard/Operations endpoints (internal - admin/ops team)
+	dashboardGroup := payoutGroup.Group("/dashboard")
+	dashboardGroup.POST("/initiate", payoutHandler.InitiatePayoutManually)
+	dashboardGroup.GET("/pending-approvals", payoutHandler.GetPendingApprovals) // DEPRECATED
+	dashboardGroup.POST("/:transfer_id/approve", payoutHandler.ApproveTransfer) // DEPRECATED
+	dashboardGroup.POST("/:transfer_id/cancel", payoutHandler.CancelTransfer)
+	dashboardGroup.GET("/:transfer_id", payoutHandler.GetTransferDetails)
+	dashboardGroup.GET("/:transfer_id/webhooks", payoutHandler.GetWebhookHistory)
+	dashboardGroup.GET("/timeouts", payoutHandler.GetTimeoutTransfers)
+	dashboardGroup.POST("/:transfer_id/mark-completed", payoutHandler.MarkCompletedManually)
+	dashboardGroup.GET("/config", payoutHandler.GetConfig)
+	dashboardGroup.PUT("/config", payoutHandler.UpdateConfig)
+	dashboardGroup.POST("/config", payoutHandler.CreateConfig)
 }
 
 func registerV1BatchPaymentRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {

@@ -152,6 +152,9 @@ type PayeeBankAccountRepository interface {
 
 	// Global account lookup (for reusing Castler beneficiary IDs)
 	FindByAccountHash(ctx context.Context, accountHash string) (*PayeeBankAccount, error)
+
+	// Lightweight lookup for payout (no decryption needed)
+	GetCastlerBeneficiaryID(ctx context.Context, accountID string) (string, error)
 }
 
 // ############################################################################

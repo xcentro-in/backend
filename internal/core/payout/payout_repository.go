@@ -60,9 +60,6 @@ type PayoutTransferRepository interface {
 	// UpdateProviderTransferID sets the provider's transfer ID after initiation
 	UpdateProviderTransferID(ctx context.Context, transferRequestID string, providerTransferID string) error
 
-	// ApproveTransfer records transfer approval
-	ApproveTransfer(ctx context.Context, transferRequestID string, approvedBy string, approvalMode ApprovalMode, timestamp time.Time) error
-
 	// MarkCompleted marks transfer as completed
 	MarkCompleted(ctx context.Context, transferRequestID string, utr string, completedAt time.Time) error
 
@@ -77,9 +74,6 @@ type PayoutTransferRepository interface {
 
 	// GetWebhookTimeouts retrieves transfers that exceeded webhook timeout
 	GetWebhookTimeouts(ctx context.Context, limit int) ([]*PayoutTransferRequest, error)
-
-	// GetPendingApprovals retrieves transfers pending approval (for operations dashboard)
-	GetPendingApprovals(ctx context.Context, limit int) ([]*PayoutTransferRequest, error)
 }
 
 // PayoutConfigurationRepository defines the interface for payout configuration persistence

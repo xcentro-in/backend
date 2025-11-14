@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
+	"xcentro.in/internal/core/payment"
 	"xcentro.in/internal/core/payout"
 	"xcentro.in/internal/core/voucher"
 	payoutSvc "xcentro.in/internal/services/payout"
@@ -22,6 +24,8 @@ type PayoutHandler struct {
 	configRepo         payout.PayoutConfigurationRepository
 	voucherRepo        voucher.VoucherRepository
 	settlementService  *settlementSvc.SettlementVerificationService
+	providerFactory    payoutSvc.PayoutProviderFactory
+	stateChangeRepo    payment.PaymentStateChangeRepository
 	logger             *logger.Logger
 }
 
@@ -32,6 +36,8 @@ func NewPayoutHandler(
 	configRepo payout.PayoutConfigurationRepository,
 	voucherRepo voucher.VoucherRepository,
 	settlementService *settlementSvc.SettlementVerificationService,
+	providerFactory payoutSvc.PayoutProviderFactory,
+	stateChangeRepo payment.PaymentStateChangeRepository,
 	logger *logger.Logger,
 ) *PayoutHandler {
 	return &PayoutHandler{
@@ -40,140 +46,42 @@ func NewPayoutHandler(
 		configRepo:        configRepo,
 		voucherRepo:       voucherRepo,
 		settlementService: settlementService,
+		providerFactory:   providerFactory,
+		stateChangeRepo:   stateChangeRepo,
 		logger:            logger,
 	}
 }
 
 // GetPendingApprovals retrieves transfers pending approval
 // GET /payout/pending-approvals?limit=50
+// DEPRECATED: Approval workflow removed in payout redesign
 func (h *PayoutHandler) GetPendingApprovals(c echo.Context) error {
-	h.logger.InfoWith("GetPendingApprovals API called")
-	ctx := c.Request().Context()
-
-	// Parse limit query parameter
-	limit := 50 // default
-	if limitStr := c.QueryParam("limit"); limitStr != "" {
-		if parsedLimit, err := strconv.Atoi(limitStr); err == nil && parsedLimit > 0 {
-			limit = parsedLimit
-		}
-	}
-
-	h.logger.DebugWith("Query parameters", "limit", limit)
-
-	// Get pending approvals
-	transfers, err := h.transferRepo.GetPendingApprovals(ctx, limit)
-	if err != nil {
-		h.logger.ErrorWith("Failed to fetch pending approvals", "error", err)
-		return c.JSON(http.StatusInternalServerError, map[string]interface{}{
-			"error":   "failed_to_fetch_pending_approvals",
-			"message": err.Error(),
-		})
-	}
-
-	h.logger.InfoWith("Pending approvals fetched", "count", len(transfers))
-	return c.JSON(http.StatusOK, map[string]interface{}{
-		"data": transfers,
-		"meta": map[string]interface{}{
-			"count": len(transfers),
-			"limit": limit,
-		},
+	h.logger.WarnWith("GetPendingApprovals API called - DEPRECATED")
+	return c.JSON(http.StatusGone, map[string]interface{}{
+		"error":   "feature_removed",
+		"message": "Approval workflow has been removed - all payouts are auto-initiated after settlement",
 	})
 }
 
 // ApproveTransfer approves a pending transfer
 // POST /payout/:transfer_id/approve
-// Body: {"approved_by": "user_uuid", "remarks": "optional remarks"}
+// DEPRECATED: Approval workflow removed in payout redesign
 func (h *PayoutHandler) ApproveTransfer(c echo.Context) error {
-	h.logger.InfoWith("ApproveTransfer API called")
-	ctx := c.Request().Context()
-	transferID := c.Param("transfer_id")
-
-	var req struct {
-		ApprovedBy string `json:"approved_by" validate:"required"`
-		Remarks    string `json:"remarks"`
-	}
-
-	if err := c.Bind(&req); err != nil {
-		h.logger.ErrorWith("Error binding request", "error", err)
-		return c.JSON(http.StatusBadRequest, map[string]interface{}{
-			"error":   "invalid_request",
-			"message": "Invalid request body",
-		})
-	}
-
-	h.logger.DebugWith("Approve transfer request",
-		"transfer_id", transferID,
-		"approved_by", req.ApprovedBy,
-		"has_remarks", req.Remarks != "")
-
-	// Call service to approve transfer
-	if err := h.service.ApproveTransfer(ctx, transferID, req.ApprovedBy, req.Remarks); err != nil {
-		h.logger.ErrorWith("Failed to approve transfer", "transfer_id", transferID, "error", err)
-		return c.JSON(http.StatusInternalServerError, map[string]interface{}{
-			"error":   "failed_to_approve_transfer",
-			"message": err.Error(),
-		})
-	}
-
-	h.logger.InfoWith("Transfer approved successfully",
-		"transfer_id", transferID,
-		"approved_by", req.ApprovedBy)
-
-	return c.JSON(http.StatusOK, map[string]interface{}{
-		"message": "Transfer approved successfully",
-		"data": map[string]interface{}{
-			"transfer_id": transferID,
-			"approved_by": req.ApprovedBy,
-		},
+	h.logger.WarnWith("ApproveTransfer API called - DEPRECATED")
+	return c.JSON(http.StatusGone, map[string]interface{}{
+		"error":   "feature_removed",
+		"message": "Approval workflow has been removed - all payouts are auto-initiated after settlement",
 	})
 }
 
 // CancelTransfer cancels a pending transfer
 // POST /payout/:transfer_id/cancel
-// Body: {"cancelled_by": "user_uuid", "reason": "cancellation reason"}
+// DEPRECATED: Cancellation workflow removed in payout redesign
 func (h *PayoutHandler) CancelTransfer(c echo.Context) error {
-	h.logger.InfoWith("CancelTransfer API called")
-	ctx := c.Request().Context()
-	transferID := c.Param("transfer_id")
-
-	var req struct {
-		CancelledBy string `json:"cancelled_by" validate:"required"`
-		Reason      string `json:"reason" validate:"required"`
-	}
-
-	if err := c.Bind(&req); err != nil {
-		h.logger.ErrorWith("Error binding request", "error", err)
-		return c.JSON(http.StatusBadRequest, map[string]interface{}{
-			"error":   "invalid_request",
-			"message": "Invalid request body",
-		})
-	}
-
-	h.logger.DebugWith("Cancel transfer request",
-		"transfer_id", transferID,
-		"cancelled_by", req.CancelledBy,
-		"reason", req.Reason)
-
-	// Call service to cancel transfer
-	if err := h.service.CancelTransfer(ctx, transferID, req.CancelledBy, req.Reason); err != nil {
-		h.logger.ErrorWith("Failed to cancel transfer", "transfer_id", transferID, "error", err)
-		return c.JSON(http.StatusInternalServerError, map[string]interface{}{
-			"error":   "failed_to_cancel_transfer",
-			"message": err.Error(),
-		})
-	}
-
-	h.logger.InfoWith("Transfer cancelled successfully",
-		"transfer_id", transferID,
-		"cancelled_by", req.CancelledBy)
-
-	return c.JSON(http.StatusOK, map[string]interface{}{
-		"message": "Transfer cancelled successfully",
-		"data": map[string]interface{}{
-			"transfer_id":  transferID,
-			"cancelled_by": req.CancelledBy,
-			"reason":       req.Reason,
-		},
+	h.logger.WarnWith("CancelTransfer API called - DEPRECATED")
+	return c.JSON(http.StatusGone, map[string]interface{}{
+		"error":   "feature_removed",
+		"message": "Cancellation workflow has been removed - contact support for payout issues",
 	})
 }
 
@@ -436,18 +344,20 @@ func (h *PayoutHandler) CreateConfig(c echo.Context) error {
 	})
 }
 
-// InitiatePayoutManually manually triggers payout for a voucher (MVP: Ops button)
+// InitiatePayoutManually manually triggers payout for a payment (MVP: Ops button)
 // POST /payout/initiate
-// Body: {"voucher_id": "uuid", "initiated_by": "user_uuid", "bypass_checks": false, "remarks": "optional"}
+// Body: {"payment_id": "uuid", "voucher_ids": ["uuid1", "uuid2"], "initiated_by": "user_uuid", "bypass_checks": false, "remarks": "optional"}
+// voucher_ids is optional - if empty, processes all unpaid vouchers for the payment
 func (h *PayoutHandler) InitiatePayoutManually(c echo.Context) error {
 	h.logger.InfoWith("InitiatePayoutManually API called")
 	ctx := c.Request().Context()
 
 	var req struct {
-		VoucherID    string `json:"voucher_id" validate:"required"`
-		InitiatedBy  string `json:"initiated_by" validate:"required"`
-		BypassChecks bool   `json:"bypass_checks"` // Admin override for emergency payouts
-		Remarks      string `json:"remarks"`
+		PaymentID    string   `json:"payment_id" validate:"required"`
+		VoucherIDs   []string `json:"voucher_ids"` // Optional - empty means all unpaid vouchers
+		InitiatedBy  string   `json:"initiated_by" validate:"required"`
+		BypassChecks bool     `json:"bypass_checks"` // Admin override for emergency payouts
+		Remarks      string   `json:"remarks"`
 	}
 
 	if err := c.Bind(&req); err != nil {
@@ -459,58 +369,31 @@ func (h *PayoutHandler) InitiatePayoutManually(c echo.Context) error {
 	}
 
 	h.logger.DebugWith("Manual payout initiation request",
-		"voucher_id", req.VoucherID,
+		"payment_id", req.PaymentID,
+		"voucher_ids", req.VoucherIDs,
 		"initiated_by", req.InitiatedBy,
 		"bypass_checks", req.BypassChecks)
 
-	// Step 1: Pre-flight validation (unless bypassed)
-	if !req.BypassChecks {
-		h.logger.DebugWith("Running pre-flight validation")
-		if err := h.validateVoucherForPayout(ctx, req.VoucherID); err != nil {
-			h.logger.WarnWith("Pre-flight validation failed", "error", err)
-			return c.JSON(http.StatusBadRequest, map[string]interface{}{
-				"error":   "validation_failed",
-				"message": err.Error(),
-			})
-		}
-		h.logger.DebugWith("Pre-flight validation passed")
-	} else {
-		h.logger.WarnWith("Pre-flight checks bypassed (admin override)",
-			"initiated_by", req.InitiatedBy,
-			"remarks", req.Remarks)
-	}
-
-	// Step 2: Optional settlement verification (MVP: always passes)
+	// Step 1: Optional settlement verification (MVP: always passes)
 	if !req.BypassChecks && h.settlementService != nil {
 		h.logger.DebugWith("Running settlement verification")
-
-		// Get voucher to extract payment_id
-		voucherUUID, _ := uuid.Parse(req.VoucherID)
-		vch, err := h.voucherRepo.GetByID(ctx, voucherUUID)
-		if err == nil && vch.PaymentID != nil {
-			verified, discrepancy, err := h.settlementService.VerifySettlement(
-				ctx,
-				req.VoucherID,
-				vch.PaymentID.String(),
-			)
-
-			if err != nil {
-				h.logger.ErrorWith("Settlement verification error", "error", err)
-				// Don't block - just log for MVP
-			} else if !verified {
-				h.logger.WarnWith("Settlement verification failed (discrepancy detected)",
-					"voucher_id", req.VoucherID,
-					"discrepancy", discrepancy)
-				// MVP: Log warning but allow ops to proceed
-			} else {
-				h.logger.DebugWith("Settlement verification passed")
-			}
+		verified, discrepancy, err := h.settlementService.VerifySettlement(ctx, "", req.PaymentID)
+		if err != nil {
+			h.logger.ErrorWith("Settlement verification error", "error", err)
+			// Don't block - just log for MVP
+		} else if !verified {
+			h.logger.WarnWith("Settlement verification failed (discrepancy detected)",
+				"payment_id", req.PaymentID,
+				"discrepancy", discrepancy)
+			// MVP: Log warning but allow ops to proceed
+		} else {
+			h.logger.DebugWith("Settlement verification passed")
 		}
 	}
 
-	// Step 3: Call the SAME service method that worker would call
-	h.logger.DebugWith("Calling PayoutService.InitiatePayoutForVoucher")
-	transfer, err := h.service.InitiatePayoutForVoucher(ctx, req.VoucherID)
+	// Step 2: Call service to create transfer requests (status='initiated')
+	h.logger.DebugWith("Calling PayoutService.InitiateManualPayout")
+	transfers, err := h.service.InitiateManualPayout(ctx, req.PaymentID, req.VoucherIDs)
 	if err != nil {
 		h.logger.ErrorWith("Failed to initiate payout", "error", err)
 		return c.JSON(http.StatusInternalServerError, map[string]interface{}{
@@ -519,29 +402,35 @@ func (h *PayoutHandler) InitiatePayoutManually(c echo.Context) error {
 		})
 	}
 
-	h.logger.InfoWith("Payout initiated successfully",
-		"transfer_request_id", transfer.TransferRequestID,
-		"voucher_id", req.VoucherID,
-		"amount", transfer.Amount,
-		"status", transfer.Status,
+	h.logger.InfoWith("Payout transfer requests created",
+		"payment_id", req.PaymentID,
+		"count", len(transfers),
 		"initiated_by", req.InitiatedBy)
 
+	// Step 3: IMMEDIATELY trigger async processing (no worker delay)
+	go h.processPayoutsAsync(context.Background(), transfers)
+
+	h.logger.InfoWith("Async payout processing triggered", "count", len(transfers))
+
+	// Step 4: Return success immediately
+	transferIDs := make([]string, len(transfers))
+	totalAmount := int64(0)
+	for i, t := range transfers {
+		transferIDs[i] = t.TransferRequestID
+		totalAmount += t.Amount
+	}
+
 	return c.JSON(http.StatusCreated, map[string]interface{}{
-		"message": "Payout initiated successfully",
+		"message": "Payout initiated - processing in background",
 		"status":  "success",
 		"data": map[string]interface{}{
-			"transfer_request_id": transfer.TransferRequestID,
-			"voucher_id":          req.VoucherID,
-			"amount":              transfer.Amount,
-			"currency":            transfer.Currency,
-			"status":              transfer.Status,
-			"requires_approval":   transfer.RequiresApproval,
-			"next_action": func() string {
-				if transfer.RequiresApproval {
-					return "Transfer pending approval - use POST /payout/:transfer_id/approve"
-				}
-				return "Transfer auto-approved - worker will initiate to Castler"
-			}(),
+			"payment_id":         req.PaymentID,
+			"transfer_count":     len(transfers),
+			"transfer_ids":       transferIDs,
+			"total_amount":       totalAmount,
+			"currency":           "INR",
+			"status":             "initiated",
+			"next_action":        "Castler API calls in progress - check status via transfer_ids",
 		},
 	})
 }
@@ -564,9 +453,7 @@ func (h *PayoutHandler) validateVoucherForPayout(ctx context.Context, voucherID 
 
 	h.logger.DebugWith("Voucher retrieved",
 		"voucher_number", vch.VoucherNumber,
-		"status", vch.Status,
-		"payout_status", vch.PayoutStatus,
-		"cancellation_status", vch.CancellationStatus)
+		"status", vch.Status)
 
 	// Check 1: Voucher must be finalized
 	if vch.Status != voucher.StatusFinalized {
@@ -578,17 +465,7 @@ func (h *PayoutHandler) validateVoucherForPayout(ctx context.Context, voucherID 
 		return fmt.Errorf("voucher has no linked payment (still in draft or payment failed)")
 	}
 
-	// Check 3: Must not be cancelled
-	if vch.CancellationStatus != voucher.CancellationStatusNotCancelled {
-		return fmt.Errorf("voucher is cancelled (cancellation_status: %s)", vch.CancellationStatus)
-	}
-
-	// Check 4: Payout must be pending (not already initiated/completed)
-	if vch.PayoutStatus != "" && voucher.PayoutStatus(vch.PayoutStatus) != voucher.PayoutStatusPending {
-		return fmt.Errorf("payout already initiated (payout_status: %s)", vch.PayoutStatus)
-	}
-
-	// Check 5: No existing transfer request (idempotency)
+	// Check 3: No existing transfer request (idempotency check)
 	existing, err := h.transferRepo.GetByVoucherID(ctx, voucherID)
 	if err == nil && existing != nil {
 		return fmt.Errorf("transfer already exists (transfer_id: %s, status: %s)",
@@ -597,4 +474,186 @@ func (h *PayoutHandler) validateVoucherForPayout(ctx context.Context, voucherID 
 
 	h.logger.DebugWith("All validation checks passed")
 	return nil
+}
+
+// processPayoutsAsync processes multiple payout transfers in parallel
+// Runs in background goroutine - calls Castler API for each transfer independently
+func (h *PayoutHandler) processPayoutsAsync(ctx context.Context, transfers []*payout.PayoutTransferRequest) {
+	h.logger.InfoWith("processPayoutsAsync started", "count", len(transfers))
+
+	// Process all transfers in parallel
+	for _, transfer := range transfers {
+		// Launch goroutine for each transfer (independent processing)
+		go h.processSinglePayout(ctx, transfer)
+	}
+
+	h.logger.InfoWith("All payout goroutines launched", "count", len(transfers))
+}
+
+// processSinglePayout processes a single payout transfer
+// Called in goroutine - updates status to 'pending' on success or 'failed' on error
+func (h *PayoutHandler) processSinglePayout(ctx context.Context, transfer *payout.PayoutTransferRequest) {
+	h.logger.InfoWith("Processing single payout transfer",
+		"transfer_id", transfer.TransferRequestID,
+		"voucher_id", transfer.VoucherID,
+		"amount", transfer.Amount)
+
+	// Parse UUIDs for activity tracking
+	transferUUID, err := uuid.Parse(transfer.TransferRequestID)
+	if err != nil {
+		h.logger.ErrorWith("Invalid transfer_request_id UUID", "error", err)
+		return
+	}
+
+	paymentUUID, err := uuid.Parse(transfer.PaymentID)
+	if err != nil {
+		h.logger.ErrorWith("Invalid payment_id UUID", "error", err)
+		return
+	}
+
+	// Record activity: Payout initiated
+	now := time.Now()
+	_, err = h.stateChangeRepo.Create(ctx, &payment.CreatePaymentStateChangeRequest{
+		PaymentID:       paymentUUID,
+		TransferID:      &transferUUID,
+		Action:          payment.PayoutActionInitiated,
+		ActionTimestamp: now,
+		ActorType:       payment.ActorTypeSystem,
+		ActorName:       "payout_handler",
+		PreviousState:   "",
+		NewState:        "initiated",
+		Amount:          transfer.Amount,
+		Currency:        transfer.Currency,
+		Provider:        string(transfer.Provider),
+		Metadata: map[string]any{
+			"transfer_mode": transfer.TransferMode,
+			"purpose":       transfer.Purpose,
+		},
+		Remarks: fmt.Sprintf("Manual payout initiated for transfer %s", transfer.TransferRequestID),
+	})
+	if err != nil {
+		h.logger.ErrorWith("Failed to create activity record (initiated)", "error", err)
+		// Continue processing even if activity tracking fails
+	}
+
+	// Get provider
+	provider, err := h.providerFactory.GetProvider(transfer.Provider)
+	if err != nil {
+		h.logger.ErrorWith("Failed to get provider", "error", err, "transfer_id", transfer.TransferRequestID)
+		h.markTransferFailed(ctx, transfer, transferUUID, paymentUUID, fmt.Sprintf("Failed to get provider: %v", err))
+		return
+	}
+
+	// Call Castler payout API
+	createReq := &payout.CreateTransferRequest{
+		TransferRequestID:     transfer.TransferRequestID,
+		VoucherID:             transfer.VoucherID,
+		ProviderBeneficiaryID: transfer.ProviderBeneficiaryID,
+		EscrowID:              transfer.EscrowID,
+		Amount:                transfer.Amount,
+		Currency:              transfer.Currency,
+		Purpose:               transfer.Purpose,
+		Reference:             transfer.Reference,
+		Narration:             transfer.Narration,
+		TransferMode:          transfer.TransferMode,
+	}
+
+	resp, err := provider.CreateTransferRequest(ctx, createReq)
+	if err != nil {
+		h.logger.ErrorWith("Castler API error",
+			"error", err,
+			"transfer_id", transfer.TransferRequestID)
+		h.markTransferFailed(ctx, transfer, transferUUID, paymentUUID, fmt.Sprintf("Castler API error: %v", err))
+		return
+	}
+
+	h.logger.InfoWith("Castler API success",
+		"transfer_id", transfer.TransferRequestID,
+		"provider_transfer_id", resp.ProviderTransferID)
+
+	// Update status to 'pending' (Castler API success)
+	pendingTime := time.Now()
+	if err := h.transferRepo.UpdateStatus(ctx, transfer.TransferRequestID, payout.TransferStatusPending, pendingTime); err != nil {
+		h.logger.ErrorWith("Failed to update status to pending", "error", err)
+		return
+	}
+
+	// Store Castler's provider transfer ID
+	if err := h.transferRepo.UpdateProviderTransferID(ctx, transfer.TransferRequestID, resp.ProviderTransferID); err != nil {
+		h.logger.ErrorWith("Failed to update provider transfer ID", "error", err)
+		return
+	}
+
+	// Record activity: Payout pending (API success = pending status)
+	_, err = h.stateChangeRepo.Create(ctx, &payment.CreatePaymentStateChangeRequest{
+		PaymentID:       paymentUUID,
+		TransferID:      &transferUUID,
+		Action:          payment.PayoutActionProcessing, // Use 'processing' action for 'pending' state
+		ActionTimestamp: pendingTime,
+		ActorType:       payment.ActorTypeSystem,
+		ActorName:       "payout_handler",
+		PreviousState:   "initiated",
+		NewState:        "pending",
+		Amount:          transfer.Amount,
+		Currency:        transfer.Currency,
+		Provider:        string(transfer.Provider),
+		Metadata: map[string]any{
+			"provider_transfer_id": resp.ProviderTransferID,
+			"transfer_mode":        transfer.TransferMode,
+		},
+		Remarks: fmt.Sprintf("Castler API success - now pending settlement (Castler transferId: %s)", resp.ProviderTransferID),
+	})
+	if err != nil {
+		h.logger.ErrorWith("Failed to create activity record (pending)", "error", err)
+	}
+
+	// Set webhook timeout
+	config, err := h.configRepo.GetConfig(ctx, nil)
+	if err == nil {
+		timeoutAt := pendingTime.Add(time.Duration(config.WebhookTimeoutMinutes) * time.Minute)
+		if err := h.transferRepo.SetWebhookTimeout(ctx, transfer.TransferRequestID, timeoutAt); err != nil {
+			h.logger.ErrorWith("Failed to set webhook timeout", "error", err)
+		}
+	}
+
+	h.logger.InfoWith("Payout transfer processed successfully",
+		"transfer_id", transfer.TransferRequestID,
+		"status", "pending")
+}
+
+// markTransferFailed updates transfer status to failed and records activity
+func (h *PayoutHandler) markTransferFailed(ctx context.Context, transfer *payout.PayoutTransferRequest, transferUUID, paymentUUID uuid.UUID, reason string) {
+	failedTime := time.Now()
+
+	// Update status to failed
+	if err := h.transferRepo.MarkFailed(ctx, transfer.TransferRequestID, reason, failedTime); err != nil {
+		h.logger.ErrorWith("Failed to mark transfer as failed", "error", err)
+		return
+	}
+
+	// Record activity: Payout failed
+	_, err := h.stateChangeRepo.Create(ctx, &payment.CreatePaymentStateChangeRequest{
+		PaymentID:       paymentUUID,
+		TransferID:      &transferUUID,
+		Action:          payment.PayoutActionFailed,
+		ActionTimestamp: failedTime,
+		ActorType:       payment.ActorTypeSystem,
+		ActorName:       "payout_handler",
+		PreviousState:   "initiated",
+		NewState:        "failed",
+		Amount:          transfer.Amount,
+		Currency:        transfer.Currency,
+		Provider:        string(transfer.Provider),
+		Metadata: map[string]any{
+			"failure_reason": reason,
+		},
+		Remarks: fmt.Sprintf("Payout failed: %s", reason),
+	})
+	if err != nil {
+		h.logger.ErrorWith("Failed to create activity record (failed)", "error", err)
+	}
+
+	h.logger.ErrorWith("Transfer marked as failed",
+		"transfer_id", transfer.TransferRequestID,
+		"reason", reason)
 }
