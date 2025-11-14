@@ -22,7 +22,7 @@ func main() {
 	flag.Parse()
 
 	// Load configuration
-	cfg, err := config.Load("")
+	cfg, err := config.Load(".env")
 	if err != nil {
 		fmt.Printf("Failed to load configuration: %v\n", err)
 		os.Exit(1)
