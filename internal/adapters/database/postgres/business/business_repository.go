@@ -449,7 +449,11 @@ func (r *PgBusinessRepository) SearchBusinesses(ctx context.Context, searchTerm 
 		SELECT
 			bid,
 			name,
-			gstin
+			gstin,
+			has_completed_onboarding,
+			has_added_payment_method,
+			has_added_vendor,
+			has_created_first_payment
 		FROM
 			xcentro.business
 		WHERE
@@ -477,7 +481,15 @@ func (r *PgBusinessRepository) SearchBusinesses(ctx context.Context, searchTerm 
 	var results []*business.OpsBusinessSearchResult
 	for rows.Next() {
 		var result business.OpsBusinessSearchResult
-		err := rows.Scan(&result.BID, &result.Name, &result.GSTIN)
+		err := rows.Scan(
+			&result.BID,
+			&result.Name,
+			&result.GSTIN,
+			&result.HasCompletedOnboarding,
+			&result.HasAddedPaymentMethod,
+			&result.HasAddedVendor,
+			&result.HasCreatedFirstPayment,
+		)
 		if err != nil {
 			return nil, fmt.Errorf("error scanning search result: %w", err)
 		}

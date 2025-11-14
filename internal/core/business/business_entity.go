@@ -185,9 +185,13 @@ type OpsBusinessListItem struct {
 
 // OpsBusinessSearchResult represents a search result item
 type OpsBusinessSearchResult struct {
-	BID   string `json:"bid"`
-	Name  string `json:"name"`
-	GSTIN string `json:"gstin"`
+	BID                    string `json:"bid"`
+	Name                   string `json:"name"`
+	GSTIN                  string `json:"gstin"`
+	HasCompletedOnboarding bool   `json:"hasCompletedOnboarding"`
+	HasAddedPaymentMethod  bool   `json:"hasAddedPaymentMethod"`
+	HasAddedVendor         bool   `json:"hasAddedVendor"`
+	HasCreatedFirstPayment bool   `json:"hasCreatedFirstPayment"`
 }
 
 // OpsUserDetails represents user information in business details
