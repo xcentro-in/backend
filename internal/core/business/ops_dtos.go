@@ -9,6 +9,7 @@ type OpsListBusinessesRequest struct {
 // OpsSearchBusinessesRequest represents the request for searching businesses
 type OpsSearchBusinessesRequest struct {
 	SearchTerm string `query:"q" validate:"required,min=2"`
+	KYBStatus  string `query:"kyb_status" validate:"omitempty,oneof=kyc_not_started kyc_in_progress kyc_completed kyc_verified kyc_needs_update kyc_rejected"`
 }
 
 // OpsGetBusinessDetailsRequest represents the request for getting business details

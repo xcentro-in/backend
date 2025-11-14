@@ -986,9 +986,9 @@ func (s *BusinessServiceImpl) ListBusinessesPaginated(ctx context.Context, page 
 	return s.businessRepo.ListBusinessesPaginated(ctx, page, limit)
 }
 
-// SearchBusinesses searches businesses by name or GSTIN
-func (s *BusinessServiceImpl) SearchBusinesses(ctx context.Context, searchTerm string) ([]*business.OpsBusinessSearchResult, error) {
-	return s.businessRepo.SearchBusinesses(ctx, searchTerm)
+// SearchBusinesses searches businesses by name or GSTIN, optionally filtered by KYB status
+func (s *BusinessServiceImpl) SearchBusinesses(ctx context.Context, searchTerm string, kybStatus string) ([]*business.OpsBusinessSearchResult, error) {
+	return s.businessRepo.SearchBusinesses(ctx, searchTerm, kybStatus)
 }
 
 // GetBusinessDetailsForOps retrieves complete business details for ops dashboard

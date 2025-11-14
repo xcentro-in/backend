@@ -443,7 +443,8 @@ func (r *PgBusinessRepository) ListBusinessesPaginated(ctx context.Context, page
 }
 
 // SearchBusinesses searches businesses by name or GSTIN
-func (r *PgBusinessRepository) SearchBusinesses(ctx context.Context, searchTerm string) ([]*business.OpsBusinessSearchResult, error) {
+func (r *PgBusinessRepository) SearchBusinesses(ctx context.Context, searchTerm string, kybStatus string) ([]*business.OpsBusinessSearchResult, error) {
+	// Build query with optional kyb_status filter
 	query := `
 		SELECT
 			bid,
@@ -452,13 +453,22 @@ func (r *PgBusinessRepository) SearchBusinesses(ctx context.Context, searchTerm 
 		FROM
 			xcentro.business
 		WHERE
-			name ILIKE $1 OR
-			gstin ILIKE $1
-		LIMIT 10
+			(name ILIKE $1 OR gstin ILIKE $1)
 	`
 
+	// Add kyb_status filter if provided
+	var args []interface{}
 	searchPattern := searchTerm + "%"
-	rows, err := r.querier.Query(ctx, query, searchPattern)
+	args = append(args, searchPattern)
+
+	if kybStatus != "" {
+		query += " AND kyb_status = $2"
+		args = append(args, kybStatus)
+	}
+
+	query += " LIMIT 10"
+
+	rows, err := r.querier.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("error searching businesses: %w", err)
 	}

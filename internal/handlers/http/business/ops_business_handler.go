@@ -131,7 +131,7 @@ func (h *OpsBusinessHandler) SearchBusinesses(c echo.Context) error {
 	}
 
 	// Call service layer
-	results, err := h.businessService.SearchBusinesses(c.Request().Context(), req.SearchTerm)
+	results, err := h.businessService.SearchBusinesses(c.Request().Context(), req.SearchTerm, req.KYBStatus)
 	if err != nil {
 		h.logger.Errorf("Error searching businesses: %v", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{

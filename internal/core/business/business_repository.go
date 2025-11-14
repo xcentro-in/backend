@@ -25,7 +25,7 @@ type BusinessRepository interface {
 
 	// Ops dashboard methods
 	ListBusinessesPaginated(ctx context.Context, page int, limit int) ([]*OpsBusinessListItem, int, error)
-	SearchBusinesses(ctx context.Context, searchTerm string) ([]*OpsBusinessSearchResult, error)
+	SearchBusinesses(ctx context.Context, searchTerm string, kybStatus string) ([]*OpsBusinessSearchResult, error)
 	GetBusinessDetailsForOps(ctx context.Context, bid string) (*OpsBusinessDetails, error)
 	UpdateGSTINData(ctx context.Context, bid string, gstDataJSON string) error
 	UpdateIncometTaxIDData(ctx context.Context, itid string, itidDataJSON string) error
