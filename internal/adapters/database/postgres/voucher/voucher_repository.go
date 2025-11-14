@@ -1879,6 +1879,10 @@ func (r *PostgresVoucherRepository) GetVoucherActivity(ctx context.Context, vouc
 			WHERE v.voucher_id = $1
 			  -- Exclude settlement lifecycle (internal step, not user-facing)
 			  AND psc.action NOT IN ('settlement_pending', 'settlement_received', 'settlement_failed')
+			  -- Exclude payout_initiated to avoid duplicate "Payment Processing" entries
+			  -- (both payout_initiated and payout_processing map to same display text,
+			  --  but payout_processing is more meaningful as it happens after API success)
+			  AND psc.action != 'payout_initiated'
 		)
 		SELECT
 			activity_id,
