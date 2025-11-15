@@ -13,6 +13,7 @@ import (
 	redis "xcentro.in/internal/adapters/cache/redis/client"
 	"xcentro.in/internal/adapters/database/postgres/client"
 	"xcentro.in/internal/adapters/providers/authbridge"
+	"xcentro.in/internal/adapters/providers/fileupload"
 	"xcentro.in/internal/adapters/providers/mailers"
 	metricsProvider "xcentro.in/internal/adapters/providers/metrics"
 	"xcentro.in/internal/core/metrics"
@@ -28,6 +29,7 @@ type externalClients struct {
 	rcache       *redis.RedisClient
 	emailService mailers.EmailService
 	metrics      metrics.MetricsProvider
+	s3Client     *fileupload.S3Client
 }
 
 // Getter methods for services to extract what they need
@@ -49,6 +51,10 @@ func (e *externalClients) GetEmailService() mailers.EmailService {
 
 func (e *externalClients) GetMetrics() interface{} {
 	return e.metrics
+}
+
+func (e *externalClients) GetS3Client() *fileupload.S3Client {
+	return e.s3Client
 }
 
 type serverMetaData struct {
@@ -80,7 +86,12 @@ func NewOpsDashboardServer() *opsDashboardServer {
 func (s *opsDashboardServer) registerGlobalMiddleware() {
 	s.echo.Use(middleware.RequestID())
 	s.echo.Use(middleware.Logger())
-	s.echo.Use(middleware.Recover())
+	s.echo.Use(middleware.RecoverWithConfig(middleware.RecoverConfig{
+		LogErrorFunc: func(c echo.Context, err error, stack []byte) error {
+			logger.GetDefault().Errorf("[PANIC RECOVERED] %v\n%s", err, stack)
+			return err
+		},
+	}))
 	s.echo.Use(middleware.CORSWithConfig(middleware.CORSConfig{
 		AllowOrigins:     s.meta.config.CORS.AllowOrigins,
 		AllowCredentials: s.meta.config.CORS.AllowCredentials,
@@ -218,6 +229,15 @@ func (s *opsDashboardServer) registerClients() {
 		panic(err)
 	}
 	s.log.Info("AuthBridge client initialized successfully")
+
+	// S3 client
+	s3Client, err := fileupload.NewS3ClientFromConfig(s.meta.config.S3)
+	if err != nil {
+		s.log.Errorf("Failed to create S3 client: %v", err)
+		panic(err)
+	}
+	s.log.Info("S3 client created successfully")
+	s.meta.clients.s3Client = s3Client
 }
 
 func (s *opsDashboardServer) registerRouters() {

@@ -112,8 +112,8 @@ CREATE TABLE xcentro.notification_preferences (
     messages_enabled BOOLEAN NOT NULL DEFAULT TRUE,
 
     -- Category preferences (flexible JSONB for easy extension)
-    -- Structure: {"announcements": true, "rewards": true, "payments": true, "payees": true, "approvals": true, "security": true, "insights": true}
-    category_preferences JSONB NOT NULL DEFAULT '{"announcements": true, "rewards": true, "payments": true, "payees": true, "approvals": true, "security": true, "insights": true}'::jsonb,
+    -- Structure: {"announcements": true, "rewards": true, "payments": true, "payees": true, "approvals": true, "security": true, "insights": true, "others": true}
+    category_preferences JSONB NOT NULL DEFAULT '{"announcements": true, "rewards": true, "payments": true, "payees": true, "approvals": true, "security": true, "insights": true, "others": true}'::jsonb,
 
     -- Timestamps
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -130,4 +130,4 @@ COMMENT ON TABLE xcentro.notification_preferences IS 'User notification preferen
 COMMENT ON COLUMN xcentro.notification_preferences.email_enabled IS 'Global switch for email notifications';
 COMMENT ON COLUMN xcentro.notification_preferences.push_enabled IS 'Global switch for push notifications';
 COMMENT ON COLUMN xcentro.notification_preferences.messages_enabled IS 'Global switch for in-app messages/web notifications';
-COMMENT ON COLUMN xcentro.notification_preferences.category_preferences IS 'Category-level preferences: {announcements, rewards, payments, payees, approvals, security, insights}';
+COMMENT ON COLUMN xcentro.notification_preferences.category_preferences IS 'Category-level preferences: {announcements, rewards, payments, payees, approvals, security, insights, others}';

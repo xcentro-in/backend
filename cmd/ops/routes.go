@@ -11,6 +11,7 @@ import (
 	businessSvc "xcentro.in/internal/services/business"
 	notificationSvc "xcentro.in/internal/services/notification"
 	userSvc "xcentro.in/internal/services/user"
+	"xcentro.in/internal/services/verification"
 	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/logger"
 )
@@ -23,16 +24,17 @@ type serviceFactory struct {
 
 // registerOpsBusinessRoutes registers ops dashboard business routes
 func registerOpsBusinessRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
-	// Create business repository
+	// Create repositories
 	businessRepo := business.NewPgBusinessRepository(clients.db)
 	businessUserRelRepo := business.NewPgBusinessUserRelationRepository(clients.db)
+	userRepository := userRepo.NewPgUserRepository(clients.db)
 
-	// Create business service
+	// Create business service (it initializes its own verification service internally)
 	businessService := businessSvc.NewBusinessService(
 		businessRepo,
 		businessUserRelRepo,
-		nil, // userRepository - not needed for ops endpoints
-		nil, // userService - not needed for ops endpoints
+		userRepository, // userRepository - needed for KYB verify endpoint
+		nil,            // userService - not needed for ops endpoints
 		clients,
 		cfg,
 	)
@@ -67,12 +69,22 @@ func registerOpsUserRoutes(clients *externalClients, cfg *config.Config, group *
 	// Create user repository
 	userRepository := userRepo.NewPgUserRepository(clients.db)
 
+	// Create business user relation repository (needed for KYC rejection)
+	businessUserRelRepo := business.NewPgBusinessUserRelationRepository(clients.db)
+
+	// Create verification service (needed for reload-pan endpoint)
+	verificationSvc, err := verification.NewDocumentVerificationService()
+	if err != nil {
+		logger.GetDefault().Errorf("Failed to create verification service: %v", err)
+		verificationSvc = nil
+	}
+
 	// Create user service
 	userService := userSvc.NewUserService(
 		userRepository,
-		nil, // businessRepository - not needed for ops endpoints
-		nil, // businessUserRelRepository - not needed for ops endpoints
-		nil, // verificationService - not needed for ops endpoints
+		nil,                    // businessRepository - not needed for ops endpoints
+		businessUserRelRepo,    // businessUserRelRepository - needed for KYC rejection
+		verificationSvc,        // verificationService - needed for reload-pan endpoint
 		clients,
 		cfg,
 	)
@@ -97,6 +109,13 @@ func registerOpsV1Routes(s *opsDashboardServer) {
 	registerOpsUserRoutes(clients, cfg, v1)
 }
 
+func initializeNotificationTrigger(clients *externalClients) {
+	eventRepo := notificationRepo.NewPgNotificationEventRepository(clients.db)
+	notificationSvc.InitializeNotificationTrigger(eventRepo)
+	logger.GetDefault().Info("Notification trigger initialized for ops dashboard")
+}
+
 func registerRouters(s *opsDashboardServer) {
+	initializeNotificationTrigger(&s.meta.clients)
 	registerOpsV1Routes(s)
 }

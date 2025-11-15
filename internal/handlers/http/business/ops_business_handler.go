@@ -195,10 +195,17 @@ func (h *OpsBusinessHandler) GetBusinessDetails(c echo.Context) error {
 func (h *OpsBusinessHandler) ReloadBusinessData(c echo.Context) error {
 	var req business.OpsReloadBusinessDataRequest
 
-	// Bind path and query parameters
-	if err := c.Bind(&req); err != nil {
+	// Bind path parameters
+	if err := (&echo.DefaultBinder{}).BindPathParams(c, &req); err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]string{
-			"error": "Invalid request parameters",
+			"error": "Invalid path parameters",
+		})
+	}
+
+	// Bind query parameters
+	if err := (&echo.DefaultBinder{}).BindQueryParams(c, &req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Invalid query parameters",
 		})
 	}
 
@@ -238,10 +245,24 @@ func (h *OpsBusinessHandler) ReloadBusinessData(c echo.Context) error {
 func (h *OpsBusinessHandler) KYBAction(c echo.Context) error {
 	var req business.OpsKYBActionRequest
 
-	// Bind path and query parameters
-	if err := c.Bind(&req); err != nil {
+	// Bind path parameters
+	if err := (&echo.DefaultBinder{}).BindPathParams(c, &req); err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]string{
-			"error": "Invalid request parameters",
+			"error": "Invalid path parameters",
+		})
+	}
+
+	// Bind query parameters
+	if err := (&echo.DefaultBinder{}).BindQueryParams(c, &req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Invalid query parameters",
+		})
+	}
+
+	// Bind JSON body (notes field)
+	if err := (&echo.DefaultBinder{}).BindBody(c, &req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Invalid request body",
 		})
 	}
 
@@ -294,10 +315,17 @@ func (h *OpsBusinessHandler) KYBAction(c echo.Context) error {
 func (h *OpsBusinessHandler) UpdateUserRole(c echo.Context) error {
 	var req business.OpsUpdateUserRoleRequest
 
-	// Bind path and query parameters
-	if err := c.Bind(&req); err != nil {
+	// Bind path parameters
+	if err := (&echo.DefaultBinder{}).BindPathParams(c, &req); err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]string{
-			"error": "Invalid request parameters",
+			"error": "Invalid path parameters",
+		})
+	}
+
+	// Bind query parameters
+	if err := (&echo.DefaultBinder{}).BindQueryParams(c, &req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Invalid query parameters",
 		})
 	}
 

@@ -130,6 +130,7 @@ type CategoryPreferences struct {
 	Approvals     bool `json:"approvals"`
 	Security      bool `json:"security"`
 	Insights      bool `json:"insights"`
+	Others        bool `json:"others"` // For notifications that don't match any known category
 }
 
 // GetEventCategory extracts the category from event type (first segment before dot)
@@ -151,7 +152,13 @@ func GetEventCategory(eventType string) string {
 func IsCategoryEnabled(categoryPrefs map[string]interface{}, eventType string) bool {
 	category := GetEventCategory(eventType)
 	if category == "" {
-		return true // Unknown category, allow by default
+		// No category extracted, check "others" preference
+		if enabled, ok := categoryPrefs["others"]; ok {
+			if boolVal, ok := enabled.(bool); ok {
+				return boolVal
+			}
+		}
+		return true // Default to enabled if "others" preference not found
 	}
 
 	// Check if category exists and is enabled in preferences
@@ -161,7 +168,14 @@ func IsCategoryEnabled(categoryPrefs map[string]interface{}, eventType string) b
 		}
 	}
 
-	return true // Default to enabled if category not found
+	// Category not found in known categories, check "others" preference
+	if enabled, ok := categoryPrefs["others"]; ok {
+		if boolVal, ok := enabled.(bool); ok {
+			return boolVal
+		}
+	}
+
+	return true // Default to enabled if category not found and "others" not set
 }
 
 // #############################################################################

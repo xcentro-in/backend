@@ -175,12 +175,16 @@ type RemoveBusinessUserRequest struct {
 
 // OpsBusinessListItem represents a business item in the paginated list
 type OpsBusinessListItem struct {
-	BID          string              `json:"bid"`
-	Name         string              `json:"name"`
-	GSTIN        string              `json:"gstin"`
-	KybStatus    shared.KYBstatus    `json:"kybStatus"`
-	BusinessType shared.BusinessType `json:"businessType"`
-	UpdatedAt    string              `json:"updatedAt"`
+	BID                    string              `json:"bid"`
+	Name                   string              `json:"name"`
+	GSTIN                  string              `json:"gstin"`
+	KybStatus              shared.KYBstatus    `json:"kybStatus"`
+	BusinessType           shared.BusinessType `json:"businessType"`
+	UpdatedAt              string              `json:"updatedAt"`
+	HasCompletedOnboarding bool                `json:"hasCompletedOnboarding"`
+	HasAddedPaymentMethod  bool                `json:"hasAddedPaymentMethod"`
+	HasAddedVendor         bool                `json:"hasAddedVendor"`
+	HasCreatedFirstPayment bool                `json:"hasCreatedFirstPayment"`
 }
 
 // OpsBusinessSearchResult represents a search result item
@@ -238,7 +242,8 @@ type OpsBusinessDetails struct {
 	ITIDData string `json:"itidData"`
 	CID      string `json:"cid"`
 	CIDData  string `json:"cidData"`
-	DocUrl   string `json:"docUrl"`
+	DocPath  string `json:"docPath"` // S3 key/path
+	DocUrl   string `json:"docUrl"`  // Presigned download URL
 
 	// Users array
 	Users []*OpsUserDetails `json:"users"`

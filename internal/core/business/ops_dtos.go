@@ -21,7 +21,7 @@ type OpsGetBusinessDetailsRequest struct {
 // OpsReloadBusinessDataRequest represents the request for reloading business data
 type OpsReloadBusinessDataRequest struct {
 	BusinessID string `param:"bid" validate:"required"`
-	DataType   string `query:"type" validate:"required,oneof=gstin income_tax_id company_id"`
+	DataType   string `query:"type" json:"dataType" validate:"required,oneof=gstin income_tax_id company_id"`
 }
 
 // OpsKYBActionRequest represents the request for KYB action

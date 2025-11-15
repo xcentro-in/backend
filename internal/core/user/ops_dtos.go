@@ -15,7 +15,7 @@ type OpsUserDetailsRequest struct {
 // OpsReloadUserPANRequest represents the request for reloading user PAN data
 type OpsReloadUserPANRequest struct {
 	UserID   string `param:"user_id" validate:"required"`
-	DataType string `query:"type" validate:"required,oneof=pan_com pan_aadhaar_link"`
+	DataType string `query:"type" json:"dataType" validate:"required,oneof=pan_com pan_aadhaar_link"`
 }
 
 // OpsKYCActionRequest represents the request for KYC action
