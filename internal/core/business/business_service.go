@@ -39,7 +39,7 @@ type BusinessService interface {
 	SearchBusinesses(ctx context.Context, searchTerm string, kybStatus string) ([]*OpsBusinessSearchResult, error)
 	GetBusinessDetailsForOps(ctx context.Context, bid string) (*OpsBusinessDetails, error)
 	ReloadBusinessData(ctx context.Context, bid string, dataType string) error
-	RejectKYB(ctx context.Context, bid string) error
-	VerifyKYB(ctx context.Context, bid string) error
+	RejectKYB(ctx context.Context, bid string, notes string) error
+	VerifyKYB(ctx context.Context, bid string, notes string) error
 	OpsUpdateUserRole(ctx context.Context, bid string, userID string, role shared.UserRole) error
 }

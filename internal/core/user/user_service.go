@@ -43,5 +43,5 @@ type UserService interface {
 	SearchUsersByBusinesses(ctx context.Context, businessIDs []string, searchTerm string) ([]*OpsUserSearchResult, error)
 	GetUserDetailsForOps(ctx context.Context, userID string, businessID string) (*OpsUserDetails, error)
 	ReloadUserPANData(ctx context.Context, userID string, dataType string) error
-	RejectKYC(ctx context.Context, userID string) error
+	RejectKYC(ctx context.Context, userID string, notes string) error
 }

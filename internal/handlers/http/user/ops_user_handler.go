@@ -201,7 +201,7 @@ func (h *OpsUserHandler) KYCAction(c echo.Context) error {
 
 	switch req.Action {
 	case "reject":
-		err = h.userService.RejectKYC(c.Request().Context(), req.UserID)
+		err = h.userService.RejectKYC(c.Request().Context(), req.UserID, req.Notes)
 		successMessage = "KYC rejected successfully"
 	}
 

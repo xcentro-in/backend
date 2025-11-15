@@ -1074,7 +1074,7 @@ func (s *BusinessServiceImpl) ReloadBusinessData(ctx context.Context, bid string
 }
 
 // RejectKYB marks business KYB as rejected, sets owner role to NULL, and clears KYB data
-func (s *BusinessServiceImpl) RejectKYB(ctx context.Context, bid string) error {
+func (s *BusinessServiceImpl) RejectKYB(ctx context.Context, bid string, notes string) error {
 	s.logger.Infof("Rejecting KYB for business: %s", bid)
 
 	// Get business to check ITID
@@ -1083,8 +1083,20 @@ func (s *BusinessServiceImpl) RejectKYB(ctx context.Context, bid string) error {
 		return fmt.Errorf("business not found: %w", err)
 	}
 
+	// Find user who has kyb_initiated = true for this business
+	var userIDToNotify string
+	relations, err := s.businessUserRelRepo.FindByBusiness(ctx, bid)
+	if err == nil {
+		for _, rel := range relations {
+			if rel.KybInitiated {
+				userIDToNotify = rel.UserID
+				break
+			}
+		}
+	}
+
 	// Use transaction to ensure atomicity
-	return s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
+	err = s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
 		txBusinessRepo := s.businessRepo.WithTx(tx)
 		txBusinessUserRelRepo := s.businessUserRelRepo.WithTx(tx)
 
@@ -1109,14 +1121,37 @@ func (s *BusinessServiceImpl) RejectKYB(ctx context.Context, bid string) error {
 		s.logger.Infof("KYB rejected successfully for business: %s", bid)
 		return nil
 	})
+
+	if err != nil {
+		return err
+	}
+
+	// Trigger notification if notes are present and user found
+	if notes != "" && userIDToNotify != "" {
+		go func() {
+			bgCtx := context.Background()
+			message := "Your business KYB verification has been rejected."
+			if notes != "" {
+				message += " Notes: " + notes
+			}
+
+			if err := notification.TriggerUnicast(bgCtx, bid, userIDToNotify, "kyb_rejected", "KYB Rejected", message, coreNotification.EntityReferences{}, nil); err != nil {
+				s.logger.Errorf("Failed to trigger KYB rejection notification: %v", err)
+			}
+		}()
+	}
+
+	return nil
 }
 
 // VerifyKYB marks business KYB as verified and sets owner's KYC status to verified
-func (s *BusinessServiceImpl) VerifyKYB(ctx context.Context, bid string) error {
+func (s *BusinessServiceImpl) VerifyKYB(ctx context.Context, bid string, notes string) error {
 	s.logger.Infof("Verifying KYB for business: %s", bid)
 
+	var ownerUserID string
+
 	// Use transaction to ensure atomicity
-	return s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
+	err := s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
 		txBusinessRepo := s.businessRepo.WithTx(tx)
 
 		// 1. Set business KYB status to verified
@@ -1125,7 +1160,8 @@ func (s *BusinessServiceImpl) VerifyKYB(ctx context.Context, bid string) error {
 		}
 
 		// 2. Get owner user ID
-		ownerUserID, err := txBusinessRepo.GetOwnerUserID(ctx, bid)
+		var err error
+		ownerUserID, err = txBusinessRepo.GetOwnerUserID(ctx, bid)
 		if err != nil {
 			// It's OK if no owner exists yet
 			s.logger.Warnf("No owner found for business %s: %v", bid, err)
@@ -1141,6 +1177,27 @@ func (s *BusinessServiceImpl) VerifyKYB(ctx context.Context, bid string) error {
 		s.logger.Infof("KYB and owner KYC verified successfully for business: %s", bid)
 		return nil
 	})
+
+	if err != nil {
+		return err
+	}
+
+	// Trigger notification if notes are present and owner found
+	if notes != "" && ownerUserID != "" {
+		go func() {
+			bgCtx := context.Background()
+			message := "Your business KYB verification has been approved!"
+			if notes != "" {
+				message += " Notes: " + notes
+			}
+
+			if err := notification.TriggerUnicast(bgCtx, bid, ownerUserID, "kyb_verified", "KYB Verified", message, coreNotification.EntityReferences{}, nil); err != nil {
+				s.logger.Errorf("Failed to trigger KYB verification notification: %v", err)
+			}
+		}()
+	}
+
+	return nil
 }
 
 // OpsUpdateUserRole updates a user's role in a business (ops dashboard endpoint)
