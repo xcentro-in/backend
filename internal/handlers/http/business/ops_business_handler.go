@@ -265,10 +265,10 @@ func (h *OpsBusinessHandler) KYBAction(c echo.Context) error {
 
 	switch req.Action {
 	case "reject":
-		err = h.businessService.RejectKYB(c.Request().Context(), req.BusinessID)
+		err = h.businessService.RejectKYB(c.Request().Context(), req.BusinessID, req.Notes)
 		successMessage = "KYB rejected successfully"
 	case "verify":
-		err = h.businessService.VerifyKYB(c.Request().Context(), req.BusinessID)
+		err = h.businessService.VerifyKYB(c.Request().Context(), req.BusinessID, req.Notes)
 		successMessage = "KYB verified successfully"
 	}
 

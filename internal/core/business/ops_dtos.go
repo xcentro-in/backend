@@ -28,6 +28,7 @@ type OpsReloadBusinessDataRequest struct {
 type OpsKYBActionRequest struct {
 	BusinessID string `param:"bid" validate:"required"`
 	Action     string `query:"action" validate:"required,oneof=reject verify"`
+	Notes      string `json:"notes" validate:"omitempty,max=500"`
 }
 
 // OpsUpdateUserRoleRequest represents the request for updating user role in a business

@@ -15,8 +15,10 @@ import (
 	"xcentro.in/internal/adapters/providers/mailers"
 	"xcentro.in/internal/core/auth"
 	businessRepo "xcentro.in/internal/core/business"
+	coreNotification "xcentro.in/internal/core/notification"
 	"xcentro.in/internal/core/shared"
 	"xcentro.in/internal/core/user"
+	"xcentro.in/internal/services/notification"
 	"xcentro.in/internal/services/verification"
 	sharedClients "xcentro.in/internal/shared/clients"
 	"xcentro.in/internal/shared/config"
@@ -1001,7 +1003,7 @@ func (s *UserServiceImpl) ReloadUserPANData(ctx context.Context, userID string, 
 }
 
 // RejectKYC marks user KYC as rejected, resets all business relations, and clears identity data
-func (s *UserServiceImpl) RejectKYC(ctx context.Context, userID string) error {
+func (s *UserServiceImpl) RejectKYC(ctx context.Context, userID string, notes string) error {
 	s.logger.Info("Rejecting KYC for user: %s", userID)
 
 	// Get user to check tax ID
@@ -1011,7 +1013,7 @@ func (s *UserServiceImpl) RejectKYC(ctx context.Context, userID string) error {
 	}
 
 	// Use transaction to ensure atomicity
-	return s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
+	err = s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
 		txUserRepo := s.userRepo.WithTx(tx)
 
 		// 1. Set KYC status to rejected
@@ -1034,4 +1036,25 @@ func (s *UserServiceImpl) RejectKYC(ctx context.Context, userID string) error {
 		s.logger.Infof("KYC rejected successfully for user: %s", userID)
 		return nil
 	})
+
+	if err != nil {
+		return err
+	}
+
+	// Trigger notification if notes are present (unicast to the user)
+	if notes != "" {
+		go func() {
+			bgCtx := context.Background()
+			message := "Your KYC verification has been rejected."
+			if notes != "" {
+				message += " Notes: " + notes
+			}
+
+			if err := notification.TriggerUnicast(bgCtx, "", userID, "kyc_rejected", "KYC Rejected", message, coreNotification.EntityReferences{}, nil); err != nil {
+				s.logger.Errorf("Failed to trigger KYC rejection notification: %v", err)
+			}
+		}()
+	}
+
+	return nil
 }

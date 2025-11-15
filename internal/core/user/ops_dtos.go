@@ -22,4 +22,5 @@ type OpsReloadUserPANRequest struct {
 type OpsKYCActionRequest struct {
 	UserID string `param:"user_id" validate:"required"`
 	Action string `query:"action" validate:"required,oneof=reject"`
+	Notes  string `json:"notes" validate:"omitempty,max=500"`
 }

@@ -177,7 +177,7 @@ This document provides a complete reference for all operations dashboard (ops) A
 
 **Endpoint:** `POST /ops/business/:bid/kyb-action`
 
-**Description:** Performs KYB verification action (reject or verify business).
+**Description:** Performs KYB verification action (reject or verify business). Optionally triggers notifications with notes.
 
 **Path Parameters:**
 | Parameter | Type | Required | Description |
@@ -189,16 +189,25 @@ This document provides a complete reference for all operations dashboard (ops) A
 |-----------|------|----------|------------|-------------|
 | `action` | string | Yes | One of: `reject`, `verify` | Action to perform |
 
+**Request Body (Optional):**
+```json
+{
+  "notes": "string (max 500 chars, optional)"
+}
+```
+
 **Action Effects:**
 
 **`reject`:**
 - Sets KYB status to `kyc_rejected`
 - Sets owner role to NULL
 - Clears all KYB verification data
+- **If notes provided:** Sends notification to user who initiated KYB (kyb_initiated=true)
 
 **`verify`:**
 - Sets KYB status to `kyc_verified`
 - Sets owner's KYC status to `kyc_verified`
+- **If notes provided:** Sends notification to business owner
 
 **Response:** `200 OK`
 ```json
@@ -213,6 +222,13 @@ This document provides a complete reference for all operations dashboard (ops) A
 
 **Error Responses:**
 - `404 Not Found` - Business not found
+
+**Notification Behavior:**
+- Notifications are only sent if `notes` field is present and not empty
+- For `reject`: Notifies user with `kyb_initiated = true`
+- For `verify`: Notifies the business owner
+- Notification type: Unicast (single user)
+- Respects user's notification preferences
 
 ---
 
@@ -389,7 +405,7 @@ GET /ops/user/search?business_id=biz-123&business_id=biz-456&q=john
 
 **Endpoint:** `POST /ops/user/:user_id/kyc-action`
 
-**Description:** Performs KYC verification action on user.
+**Description:** Performs KYC verification action on user. Optionally includes notes that will trigger a notification to the user.
 
 **Path Parameters:**
 | Parameter | Type | Required | Description |
@@ -401,12 +417,32 @@ GET /ops/user/search?business_id=biz-123&business_id=biz-456&q=john
 |-----------|------|----------|------------|-------------|
 | `action` | string | Yes | Currently only: `reject` | Action to perform |
 
+**Request Body:**
+```json
+{
+  "notes": "string (optional, max 500 characters)"
+}
+```
+
+**Body Fields:**
+| Field | Type | Required | Validation | Description |
+|-------|------|----------|------------|-------------|
+| `notes` | string | No | Max 500 characters | Reason or notes for the action |
+
 **Action Effects:**
 
 **`reject`:**
 - Sets KYC status to `kyc_rejected`
 - Resets all business relations for the user
 - Clears identity verification data
+- **If notes provided:** Sends unicast notification to the user with rejection reason
+
+**Notification Behavior:**
+- **Target:** User being rejected (unicast)
+- **Event Type:** `kyc_rejected`
+- **Title:** "KYC Rejected"
+- **Message:** "Your KYC verification has been rejected. Notes: {notes}"
+- **Triggered:** Asynchronously if notes are provided
 
 **Response:** `200 OK`
 ```json
@@ -417,6 +453,7 @@ GET /ops/user/search?business_id=biz-123&business_id=biz-456&q=john
 
 **Error Responses:**
 - `404 Not Found` - User not found
+- `400 Bad Request` - Notes exceed 500 characters
 
 ---
 
