@@ -1142,3 +1142,26 @@ func (s *BusinessServiceImpl) VerifyKYB(ctx context.Context, bid string) error {
 		return nil
 	})
 }
+
+// OpsUpdateUserRole updates a user's role in a business (ops dashboard endpoint)
+func (s *BusinessServiceImpl) OpsUpdateUserRole(ctx context.Context, bid string, userID string, role shared.UserRole) error {
+	s.logger.Infof("Ops updating user %s role in business %s to %s", userID, bid, role)
+
+	// Call repository to update role - it will return error if user-business relation doesn't exist
+	err := s.businessUserRelRepo.OpsUpdateUserRole(ctx, bid, userID, role)
+	if err != nil {
+		return err
+	}
+
+	// Invalidate user roles cache after successful update
+	go func() {
+		bgCtx := context.Background()
+		invalidationKeys := keys.InvalidateUserRoles(userID)
+		if err := s.rclient.Delete(bgCtx, invalidationKeys...); err != nil {
+			s.logger.Warnf("Failed to invalidate user roles cache for user %s: %v", userID, err)
+		}
+	}()
+
+	s.logger.Infof("Successfully updated user %s role to %s in business %s via ops", userID, role, bid)
+	return nil
+}

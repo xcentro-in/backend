@@ -216,6 +216,61 @@ This document provides a complete reference for all operations dashboard (ops) A
 
 ---
 
+### 6. Update User Role in Business
+
+**Endpoint:** `POST /ops/business/:bid/user-action`
+
+**Description:** Updates a user's role in a business. Used by ops to promote/demote users or set specific roles.
+
+**Path Parameters:**
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `bid` | string | Yes | Business ID |
+
+**Query Parameters:**
+| Parameter | Type | Required | Validation | Description |
+|-----------|------|----------|------------|-------------|
+| `user_id` | string | Yes | - | User ID to update |
+| `action` | string | Yes | One of: `set_owner`, `set_admin`, `set_manager`, `set_auditor` | Role action to perform |
+
+**Action Details:**
+
+| Action | Sets Role To | Description |
+|--------|-------------|-------------|
+| `set_owner` | `owner` | Promotes user to owner (highest privilege) |
+| `set_admin` | `admin` | Sets user as admin |
+| `set_manager` | `manager` | Sets user as manager |
+| `set_auditor` | `auditor` | Sets user as auditor (read-only) |
+
+**Response:** `200 OK`
+```json
+{
+  "message": "User role updated successfully"
+}
+```
+
+**Error Responses:**
+- `404 Not Found` - User not associated with business (no business-user relation exists)
+- `500 Internal Server Error` - Failed to update role
+
+**Important Notes:**
+- User must already be associated with the business (existing business-user relation)
+- If user-business relation doesn't exist, returns 404 error
+- Ops team should verify user association before promoting
+- Cache invalidation is automatically triggered for user roles after update
+- No additional business logic checks - ops has full control
+
+**Example:**
+```bash
+# Promote user to owner
+POST /ops/business/biz-123/user-action?user_id=user-456&action=set_owner
+
+# Set user as admin
+POST /ops/business/biz-123/user-action?user_id=user-456&action=set_admin
+```
+
+---
+
 ## User Operations
 
 ### 1. Search Users

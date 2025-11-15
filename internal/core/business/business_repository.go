@@ -51,4 +51,5 @@ type BusinessUserRelationRepository interface {
 	RemoveUserFromBusiness(ctx context.Context, userID string, bid string) error
 	SetOwnerRoleToNull(ctx context.Context, bid string) error
 	ResetAllUserRelationsForRejectedKYC(ctx context.Context, userID string) error
+	OpsUpdateUserRole(ctx context.Context, bid string, userID string, role shared.UserRole) error
 }

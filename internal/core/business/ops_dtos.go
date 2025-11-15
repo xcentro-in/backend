@@ -30,6 +30,13 @@ type OpsKYBActionRequest struct {
 	Action     string `query:"action" validate:"required,oneof=reject verify"`
 }
 
+// OpsUpdateUserRoleRequest represents the request for updating user role in a business
+type OpsUpdateUserRoleRequest struct {
+	BusinessID string `param:"bid" validate:"required"`
+	UserID     string `query:"user_id" validate:"required"`
+	Action     string `query:"action" validate:"required,oneof=set_owner set_admin set_manager set_auditor"`
+}
+
 // PaginationResponse represents pagination metadata
 type PaginationResponse struct {
 	CurrentPage int `json:"currentPage"`

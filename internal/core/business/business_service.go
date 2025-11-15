@@ -41,4 +41,5 @@ type BusinessService interface {
 	ReloadBusinessData(ctx context.Context, bid string, dataType string) error
 	RejectKYB(ctx context.Context, bid string) error
 	VerifyKYB(ctx context.Context, bid string) error
+	OpsUpdateUserRole(ctx context.Context, bid string, userID string, role shared.UserRole) error
 }
