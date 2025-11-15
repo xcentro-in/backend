@@ -371,19 +371,30 @@ func (r *PgBusinessRepository) UpdateOnboardingFlag(ctx context.Context, bid str
 	return nil
 }
 
-// ListBusinessesPaginated retrieves paginated businesses sorted by KYB status
-func (r *PgBusinessRepository) ListBusinessesPaginated(ctx context.Context, page int, limit int) ([]*business.OpsBusinessListItem, int, error) {
+// ListBusinessesPaginated retrieves paginated businesses sorted by KYB status, optionally filtered
+func (r *PgBusinessRepository) ListBusinessesPaginated(ctx context.Context, page int, limit int, kybStatus string) ([]*business.OpsBusinessListItem, int, error) {
 	offset := (page - 1) * limit
 
+	// Build WHERE clause for kyb_status filter
+	var whereClause string
+	var countArgs []interface{}
+	var queryArgs []interface{}
+
+	if kybStatus != "" {
+		whereClause = " WHERE kyb_status = $1"
+		countArgs = append(countArgs, kybStatus)
+		queryArgs = append(queryArgs, kybStatus)
+	}
+
 	// Get total count
-	countQuery := `SELECT COUNT(*) FROM xcentro.business`
+	countQuery := `SELECT COUNT(*) FROM xcentro.business` + whereClause
 	var totalCount int
-	err := r.querier.QueryRow(ctx, countQuery).Scan(&totalCount)
+	err := r.querier.QueryRow(ctx, countQuery, countArgs...).Scan(&totalCount)
 	if err != nil {
 		return nil, 0, fmt.Errorf("error counting businesses: %w", err)
 	}
 
-	// Get paginated results with custom sort
+	// Build paginated query with custom sort
 	query := `
 		SELECT
 			bid,
@@ -393,7 +404,8 @@ func (r *PgBusinessRepository) ListBusinessesPaginated(ctx context.Context, page
 			business_type,
 			COALESCE(updated_at::text, '') as updated_at
 		FROM
-			xcentro.business
+			xcentro.business` +
+		whereClause + `
 		ORDER BY
 			CASE kyb_status
 				WHEN 'kyc_completed' THEN 1
@@ -402,11 +414,12 @@ func (r *PgBusinessRepository) ListBusinessesPaginated(ctx context.Context, page
 				ELSE 3
 			END ASC,
 			updated_at DESC
-		LIMIT $1
-		OFFSET $2
-	`
+		LIMIT $` + fmt.Sprintf("%d", len(queryArgs)+1) + `
+		OFFSET $` + fmt.Sprintf("%d", len(queryArgs)+2)
 
-	rows, err := r.querier.Query(ctx, query, limit, offset)
+	queryArgs = append(queryArgs, limit, offset)
+
+	rows, err := r.querier.Query(ctx, query, queryArgs...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("error querying businesses: %w", err)
 	}
@@ -443,22 +456,36 @@ func (r *PgBusinessRepository) ListBusinessesPaginated(ctx context.Context, page
 }
 
 // SearchBusinesses searches businesses by name or GSTIN
-func (r *PgBusinessRepository) SearchBusinesses(ctx context.Context, searchTerm string) ([]*business.OpsBusinessSearchResult, error) {
+func (r *PgBusinessRepository) SearchBusinesses(ctx context.Context, searchTerm string, kybStatus string) ([]*business.OpsBusinessSearchResult, error) {
+	// Build query with optional kyb_status filter
 	query := `
 		SELECT
 			bid,
 			name,
-			gstin
+			gstin,
+			has_completed_onboarding,
+			has_added_payment_method,
+			has_added_vendor,
+			has_created_first_payment
 		FROM
 			xcentro.business
 		WHERE
-			name ILIKE $1 OR
-			gstin ILIKE $1
-		LIMIT 10
+			(name ILIKE $1 OR gstin ILIKE $1)
 	`
 
+	// Add kyb_status filter if provided
+	var args []interface{}
 	searchPattern := searchTerm + "%"
-	rows, err := r.querier.Query(ctx, query, searchPattern)
+	args = append(args, searchPattern)
+
+	if kybStatus != "" {
+		query += " AND kyb_status = $2"
+		args = append(args, kybStatus)
+	}
+
+	query += " LIMIT 10"
+
+	rows, err := r.querier.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("error searching businesses: %w", err)
 	}
@@ -467,7 +494,15 @@ func (r *PgBusinessRepository) SearchBusinesses(ctx context.Context, searchTerm 
 	var results []*business.OpsBusinessSearchResult
 	for rows.Next() {
 		var result business.OpsBusinessSearchResult
-		err := rows.Scan(&result.BID, &result.Name, &result.GSTIN)
+		err := rows.Scan(
+			&result.BID,
+			&result.Name,
+			&result.GSTIN,
+			&result.HasCompletedOnboarding,
+			&result.HasAddedPaymentMethod,
+			&result.HasAddedVendor,
+			&result.HasCreatedFirstPayment,
+		)
 		if err != nil {
 			return nil, fmt.Errorf("error scanning search result: %w", err)
 		}

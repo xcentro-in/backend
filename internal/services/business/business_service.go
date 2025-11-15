@@ -981,14 +981,14 @@ func (s *BusinessServiceImpl) UpdateOnboardingStatus(ctx context.Context, bid st
 
 // Ops Dashboard Methods
 
-// ListBusinessesPaginated retrieves paginated list of businesses
-func (s *BusinessServiceImpl) ListBusinessesPaginated(ctx context.Context, page int, limit int) ([]*business.OpsBusinessListItem, int, error) {
-	return s.businessRepo.ListBusinessesPaginated(ctx, page, limit)
+// ListBusinessesPaginated retrieves paginated list of businesses, optionally filtered by KYB status
+func (s *BusinessServiceImpl) ListBusinessesPaginated(ctx context.Context, page int, limit int, kybStatus string) ([]*business.OpsBusinessListItem, int, error) {
+	return s.businessRepo.ListBusinessesPaginated(ctx, page, limit, kybStatus)
 }
 
-// SearchBusinesses searches businesses by name or GSTIN
-func (s *BusinessServiceImpl) SearchBusinesses(ctx context.Context, searchTerm string) ([]*business.OpsBusinessSearchResult, error) {
-	return s.businessRepo.SearchBusinesses(ctx, searchTerm)
+// SearchBusinesses searches businesses by name or GSTIN, optionally filtered by KYB status
+func (s *BusinessServiceImpl) SearchBusinesses(ctx context.Context, searchTerm string, kybStatus string) ([]*business.OpsBusinessSearchResult, error) {
+	return s.businessRepo.SearchBusinesses(ctx, searchTerm, kybStatus)
 }
 
 // GetBusinessDetailsForOps retrieves complete business details for ops dashboard
@@ -1141,4 +1141,27 @@ func (s *BusinessServiceImpl) VerifyKYB(ctx context.Context, bid string) error {
 		s.logger.Infof("KYB and owner KYC verified successfully for business: %s", bid)
 		return nil
 	})
+}
+
+// OpsUpdateUserRole updates a user's role in a business (ops dashboard endpoint)
+func (s *BusinessServiceImpl) OpsUpdateUserRole(ctx context.Context, bid string, userID string, role shared.UserRole) error {
+	s.logger.Infof("Ops updating user %s role in business %s to %s", userID, bid, role)
+
+	// Call repository to update role - it will return error if user-business relation doesn't exist
+	err := s.businessUserRelRepo.OpsUpdateUserRole(ctx, bid, userID, role)
+	if err != nil {
+		return err
+	}
+
+	// Invalidate user roles cache after successful update
+	go func() {
+		bgCtx := context.Background()
+		invalidationKeys := keys.InvalidateUserRoles(userID)
+		if err := s.rclient.Delete(bgCtx, invalidationKeys...); err != nil {
+			s.logger.Warnf("Failed to invalidate user roles cache for user %s: %v", userID, err)
+		}
+	}()
+
+	s.logger.Infof("Successfully updated user %s role to %s in business %s via ops", userID, role, bid)
+	return nil
 }

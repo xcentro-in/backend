@@ -6,6 +6,7 @@ import (
 	"github.com/labstack/echo/v4"
 	"xcentro.in/internal/core/auth"
 	"xcentro.in/internal/core/business"
+	"xcentro.in/internal/core/shared"
 	"xcentro.in/internal/shared/logger"
 	"xcentro.in/internal/shared/validator"
 )
@@ -44,6 +45,7 @@ func RegisterOpsBusinessRoutes(e *echo.Group, businessService business.BusinessS
 	// Ops verification endpoints
 	businessGroup.POST("/:bid/reload-data", handler.ReloadBusinessData)
 	businessGroup.POST("/:bid/kyb-action", handler.KYBAction)
+	businessGroup.POST("/:bid/user-action", handler.UpdateUserRole)
 }
 
 // ListBusinesses handles GET /businesses?page=1&limit=20
@@ -80,7 +82,7 @@ func (h *OpsBusinessHandler) ListBusinesses(c echo.Context) error {
 	}
 
 	// Call service layer
-	businesses, totalCount, err := h.businessService.ListBusinessesPaginated(c.Request().Context(), req.Page, req.Limit)
+	businesses, totalCount, err := h.businessService.ListBusinessesPaginated(c.Request().Context(), req.Page, req.Limit, req.KYBStatus)
 	if err != nil {
 		h.logger.Errorf("Error listing businesses: %v", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{
@@ -131,7 +133,7 @@ func (h *OpsBusinessHandler) SearchBusinesses(c echo.Context) error {
 	}
 
 	// Call service layer
-	results, err := h.businessService.SearchBusinesses(c.Request().Context(), req.SearchTerm)
+	results, err := h.businessService.SearchBusinesses(c.Request().Context(), req.SearchTerm, req.KYBStatus)
 	if err != nil {
 		h.logger.Errorf("Error searching businesses: %v", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{
@@ -285,5 +287,62 @@ func (h *OpsBusinessHandler) KYBAction(c echo.Context) error {
 
 	return c.JSON(http.StatusOK, map[string]string{
 		"message": successMessage,
+	})
+}
+
+// UpdateUserRole handles POST /businesses/:bid/user-action?user_id=xxx&action=set_owner|set_admin|set_manager|set_auditor
+func (h *OpsBusinessHandler) UpdateUserRole(c echo.Context) error {
+	var req business.OpsUpdateUserRoleRequest
+
+	// Bind path and query parameters
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Invalid request parameters",
+		})
+	}
+
+	// Trim and validate
+	validator.TrimStrings(&req)
+	if err := c.Validate(&req); err != nil {
+		if ve, ok := err.(*validator.ValidationError); ok {
+			return c.JSON(http.StatusBadRequest, map[string]interface{}{
+				"error":  "Validation failed",
+				"errors": ve.Errors,
+			})
+		}
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": err.Error(),
+		})
+	}
+
+	// Map action to role
+	var role shared.UserRole
+	switch req.Action {
+	case "set_owner":
+		role = shared.Owner
+	case "set_admin":
+		role = shared.Admin
+	case "set_manager":
+		role = shared.Manager
+	case "set_auditor":
+		role = shared.Auditor
+	}
+
+	// Call service layer
+	err := h.businessService.OpsUpdateUserRole(c.Request().Context(), req.BusinessID, req.UserID, role)
+	if err != nil {
+		h.logger.Errorf("Error updating user role for user %s in business %s: %v", req.UserID, req.BusinessID, err)
+		if err.Error() == "business-user relation not found" {
+			return c.JSON(http.StatusNotFound, map[string]string{
+				"error": "User not associated with business",
+			})
+		}
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Failed to update user role",
+		})
+	}
+
+	return c.JSON(http.StatusOK, map[string]string{
+		"message": "User role updated successfully",
 	})
 }

@@ -393,3 +393,20 @@ func (r *PgBusinessUserRelationRepository) ResetAllUserRelationsForRejectedKYC(c
 	}
 	return nil
 }
+
+// OpsUpdateUserRole updates a user's role in a business (ops endpoint - simple update with WHERE check)
+func (r *PgBusinessUserRelationRepository) OpsUpdateUserRole(ctx context.Context, bid string, userID string, role shared.UserRole) error {
+	query := `UPDATE xcentro.business_user_relation SET role = $1 WHERE bid = $2 AND userid = $3`
+	result, err := r.querier.Exec(ctx, query, role, bid, userID)
+	if err != nil {
+		return fmt.Errorf("failed to update user role: %w", err)
+	}
+
+	// Check if any row was updated
+	rowsAffected := result.RowsAffected()
+	if rowsAffected == 0 {
+		return fmt.Errorf("business-user relation not found")
+	}
+
+	return nil
+}

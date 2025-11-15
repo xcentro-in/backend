@@ -24,8 +24,8 @@ type BusinessRepository interface {
 	UpdateOnboardingFlag(ctx context.Context, bid string, flagName string, value bool) error
 
 	// Ops dashboard methods
-	ListBusinessesPaginated(ctx context.Context, page int, limit int) ([]*OpsBusinessListItem, int, error)
-	SearchBusinesses(ctx context.Context, searchTerm string) ([]*OpsBusinessSearchResult, error)
+	ListBusinessesPaginated(ctx context.Context, page int, limit int, kybStatus string) ([]*OpsBusinessListItem, int, error)
+	SearchBusinesses(ctx context.Context, searchTerm string, kybStatus string) ([]*OpsBusinessSearchResult, error)
 	GetBusinessDetailsForOps(ctx context.Context, bid string) (*OpsBusinessDetails, error)
 	UpdateGSTINData(ctx context.Context, bid string, gstDataJSON string) error
 	UpdateIncometTaxIDData(ctx context.Context, itid string, itidDataJSON string) error
@@ -51,4 +51,5 @@ type BusinessUserRelationRepository interface {
 	RemoveUserFromBusiness(ctx context.Context, userID string, bid string) error
 	SetOwnerRoleToNull(ctx context.Context, bid string) error
 	ResetAllUserRelationsForRejectedKYC(ctx context.Context, userID string) error
+	OpsUpdateUserRole(ctx context.Context, bid string, userID string, role shared.UserRole) error
 }

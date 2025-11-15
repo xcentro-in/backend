@@ -35,10 +35,11 @@ type BusinessService interface {
 	RemoveUserFromBusiness(ctx context.Context, bid string, targetUserID string, requesterRole shared.UserRole) error
 
 	// Ops dashboard methods
-	ListBusinessesPaginated(ctx context.Context, page int, limit int) ([]*OpsBusinessListItem, int, error)
-	SearchBusinesses(ctx context.Context, searchTerm string) ([]*OpsBusinessSearchResult, error)
+	ListBusinessesPaginated(ctx context.Context, page int, limit int, kybStatus string) ([]*OpsBusinessListItem, int, error)
+	SearchBusinesses(ctx context.Context, searchTerm string, kybStatus string) ([]*OpsBusinessSearchResult, error)
 	GetBusinessDetailsForOps(ctx context.Context, bid string) (*OpsBusinessDetails, error)
 	ReloadBusinessData(ctx context.Context, bid string, dataType string) error
 	RejectKYB(ctx context.Context, bid string) error
 	VerifyKYB(ctx context.Context, bid string) error
+	OpsUpdateUserRole(ctx context.Context, bid string, userID string, role shared.UserRole) error
 }
