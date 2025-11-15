@@ -459,11 +459,22 @@ GET /ops/user/search?business_id=biz-123&business_id=biz-456&q=john
 
 ## Notification Operations
 
+### Overview
+
+The notification system supports three delivery channels:
+- **Web:** In-app notifications (always sent)
+- **Email:** Email notifications (based on user preferences)
+- **Push:** Push notifications (based on user preferences and device availability)
+
+Notifications respect user preferences for channels and event categories. The system handles fan-out, delivery, and retry logic automatically.
+
+---
+
 ### 1. Trigger Bulk Notifications
 
 **Endpoint:** `POST /ops/notification/trigger`
 
-**Description:** Triggers notifications for multiple businesses with flexible targeting (unicast, multicast, broadcast).
+**Description:** Triggers notifications for multiple businesses with flexible targeting (unicast, multicast, broadcast). This endpoint creates notification events that are asynchronously processed and delivered through configured channels based on user preferences.
 
 **Request Body:**
 ```json
@@ -491,27 +502,185 @@ GET /ops/user/search?business_id=biz-123&business_id=biz-456&q=john
 }
 ```
 
-**Target Types:**
+**Request Fields:**
 
-**Unicast:**
-- Must have exactly one user ID in `ids` array
-- Direct notification to a specific user
+| Field | Type | Required | Validation | Description |
+|-------|------|----------|------------|-------------|
+| `targets` | array | Yes | Min 1 item | Array of target specifications for notification recipients |
+| `event_type` | string | Yes | Non-empty | Event type identifier (see Event Types below) |
+| `message` | object | Yes | Valid MessageContent | Notification message with title and body |
+| `actions` | array | No | Valid ActionButtons | Optional action buttons for the notification |
 
-**Multicast:**
-- Either `ids` array OR `minimum_role` (not both)
-- Multiple users in a business
+**Target Object Fields:**
 
-**Broadcast:**
-- Must have `minimum_role`
-- All users with minimum role or higher in the business
+| Field | Type | Required | Validation | Description |
+|-------|------|----------|------------|-------------|
+| `business_id` | string | Yes | Non-empty | Business ID for scoping the notification |
+| `type` | string | Yes | `unicast`, `multicast`, or `broadcast` | Targeting type |
+| `minimum_role` | string | Conditional | `owner`, `admin`, `finance`, `support` | Required for broadcast, optional for multicast with role-based targeting |
+| `ids` | array | Conditional | Non-empty user IDs | Required for unicast (exactly 1), optional for multicast (specific users) |
 
-**Validation Rules:**
-- `targets` array must have at least 1 item
-- Unicast: exactly 1 user ID required
-- Multicast: either IDs or MinimumRole, not both
-- Broadcast: MinimumRole is required
+**Message Object Fields:**
 
-**Response:** `200 OK`
+| Field | Type | Required | Validation | Description |
+|-------|------|----------|------------|-------------|
+| `title` | string | Yes | Max 100 chars | Short notification title (used in push notifications and email subjects) |
+| `body` | string | Yes | Max 500 chars | Main notification message content |
+
+**Action Button Fields:**
+
+| Field | Type | Required | Validation | Description |
+|-------|------|----------|------------|-------------|
+| `type` | string | Yes | `button-positive`, `button-negative`, `button-neutral`, `link` | Button style/appearance |
+| `text` | string | Yes | Max 30 chars | Button label text |
+| `href` | string | Yes | Non-empty | Relative URL (e.g., `/payments/123`) or deep link |
+
+---
+
+### Target Types Explained
+
+#### Unicast
+Sends notification to a single specific user.
+
+**Requirements:**
+- `ids` array must contain exactly 1 user ID
+- User must be associated with the specified business
+
+**Use Cases:**
+- User-specific actions (KYC rejected, role changed)
+- Direct messages to individual users
+
+**Example:**
+```json
+{
+  "business_id": "biz-123",
+  "type": "unicast",
+  "ids": ["user-456"]
+}
+```
+
+#### Multicast
+Sends notification to multiple specific users OR users with a minimum role.
+
+**Requirements (choose one):**
+- **Option 1:** `ids` array with multiple user IDs (specific users)
+- **Option 2:** `minimum_role` for role-based targeting (e.g., notify all admins)
+- **Cannot use both** `ids` and `minimum_role` together
+
+**Use Cases:**
+- Notify specific team members about an event
+- Notify all users with a certain role (e.g., all finance managers)
+
+**Example (Specific Users):**
+```json
+{
+  "business_id": "biz-123",
+  "type": "multicast",
+  "ids": ["user-1", "user-2", "user-3"]
+}
+```
+
+**Example (Role-Based):**
+```json
+{
+  "business_id": "biz-123",
+  "type": "multicast",
+  "minimum_role": "admin"
+}
+```
+
+#### Broadcast
+Sends notification to all users in a business with a minimum role or higher.
+
+**Requirements:**
+- `minimum_role` is required
+- Targets all users in the business meeting the role requirement
+
+**Role Hierarchy (highest to lowest):**
+1. `owner` - Business owner
+2. `admin` - Administrators
+3. `finance` - Finance managers
+4. `support` - Support staff
+
+**Use Cases:**
+- Company-wide announcements
+- System maintenance notifications
+- Important updates affecting all users
+
+**Example:**
+```json
+{
+  "business_id": "biz-123",
+  "type": "broadcast",
+  "minimum_role": "support"
+}
+```
+*This notifies everyone: owner, admins, finance, and support staff*
+
+---
+
+### Event Types
+
+Common event types follow the format: `category.action.details`
+
+**Categories map to user preference categories:**
+
+| Category | Event Types | Description |
+|----------|-------------|-------------|
+| `payments` | `payments.completed`, `payments.failed`, `payments.refunded`, `payments.settlement.received`, `payments.payout.completed` | Payment-related events |
+| `payees` | `payees.verified`, `payees.verification.failed` | Payee/vendor management |
+| `approvals` | `approvals.voucher.requested`, `approvals.voucher.approved`, `approvals.voucher.rejected` | Approval workflow events |
+| `security` | `security.user.invited`, `security.user.role.changed` | User access and security |
+| `insights` | `insights.report.ready` | Reports and analytics |
+| `announcements` | `announcements.maintenance`, `announcements.alert` | System announcements |
+
+**User Preference Filtering:**
+- Users can disable notifications for entire categories
+- Event category is extracted from event type (first segment before dot)
+- If user has disabled a category, they won't receive notifications for that category
+- Web notifications are always sent regardless of preferences (for important alerts)
+
+---
+
+### Action Button Types
+
+Action buttons provide interactive elements in notifications.
+
+| Type | Visual Style | Use Cases |
+|------|--------------|-----------|
+| `button-positive` | Green/primary button | Approve, Accept, Confirm, Proceed |
+| `button-negative` | Red/destructive button | Reject, Deny, Cancel, Delete |
+| `button-neutral` | Gray/secondary button | View Details, Review, Maybe Later |
+| `link` | Text link style | Learn More, View Report, Documentation |
+
+**Example with Multiple Actions:**
+```json
+{
+  "actions": [
+    {
+      "type": "button-positive",
+      "text": "Approve",
+      "href": "/approvals/123/approve"
+    },
+    {
+      "type": "button-negative",
+      "text": "Reject",
+      "href": "/approvals/123/reject"
+    },
+    {
+      "type": "button-neutral",
+      "text": "View Details",
+      "href": "/approvals/123"
+    }
+  ]
+}
+```
+
+---
+
+### Response Format
+
+**Success Response:** `200 OK`
 ```json
 {
   "success": true,
@@ -519,51 +688,190 @@ GET /ops/user/search?business_id=biz-123&business_id=biz-456&q=john
 }
 ```
 
-**Error Responses:**
-- `400 Bad Request` - Validation failed (includes field-specific errors)
+| Field | Type | Description |
+|-------|------|-------------|
+| `success` | boolean | Whether the notification events were created successfully |
+| `triggered_count` | integer | Total number of notification events created |
 
-**Example - Notify All Admins:**
+**Error Responses:**
+
+**`400 Bad Request` - Validation Errors:**
+```json
+{
+  "error": "Validation failed",
+  "errors": {
+    "targets[0].type": "must be one of: unicast, multicast, broadcast",
+    "message.title": "max length is 100 characters"
+  }
+}
+```
+
+**`400 Bad Request` - Target Type Errors:**
+```json
+{
+  "error": "Unicast target must have exactly one user ID",
+  "index": "0"
+}
+```
+
+**`500 Internal Server Error` - System Errors:**
+```json
+{
+  "error": "Failed to trigger notifications"
+}
+```
+
+---
+
+### Complete Examples
+
+#### Example 1: Payment Approval Required (Unicast)
 ```json
 {
   "targets": [
     {
-      "business_id": "biz-123",
-      "type": "multicast",
-      "minimum_role": "admin"
+      "business_id": "biz-789",
+      "type": "unicast",
+      "ids": ["user-owner-123"]
     }
   ],
-  "event_type": "payment_processed",
+  "event_type": "payments.approval.required",
   "message": {
-    "title": "Payment Processed",
-    "body": "Your payment of ₹10,000 has been processed successfully."
+    "title": "Payment Approval Required",
+    "body": "A payment of ₹50,000 to ABC Corp requires your approval."
   },
   "actions": [
     {
       "type": "button-positive",
+      "text": "Approve",
+      "href": "/payments/pay-456/approve"
+    },
+    {
+      "type": "button-negative",
+      "text": "Reject",
+      "href": "/payments/pay-456/reject"
+    },
+    {
+      "type": "link",
       "text": "View Details",
-      "href": "/payments/pay-123"
+      "href": "/payments/pay-456"
     }
   ]
 }
 ```
 
-**Example - Notify Specific Users:**
+#### Example 2: System Maintenance (Broadcast)
+```json
+{
+  "targets": [
+    {
+      "business_id": "biz-123",
+      "type": "broadcast",
+      "minimum_role": "support"
+    },
+    {
+      "business_id": "biz-456",
+      "type": "broadcast",
+      "minimum_role": "support"
+    }
+  ],
+  "event_type": "announcements.maintenance",
+  "message": {
+    "title": "Scheduled Maintenance",
+    "body": "Our platform will undergo maintenance on Jan 15, 2025 from 2 AM to 4 AM IST. Some features may be temporarily unavailable."
+  },
+  "actions": [
+    {
+      "type": "link",
+      "text": "Learn More",
+      "href": "/announcements/maintenance-jan-2025"
+    }
+  ]
+}
+```
+
+#### Example 3: Vendor Approved (Multicast to Finance Team)
 ```json
 {
   "targets": [
     {
       "business_id": "biz-123",
       "type": "multicast",
-      "ids": ["user-1", "user-2", "user-3"]
+      "minimum_role": "finance"
     }
   ],
-  "event_type": "vendor_approved",
+  "event_type": "payees.verified",
   "message": {
     "title": "Vendor Approved",
-    "body": "ABC Corp has been approved as a vendor."
-  }
+    "body": "ABC Corp has been verified and approved as a vendor. You can now create payments to this vendor."
+  },
+  "actions": [
+    {
+      "type": "button-neutral",
+      "text": "View Vendor",
+      "href": "/vendors/vnd-789"
+    }
+  ]
 }
 ```
+
+#### Example 4: Report Ready (Multicast to Specific Users)
+```json
+{
+  "targets": [
+    {
+      "business_id": "biz-123",
+      "type": "multicast",
+      "ids": ["user-1", "user-2"]
+    }
+  ],
+  "event_type": "insights.report.ready",
+  "message": {
+    "title": "Monthly Report Ready",
+    "body": "Your monthly payment analytics report for December 2024 is now available."
+  },
+  "actions": [
+    {
+      "type": "button-positive",
+      "text": "View Report",
+      "href": "/reports/monthly-dec-2024"
+    }
+  ]
+}
+```
+
+---
+
+### Best Practices
+
+1. **Event Type Naming:**
+   - Use consistent `category.action.details` format
+   - Map to existing category preferences when possible
+   - Use descriptive names (e.g., `payments.settlement.received` not `pmt_sett`)
+
+2. **Message Content:**
+   - Keep titles short and actionable (max 100 chars)
+   - Provide context in body (max 500 chars)
+   - Include relevant amounts, names, or IDs
+   - Use clear, professional language
+
+3. **Action Buttons:**
+   - Limit to 2-3 buttons maximum for better UX
+   - Use positive/negative types for approval workflows
+   - Always provide a neutral "View Details" option
+   - Use relative URLs for deep linking
+
+4. **Target Selection:**
+   - Use unicast for user-specific notifications
+   - Use multicast with role for departmental notifications
+   - Use broadcast sparingly (system-wide announcements only)
+   - Consider user preferences and notification fatigue
+
+5. **Testing:**
+   - Test with different user preference settings
+   - Verify role-based targeting works correctly
+   - Check notification appearance on all channels (web, email, push)
+   - Validate deep links work as expected
 
 ---
 
