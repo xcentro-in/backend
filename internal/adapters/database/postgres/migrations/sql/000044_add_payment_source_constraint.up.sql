@@ -1,6 +1,9 @@
 -- Migration: Add CHECK constraint to ensure token_card payments have payment_source tracking
 -- This prevents the bug where tokenized payments are created without source_id/source_type
 
+-- Drop constraint if it exists (idempotent)
+ALTER TABLE xcentro.payments DROP CONSTRAINT IF EXISTS chk_token_card_requires_source;
+
 -- Add CHECK constraint: token_card payments MUST have both payment_source_id and payment_source_type
 ALTER TABLE xcentro.payments
 ADD CONSTRAINT chk_token_card_requires_source

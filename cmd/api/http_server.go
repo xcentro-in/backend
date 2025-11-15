@@ -19,6 +19,7 @@ import (
 	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/logger"
 	"xcentro.in/internal/shared/ratelimiter"
+	"xcentro.in/internal/shared/utils"
 	customValidator "xcentro.in/internal/shared/validator"
 )
 
@@ -115,13 +116,13 @@ func (s *xcentroServer) registerGlobalMiddleware() {
 func buildSecureConfig(env, frontendURL string) middleware.SecureConfig {
 	if env == "production" {
 		return middleware.SecureConfig{
-			XSSProtection:         "",       // Modern browsers ignore this header, rely on CSP
+			XSSProtection:         "",        // Modern browsers ignore this header, rely on CSP
 			ContentTypeNosniff:    "nosniff", // Prevent MIME type sniffing
-			XFrameOptions:         "DENY",   // Prevent clickjacking
-			HSTSMaxAge:            31536000, // 1 year
+			XFrameOptions:         "DENY",    // Prevent clickjacking
+			HSTSMaxAge:            31536000,  // 1 year
 			HSTSExcludeSubdomains: false,
 			HSTSPreloadEnabled:    false,
-			ContentSecurityPolicy: "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; script-src 'self'; style-src 'self';",
+			ContentSecurityPolicy: utils.GenerateCSPHeader(""), // Use common CSP function without nonce
 			CSPReportOnly:         false,
 			ReferrerPolicy:        "strict-origin-when-cross-origin",
 		}
@@ -142,7 +143,7 @@ func buildSecureConfig(env, frontendURL string) middleware.SecureConfig {
 }
 
 func (s *xcentroServer) loadConfig() {
-	cfg, err := config.Load("")
+	cfg, err := config.Load(".env")
 	if err != nil {
 		s.log.Errorf("Failed to load config: %v", err)
 		panic(err)

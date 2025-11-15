@@ -771,3 +771,199 @@ func (r *PgUserRepository) GetUserBasicInfo(ctx context.Context, userID string) 
 
 	return id, email, name, nil
 }
+
+// SearchUsersByBusinesses searches users by name or email within specified businesses
+func (r *PgUserRepository) SearchUsersByBusinesses(ctx context.Context, businessIDs []string, searchTerm string) ([]*user.OpsUserSearchResult, error) {
+	query := `
+		SELECT DISTINCT u.id, COALESCE(u.name, '') as name, bur.bid as business_id
+		FROM xcentro.user_table u
+		JOIN xcentro.business_user_relation bur ON u.id = bur.userid
+		WHERE bur.bid = ANY($1)
+		AND (u.name ILIKE $2 OR u.email ILIKE $2)
+		ORDER BY u.name
+		LIMIT 50
+	`
+
+	searchPattern := "%" + searchTerm + "%"
+	rows, err := r.querier.Query(ctx, query, businessIDs, searchPattern)
+	if err != nil {
+		return nil, fmt.Errorf("failed to search users by businesses: %w", err)
+	}
+	defer rows.Close()
+
+	var results []*user.OpsUserSearchResult
+	for rows.Next() {
+		var result user.OpsUserSearchResult
+		if err := rows.Scan(&result.ID, &result.Name, &result.BusinessID); err != nil {
+			return nil, fmt.Errorf("failed to scan user search result: %w", err)
+		}
+		results = append(results, &result)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating user search results: %w", err)
+	}
+
+	return results, nil
+}
+
+// GetUserDetailsForOps retrieves detailed user information with identity data for ops dashboard
+// If businessID is provided, also fetches role information for that business
+func (r *PgUserRepository) GetUserDetailsForOps(ctx context.Context, userID string, businessID string) (*user.OpsUserDetails, error) {
+	var query string
+	var args []interface{}
+
+	if businessID != "" {
+		// Query with business role data
+		query = `
+			SELECT
+				u.id, u.email, COALESCE(u.mobile, '') as mobile, COALESCE(u.name, '') as name,
+				COALESCE(u.dob, '') as dob, COALESCE(u.tax_id, '') as tax_id,
+				u.kyc_status, u.kyc_needed, u.email_verified, u.mobile_verified,
+				u.created_at::text, COALESCE(u.updated_at::text, '') as updated_at,
+				COALESCE(ui.tax_id_data, '') as tax_id_data, COALESCE(ui.national_id, '') as national_id,
+				COALESCE(ui.national_id_data, '') as national_id_data, COALESCE(ui.n_txn_id, '') as n_txn_id,
+				COALESCE(bur.role, '') as role, COALESCE(bur.role_claim, '') as role_claim
+			FROM xcentro.user_table u
+			LEFT JOIN xcentro.user_identity ui ON u.tax_id = ui.tax_id
+			LEFT JOIN xcentro.business_user_relation bur ON u.id = bur.userid AND bur.bid = $2
+			WHERE u.id = $1
+		`
+		args = []interface{}{userID, businessID}
+	} else {
+		// Query without business role data
+		query = `
+			SELECT
+				u.id, u.email, COALESCE(u.mobile, '') as mobile, COALESCE(u.name, '') as name,
+				COALESCE(u.dob, '') as dob, COALESCE(u.tax_id, '') as tax_id,
+				u.kyc_status, u.kyc_needed, u.email_verified, u.mobile_verified,
+				u.created_at::text, COALESCE(u.updated_at::text, '') as updated_at,
+				COALESCE(ui.tax_id_data, '') as tax_id_data, COALESCE(ui.national_id, '') as national_id,
+				COALESCE(ui.national_id_data, '') as national_id_data, COALESCE(ui.n_txn_id, '') as n_txn_id
+			FROM xcentro.user_table u
+			LEFT JOIN xcentro.user_identity ui ON u.tax_id = ui.tax_id
+			WHERE u.id = $1
+		`
+		args = []interface{}{userID}
+	}
+
+	var details user.OpsUserDetails
+	var kycStatusStr string
+	var roleStr, roleClaimStr sql.NullString
+
+	if businessID != "" {
+		err := r.querier.QueryRow(ctx, query, args...).Scan(
+			&details.ID, &details.Email, &details.Mobile, &details.Name,
+			&details.DOB, &details.TaxID, &kycStatusStr, &details.KycNeeded,
+			&details.EmailVerified, &details.MobileVerified,
+			&details.CreatedAt, &details.UpdatedAt,
+			&details.TaxIDData, &details.NationalID, &details.NationalIDData, &details.NTxnID,
+			&roleStr, &roleClaimStr,
+		)
+
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil, fmt.Errorf("user not found")
+			}
+			return nil, fmt.Errorf("failed to get user details: %w", err)
+		}
+
+		// Parse role and role_claim if present
+		if roleStr.Valid && roleStr.String != "" {
+			role := parseUserRole(roleStr.String)
+			details.Role = &role
+		}
+		if roleClaimStr.Valid && roleClaimStr.String != "" {
+			roleClaim := parseUserRole(roleClaimStr.String)
+			details.RoleClaim = &roleClaim
+		}
+	} else {
+		err := r.querier.QueryRow(ctx, query, args...).Scan(
+			&details.ID, &details.Email, &details.Mobile, &details.Name,
+			&details.DOB, &details.TaxID, &kycStatusStr, &details.KycNeeded,
+			&details.EmailVerified, &details.MobileVerified,
+			&details.CreatedAt, &details.UpdatedAt,
+			&details.TaxIDData, &details.NationalID, &details.NationalIDData, &details.NTxnID,
+		)
+
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil, fmt.Errorf("user not found")
+			}
+			return nil, fmt.Errorf("failed to get user details: %w", err)
+		}
+	}
+
+	// Parse KYC status
+	details.KycStatus = parseKYCStatus(kycStatusStr)
+
+	return &details, nil
+}
+
+// parseUserRole converts string to UserRole
+func parseUserRole(role string) shared.UserRole {
+	switch role {
+	case "owner":
+		return shared.Owner
+	case "admin":
+		return shared.Admin
+	case "manager":
+		return shared.Manager
+	case "auditor":
+		return shared.Auditor
+	case "none":
+		return shared.None
+	default:
+		return shared.None
+	}
+}
+
+// UpdateTaxIDDataPartial updates a specific field in the tax_id_data JSON
+func (r *PgUserRepository) UpdateTaxIDDataPartial(ctx context.Context, taxID string, field string, value string) error {
+	query := `
+		UPDATE xcentro.user_identity
+		SET tax_id_data = jsonb_set(tax_id_data, $1, $2::jsonb)
+		WHERE tax_id = $3
+	`
+	fieldPath := fmt.Sprintf("{%s}", field)
+	_, err := r.querier.Exec(ctx, query, fieldPath, value, taxID)
+	if err != nil {
+		return fmt.Errorf("failed to update tax ID data field: %w", err)
+	}
+	return nil
+}
+
+// SetKYCStatusRejected sets user KYC status to rejected
+func (r *PgUserRepository) SetKYCStatusRejected(ctx context.Context, userID string) error {
+	query := `UPDATE xcentro.user_table SET kyc_status = 'kyc_rejected' WHERE id = $1`
+	_, err := r.querier.Exec(ctx, query, userID)
+	if err != nil {
+		return fmt.Errorf("failed to set KYC status to rejected: %w", err)
+	}
+	return nil
+}
+
+// ClearUserIdentityData clears all identity data fields to empty JSON
+func (r *PgUserRepository) ClearUserIdentityData(ctx context.Context, taxID string) error {
+	query := `
+		UPDATE xcentro.user_identity
+		SET tax_id_data = '{}'::jsonb,
+		    national_id_data = '{}'::jsonb
+		WHERE tax_id = $1
+	`
+	_, err := r.querier.Exec(ctx, query, taxID)
+	if err != nil {
+		return fmt.Errorf("failed to clear user identity data: %w", err)
+	}
+	return nil
+}
+
+// SetKYCStatusVerified sets user KYC status to verified
+func (r *PgUserRepository) SetKYCStatusVerified(ctx context.Context, userID string) error {
+	query := `UPDATE xcentro.user_table SET kyc_status = 'kyc_verified' WHERE id = $1`
+	_, err := r.querier.Exec(ctx, query, userID)
+	if err != nil {
+		return fmt.Errorf("failed to set KYC status to verified: %w", err)
+	}
+	return nil
+}

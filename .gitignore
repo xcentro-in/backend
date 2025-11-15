@@ -44,6 +44,8 @@ build/
 .env.test
 .env.production
 .env.staging
+ops.env
+*.env
 
 # =============================================================================
 # IDE and Editor Files
@@ -162,3 +164,6 @@ local/
 
 # Vendor directory (if using go modules with vendor)
 # vendor/
+# Air hot reload
+tmp/
+build-errors*.log

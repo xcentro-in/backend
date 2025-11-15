@@ -2,6 +2,7 @@ package business
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -968,12 +969,256 @@ func (s *BusinessServiceImpl) UpdateOnboardingStatus(ctx context.Context, bid st
 	}
 
 	// Invalidate the cache asynchronously
-	
+
 	invalidationKey := keys.Business.OnboardingStatus(bid)
 	if err := s.rclient.Delete(ctx, invalidationKey); err != nil {
 		s.logger.Warnf("Failed to invalidate business onboarding status cache for BID %s: %v", bid, err)
 	}
-	
 
+
+	return nil
+}
+
+// Ops Dashboard Methods
+
+// ListBusinessesPaginated retrieves paginated list of businesses, optionally filtered by KYB status
+func (s *BusinessServiceImpl) ListBusinessesPaginated(ctx context.Context, page int, limit int, kybStatus string) ([]*business.OpsBusinessListItem, int, error) {
+	return s.businessRepo.ListBusinessesPaginated(ctx, page, limit, kybStatus)
+}
+
+// SearchBusinesses searches businesses by name or GSTIN, optionally filtered by KYB status
+func (s *BusinessServiceImpl) SearchBusinesses(ctx context.Context, searchTerm string, kybStatus string) ([]*business.OpsBusinessSearchResult, error) {
+	return s.businessRepo.SearchBusinesses(ctx, searchTerm, kybStatus)
+}
+
+// GetBusinessDetailsForOps retrieves complete business details for ops dashboard
+func (s *BusinessServiceImpl) GetBusinessDetailsForOps(ctx context.Context, bid string) (*business.OpsBusinessDetails, error) {
+	return s.businessRepo.GetBusinessDetailsForOps(ctx, bid)
+}
+
+// ReloadBusinessData reloads verification data for business (GSTIN, ITID, or CID)
+func (s *BusinessServiceImpl) ReloadBusinessData(ctx context.Context, bid string, dataType string) error {
+	s.logger.Infof("Reloading business data for bid=%s, type=%s", bid, dataType)
+
+	// Get business to fetch required IDs
+	bus, err := s.businessRepo.FindByID(ctx, bid)
+	if err != nil {
+		return fmt.Errorf("business not found: %w", err)
+	}
+
+	// Generate transaction ID
+	transID := fmt.Sprintf("reload_%s_%s_%d", dataType, bid, time.Now().Unix())
+
+	switch dataType {
+	case "gstin":
+		// Verify GSTIN and update data
+		gstData, err := s.verificationService.VerifyGSTIN(ctx, bus.GSTIN, transID)
+		if err != nil {
+			return fmt.Errorf("GSTIN verification failed: %w", err)
+		}
+
+		// Convert to JSON
+		gstDataJSON, err := json.Marshal(gstData.RawResponse)
+		if err != nil {
+			return fmt.Errorf("failed to marshal GST data: %w", err)
+		}
+
+		// Update in database
+		return s.businessRepo.UpdateGSTINData(ctx, bid, string(gstDataJSON))
+
+	case "income_tax_id":
+		// Verify PAN and update data
+		if bus.ITID == "" {
+			return fmt.Errorf("income tax ID not set for business")
+		}
+
+		panData, err := s.verificationService.VerifyPANCOM(ctx, bus.ITID, transID)
+		if err != nil {
+			return fmt.Errorf("PAN verification failed: %w", err)
+		}
+
+		// Convert to JSON
+		panDataJSON, err := json.Marshal(panData.PANCOMResponse)
+		if err != nil {
+			return fmt.Errorf("failed to marshal PAN data: %w", err)
+		}
+
+		// Update in database
+		return s.businessRepo.UpdateIncometTaxIDData(ctx, bus.ITID, string(panDataJSON))
+
+	case "company_id":
+		// Get CID from KYB data
+		_, kybData, err := s.businessRepo.GetBusinessWithKYBData(ctx, bid)
+		if err != nil || kybData == nil || kybData.CID == "" {
+			return fmt.Errorf("company ID not set for business")
+		}
+
+		// Verify CIN and update data
+		cinData, err := s.verificationService.VerifyCIN(ctx, kybData.CID, transID)
+		if err != nil {
+			return fmt.Errorf("CIN verification failed: %w", err)
+		}
+
+		// Convert to JSON
+		cinDataJSON, err := json.Marshal(cinData.RawResponse)
+		if err != nil {
+			return fmt.Errorf("failed to marshal CIN data: %w", err)
+		}
+
+		// Update in database
+		return s.businessRepo.UpdateCompanyIDData(ctx, bus.ITID, string(cinDataJSON))
+
+	default:
+		return fmt.Errorf("invalid data type: %s (must be gstin, income_tax_id, or company_id)", dataType)
+	}
+}
+
+// RejectKYB marks business KYB as rejected, sets owner role to NULL, and clears KYB data
+func (s *BusinessServiceImpl) RejectKYB(ctx context.Context, bid string, notes string) error {
+	s.logger.Infof("Rejecting KYB for business: %s", bid)
+
+	// Get business to check ITID
+	bus, err := s.businessRepo.FindByID(ctx, bid)
+	if err != nil {
+		return fmt.Errorf("business not found: %w", err)
+	}
+
+	// Find user who has kyb_initiated = true for this business
+	var userIDToNotify string
+	relations, err := s.businessUserRelRepo.FindByBusiness(ctx, bid)
+	if err == nil {
+		for _, rel := range relations {
+			if rel.KybInitiated {
+				userIDToNotify = rel.UserID
+				break
+			}
+		}
+	}
+
+	// Use transaction to ensure atomicity
+	err = s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
+		txBusinessRepo := s.businessRepo.WithTx(tx)
+		txBusinessUserRelRepo := s.businessUserRelRepo.WithTx(tx)
+
+		// 1. Set KYB status to rejected
+		if err := txBusinessRepo.SetKYBStatusRejected(ctx, bid); err != nil {
+			return err
+		}
+
+		// 2. Set owner role to NULL (database NULL)
+		if err := txBusinessUserRelRepo.SetOwnerRoleToNull(ctx, bid); err != nil {
+			// It's OK if no owner exists
+			s.logger.Warnf("No owner found for business %s: %v", bid, err)
+		}
+
+		// 3. Clear KYB data
+		if bus.ITID != "" {
+			if err := txBusinessRepo.ClearKYBData(ctx, bus.ITID); err != nil {
+				return err
+			}
+		}
+
+		s.logger.Infof("KYB rejected successfully for business: %s", bid)
+		return nil
+	})
+
+	if err != nil {
+		return err
+	}
+
+	// Trigger notification if notes are present and user found
+	if notes != "" && userIDToNotify != "" {
+		go func() {
+			bgCtx := context.Background()
+			message := "Your business KYB verification has been rejected."
+			if notes != "" {
+				message += " Notes: " + notes
+			}
+
+			if err := notification.TriggerUnicast(bgCtx, bid, userIDToNotify, "kyb_rejected", "KYB Rejected", message, coreNotification.EntityReferences{}, nil); err != nil {
+				s.logger.Errorf("Failed to trigger KYB rejection notification: %v", err)
+			}
+		}()
+	}
+
+	return nil
+}
+
+// VerifyKYB marks business KYB as verified and sets owner's KYC status to verified
+func (s *BusinessServiceImpl) VerifyKYB(ctx context.Context, bid string, notes string) error {
+	s.logger.Infof("Verifying KYB for business: %s", bid)
+
+	var ownerUserID string
+
+	// Use transaction to ensure atomicity
+	err := s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
+		txBusinessRepo := s.businessRepo.WithTx(tx)
+
+		// 1. Set business KYB status to verified
+		if err := txBusinessRepo.SetKYBStatusVerified(ctx, bid); err != nil {
+			return err
+		}
+
+		// 2. Get owner user ID
+		var err error
+		ownerUserID, err = txBusinessRepo.GetOwnerUserID(ctx, bid)
+		if err != nil {
+			// It's OK if no owner exists yet
+			s.logger.Warnf("No owner found for business %s: %v", bid, err)
+			return nil
+		}
+
+		// 3. Set owner's KYC status to verified
+		txUserRepo := s.userRepo.WithTx(tx)
+		if err := txUserRepo.SetKYCStatusVerified(ctx, ownerUserID); err != nil {
+			return fmt.Errorf("failed to verify owner KYC: %w", err)
+		}
+
+		s.logger.Infof("KYB and owner KYC verified successfully for business: %s", bid)
+		return nil
+	})
+
+	if err != nil {
+		return err
+	}
+
+	// Trigger notification if notes are present and owner found
+	if notes != "" && ownerUserID != "" {
+		go func() {
+			bgCtx := context.Background()
+			message := "Your business KYB verification has been approved!"
+			if notes != "" {
+				message += " Notes: " + notes
+			}
+
+			if err := notification.TriggerUnicast(bgCtx, bid, ownerUserID, "kyb_verified", "KYB Verified", message, coreNotification.EntityReferences{}, nil); err != nil {
+				s.logger.Errorf("Failed to trigger KYB verification notification: %v", err)
+			}
+		}()
+	}
+
+	return nil
+}
+
+// OpsUpdateUserRole updates a user's role in a business (ops dashboard endpoint)
+func (s *BusinessServiceImpl) OpsUpdateUserRole(ctx context.Context, bid string, userID string, role shared.UserRole) error {
+	s.logger.Infof("Ops updating user %s role in business %s to %s", userID, bid, role)
+
+	// Call repository to update role - it will return error if user-business relation doesn't exist
+	err := s.businessUserRelRepo.OpsUpdateUserRole(ctx, bid, userID, role)
+	if err != nil {
+		return err
+	}
+
+	// Invalidate user roles cache after successful update
+	go func() {
+		bgCtx := context.Background()
+		invalidationKeys := keys.InvalidateUserRoles(userID)
+		if err := s.rclient.Delete(bgCtx, invalidationKeys...); err != nil {
+			s.logger.Warnf("Failed to invalidate user roles cache for user %s: %v", userID, err)
+		}
+	}()
+
+	s.logger.Infof("Successfully updated user %s role to %s in business %s via ops", userID, role, bid)
 	return nil
 }

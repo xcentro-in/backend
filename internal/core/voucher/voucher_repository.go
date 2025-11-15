@@ -29,6 +29,19 @@ type VoucherRepository interface {
 	// (supports multi-bill payments where multiple vouchers share same payment_id)
 	GetByPaymentID(ctx context.Context, paymentID uuid.UUID) ([]*Voucher, error)
 
+	// GetVouchersByPaymentIDWithStatus retrieves vouchers for a payment based on payment status
+	// For 'success' status: queries payment_vouchers where payment_id is set (finalized)
+	// For other statuses: queries payment_voucher_pending table (transient pending records)
+	// This method encapsulates the conditional logic for fetching vouchers in different payment states
+	GetVouchersByPaymentIDWithStatus(ctx context.Context, paymentID uuid.UUID, paymentStatus string) ([]*Voucher, error)
+
+	// GetVouchersWithPayeeDetailsByPaymentID retrieves vouchers with payee details in a single JOIN query
+	// Avoids N+1 problem by joining with business_payee_relation table
+	// For 'success' status: queries finalized vouchers
+	// For other statuses: queries from payment_voucher_pending table
+	// Returns complete voucher and payee information ready for display
+	GetVouchersWithPayeeDetailsByPaymentID(ctx context.Context, paymentID uuid.UUID, paymentStatus string) ([]*VoucherWithPayeeDetails, error)
+
 	// ListByBusiness retrieves vouchers for a business with filters
 	ListByBusiness(ctx context.Context, businessID uuid.UUID, filters VoucherFilters) ([]*Voucher, *PaginationResult, error)
 
@@ -38,18 +51,6 @@ type VoucherRepository interface {
 	// UpdateERPStatus updates the ERP sync status of a voucher
 	UpdateERPStatus(ctx context.Context, voucherID uuid.UUID, status ERPSyncStatus, referenceID string, metadata map[string]interface{}) error
 
-	// RequestCancellation requests cancellation of a voucher (Phase 7)
-	RequestCancellation(ctx context.Context, voucherID uuid.UUID, userID uuid.UUID, reason string, timestamp time.Time) error
-
-	// ApproveCancellation approves a cancellation request (Phase 7)
-	ApproveCancellation(ctx context.Context, voucherID uuid.UUID, userID uuid.UUID, timestamp time.Time, refundStatus RefundStatus) error
-
-	// RejectCancellation rejects a cancellation request (Phase 7)
-	RejectCancellation(ctx context.Context, voucherID uuid.UUID) error
-
-	// UpdatePayoutStatus updates the payout status of a voucher (Phase 9)
-	UpdatePayoutStatus(ctx context.Context, voucherID string, status PayoutStatus, utr string) error
-
 	// GetNextVoucherNumber generates the next sequential voucher number for a business and fiscal year
 	GetNextVoucherNumber(ctx context.Context, businessID uuid.UUID, fiscalYear string) (int, error)
 
@@ -58,10 +59,6 @@ type VoucherRepository interface {
 
 	// GetVouchersForERPSync retrieves vouchers that need ERP synchronization
 	GetVouchersForERPSync(ctx context.Context, limit int) ([]*Voucher, error)
-
-	// GetVouchersReadyForPayout retrieves vouchers ready for payout processing (Phase 9)
-	// Returns finalized, paid, non-cancelled vouchers with payout_status = 'pending'
-	GetVouchersReadyForPayout(ctx context.Context, limit int) ([]*Voucher, error)
 
 	// GetVouchersByRelation retrieves all vouchers for a specific payee relation with payment method details
 	// Validates that the relation belongs to the business (security check via business_payee_relation join)

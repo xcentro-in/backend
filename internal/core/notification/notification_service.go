@@ -14,6 +14,9 @@ type NotificationService interface {
 
 	// Manual trigger for ops/campaigns
 	TriggerManualNotification(ctx context.Context, payload NotificationEventPayload) error
+
+	// Bulk trigger for ops dashboard - triggers notifications for multiple businesses in a transaction
+	BulkTriggerNotifications(ctx context.Context, request *OpsBulkTriggerRequest) (*OpsBulkTriggerResponse, error)
 }
 
 // FanoutService defines the interface for notification fan-out operations

@@ -357,24 +357,21 @@ type VouchersByPayeeSummary struct {
 	CompletedCount int64 `json:"completed_count"`
 }
 
-// VoucherPaymentDetailsResponse represents complete payment details for a voucher
+// VoucherPaymentDetailsResponse represents payment details for a voucher (customer-facing)
 type VoucherPaymentDetailsResponse struct {
 	// Payment identification
-	PaymentID        string    `json:"payment_id"`
-	VoucherID        string    `json:"voucher_id"`
-	VoucherNumber    string    `json:"voucher_number"`
-	PaymentStatus    string    `json:"payment_status"`     // success, pending, failed
-	PaymentDate      time.Time `json:"payment_date"`       // When payment was made
-	GatewayUsed      string    `json:"gateway_used"`       // jiopay, easebuzz
-	GatewayPaymentID string    `json:"gateway_payment_id"` // Gateway transaction ID
+	PaymentID     string    `json:"payment_id"`
+	VoucherID     string    `json:"voucher_id"`
+	VoucherNumber string    `json:"voucher_number"`
+	PaymentStatus string    `json:"payment_status"` // success, pending, failed
+	PaymentDate   time.Time `json:"payment_date"`   // When payment was made
 
 	// Payment source details
-	PaymentMethod     string `json:"payment_method"`      // card, net_banking, upi
-	PaymentSourceType string `json:"payment_source_type"` // credit, debit, savings, current
-	CardType          string `json:"card_type"`           // visa, mastercard, rupay, amex, diners (for cards)
-	CardCategory      string `json:"card_category"`       // credit, debit (for cards)
-	LastFourDigits    string `json:"last_four_digits"`    // Last 4 digits of card/account
-	BankName          string `json:"bank_name"`           // Bank name for net banking or card issuer
+	PaymentMethod  string `json:"payment_method"`   // card, net_banking, upi
+	CardType       string `json:"card_type"`        // visa, mastercard, rupay, amex, diners (for cards)
+	CardCategory   string `json:"card_category"`    // credit, debit (for cards)
+	LastFourDigits string `json:"last_four_digits"` // Last 4 digits of card/account
+	BankName       string `json:"bank_name"`        // Bank name for net banking or card issuer
 
 	// Payment amount breakdown (all in paise)
 	VoucherAmount      int64  `json:"voucher_amount"`       // Original voucher amount (what vendor gets)
@@ -385,17 +382,9 @@ type VoucherPaymentDetailsResponse struct {
 	TotalFeeAmount     int64  `json:"total_fee_amount"`     // convenience_fee + gst_on_fee
 	TotalAmountPaid    int64  `json:"total_amount_paid"`    // voucher_amount + total_fee_amount (what customer paid)
 
-	// Settlement details (what merchant receives)
-	SettlementStatus      string     `json:"settlement_status"`       // pending, settled, failed
-	SettledAt             *time.Time `json:"settled_at"`              // When funds were settled to merchant
-	SettlementAmount      int64      `json:"settlement_amount"`       // Amount before MDR deduction
-	MDRAmount             int64      `json:"mdr_amount"`              // Merchant Discount Rate (gateway fees)
-	MDRRate               string     `json:"mdr_rate"`                // e.g., "1.90%"
-	NetSettlementAmount   int64      `json:"net_settlement_amount"`   // Final amount received (settlement_amount - mdr_amount)
-	SettlementReferenceID string     `json:"settlement_reference_id"` // Gateway settlement reference
-	SettlementUTR         string     `json:"settlement_utr"`          // Bank UTR for settlement
+	// Payout details (vendor/payee receipt)
+	PayoutUTR         string     `json:"payout_utr"`          // Bank UTR from payout provider (if payout completed to vendor)
+	PayoutCompletedAt *time.Time `json:"payout_completed_at"` // When payout completed to vendor (null if not yet completed)
 
-	// Additional payment metadata
-	Description string                 `json:"description"`
-	Metadata    map[string]interface{} `json:"metadata"`
+	Description string `json:"description"`
 }

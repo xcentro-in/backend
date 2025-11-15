@@ -120,20 +120,28 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 
 		// Sub-step 1: Create payment record within transaction
 		s.logger.DebugWith("Creating payment record within transaction")
+
+		// Calculate GST breakdown (18% GST on convenience fee)
+		convenienceFee := feeCalculation.FeeAmount
+		convenienceFeeGST := int64(float64(convenienceFee) * 0.18)
+		totalFee := convenienceFee + convenienceFeeGST
+
 		p := &payment.Payment{
-			ID:            paymentID,
-			UserID:        req.UserID,
-			BusinessID:    req.BusinessID,
-			Amount:        req.Amount,
-			Currency:      req.Currency,
-			PaymentMethod: req.PaymentMethod,
-			PaymentType:   payment.PaymentTypePayment,
-			Status:        payment.PaymentStatusPending,
-			Description:   req.Description,
-			CallbackURL:   callbackURL,
-			FeeAmount:     feeCalculation.FeeAmount,
-			TotalAmount:   feeCalculation.TotalAmount,
-			Metadata:      req.Metadata,
+			ID:               paymentID,
+			UserID:           req.UserID,
+			BusinessID:       req.BusinessID,
+			Amount:           req.Amount,
+			Currency:         req.Currency,
+			PaymentMethod:    req.PaymentMethod,
+			PaymentType:      payment.PaymentTypePayment,
+			Status:           payment.PaymentStatusPending,
+			Description:      req.Description,
+			CallbackURL:      callbackURL,
+			FeeAmount:        totalFee,              // Total fee (base + GST)
+			ConvenienceFee:   convenienceFee,        // Base convenience fee before GST
+			ConvenienceFeeGST: convenienceFeeGST,    // 18% GST on convenience fee
+			TotalAmount:      req.Amount + totalFee, // Base amount + total fee
+			Metadata:         req.Metadata,
 		}
 
 		// Set payment source details for tokenized payments
@@ -457,6 +465,56 @@ func (s *PaymentService) GetPaymentList(ctx context.Context, businessID string, 
 		Limit:      limit,
 		Offset:     offset,
 	}, nil
+}
+
+// GetPaymentByID retrieves detailed payment information by payment ID
+func (s *PaymentService) GetPaymentByID(ctx context.Context, paymentID string, businessID string) (*payment.Payment, error) {
+	s.logger.InfoWith("Fetching payment by ID",
+		"payment_id", paymentID,
+		"business_id", businessID)
+
+	// Validate payment ID
+	if paymentID == "" {
+		return nil, fmt.Errorf("payment_id is required")
+	}
+
+	// Validate business ID
+	if businessID == "" {
+		return nil, fmt.Errorf("business_id is required")
+	}
+
+	// Fetch payment from repository
+	paymentRecord, err := s.paymentRepo.GetPaymentByID(ctx, paymentID)
+	if err != nil {
+		s.logger.ErrorWith("failed to get payment by ID",
+			"error", err,
+			"payment_id", paymentID)
+		return nil, fmt.Errorf("failed to get payment: %w", err)
+	}
+
+	// Check if payment exists
+	if paymentRecord == nil {
+		s.logger.WarnWith("payment not found",
+			"payment_id", paymentID)
+		return nil, fmt.Errorf("payment not found")
+	}
+
+	// Verify payment belongs to the business (authorization check)
+	if paymentRecord.BusinessID != businessID {
+		s.logger.WarnWith("payment does not belong to business",
+			"payment_id", paymentID,
+			"requested_business_id", businessID,
+			"actual_business_id", paymentRecord.BusinessID)
+		return nil, fmt.Errorf("payment not found")
+	}
+
+	s.logger.InfoWith("Successfully retrieved payment",
+		"payment_id", paymentID,
+		"business_id", businessID,
+		"status", paymentRecord.Status,
+		"amount", paymentRecord.Amount)
+
+	return paymentRecord, nil
 }
 
 // RetryPayment retries a failed or pending payment with the same payment source and vouchers

@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 	"xcentro.in/internal/adapters/cache/redis/keys"
+	"xcentro.in/internal/adapters/database/postgres/client"
 	"xcentro.in/internal/core/notification"
 	"xcentro.in/internal/shared/logger"
 )
@@ -17,6 +19,7 @@ type UserFacingNotificationService struct {
 	notifEventRepo  notification.NotificationEventRepository
 	userNotifRepo   notification.UserNotificationRepository
 	preferencesRepo notification.NotificationPreferencesRepository
+	txManager       client.TxManager
 	redisClient     *redis.Client
 	logger          *logger.Logger
 }
@@ -26,6 +29,7 @@ func NewUserFacingNotificationService(
 	notifEventRepo notification.NotificationEventRepository,
 	userNotifRepo notification.UserNotificationRepository,
 	preferencesRepo notification.NotificationPreferencesRepository,
+	txManager client.TxManager,
 	redisClient *redis.Client,
 	logger *logger.Logger,
 ) *UserFacingNotificationService {
@@ -33,6 +37,7 @@ func NewUserFacingNotificationService(
 		notifEventRepo:  notifEventRepo,
 		userNotifRepo:   userNotifRepo,
 		preferencesRepo: preferencesRepo,
+		txManager:       txManager,
 		redisClient:     redisClient,
 		logger:          logger,
 	}
@@ -115,4 +120,56 @@ func (s *UserFacingNotificationService) TriggerManualNotification(ctx context.Co
 	}
 
 	return s.notifEventRepo.CreateEvent(ctx, event)
+}
+
+// BulkTriggerNotifications triggers notifications for multiple businesses in a single transaction
+// If any trigger fails, the entire transaction is rolled back
+func (s *UserFacingNotificationService) BulkTriggerNotifications(ctx context.Context, request *notification.OpsBulkTriggerRequest) (*notification.OpsBulkTriggerResponse, error) {
+	// Counter for successfully triggered notifications
+	var triggeredCount int
+	timestamp := time.Now().Format(time.RFC3339)
+
+	// Execute within transaction
+	err := s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
+		// Get transaction-aware event repository
+		txEventRepo := s.notifEventRepo.WithTx(tx)
+
+		// Loop through each target and create individual notification event
+		for _, target := range request.Targets {
+			// Build payload for this target
+			payload := notification.NotificationEventPayload{
+				Timestamp: timestamp,
+				EventType: request.EventType,
+				Target:    target,
+				Entities:  notification.EntityReferences{}, // Empty as per requirements
+				Message:   request.Message,
+				Actions:   request.Actions,
+			}
+
+			// Create event in transaction
+			event := &notification.NotificationEvent{
+				EventType: payload.EventType,
+				Payload:   payload,
+			}
+
+			if err := txEventRepo.CreateEvent(ctx, event); err != nil {
+				// Fail fast: return error and transaction will be rolled back
+				return fmt.Errorf("failed to create notification event for business %s: %w", target.BusinessID, err)
+			}
+
+			triggeredCount++
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	// Return success response
+	return &notification.OpsBulkTriggerResponse{
+		Success:        true,
+		TriggeredCount: triggeredCount,
+	}, nil
 }
