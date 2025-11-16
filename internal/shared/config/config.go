@@ -95,11 +95,11 @@ type SESConfig struct {
 // CastlerConfig holds Castler payout provider configuration.
 type CastlerConfig struct {
 	BaseURL       string `json:"base_url" env:"CASTLER_BASE_URL" env-default:"https://api.castler.in"`
-	APIKey        string `json:"-" env:"CASTLER_API_KEY"`        // API authentication key (sensitive)
-	SecretKey     string `json:"-" env:"CASTLER_SECRET_KEY"`     // API signing secret (sensitive)
-	WebhookSecret string `json:"-" env:"CASTLER_WEBHOOK_SECRET"` // Webhook signature verification (sensitive)
-	EncryptionKey string `json:"-" env:"CASTLER_ENCRYPTION_KEY"` // AES encryption key (optional, sensitive)
-	EncryptionIV  string `json:"-" env:"CASTLER_ENCRYPTION_IV"`  // Fixed AES IV in base64 (optional, sensitive)
+	APIKey        string `json:"-" env:"CASTLER_API_KEY"`                                     // API authentication key (sensitive)
+	SecretKey     string `json:"-" env:"CASTLER_SECRET_KEY"`                                  // API signing secret (sensitive)
+	WebhookSecret string `json:"-" env:"CASTLER_WEBHOOK_SECRET"`                              // Webhook signature verification (sensitive)
+	EncryptionKey string `json:"-" env:"CASTLER_ENCRYPTION_KEY"`                              // AES encryption key (optional, sensitive)
+	EncryptionIV  string `json:"-" env:"CASTLER_ENCRYPTION_IV"`                               // Fixed AES IV in base64 (optional, sensitive)
 	MockEnabled   bool   `json:"mock_enabled" env:"CASTLER_MOCK_ENABLED" env-default:"false"` // Enable mock mode for testing (no real API calls)
 }
 
@@ -127,9 +127,9 @@ type EasebuzzConfig struct {
 
 // MockPGConfig holds Mock Payment Gateway configuration for testing.
 type MockPGConfig struct {
-	Enabled        bool   `json:"enabled" env:"MOCKPG_ENABLED" env-default:"false"`              // Enable mock PG (bypass real gateways)
-	MerchantID     string `json:"merchant_id" env:"MOCKPG_MERCHANT_ID" env-default:"MOCK_MERCH"` // Mock merchant identifier
-	APIKey         string `json:"-" env:"MOCKPG_API_KEY" env-default:"mock_api_key_123"`         // Mock API key (sensitive)
+	Enabled         bool   `json:"enabled" env:"MOCKPG_ENABLED" env-default:"false"`                  // Enable mock PG (bypass real gateways)
+	MerchantID      string `json:"merchant_id" env:"MOCKPG_MERCHANT_ID" env-default:"MOCK_MERCH"`     // Mock merchant identifier
+	APIKey          string `json:"-" env:"MOCKPG_API_KEY" env-default:"mock_api_key_123"`             // Mock API key (sensitive)
 	SimulateSuccess bool   `json:"simulate_success" env:"MOCKPG_SIMULATE_SUCCESS" env-default:"true"` // If true, always succeed; if false, simulate random failures
 }
 
@@ -271,26 +271,16 @@ var (
 // Load reads configuration from optional file path (YAML/JSON/TOML supported by cleanenv) plus env overrides.
 func Load(path string) (Config, error) {
 	var cfg Config
-	if path != "" {
-		if err := cleanenv.ReadConfig(path, &cfg); err != nil {
-			return cfg, fmt.Errorf("read config file: %w", err)
-		}
-		// env overrides
-		if err := cleanenv.ReadEnv(&cfg); err != nil {
-			return cfg, fmt.Errorf("read env: %w", err)
-		}
-	} else {
-		// Try to load from .env file first if it exists
-		if err := cleanenv.ReadConfig(".env", &cfg); err != nil {
-			// If .env doesn't exist or fails to load, continue with env vars only
-			log.Printf("No .env file found or failed to load, using environment variables only: %v", err)
-		}
-		// Load/override from environment variables
-		if err := cleanenv.ReadEnv(&cfg); err != nil {
+	var err error
+
+	if err = cleanenv.ReadConfig(path, &cfg); err != nil {
+		fmt.Printf("error reading config file: %v\n", err)
+		if err = cleanenv.ReadEnv(&cfg); err != nil {
 			return cfg, fmt.Errorf("read env: %w", err)
 		}
 	}
-	return cfg, nil
+
+	return cfg, err
 }
 
 // MustLoad loads configuration once and exits on failure.

@@ -8,6 +8,7 @@ import (
 	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/logger"
 	"xcentro.in/internal/shared/templates"
+	"xcentro.in/internal/shared/utils"
 )
 
 type AadhaarCallbackHandler struct {
@@ -32,6 +33,17 @@ type CallbackRequest struct {
 func (h *AadhaarCallbackHandler) HandleRedirectCallback(c echo.Context) error {
 	log := logger.GetDefault()
 
+	// Generate a unique, random nonce for CSP
+	nonce, err := utils.GenerateNonce()
+	if err != nil {
+		log.Errorf("Failed to generate CSP nonce: %v", err)
+		return c.String(http.StatusInternalServerError, "Internal server error")
+	}
+
+	// Set CSP header with nonce - overrides the global middleware policy
+	csp := utils.GenerateCSPHeader(nonce)
+	c.Response().Header().Set("Content-Security-Policy", csp)
+
 	// Log all query parameters
 	log.Info("Aadhaar callback received")
 	log.Info("Query parameters:")
@@ -41,7 +53,7 @@ func (h *AadhaarCallbackHandler) HandleRedirectCallback(c echo.Context) error {
 		}
 	}
 
-	// Return success HTML
+	// Return success HTML with nonce
 	html := templates.GenerateResponsePage(templates.ResponsePageConfig{
 		PageType:      templates.PageTypeSuccess,
 		Title:         "Aadhaar Verified Successfully!",
@@ -49,7 +61,7 @@ func (h *AadhaarCallbackHandler) HandleRedirectCallback(c echo.Context) error {
 		SubMessage:    "✓ Your identity has been verified successfully",
 		AutoCloseSec:  2,
 		ShowCloseHint: true,
-	})
+	}, nonce)
 	return c.HTML(http.StatusOK, html)
 }
 
@@ -58,6 +70,17 @@ func (h *AadhaarCallbackHandler) HandleRedirectCallback(c echo.Context) error {
 func (h *AadhaarCallbackHandler) HandleWebhook(c echo.Context) error {
 	log := logger.GetDefault()
 	ctx := c.Request().Context()
+
+	// Generate a unique, random nonce for CSP
+	nonce, err := utils.GenerateNonce()
+	if err != nil {
+		log.Errorf("Failed to generate CSP nonce: %v", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Internal server error"})
+	}
+
+	// Set CSP header with nonce - overrides the global middleware policy
+	csp := utils.GenerateCSPHeader(nonce)
+	c.Response().Header().Set("Content-Security-Policy", csp)
 
 	// Parse encrypted request
 	var req CallbackRequest

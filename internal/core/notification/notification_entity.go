@@ -130,6 +130,7 @@ type CategoryPreferences struct {
 	Approvals     bool `json:"approvals"`
 	Security      bool `json:"security"`
 	Insights      bool `json:"insights"`
+	Others        bool `json:"others"` // For notifications that don't match any known category
 }
 
 // GetEventCategory extracts the category from event type (first segment before dot)
@@ -151,7 +152,13 @@ func GetEventCategory(eventType string) string {
 func IsCategoryEnabled(categoryPrefs map[string]interface{}, eventType string) bool {
 	category := GetEventCategory(eventType)
 	if category == "" {
-		return true // Unknown category, allow by default
+		// No category extracted, check "others" preference
+		if enabled, ok := categoryPrefs["others"]; ok {
+			if boolVal, ok := enabled.(bool); ok {
+				return boolVal
+			}
+		}
+		return true // Default to enabled if "others" preference not found
 	}
 
 	// Check if category exists and is enabled in preferences
@@ -161,7 +168,14 @@ func IsCategoryEnabled(categoryPrefs map[string]interface{}, eventType string) b
 		}
 	}
 
-	return true // Default to enabled if category not found
+	// Category not found in known categories, check "others" preference
+	if enabled, ok := categoryPrefs["others"]; ok {
+		if boolVal, ok := enabled.(bool); ok {
+			return boolVal
+		}
+	}
+
+	return true // Default to enabled if category not found and "others" not set
 }
 
 // #############################################################################
@@ -230,3 +244,22 @@ type UserNotification struct {
 	SentAt     *time.Time             `db:"sent_at" json:"sent_at,omitempty"`
 	ReadAt     *time.Time             `db:"read_at" json:"read_at,omitempty"`
 }
+
+// #############################################################################
+// # OPS DASHBOARD DTOs
+// #############################################################################
+
+// OpsBulkTriggerRequest represents the request to trigger notifications for multiple businesses
+type OpsBulkTriggerRequest struct {
+	Targets   []TargetInfo     `json:"targets" validate:"required,min=1,dive"`
+	EventType string           `json:"event_type" validate:"required"`
+	Message   MessageContent   `json:"message" validate:"required"`
+	Actions   []ActionButton   `json:"actions,omitempty" validate:"omitempty,dive"`
+}
+
+// OpsBulkTriggerResponse represents the response after triggering bulk notifications
+type OpsBulkTriggerResponse struct {
+	Success        bool `json:"success"`
+	TriggeredCount int  `json:"triggered_count"`
+}
+

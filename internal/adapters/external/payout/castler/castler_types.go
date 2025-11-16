@@ -23,27 +23,29 @@ type CastlerBeneficiaryResponse struct {
 	Message            string `json:"message"`
 }
 
-// CastlerTransferRequest represents Castler's transfer request
+// CastlerTransferRequest represents Castler's transfer request (payout API)
 type CastlerTransferRequest struct {
-	BeneficiaryID string  `json:"beneficiary_id"`
-	Amount        float64 `json:"amount"` // In rupees (Castler uses rupees, not paise)
-	Currency      string  `json:"currency"`
-	Purpose       string  `json:"purpose"`
-	Reference     string  `json:"reference"`
-	Narration     string  `json:"narration"`
-	TransferMode  string  `json:"transfer_mode,omitempty"` // IMPS, NEFT, RTGS
+	EscrowID      string                 `json:"escrowId"`      // Castler escrow account ID
+	PayeeID       string                 `json:"payeeId"`       // Castler payee/beneficiary ID
+	Mode          string                 `json:"mode"`          // neft, rtgs, imps
+	Amount        float64                `json:"amount"`        // In rupees (Castler uses rupees, not paise)
+	CustomerRefID string                 `json:"customerRefId"` // Our payout_id (transfer_request_id)
+	Purpose       string                 `json:"purpose"`       // Purpose of payment
+	Notes         map[string]interface{} `json:"notes"`         // Additional metadata (invoice number, etc.)
 }
 
-// CastlerTransferResponse represents Castler's transfer response
+// CastlerTransferResult represents the nested result in Castler's transfer response
+type CastlerTransferResult struct {
+	TransferID string `json:"transferId"` // Castler's transfer ID
+}
+
+// CastlerTransferResponse represents Castler's transfer response (payout API)
 type CastlerTransferResponse struct {
-	TransferID          string `json:"transfer_id"`
-	Status              string `json:"status"` // pending, processing, completed, failed
-	Message             string `json:"message"`
-	UTR                 string `json:"utr,omitempty"`
-	FailureReason       string `json:"failure_reason,omitempty"`
-	EstimatedSettlement string `json:"estimated_settlement,omitempty"` // ISO timestamp
-	ProcessedAt         string `json:"processed_at,omitempty"`         // ISO timestamp
-	SettledAt           string `json:"settled_at,omitempty"`           // ISO timestamp
+	Result        CastlerTransferResult `json:"result"`
+	Message       *string               `json:"message"`
+	Errors        []string              `json:"errors"`
+	Success       bool                  `json:"success"`
+	TotalElements int                   `json:"totalElements"`
 }
 
 // CastlerApprovalRequest represents Castler's transfer approval request

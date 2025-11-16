@@ -83,9 +83,9 @@ func (m *MockCastlerClient) CreateTransferRequest(ctx context.Context, req *payo
 
 	return &payout.CreateTransferResponse{
 		ProviderTransferID:  mockTransferID,
-		Status:              payout.TransferStatusApproved,
-		RequiresApproval:    true,
-		Message:             "Mock transfer created successfully - ready for approval",
+		Status:              payout.TransferStatusInitiated,
+		RequiresApproval:    false,
+		Message:             "Mock transfer created and initiated successfully",
 		EstimatedSettlement: &estimatedSettlement,
 		Metadata: map[string]interface{}{
 			"mock":                true,

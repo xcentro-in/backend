@@ -8,6 +8,7 @@ import (
 	"xcentro.in/internal/core/payment"
 	"xcentro.in/internal/shared/logger"
 	"xcentro.in/internal/shared/templates"
+	"xcentro.in/internal/shared/utils"
 )
 
 // PaymentCallbackHandler handles payment redirect callbacks (user-facing HTML pages)
@@ -30,11 +31,22 @@ func NewPaymentCallbackHandler(paymentRepo payment.PaymentRepository) *PaymentCa
 func (h *PaymentCallbackHandler) HandlePaymentCallback(c echo.Context) error {
 	ctx := c.Request().Context()
 
+	// Generate a unique, random nonce for CSP
+	nonce, err := utils.GenerateNonce()
+	if err != nil {
+		h.logger.ErrorWith("Failed to generate CSP nonce", "error", err)
+		return c.String(http.StatusInternalServerError, "Internal server error")
+	}
+
+	// Set CSP header with nonce - overrides the global middleware policy
+	csp := utils.GenerateCSPHeader(nonce)
+	c.Response().Header().Set("Content-Security-Policy", csp)
+
 	// Get transaction ID from query params
 	transactionID := c.QueryParam("transaction_id")
 	if transactionID == "" {
 		h.logger.Error("Missing transaction_id in payment callback")
-		return h.renderErrorPage(c, "Invalid Request", "Payment transaction ID is missing")
+		return h.renderErrorPage(c, nonce, "Invalid Request", "Payment transaction ID is missing")
 	}
 
 	// Get status from query params (optional - some gateways include this)
@@ -48,36 +60,36 @@ func (h *PaymentCallbackHandler) HandlePaymentCallback(c echo.Context) error {
 	pmt, err := h.paymentRepo.GetPaymentByID(ctx, transactionID)
 	if err != nil {
 		h.logger.ErrorWith("Failed to fetch payment in callback", "error", err, "transaction_id", transactionID)
-		return h.renderErrorPage(c, "Payment Not Found", "Unable to locate your payment transaction")
+		return h.renderErrorPage(c, nonce, "Payment Not Found", "Unable to locate your payment transaction")
 	}
 
 	if pmt == nil {
 		h.logger.ErrorWith("Payment not found in callback", "transaction_id", transactionID)
-		return h.renderErrorPage(c, "Payment Not Found", "Unable to locate your payment transaction")
+		return h.renderErrorPage(c, nonce, "Payment Not Found", "Unable to locate your payment transaction")
 	}
 
 	// Render appropriate page based on payment status
 	switch pmt.Status {
 	case payment.PaymentStatusSuccess:
-		return h.renderSuccessPage(c, transactionID, pmt)
+		return h.renderSuccessPage(c, nonce, transactionID, pmt)
 
 	case payment.PaymentStatusFailed:
-		return h.renderFailedPage(c, transactionID, pmt)
+		return h.renderFailedPage(c, nonce, transactionID, pmt)
 
 	case payment.PaymentStatusCancelled:
-		return h.renderFailedPage(c, transactionID, pmt)
+		return h.renderFailedPage(c, nonce, transactionID, pmt)
 
 	case payment.PaymentStatusPending:
-		return h.renderPendingPage(c, transactionID, pmt)
+		return h.renderPendingPage(c, nonce, transactionID, pmt)
 
 	default:
 		h.logger.WarnWith("Unknown payment status in callback", "status", pmt.Status, "transaction_id", transactionID)
-		return h.renderPendingPage(c, transactionID, pmt)
+		return h.renderPendingPage(c, nonce, transactionID, pmt)
 	}
 }
 
 // renderSuccessPage renders the payment success page
-func (h *PaymentCallbackHandler) renderSuccessPage(c echo.Context, transactionID string, pmt *payment.Payment) error {
+func (h *PaymentCallbackHandler) renderSuccessPage(c echo.Context, nonce string, transactionID string, pmt *payment.Payment) error {
 	// Format amount for display (convert paise to rupees)
 	amountINR := float64(pmt.Amount) / 100.0
 
@@ -94,13 +106,13 @@ func (h *PaymentCallbackHandler) renderSuccessPage(c echo.Context, transactionID
             <p style="font-size: 14px; color: #5f6368; margin: 4px 0;"><strong>Amount:</strong> ₹%.2f</p>
             <p style="font-size: 14px; color: #5f6368; margin: 4px 0;"><strong>Gateway:</strong> %s</p>
         </div>`, transactionID, amountINR, pmt.GatewayUsed),
-	})
+	}, nonce)
 
 	return c.HTML(http.StatusOK, html)
 }
 
 // renderFailedPage renders the payment failed page
-func (h *PaymentCallbackHandler) renderFailedPage(c echo.Context, transactionID string, pmt *payment.Payment) error {
+func (h *PaymentCallbackHandler) renderFailedPage(c echo.Context, nonce string, transactionID string, pmt *payment.Payment) error {
 	// Format amount for display (convert paise to rupees)
 	amountINR := float64(pmt.Amount) / 100.0
 
@@ -126,13 +138,13 @@ func (h *PaymentCallbackHandler) renderFailedPage(c echo.Context, transactionID 
         </div>
         <p style="margin-top: 16px; font-size: 14px;">Please try again or contact support if the issue persists.</p>`,
 		transactionID, amountINR),
-	})
+	}, nonce)
 
 	return c.HTML(http.StatusOK, html)
 }
 
 // renderPendingPage renders the payment pending page
-func (h *PaymentCallbackHandler) renderPendingPage(c echo.Context, transactionID string, pmt *payment.Payment) error {
+func (h *PaymentCallbackHandler) renderPendingPage(c echo.Context, nonce string, transactionID string, pmt *payment.Payment) error {
 	// Format amount for display (convert paise to rupees)
 	amountINR := float64(pmt.Amount) / 100.0
 
@@ -150,13 +162,13 @@ func (h *PaymentCallbackHandler) renderPendingPage(c echo.Context, transactionID
         </div>
         <p style="margin-top: 16px; font-size: 14px;">You will receive a confirmation shortly. This may take a few minutes.</p>`,
 		transactionID, amountINR),
-	})
+	}, nonce)
 
 	return c.HTML(http.StatusOK, html)
 }
 
 // renderErrorPage renders a generic error page
-func (h *PaymentCallbackHandler) renderErrorPage(c echo.Context, title, message string) error {
+func (h *PaymentCallbackHandler) renderErrorPage(c echo.Context, nonce string, title, message string) error {
 	html := templates.GenerateResponsePage(templates.ResponsePageConfig{
 		PageType:      templates.PageTypeError,
 		Title:         title,
@@ -164,7 +176,7 @@ func (h *PaymentCallbackHandler) renderErrorPage(c echo.Context, title, message 
 		SubMessage:    "Please contact support if you need assistance",
 		AutoCloseSec:  5,
 		ShowCloseHint: true,
-	})
+	}, nonce)
 
 	return c.HTML(http.StatusBadRequest, html)
 }

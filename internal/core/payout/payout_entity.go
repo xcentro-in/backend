@@ -58,12 +58,14 @@ func (m *PayoutProviderMapping) CanRetryOnboarding() bool {
 // Maps to xcentro.payout_transfer_requests table
 type PayoutTransferRequest struct {
 	TransferRequestID string // UUID stored as string
+	PaymentID         string // UUID stored as string - direct reference to payment
 	VoucherID         string // UUID stored as string
 
 	// Provider details
 	Provider              ProviderType
 	ProviderBeneficiaryID string
 	ProviderTransferID    string
+	EscrowID              string // Castler escrow account ID (source account)
 
 	// Transfer details
 	Amount       int64
@@ -73,55 +75,30 @@ type PayoutTransferRequest struct {
 	Narration    string
 	TransferMode string
 
-	// Approval workflow
-	RequiresApproval bool
-	ApprovalMode     ApprovalMode
-	ApprovedBy       string // UUID stored as string
-	ApprovedAt       *time.Time
-
 	// Status tracking (webhook-driven)
-	Status       TransferStatusType
-	InitiatedAt  *time.Time
-	ProcessingAt *time.Time
-	CompletedAt  *time.Time
-	FailedAt     *time.Time
+	Status        TransferStatusType
+	InitiatedAt   *time.Time
+	ProcessingAt  *time.Time
+	CompletedAt   *time.Time
+	FailedAt      *time.Time
 	FailureReason string
-	UTR          string
+	UTR           string
 
 	// Retry tracking (placeholder for future)
-	RetryCount    int
-	MaxRetries    int
-	NextRetryAt   *time.Time
-	LastRetryAt   *time.Time
+	RetryCount  int
+	MaxRetries  int
+	NextRetryAt *time.Time
+	LastRetryAt *time.Time
 
 	// Webhook tracking
-	LastWebhookAt     *time.Time
-	WebhookTimeoutAt  *time.Time
-	WebhookHistory    []map[string]interface{} // Array of webhook payloads
-	ProviderMetadata  map[string]interface{}
+	LastWebhookAt    *time.Time
+	WebhookTimeoutAt *time.Time
+	WebhookHistory   []map[string]interface{} // Array of webhook payloads
+	ProviderMetadata map[string]interface{}
 
 	// Audit
 	CreatedAt time.Time
 	UpdatedAt *time.Time
-}
-
-// ApprovalMode indicates how transfer was approved
-type ApprovalMode string
-
-const (
-	ApprovalModeAuto   ApprovalMode = "auto"   // Auto-approved by system (amount < limit)
-	ApprovalModeManual ApprovalMode = "manual" // Manually approved by operations
-	ApprovalModeNone   ApprovalMode = "none"   // One-step provider, no approval needed
-)
-
-// IsApproved returns true if transfer is approved (or doesn't require approval)
-func (t *PayoutTransferRequest) IsApproved() bool {
-	return !t.RequiresApproval || (t.ApprovedBy != "" && t.ApprovedAt != nil)
-}
-
-// CanBeApproved returns true if transfer is pending approval
-func (t *PayoutTransferRequest) CanBeApproved() bool {
-	return t.RequiresApproval && t.Status == TransferStatusPendingApproval && !t.IsApproved()
 }
 
 // PayoutConfiguration represents payout system configuration

@@ -12,6 +12,7 @@ import (
 	"github.com/labstack/echo/v4"
 	"xcentro.in/internal/core/business"
 	"xcentro.in/internal/core/voucher"
+	"xcentro.in/internal/handlers/http/common"
 	voucherSvc "xcentro.in/internal/services/voucher"
 	"xcentro.in/internal/shared/logger"
 )
@@ -1287,6 +1288,11 @@ func (h *VoucherHandler) GetVoucherActivity(c echo.Context) error {
 			"error":   "SERVICE_ERROR",
 			"message": err.Error(),
 		})
+	}
+
+	// Redact internal actor names in activity items for customer-facing response
+	for i := range activity.Activities {
+		activity.Activities[i].UserName = common.RedactActorName(activity.Activities[i].UserName)
 	}
 
 	h.logger.InfoWith("Voucher activity fetched successfully",

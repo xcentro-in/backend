@@ -27,6 +27,9 @@ jobs:
           - dockerfile: Dockerfile.api
             image-suffix: api
             context: .
+          - dockerfile: Dockerfile.ops
+            image-suffix: ops
+            context: .
           - dockerfile: Dockerfile.notification_worker
             image-suffix: notification-worker
             context: .

@@ -1,0 +1,9 @@
+root = "."
+tmp_dir = "bin"
+
+[build]
+  bin = "./bin/ops"
+  cmd = "go build -o ./bin/ops ./cmd/ops"
+  include_ext = ["go"]
+  stop_on_error = true
+  rerun = false
