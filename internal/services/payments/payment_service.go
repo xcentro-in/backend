@@ -117,9 +117,60 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 
 		// Create transactional repository instances
 		txPaymentRepo := s.paymentRepo.WithTx(tx)
+		txStoredCardRepo := s.storedCardRepo.WithTx(tx)
+
+		// Sub-step 0.5: For tokenization payments, create stored_card record with partial data (Phase 1)
+		// This allows us to track the card even before tokenization completes
+		var storedCardID *string
+		if req.PaymentType == payment.PaymentTypeTokenization && req.CardDetails != nil {
+			s.logger.InfoWith("TOKENIZATION: Creating stored_card record with partial data (Phase 1)")
+
+			// Generate card ID
+			cardID := uuid.Must(uuid.NewV7()).String()
+
+			// Create stored_card with partial data (no token yet)
+			storedCard := &payment.StoredCard{
+				CardID:         cardID,
+				BusinessID:     req.BusinessID,
+				LastFourDigits: req.CardDetails.LastFourDigits,
+				CardType:       req.CardDetails.CardType,
+				CardCategory:   req.CardDetails.CardCategory,
+				ExpiryMonth:    req.CardDetails.ExpiryMonth,
+				ExpiryYear:     req.CardDetails.ExpiryYear,
+				CardHolderName: req.CardDetails.HolderName,
+				Token:          "", // Will be filled in Phase 2 (after tokenization)
+				IssuerBank:     "", // Will be filled in Phase 2
+				IsActive:       false, // Not active until tokenization succeeds
+				GatewayUsed:    "", // Will be updated in Phase 2 after gateway selection
+				AddedAt:        time.Now(),
+				Metadata: map[string]any{
+					"status": "pending_tokenization",
+					"phase":  "1_partial_data",
+				},
+			}
+
+			if err := txStoredCardRepo.CreateStoredCard(txCtx, storedCard); err != nil {
+				s.logger.ErrorWith("Failed to create stored_card record", "error", err)
+				return fmt.Errorf("failed to create stored_card record: %w", err)
+			}
+
+			storedCardID = &cardID
+			s.logger.InfoWith("TOKENIZATION: Stored card created with partial data",
+				"card_id", cardID,
+				"last_four", storedCard.LastFourDigits,
+				"card_type", storedCard.CardType,
+				"card_category", storedCard.CardCategory)
+		}
 
 		// Sub-step 1: Create payment record within transaction
 		s.logger.DebugWith("Creating payment record within transaction")
+
+		// Determine payment type (use from request, default to "payment")
+		paymentType := req.PaymentType
+		if paymentType == "" {
+			paymentType = payment.PaymentTypePayment
+		}
+
 		p := &payment.Payment{
 			ID:            paymentID,
 			UserID:        req.UserID,
@@ -127,7 +178,7 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 			Amount:        req.Amount,
 			Currency:      req.Currency,
 			PaymentMethod: req.PaymentMethod,
-			PaymentType:   payment.PaymentTypePayment,
+			PaymentType:   paymentType, // FIXED: Use req.PaymentType instead of hardcoded value
 			Status:        payment.PaymentStatusPending,
 			Description:   req.Description,
 			CallbackURL:   callbackURL,
@@ -136,9 +187,18 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 			Metadata:      req.Metadata,
 		}
 
-		// Set payment source details for tokenized payments
+		// Set payment source details for different payment methods
 		// CRITICAL: These fields must be set for payment_source tracking to work
-		if req.PaymentMethod == payment.PaymentMethodTokenCard {
+		if req.PaymentType == payment.PaymentTypeTokenization && storedCardID != nil {
+			// For tokenization payments, link to the stored_card we just created
+			cardSourceType := payment.PaymentSourceCard
+			p.PaymentSourceID = storedCardID
+			p.PaymentSourceType = &cardSourceType
+			s.logger.InfoWith("TOKENIZATION: Payment linked to stored_card",
+				"payment_id", paymentID,
+				"stored_card_id", *storedCardID,
+				"source_type", "card")
+		} else if req.PaymentMethod == payment.PaymentMethodTokenCard {
 			if req.TokenCardDetails != nil && req.TokenCardDetails.CardID != "" {
 				cardSourceType := payment.PaymentSourceCard
 				p.PaymentSourceID = &req.TokenCardDetails.CardID

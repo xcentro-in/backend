@@ -188,6 +188,46 @@ func (r *PgStoredCardRepository) GetStoredCardsByBusinessID(ctx context.Context,
 	return cards, nil
 }
 
+// UpdateStoredCard updates an existing stored card record
+// Used for Phase 2 of tokenization to update token, issuer bank, and status
+func (r *PgStoredCardRepository) UpdateStoredCard(ctx context.Context, card *payment.StoredCard) error {
+	fmt.Printf("[PgStoredCardRepository] UpdateStoredCard called - CardID: %s\n", card.CardID)
+
+	query := `
+		UPDATE xcentro.stored_cards
+		SET token = $1,
+		    issuer_bank = $2,
+		    is_active = $3,
+		    gateway_used = $4,
+		    metadata = $5
+		WHERE card_id = $6
+	`
+
+	var metadataJSON []byte
+	if card.Metadata != nil {
+		var err error
+		metadataJSON, err = json.Marshal(card.Metadata)
+		if err != nil {
+			return fmt.Errorf("failed to marshal metadata: %w", err)
+		}
+	}
+
+	_, err := r.querier.Exec(ctx, query,
+		card.Token,
+		card.IssuerBank,
+		card.IsActive,
+		card.GatewayUsed,
+		metadataJSON,
+		card.CardID,
+	)
+
+	if err != nil {
+		return fmt.Errorf("failed to update stored card: %w", err)
+	}
+
+	return nil
+}
+
 // DeactivateCard marks a card as inactive (soft delete)
 func (r *PgStoredCardRepository) DeactivateCard(ctx context.Context, cardID string) error {
 	fmt.Printf("[PgStoredCardRepository] DeactivateCard called - CardID: %s\n", cardID)
