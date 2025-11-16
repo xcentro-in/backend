@@ -162,12 +162,20 @@ func (c *MockPGClient) GenerateCryptogram(ctx context.Context, request payment.C
 
 // InitiatePayment implements mock payment initiation
 // Supports all payment methods: card (tokenized & direct), net banking, UPI, wallet
+// Also handles tokenization payments (payment_type="tokenization")
 func (c *MockPGClient) InitiatePayment(ctx context.Context, request payment.GatewayPaymentRequest) (*payment.GatewayPaymentResponse, error) {
 	fmt.Println("=== MOCK PG GATEWAY: InitiatePayment Called ===")
 	fmt.Printf("📥 Business ID: %s\n", request.BusinessID)
 	fmt.Printf("📥 Transaction ID: %s\n", request.TransactionID)
 	fmt.Printf("💰 Amount: %d %s\n", request.Amount, request.Currency)
 	fmt.Printf("🔀 Payment Method: %s\n", request.PaymentMethod)
+	fmt.Printf("🔀 Payment Type: %s\n", request.PaymentType)
+
+	// Check if this is a tokenization payment
+	isTokenization := request.PaymentType == payment.PaymentTypeTokenization
+	if isTokenization {
+		fmt.Println("🔑 TOKENIZATION PAYMENT: Will store card details for post-payment tokenization")
+	}
 
 	// Simulate network delay
 	c.simulateDelay(ctx)
@@ -257,6 +265,23 @@ func (c *MockPGClient) InitiatePayment(ctx context.Context, request payment.Gate
 			"simulate_success": c.simulateSuccess,
 			"mock_3ds_url":     redirectURL,
 		},
+	}
+
+	// For tokenization payments, add card details to metadata for later tokenization
+	// Mock PG is an "immature" gateway - needs to call tokenize API after payment success
+	if isTokenization && request.CardDetails != nil {
+		fmt.Println("🔑 Storing card details in metadata for tokenization after payment success")
+		response.Metadata["_tokenization_card_details"] = map[string]any{
+			"card_number":    request.CardDetails.Number,
+			"expiry_month":   request.CardDetails.ExpiryMonth,
+			"expiry_year":    request.CardDetails.ExpiryYear,
+			"holder_name":    request.CardDetails.HolderName,
+			"card_type":      string(request.CardDetails.CardType),
+			"card_category":  string(request.CardDetails.CardCategory),
+			"last_four":      request.CardDetails.LastFourDigits,
+		}
+		response.Metadata["_requires_tokenization"] = true
+		fmt.Println("✅ Card details stored securely in metadata")
 	}
 
 	fmt.Printf("📌 Note: User should open the redirect URL to complete authentication\n")

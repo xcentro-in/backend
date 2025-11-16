@@ -116,6 +116,7 @@ func (o *paymentOrchestratorImpl) ProcessPayment(ctx context.Context, request Pa
 		Amount:            request.Amount + feeAmount, // Include fee in total
 		Currency:          request.Currency,
 		PaymentMethod:     request.PaymentMethod,
+		PaymentType:       request.PaymentType, // Pass payment type (payment/tokenization/refund)
 		Description:       request.Description,
 		CallbackURL:       request.CallbackURL, // From request, not DB
 		CardDetails:       request.CardDetails,

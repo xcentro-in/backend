@@ -61,6 +61,7 @@ type GatewayPaymentRequest struct {
 	Amount        int64         `json:"amount"`
 	Currency      Currency      `json:"currency"`
 	PaymentMethod PaymentMethod `json:"payment_method"`
+	PaymentType   PaymentType   `json:"payment_type"` // Type: payment, tokenization, refund
 	Description   string        `json:"description"`
 	CallbackURL   string        `json:"callback_url"`
 

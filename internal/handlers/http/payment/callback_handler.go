@@ -25,6 +25,7 @@ import (
 // after user completes payment. Response is HTML page for visual feedback.
 type CallbackHandler struct {
 	paymentRepo        payment.PaymentRepository
+	storedCardRepo     payment.StoredCardRepository
 	jioPayGateway      payment.PaymentGateway
 	easebuzzGateway    payment.PaymentGateway
 	mockPGGateway      payment.PaymentGateway
@@ -39,6 +40,7 @@ type CallbackHandler struct {
 // NewCallbackHandler creates a new callback handler
 func NewCallbackHandler(
 	paymentRepoParam payment.PaymentRepository,
+	storedCardRepo payment.StoredCardRepository,
 	jioPayGateway payment.PaymentGateway,
 	easebuzzGateway payment.PaymentGateway,
 	mockPGGateway payment.PaymentGateway,
@@ -50,6 +52,7 @@ func NewCallbackHandler(
 ) *CallbackHandler {
 	return &CallbackHandler{
 		paymentRepo:        paymentRepoParam,
+		storedCardRepo:     storedCardRepo,
 		jioPayGateway:      jioPayGateway,
 		easebuzzGateway:    easebuzzGateway,
 		mockPGGateway:      mockPGGateway,
@@ -391,7 +394,18 @@ func (h *CallbackHandler) handleMockPGCallback(c echo.Context) error {
 		} else {
 			fmt.Printf("✅ Payment status updated to: %s\n", newStatus)
 
-			// Step 6.1: Handle post-update operations (state changes, voucher finalization)
+			// Step 6.1: Handle tokenization if this is a tokenization payment
+			if pmt.PaymentType == payment.PaymentTypeTokenization && newStatus == payment.PaymentStatusSuccess {
+				fmt.Println("🔑 TOKENIZATION PAYMENT: Initiating card tokenization after successful payment")
+				if err := h.handleTokenizationAfterPayment(ctx, pmt); err != nil {
+					fmt.Printf("⚠️  Tokenization failed: %v\n", err)
+					// Non-fatal: callback continues
+				} else {
+					fmt.Println("✅ Card tokenized successfully")
+				}
+			}
+
+			// Step 6.2: Handle post-update operations (state changes, voucher finalization)
 			if err := h.handlePostPaymentUpdate(ctx, pmt, newStatus, "mockpg", metadata); err != nil {
 				fmt.Printf("⚠️  Post-update operations had issues: %v\n", err)
 				// Non-fatal: callback continues
@@ -421,6 +435,119 @@ func (h *CallbackHandler) handleMockPGCallback(c echo.Context) error {
 	default:
 		return c.HTML(http.StatusOK, generateFailureHTML(pmt, callback.TransactionID, "Payment failed"))
 	}
+}
+
+// handleTokenizationAfterPayment handles card tokenization for immature PGs (Mock PG)
+// Called after successful ₹1 tokenization payment
+func (h *CallbackHandler) handleTokenizationAfterPayment(ctx context.Context, pmt *payment.Payment) error {
+	fmt.Println("=== TOKENIZATION: Starting post-payment tokenization ===")
+
+	// Step 1: Extract card details from payment metadata
+	cardDetailsRaw, exists := pmt.Metadata["_tokenization_card_details"]
+	if !exists {
+		fmt.Println("❌ Card details not found in payment metadata")
+		return fmt.Errorf("card details not found in payment metadata")
+	}
+
+	cardDetailsMap, ok := cardDetailsRaw.(map[string]any)
+	if !ok {
+		fmt.Println("❌ Invalid card details format in metadata")
+		return fmt.Errorf("invalid card details format")
+	}
+
+	// Extract individual fields
+	cardNumber, _ := cardDetailsMap["card_number"].(string)
+	expiryMonth, _ := cardDetailsMap["expiry_month"].(string)
+	expiryYear, _ := cardDetailsMap["expiry_year"].(string)
+	holderName, _ := cardDetailsMap["holder_name"].(string)
+	cardTypeStr, _ := cardDetailsMap["card_type"].(string)
+	cardCategoryStr, _ := cardDetailsMap["card_category"].(string)
+	lastFour, _ := cardDetailsMap["last_four"].(string)
+
+	fmt.Printf("🔑 Extracted card details: %s %s ending in %s\n", cardCategoryStr, cardTypeStr, lastFour)
+
+	// Step 2: Build tokenization request
+	tokenizeReq := payment.GatewayTokenizeRequest{
+		BusinessID:    pmt.BusinessID,
+		TransactionID: pmt.ID,
+		CardDetails: payment.Card{
+			Number:         cardNumber,
+			ExpiryMonth:    expiryMonth,
+			ExpiryYear:     expiryYear,
+			HolderName:     holderName,
+			CardType:       payment.CardType(cardTypeStr),
+			CardCategory:   payment.CardCategory(cardCategoryStr),
+			LastFourDigits: lastFour,
+		},
+		CallbackURL: pmt.CallbackURL,
+	}
+
+	// Step 3: Call gateway tokenization API (Mock PG in this case)
+	var tokenizeResp *payment.GatewayTokenizeResponse
+	var err error
+
+	switch pmt.GatewayUsed {
+	case payment.GatewayMockPG:
+		fmt.Println("🔑 Calling Mock PG tokenization API...")
+		tokenizeResp, err = h.mockPGGateway.TokenizeCard(ctx, tokenizeReq)
+	case payment.GatewayJioPay:
+		fmt.Println("🔑 Calling JioPay tokenization API...")
+		tokenizeResp, err = h.jioPayGateway.TokenizeCard(ctx, tokenizeReq)
+	case payment.GatewayEasebuzz:
+		fmt.Println("🔑 Calling Easebuzz tokenization API...")
+		tokenizeResp, err = h.easebuzzGateway.TokenizeCard(ctx, tokenizeReq)
+	default:
+		fmt.Printf("❌ Unknown gateway: %s\n", pmt.GatewayUsed)
+		return fmt.Errorf("unknown gateway: %s", pmt.GatewayUsed)
+	}
+
+	if err != nil {
+		fmt.Printf("❌ Tokenization failed: %v\n", err)
+		return fmt.Errorf("tokenization failed: %w", err)
+	}
+
+	fmt.Printf("✅ Tokenization successful: CardID=%s, Token=%s...\n", tokenizeResp.CardID, tokenizeResp.Token[:min(20, len(tokenizeResp.Token))])
+
+	// Step 4: Store tokenized card in database
+	storedCard := &payment.StoredCard{
+		CardID:         tokenizeResp.CardID,
+		BusinessID:     pmt.BusinessID,
+		Token:          tokenizeResp.Token,
+		LastFourDigits: lastFour,
+		CardType:       payment.CardType(cardTypeStr),
+		CardCategory:   payment.CardCategory(cardCategoryStr),
+		ExpiryMonth:    expiryMonth,
+		ExpiryYear:     expiryYear,
+		IssuerBank:     "Unknown", // Can be enhanced later
+		CardHolderName: holderName,
+		IsActive:       true,
+		GatewayUsed:    pmt.GatewayUsed,
+		AddedAt:        time.Now(),
+		Metadata: map[string]any{
+			"tokenization_date":   time.Now().Format("2006-01-02"),
+			"payment_id":          pmt.ID,
+			"gateway_used":        string(pmt.GatewayUsed),
+			"tokenization_method": "post_payment",
+		},
+	}
+
+	if err := h.storedCardRepo.CreateStoredCard(ctx, storedCard); err != nil {
+		fmt.Printf("❌ Failed to store card: %v\n", err)
+		return fmt.Errorf("failed to store card: %w", err)
+	}
+
+	fmt.Printf("✅ Card stored successfully: %s\n", storedCard.CardID)
+	fmt.Println("=== TOKENIZATION: Complete ===")
+
+	return nil
+}
+
+// min returns the minimum of two integers
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // ============================================================================

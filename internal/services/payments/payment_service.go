@@ -198,6 +198,18 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 		}
 		s.logger.DebugWith("Payment updated with gateway details")
 
+		// Sub-step 3.5: For tokenization payments, store gateway metadata (contains card details for immature PGs)
+		if req.PaymentType == payment.PaymentTypeTokenization && resp.Metadata != nil {
+			// Merge gateway metadata into payment metadata
+			if p.Metadata == nil {
+				p.Metadata = make(map[string]any)
+			}
+			for k, v := range resp.Metadata {
+				p.Metadata[k] = v
+			}
+			s.logger.DebugWith("Stored gateway metadata for tokenization", "keys", len(resp.Metadata))
+		}
+
 		// Sub-step 4: Store pending voucher relationships (within same transaction)
 		// Vouchers will be finalized later in callback handler when payment succeeds
 		if len(req.VoucherIDs) > 0 && s.pendingVoucherRepo != nil {

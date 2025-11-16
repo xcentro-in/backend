@@ -289,6 +289,8 @@ func (h *PaymentHandler) GetFeeRules(c echo.Context) error {
 }
 
 // Tokenize handles POST /process_payment/tokenize
+// This endpoint now initiates a tokenization payment flow (₹1 transaction)
+// Returns redirect_url for 3DS authentication
 func (h *PaymentHandler) Tokenize(c echo.Context) error {
 	h.logger.Info("Tokenize API called")
 
@@ -337,15 +339,22 @@ func (h *PaymentHandler) Tokenize(c echo.Context) error {
 		})
 	}
 
-	// Create context with timeout for blocking tokenization
-	ctx, cancel := context.WithTimeout(c.Request().Context(), 60*time.Second)
+	// Create context with timeout
+	ctx, cancel := context.WithTimeout(c.Request().Context(), 30*time.Second)
 	defer cancel()
 
-	// Convert HTTP request to core domain request
-	coreRequest := payment.TokenizeRequest{
-		UserID:     userID,
-		BusinessID: businessID,
-		CardDetails: payment.Card{
+	// Convert to payment request with payment_type="tokenization"
+	// This reuses the entire payment flow infrastructure
+	paymentReq := payment.PaymentRequest{
+		UserID:        userID,
+		BusinessID:    businessID,
+		Amount:        100, // ₹1.00 in paise for tokenization
+		Currency:      payment.CurrencyINR,
+		PaymentMethod: payment.PaymentMethodCard,
+		PaymentType:   payment.PaymentTypeTokenization, // KEY: Tokenization type
+		Description:   "Card tokenization (₹1 verification charge)",
+		CallingDevice: payment.CallingDeviceWeb, // Default to web
+		CardDetails: &payment.Card{
 			Number:         req.CardDetails.CardNumber,
 			ExpiryMonth:    req.CardDetails.ExpiryMonth,
 			ExpiryYear:     req.CardDetails.ExpiryYear,
@@ -355,73 +364,44 @@ func (h *PaymentHandler) Tokenize(c echo.Context) error {
 			CardCategory:   payment.CardCategory(req.CardDetails.CardCategory),
 			LastFourDigits: extractLastFourDigits(req.CardDetails.CardNumber),
 		},
-	}
-
-	// Call payment service for complete tokenization (blocking call)
-	h.logger.InfoWith("Initiating card tokenization", "business_id", businessID)
-	h.logger.Debug("Tokenization may take up to 60 seconds for gateway 2-step process")
-	tokenizeResponse, err := h.paymentService.TokenizeCard(ctx, coreRequest)
-
-	if err != nil {
-		h.logger.ErrorWith("Card tokenization failed", "error", err, "business_id", businessID)
-		return h.handleTokenizationError(err)
-	}
-
-	// Store tokenized card in business wallet immediately
-	h.logger.Debug("Storing tokenized card in business wallet")
-	storedCard := &payment.StoredCard{
-		CardID:         tokenizeResponse.CardID,
-		BusinessID:     coreRequest.BusinessID,
-		Token:          tokenizeResponse.Token, // Backend only - never exposed to client
-		LastFourDigits: tokenizeResponse.LastFourDigits,
-		CardType:       tokenizeResponse.CardType,
-		CardCategory:   tokenizeResponse.CardCategory,
-		ExpiryMonth:    tokenizeResponse.ExpiryMonth,
-		ExpiryYear:     tokenizeResponse.ExpiryYear,
-		IssuerBank:     "Unknown", // TODO-OPTIONAL: Add bank detection logic if needed (can be left as Unknown)
-		CardHolderName: coreRequest.CardDetails.HolderName,
-		IsActive:       true,
-		GatewayUsed:    tokenizeResponse.GatewayUsed,
-		AddedAt:        time.Now(),
 		Metadata: map[string]any{
-			"tokenization_date": time.Now().Format("2006-01-02"),
-			"gateway_used":      string(tokenizeResponse.GatewayUsed),
-			"tokenization_id":   tokenizeResponse.CardID,
+			"tokenization_request": true,
+			"card_type":            req.CardDetails.CardType,
+			"card_category":        req.CardDetails.CardCategory,
 		},
 	}
 
-	// Add to business wallet via payment service (uses same ctx with 60s timeout)
-	if err := h.paymentService.AddPaymentSource(ctx, coreRequest.BusinessID, storedCard); err != nil {
-		h.logger.ErrorWith("Failed to store card in wallet", "error", err, "card_id", tokenizeResponse.CardID)
+	// Call ProcessPayment (reuse payment infrastructure)
+	h.logger.InfoWith("Initiating tokenization payment", "business_id", businessID)
+	paymentResp, err := h.paymentService.ProcessPayment(ctx, paymentReq)
+
+	if err != nil {
+		h.logger.ErrorWith("Tokenization payment initiation failed", "error", err, "business_id", businessID)
 		return c.JSON(http.StatusInternalServerError, map[string]any{
-			"error":   "storage_failed",
-			"message": "Card was tokenized but failed to save. Please contact support.",
+			"error":   "tokenization_failed",
+			"message": err.Error(),
 		})
 	}
 
-	// Create success response (no token exposure)
+	// Return redirect URL for 3DS authentication
 	response := map[string]any{
 		"status":  "success",
-		"message": "Card tokenized and saved successfully",
-		"card_info": map[string]any{
-			"card_id":          tokenizeResponse.CardID,
-			"last_four_digits": tokenizeResponse.LastFourDigits,
-			"card_type":        string(tokenizeResponse.CardType),
-			"card_category":    string(tokenizeResponse.CardCategory),
-			"expiry_month":     tokenizeResponse.ExpiryMonth,
-			"expiry_year":      tokenizeResponse.ExpiryYear,
-			"gateway_used":     string(tokenizeResponse.GatewayUsed),
+		"message": "Tokenization payment initiated. Complete 3DS authentication.",
+		"data": map[string]any{
+			"payment_id":   paymentResp.PaymentID,
+			"redirect_url": paymentResp.RedirectURL,
+			"gateway_used": string(paymentResp.GatewayUsed),
+			"amount":       paymentResp.Amount, // ₹1.00 in paise
+			"status":       string(paymentResp.Status),
 		},
 	}
 
-	h.logger.InfoWith("Card tokenized and stored successfully",
-		"card_id", tokenizeResponse.CardID,
-		"card_type", tokenizeResponse.CardType,
-		"card_category", tokenizeResponse.CardCategory,
-		"last_four_digits", tokenizeResponse.LastFourDigits,
-		"gateway_used", tokenizeResponse.GatewayUsed)
+	h.logger.InfoWith("Tokenization payment initiated successfully",
+		"payment_id", paymentResp.PaymentID,
+		"gateway_used", paymentResp.GatewayUsed,
+		"redirect_url", paymentResp.RedirectURL)
 
-	return c.JSON(http.StatusCreated, response)
+	return c.JSON(http.StatusOK, response)
 }
 
 // MakePayment handles POST /process_payment/make_payment
