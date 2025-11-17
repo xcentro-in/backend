@@ -10,6 +10,7 @@ import (
 	"xcentro.in/internal/adapters/database/postgres/client"
 	dashboardRepo "xcentro.in/internal/adapters/database/postgres/dashboard"
 	featureFlagsRepo "xcentro.in/internal/adapters/database/postgres/feature_flags"
+	invoiceRepo "xcentro.in/internal/adapters/database/postgres/invoice"
 	notificationRepo "xcentro.in/internal/adapters/database/postgres/notification"
 	payeeRepo "xcentro.in/internal/adapters/database/postgres/payee"
 	paymentRepo "xcentro.in/internal/adapters/database/postgres/payment"
@@ -31,6 +32,7 @@ import (
 	businessHandler "xcentro.in/internal/handlers/http/business"
 	dashboardHandler "xcentro.in/internal/handlers/http/dashboard"
 	featureFlagsHandler "xcentro.in/internal/handlers/http/feature_flags"
+	invoiceHandler "xcentro.in/internal/handlers/http/invoice"
 	notificationHandler "xcentro.in/internal/handlers/http/notification"
 	"xcentro.in/internal/handlers/http/payee"
 	"xcentro.in/internal/handlers/http/payment"
@@ -43,6 +45,7 @@ import (
 	businessSvc "xcentro.in/internal/services/business"
 	dashboardSvc "xcentro.in/internal/services/dashboard"
 	featureFlagsSvc "xcentro.in/internal/services/feature_flags"
+	invoiceSvc "xcentro.in/internal/services/invoice"
 	notificationService "xcentro.in/internal/services/notification"
 	payeeSvc "xcentro.in/internal/services/payee"
 	"xcentro.in/internal/services/payments"
@@ -180,6 +183,11 @@ func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group
 
 	// Register public routes FIRST (no JWT required) - these are called by external systems
 	// 1. Webhooks (called by payment gateways)
+	// Invoice dependencies (needed by webhook handler)
+	businessRepo := business.NewPgBusinessRepository(clients.db).(*business.PgBusinessRepository)
+	invoiceRepository := invoiceRepo.NewPgInvoiceRepository(clients.db)
+	invoiceService := invoiceSvc.NewInvoiceService(invoiceRepository)
+
 	webhookHandler := payment.NewWebhookHandler(paymentRepository, jioPayClient, easebuzzClient, mockPGClient, cfg.MockPG.Enabled, stateChangeRepository)
 	webhookGroup := processPaymentGroup.Group("/webhooks")
 	webhookGroup.POST("/payment_status", webhookHandler.HandlePaymentStatusWebhook)
@@ -196,6 +204,13 @@ func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group
 	// 4. Payment callback page (user-facing HTML redirect pages)
 	paymentCallbackHandler := payment.NewPaymentCallbackHandler(paymentRepository)
 	processPaymentGroup.GET("/callback_page", paymentCallbackHandler.HandlePaymentCallback)
+
+	// Invoice routes (user-facing)
+	pdfGenerator := invoiceSvc.NewPDFGenerator()
+	invoiceGroup := group.Group("/invoices")
+	invoiceUserHandler := invoiceHandler.NewInvoiceHandler(invoiceService, pdfGenerator)
+	invoiceGroup.Use(middleware.JWTMiddleware(authSvc))
+	invoiceGroup.GET("/download", invoiceUserHandler.DownloadInvoice)
 
 	// Register JWT-protected routes (authenticated user operations)
 	payment.RegisterPaymentRoutes(processPaymentGroup, paymentService, paymentSourceService, walletService, authSvc, voucherRepository, stateChangeRepository, businessPayeeRelationRepo, storedCardRepository, bankAccountRepository, logger.GetDefault())
