@@ -3,6 +3,7 @@ package opsauth
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
@@ -10,6 +11,7 @@ import (
 	"golang.org/x/oauth2"
 	redis "xcentro.in/internal/adapters/cache/redis/client"
 	"xcentro.in/internal/adapters/cache/redis/keys"
+	"xcentro.in/internal/adapters/database/postgres/client"
 	"xcentro.in/internal/core/opsauth"
 	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/crypto"
@@ -17,6 +19,7 @@ import (
 	"xcentro.in/internal/shared/security"
 )
 
+// OpsAuthService implements OAuth2/OIDC authentication for ops dashboard users
 type OpsAuthService struct {
 	oauth2Config      *oauth2.Config
 	oidcVerifier      *oidc.IDTokenVerifier
@@ -26,12 +29,15 @@ type OpsAuthService struct {
 	opsUserRepo       opsauth.OpsUserRepository
 	opsSessionRepo    opsauth.OpsSessionRepository
 	rclient           *redis.RedisClient
+	txManager         client.TxManager
 }
 
+// NewOpsAuthService creates a new ops authentication service with OAuth2/OIDC support
 func NewOpsAuthService(
 	opsUserRepo opsauth.OpsUserRepository,
 	opsSessionRepo opsauth.OpsSessionRepository,
 	rclient *redis.RedisClient,
+	txManager client.TxManager,
 	cfg *config.Config,
 ) (*OpsAuthService, error) {
 	// Build Office365 OIDC configuration URL
@@ -39,8 +45,11 @@ func NewOpsAuthService(
 	// https://login.microsoftonline.com/{tenant}/v2.0
 	issuerURL := fmt.Sprintf("https://login.microsoftonline.com/%s/v2.0", cfg.OpsOAuth.TenantID)
 
-	// Create OIDC provider (automatically discovers endpoints via .well-known/openid-configuration)
-	provider, err := oidc.NewProvider(context.Background(), issuerURL)
+	// Create OIDC provider with timeout context (automatically discovers endpoints via .well-known/openid-configuration)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	provider, err := oidc.NewProvider(ctx, issuerURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create OIDC provider: %w", err)
 	}
@@ -68,15 +77,17 @@ func NewOpsAuthService(
 		opsUserRepo:       opsUserRepo,
 		opsSessionRepo:    opsSessionRepo,
 		rclient:           rclient,
+		txManager:         txManager,
 	}, nil
 }
 
-// GetLoginURL generates the OAuth2 authorization URL
+// GetLoginURL generates the OAuth2 authorization URL for Office365 login
 func (s *OpsAuthService) GetLoginURL(state string) string {
 	return s.oauth2Config.AuthCodeURL(state, oauth2.AccessTypeOffline)
 }
 
-// HandleCallback processes the OAuth callback
+// HandleCallback processes the OAuth callback, exchanges code for tokens,
+// creates/updates ops user, and returns our internal tokens
 func (s *OpsAuthService) HandleCallback(
 	ctx context.Context,
 	code string,
@@ -112,17 +123,19 @@ func (s *OpsAuthService) HandleCallback(
 		return nil, fmt.Errorf("failed to parse ID token claims: %w", err)
 	}
 
+	// Validate email and name
+	if err := validateEmail(claims.Email); err != nil {
+		return nil, fmt.Errorf("invalid email from ID token: %w", err)
+	}
+	if strings.TrimSpace(claims.Name) == "" {
+		return nil, fmt.Errorf("name cannot be empty")
+	}
+
 	// Extract roles from access token (if available)
 	roles, err := s.extractRolesFromAccessToken(oauth2Token.AccessToken)
 	if err != nil {
 		logger.Warnf("Failed to extract roles from access token: %v, using empty roles", err)
 		roles = []string{} // Default to empty roles if extraction fails
-	}
-
-	// Create or update ops user
-	opsUserID, _, err := s.opsUserRepo.CreateOrUpdateUser(ctx, claims.Email, claims.Name, roles)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create/update ops user: %w", err)
 	}
 
 	// Encrypt OIDC refresh token before storing
@@ -131,32 +144,66 @@ func (s *OpsAuthService) HandleCallback(
 		return nil, fmt.Errorf("failed to encrypt OIDC refresh token: %w", err)
 	}
 
-	// Generate our internal tokens
-	internalAccessToken, err := s.generateAccessToken(opsUserID, claims.Email, roles)
-	if err != nil {
-		return nil, fmt.Errorf("failed to generate internal access token: %w", err)
+	// Calculate expiry based on OIDC token expiry
+	// Use OIDC token expiry if available, otherwise fallback to configured expiry
+	var refreshTokenExpiry time.Duration
+	if !oauth2Token.Expiry.IsZero() {
+		refreshTokenExpiry = time.Until(oauth2Token.Expiry)
+		// Ensure expiry is positive and reasonable
+		if refreshTokenExpiry <= 0 {
+			refreshTokenExpiry = s.jwtConfig.RefreshTokenExpiry
+		}
+	} else {
+		refreshTokenExpiry = s.jwtConfig.RefreshTokenExpiry
 	}
 
-	internalRefreshToken, err := s.generateRefreshToken(opsUserID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to generate internal refresh token: %w", err)
-	}
+	// Use transaction to ensure atomicity of user creation + session creation
+	var opsUserID string
+	var internalAccessToken, internalRefreshToken string
 
-	// Hash internal refresh token for storage
-	refreshTokenHash := security.HashToken(internalRefreshToken)
+	err = s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
+		// Create or update ops user within transaction
+		txOpsUserRepo := s.opsUserRepo.WithTx(tx)
+		var createErr error
+		opsUserID, _, createErr = txOpsUserRepo.CreateOrUpdateUser(ctx, claims.Email, claims.Name, roles)
+		if createErr != nil {
+			return fmt.Errorf("failed to create/update ops user: %w", createErr)
+		}
 
-	// Store session with encrypted OIDC refresh token
-	expiresAt := time.Now().Add(s.jwtConfig.RefreshTokenExpiry)
-	_, err = s.opsSessionRepo.CreateSession(
-		ctx,
-		opsUserID,
-		refreshTokenHash,
-		encryptedOIDCRefreshToken,
-		expiresAt,
-		userAgent,
-	)
+		// Generate our internal tokens
+		internalAccessToken, createErr = s.generateToken(opsUserID, claims.Email, roles, s.jwtConfig.AccessTokenExpiry)
+		if createErr != nil {
+			return fmt.Errorf("failed to generate internal access token: %w", createErr)
+		}
+
+		internalRefreshToken, createErr = s.generateToken(opsUserID, "", nil, refreshTokenExpiry)
+		if createErr != nil {
+			return fmt.Errorf("failed to generate internal refresh token: %w", createErr)
+		}
+
+		// Hash internal refresh token for storage
+		refreshTokenHash := security.HashToken(internalRefreshToken)
+
+		// Store session with encrypted OIDC refresh token within transaction
+		expiresAt := time.Now().Add(refreshTokenExpiry)
+		txOpsSessionRepo := s.opsSessionRepo.WithTx(tx)
+		_, createErr = txOpsSessionRepo.CreateSession(
+			ctx,
+			opsUserID,
+			refreshTokenHash,
+			encryptedOIDCRefreshToken,
+			expiresAt,
+			userAgent,
+		)
+		if createErr != nil {
+			return fmt.Errorf("failed to create ops session: %w", createErr)
+		}
+
+		return nil
+	})
+
 	if err != nil {
-		return nil, fmt.Errorf("failed to create ops session: %w", err)
+		return nil, err
 	}
 
 	logger.Infof("OAuth callback processed successfully for user: %s", opsUserID)
@@ -168,13 +215,14 @@ func (s *OpsAuthService) HandleCallback(
 }
 
 // RefreshAccessToken validates internal refresh token and issues new access token
+// Also refreshes OIDC tokens with provider and updates roles
 func (s *OpsAuthService) RefreshAccessToken(ctx context.Context, refreshToken string) (string, error) {
 	logger.Infof("Refreshing access token")
 
 	// Parse and validate internal refresh token
 	claims, err := s.parseAndValidateToken(refreshToken)
 	if err != nil {
-		return "", fmt.Errorf("invalid refresh token: %w", err)
+		return "", fmt.Errorf("authentication failed")
 	}
 
 	opsUserID := claims.Subject
@@ -186,22 +234,27 @@ func (s *OpsAuthService) RefreshAccessToken(ctx context.Context, refreshToken st
 	if err != nil {
 		logger.Warnf("Redis error checking revocation: %v", err)
 	} else if isRevoked {
-		return "", fmt.Errorf("refresh token has been revoked")
+		return "", fmt.Errorf("authentication failed")
 	}
 
 	// Get session from database
 	session, err := s.opsSessionRepo.GetSessionByTokenHash(ctx, opsUserID, refreshTokenHash)
 	if err != nil {
-		return "", fmt.Errorf("failed to get session: %w", err)
+		return "", fmt.Errorf("authentication failed")
 	}
 	if session == nil {
-		return "", fmt.Errorf("session not found")
+		return "", fmt.Errorf("authentication failed")
+	}
+
+	// Check if session is expired
+	if time.Now().After(session.ExpiresAt) {
+		return "", fmt.Errorf("authentication failed")
 	}
 
 	// Decrypt OIDC refresh token
 	oidcRefreshToken, err := crypto.DecryptBankAccountNumber(session.OIDCRefreshToken, s.encryptionKey)
 	if err != nil {
-		return "", fmt.Errorf("failed to decrypt OIDC refresh token: %w", err)
+		return "", fmt.Errorf("authentication failed")
 	}
 
 	// Refresh OIDC tokens with provider
@@ -211,7 +264,7 @@ func (s *OpsAuthService) RefreshAccessToken(ctx context.Context, refreshToken st
 
 	newOAuth2Token, err := tokenSource.Token()
 	if err != nil {
-		return "", fmt.Errorf("failed to refresh OIDC token: %w", err)
+		return "", fmt.Errorf("authentication failed")
 	}
 
 	// Extract new roles from refreshed access token
@@ -255,11 +308,11 @@ func (s *OpsAuthService) RefreshAccessToken(ctx context.Context, refreshToken st
 	// Get user email for new access token
 	user, err := s.opsUserRepo.GetUserByID(ctx, opsUserID)
 	if err != nil || user == nil {
-		return "", fmt.Errorf("user not found")
+		return "", fmt.Errorf("authentication failed")
 	}
 
 	// Generate new internal access token with updated roles
-	newAccessToken, err := s.generateAccessToken(opsUserID, user.Email, newRoles)
+	newAccessToken, err := s.generateToken(opsUserID, user.Email, newRoles, s.jwtConfig.AccessTokenExpiry)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate new access token: %w", err)
 	}
@@ -275,7 +328,7 @@ func (s *OpsAuthService) Logout(ctx context.Context, opsUserID, refreshToken str
 	// Delete session from database
 	err := s.opsSessionRepo.DeleteSession(ctx, opsUserID, refreshTokenHash)
 	if err != nil {
-		return fmt.Errorf("failed to delete session: %w", err)
+		return fmt.Errorf("failed to logout: %w", err)
 	}
 
 	// Mark as revoked in Redis cache
@@ -312,7 +365,7 @@ func (s *OpsAuthService) ValidateAccessToken(tokenString string) (*opsauth.OpsJW
 	return opsClaims, nil
 }
 
-// GetUserProfile retrieves the ops user profile
+// GetUserProfile retrieves the ops user profile by ID
 func (s *OpsAuthService) GetUserProfile(ctx context.Context, opsUserID string) (*opsauth.OpsUserProfileResponse, error) {
 	user, err := s.opsUserRepo.GetUserByID(ctx, opsUserID)
 	if err != nil {
@@ -338,37 +391,21 @@ func (s *OpsAuthService) GetUserProfile(ctx context.Context, opsUserID string) (
 // customClaims extends JWT registered claims with email and roles
 type customClaims struct {
 	jwt.RegisteredClaims
-	Email string   `json:"email"`
-	Roles []string `json:"roles"`
+	Email string   `json:"email,omitempty"`
+	Roles []string `json:"roles,omitempty"`
 }
 
-// generateAccessToken creates an internal JWT access token
-func (s *OpsAuthService) generateAccessToken(opsUserID, email string, roles []string) (string, error) {
+// generateToken creates an internal JWT token (access or refresh)
+// Combines the logic for both access and refresh token generation
+func (s *OpsAuthService) generateToken(opsUserID, email string, roles []string, expiry time.Duration) (string, error) {
 	claims := customClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			Subject:   opsUserID,
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(s.jwtConfig.AccessTokenExpiry)),
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(expiry)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 		},
 		Email: email,
 		Roles: roles,
-	}
-
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	signedToken, err := token.SignedString([]byte(s.jwtConfig.SecretKey))
-	if err != nil {
-		return "", fmt.Errorf("failed to sign token: %w", err)
-	}
-
-	return signedToken, nil
-}
-
-// generateRefreshToken creates an internal JWT refresh token
-func (s *OpsAuthService) generateRefreshToken(opsUserID string) (string, error) {
-	claims := jwt.RegisteredClaims{
-		Subject:   opsUserID,
-		ExpiresAt: jwt.NewNumericDate(time.Now().Add(s.jwtConfig.RefreshTokenExpiry)),
-		IssuedAt:  jwt.NewNumericDate(time.Now()),
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
@@ -406,7 +443,7 @@ func (s *OpsAuthService) parseAndValidateToken(tokenString string) (*customClaim
 }
 
 // extractRolesFromAccessToken extracts roles from the OIDC access token
-// For Microsoft Entra ID, roles are typically in the "roles" claim
+// For Microsoft Entra ID, roles are typically in the "roles" claim of the access token
 func (s *OpsAuthService) extractRolesFromAccessToken(accessToken string) ([]string, error) {
 	// Parse the access token (it's a JWT)
 	token, _, err := new(jwt.Parser).ParseUnverified(accessToken, jwt.MapClaims{})
@@ -441,4 +478,21 @@ func (s *OpsAuthService) extractRolesFromAccessToken(accessToken string) ([]stri
 	}
 
 	return roles, nil
+}
+
+// validateEmail validates email format
+func validateEmail(email string) error {
+	email = strings.TrimSpace(email)
+	if email == "" {
+		return fmt.Errorf("email cannot be empty")
+	}
+	// Basic email format validation
+	if !strings.Contains(email, "@") || !strings.Contains(email, ".") {
+		return fmt.Errorf("invalid email format")
+	}
+	parts := strings.Split(email, "@")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return fmt.Errorf("invalid email format")
+	}
+	return nil
 }

@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"net/http"
+	"strings"
 
 	"github.com/labstack/echo/v4"
 	"xcentro.in/internal/core/opsauth"
@@ -12,11 +13,13 @@ import (
 	"xcentro.in/internal/shared/logger"
 )
 
+// OpsAuthHandler handles OAuth2/OIDC authentication requests for ops dashboard
 type OpsAuthHandler struct {
 	authService   opsauth.OpsAuthService
 	cookieManager *httputil.CookieManager
 }
 
+// NewOpsAuthHandler creates a new ops authentication handler
 func NewOpsAuthHandler(authService opsauth.OpsAuthService, cfg *config.Config) *OpsAuthHandler {
 	return &OpsAuthHandler{
 		authService:   authService,
@@ -24,7 +27,8 @@ func NewOpsAuthHandler(authService opsauth.OpsAuthService, cfg *config.Config) *
 	}
 }
 
-// HandleLogin initiates the OAuth2 flow
+// HandleLogin initiates the OAuth2 flow by generating authorization URL
+// GET /ops/v1/auth/login
 func (h *OpsAuthHandler) HandleLogin(c echo.Context) error {
 	logger.Info("Initiating OAuth2 login")
 
@@ -35,11 +39,11 @@ func (h *OpsAuthHandler) HandleLogin(c echo.Context) error {
 		return c.JSON(500, map[string]any{"message": "Failed to initiate login", "data": nil})
 	}
 
-	// Store state in session cookie for verification
+	// Store state in session cookie for verification (path restricted to auth endpoints)
 	c.SetCookie(&http.Cookie{
 		Name:     "oauth_state",
 		Value:    state,
-		Path:     "/",
+		Path:     "/ops/v1/auth",
 		Secure:   true,
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
@@ -57,17 +61,23 @@ func (h *OpsAuthHandler) HandleLogin(c echo.Context) error {
 	})
 }
 
-// HandleCallback processes the OAuth2 callback
+// HandleCallback processes the OAuth2 callback from Office365
+// GET /ops/v1/auth/callback?code=xxx&state=xxx
 func (h *OpsAuthHandler) HandleCallback(c echo.Context) error {
 	logger.Info("Processing OAuth2 callback")
 
-	// Get code and state from query parameters
-	code := c.QueryParam("code")
-	state := c.QueryParam("state")
-
+	// Get and validate code parameter
+	code := strings.TrimSpace(c.QueryParam("code"))
 	if code == "" {
 		logger.Error("Missing authorization code")
 		return c.JSON(400, map[string]any{"message": "Missing authorization code", "data": nil})
+	}
+
+	// Get and validate state parameter
+	state := strings.TrimSpace(c.QueryParam("state"))
+	if state == "" {
+		logger.Error("Missing state parameter")
+		return c.JSON(400, map[string]any{"message": "Missing state parameter", "data": nil})
 	}
 
 	// Verify state for CSRF protection
@@ -81,7 +91,7 @@ func (h *OpsAuthHandler) HandleCallback(c echo.Context) error {
 	c.SetCookie(&http.Cookie{
 		Name:   "oauth_state",
 		Value:  "",
-		Path:   "/",
+		Path:   "/ops/v1/auth",
 		MaxAge: -1,
 	})
 
@@ -109,6 +119,7 @@ func (h *OpsAuthHandler) HandleCallback(c echo.Context) error {
 }
 
 // HandleRefresh refreshes the access token using the internal refresh token
+// POST /ops/v1/auth/refresh
 func (h *OpsAuthHandler) HandleRefresh(c echo.Context) error {
 	logger.Info("Refreshing access token")
 
@@ -119,7 +130,7 @@ func (h *OpsAuthHandler) HandleRefresh(c echo.Context) error {
 		return c.JSON(401, map[string]any{"message": "Refresh token cookie required", "data": nil})
 	}
 
-	refreshToken := cookie.Value
+	refreshToken := strings.TrimSpace(cookie.Value)
 	if refreshToken == "" {
 		return c.JSON(401, map[string]any{"message": "Refresh token is empty", "data": nil})
 	}
@@ -142,7 +153,8 @@ func (h *OpsAuthHandler) HandleRefresh(c echo.Context) error {
 	})
 }
 
-// HandleLogout logs out the ops user
+// HandleLogout logs out the ops user and revokes the session
+// POST /ops/v1/auth/logout
 func (h *OpsAuthHandler) HandleLogout(c echo.Context) error {
 	logger.Info("Processing logout request")
 
@@ -201,6 +213,6 @@ func RegisterOpsAuthRoutes(e *echo.Group, authService opsauth.OpsAuthService, cf
 	authGroup.GET("/callback", handler.HandleCallback)
 	authGroup.POST("/refresh", handler.HandleRefresh)
 
-	// Protected routes would require middleware, but logout can work either way
+	// Logout can work either way (with or without authentication)
 	authGroup.POST("/logout", handler.HandleLogout)
 }
