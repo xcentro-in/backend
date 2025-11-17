@@ -35,6 +35,8 @@ type Config struct {
 	AuthBridge            AuthBridgeConfig            `json:"authbridge"`
 	RateLimiter           RateLimiterConfig           `json:"rate_limiter"`
 	OpsAccess             OpsAccessConfig             `json:"ops_access"`
+	OpsOAuth              OpsOAuthConfig              `json:"ops_oauth"`
+	OpsTokenEncryption    OpsTokenEncryptionConfig    `json:"ops_token_encryption"`
 }
 
 // JWTSecretConfig holds JWT secret configuration.
@@ -242,6 +244,19 @@ type OpsAccessConfig struct {
 	RejectAccess bool `json:"reject_access" env:"OPS_REJECT_ACCESS" env-default:"true"` // Reject all ops dashboard requests by default
 }
 
+// OpsOAuthConfig holds OAuth2/OIDC configuration for ops dashboard authentication.
+type OpsOAuthConfig struct {
+	ClientID     string `json:"client_id" env:"OPS_OAUTH_CLIENT_ID" env-required:"true"`         // Office365 Application (client) ID
+	ClientSecret string `json:"-" env:"OPS_OAUTH_CLIENT_SECRET" env-required:"true"`             // Office365 Client secret (sensitive)
+	RedirectURL  string `json:"redirect_url" env:"OPS_OAUTH_REDIRECT_URL" env-required:"true"`   // OAuth callback URL (e.g., https://ops.xcentro.in/ops/v1/auth/callback)
+	TenantID     string `json:"tenant_id" env:"OPS_OAUTH_TENANT_ID" env-default:"organizations"` // Office365 Tenant ID (default: organizations for multi-tenant)
+}
+
+// OpsTokenEncryptionConfig holds encryption configuration for storing OIDC tokens.
+type OpsTokenEncryptionConfig struct {
+	EncryptionKey string `json:"-" env:"OPS_TOKEN_ENCRYPTION_KEY" env-required:"true"` // AES-256-GCM key for encrypting OIDC refresh tokens (32 bytes)
+}
+
 // RateLimiterConfig holds rate limiter configuration for token-bucket algorithm.
 type RateLimiterConfig struct {
 	Enabled                      bool          `json:"enabled" env:"RATE_LIMITER_ENABLED" env-default:"true"`
@@ -364,5 +379,7 @@ func (c Config) Safe() Config {
 	c.Easebuzz.WebhookSecret = "***REDACTED***"
 	c.MockPG.APIKey = "***REDACTED***"
 	c.BankAccountEncryption.EncryptionKey = "***REDACTED***"
+	c.OpsOAuth.ClientSecret = "***REDACTED***"
+	c.OpsTokenEncryption.EncryptionKey = "***REDACTED***"
 	return c
 }

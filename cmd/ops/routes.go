@@ -4,13 +4,16 @@ import (
 	"github.com/labstack/echo/v4"
 	"xcentro.in/internal/adapters/database/postgres/business"
 	notificationRepo "xcentro.in/internal/adapters/database/postgres/notification"
+	opsAuthRepo "xcentro.in/internal/adapters/database/postgres/opsauth"
 	userRepo "xcentro.in/internal/adapters/database/postgres/user"
 	businessHandler "xcentro.in/internal/handlers/http/business"
 	notificationHandler "xcentro.in/internal/handlers/http/notification"
+	opsAuthHandler "xcentro.in/internal/handlers/http/opsauth"
 	userHandler "xcentro.in/internal/handlers/http/user"
 	"xcentro.in/internal/middleware"
 	businessSvc "xcentro.in/internal/services/business"
 	notificationSvc "xcentro.in/internal/services/notification"
+	opsAuthSvc "xcentro.in/internal/services/opsauth"
 	userSvc "xcentro.in/internal/services/user"
 	"xcentro.in/internal/services/verification"
 	"xcentro.in/internal/shared/config"
@@ -65,6 +68,34 @@ func registerOpsNotificationRoutes(clients *externalClients, cfg *config.Config,
 	notificationHandler.RegisterOpsNotificationRoutes(group, notificationService, nil)
 }
 
+// registerOpsAuthRoutes registers ops dashboard authentication routes
+func registerOpsAuthRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
+	// Create ops auth repositories
+	opsUserRepo := opsAuthRepo.NewPgOpsUserRepository(clients.db)
+	opsSessionRepo := opsAuthRepo.NewPgOpsSessionRepository(clients.db)
+
+	// Create ops auth service
+	opsAuthService, err := opsAuthSvc.NewOpsAuthService(
+		opsUserRepo,
+		opsSessionRepo,
+		clients.rcache,
+		cfg,
+	)
+	if err != nil {
+		logger.GetDefault().Errorf("Failed to create ops auth service: %v", err)
+		// Fatal error - ops dashboard won't work without auth
+		panic(err)
+	}
+
+	// Register auth routes (public)
+	opsAuthHandler.RegisterOpsAuthRoutes(group, opsAuthService, cfg)
+
+	// Register user routes (protected with JWT middleware)
+	userGroup := group.Group("")
+	userGroup.Use(middleware.OpsJWTMiddleware(opsAuthService))
+	opsAuthHandler.RegisterOpsUserRoutes(userGroup, opsAuthService)
+}
+
 // registerOpsUserRoutes registers ops dashboard user routes
 func registerOpsUserRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
 	// Create user repository
@@ -108,6 +139,7 @@ func registerOpsV1Routes(s *opsDashboardServer) {
 	cfg := &s.meta.config
 
 	// Register route groups
+	registerOpsAuthRoutes(clients, cfg, v1)           // OAuth2/OIDC authentication
 	registerOpsBusinessRoutes(clients, cfg, v1)
 	registerOpsNotificationRoutes(clients, cfg, v1)
 	registerOpsUserRoutes(clients, cfg, v1)
