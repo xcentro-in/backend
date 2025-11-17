@@ -75,7 +75,7 @@ func (r *PgOpsSessionRepository) GetSessionByTokenHash(
 		SELECT session_id, ops_user_id, refresh_token_hash, oidc_refresh_token,
 		       expires_at, user_agent, created_at, last_used_at
 		FROM xcentro.ops_session_table
-		WHERE ops_user_id = $1 AND refresh_token_hash = $2
+		WHERE ops_user_id = $1 AND refresh_token_hash = $2 AND expires_at > NOW()
 	`
 
 	var session opsauth.OpsSession
@@ -109,7 +109,7 @@ func (r *PgOpsSessionRepository) UpdateLastUsed(
 	query := `
 		UPDATE xcentro.ops_session_table
 		SET last_used_at = NOW()
-		WHERE ops_user_id = $1 AND refresh_token_hash = $2
+		WHERE ops_user_id = $1 AND refresh_token_hash = $2 AND expires_at > NOW()
 	`
 
 	cmdTag, err := r.querier.Exec(ctx, query, opsUserID, refreshTokenHash)
@@ -118,7 +118,7 @@ func (r *PgOpsSessionRepository) UpdateLastUsed(
 	}
 
 	if cmdTag.RowsAffected() == 0 {
-		return fmt.Errorf("session not found")
+		return fmt.Errorf("invalid session")
 	}
 
 	return nil
@@ -133,7 +133,7 @@ func (r *PgOpsSessionRepository) UpdateOIDCRefreshToken(
 	query := `
 		UPDATE xcentro.ops_session_table
 		SET oidc_refresh_token = $3, last_used_at = NOW()
-		WHERE ops_user_id = $1 AND refresh_token_hash = $2
+		WHERE ops_user_id = $1 AND refresh_token_hash = $2 AND expires_at > NOW()
 	`
 
 	cmdTag, err := r.querier.Exec(ctx, query, opsUserID, refreshTokenHash, newEncryptedOIDCRefreshToken)
@@ -142,7 +142,7 @@ func (r *PgOpsSessionRepository) UpdateOIDCRefreshToken(
 	}
 
 	if cmdTag.RowsAffected() == 0 {
-		return fmt.Errorf("session not found")
+		return fmt.Errorf("invalid session")
 	}
 
 	return nil
@@ -164,7 +164,7 @@ func (r *PgOpsSessionRepository) DeleteSession(
 	}
 
 	if cmdTag.RowsAffected() == 0 {
-		return fmt.Errorf("session not found")
+		return fmt.Errorf("invalid session")
 	}
 
 	return nil

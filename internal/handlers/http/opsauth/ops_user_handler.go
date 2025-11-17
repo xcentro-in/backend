@@ -6,17 +6,20 @@ import (
 	"xcentro.in/internal/shared/logger"
 )
 
+// OpsUserHandler handles ops user profile requests
 type OpsUserHandler struct {
 	authService opsauth.OpsAuthService
 }
 
+// NewOpsUserHandler creates a new ops user handler
 func NewOpsUserHandler(authService opsauth.OpsAuthService) *OpsUserHandler {
 	return &OpsUserHandler{
 		authService: authService,
 	}
 }
 
-// HandleGetProfile retrieves the ops user's profile
+// HandleGetProfile retrieves the authenticated ops user's profile
+// GET /ops/v1/user/profile (requires JWT middleware)
 func (h *OpsUserHandler) HandleGetProfile(c echo.Context) error {
 	// Get ops user ID from context (set by middleware)
 	opsUserID, ok := c.Get("opsUserId").(string)
@@ -37,7 +40,7 @@ func (h *OpsUserHandler) HandleGetProfile(c echo.Context) error {
 	})
 }
 
-// RegisterOpsUserRoutes registers ops user routes
+// RegisterOpsUserRoutes registers ops user routes (all routes require JWT authentication)
 func RegisterOpsUserRoutes(e *echo.Group, authService opsauth.OpsAuthService) {
 	handler := NewOpsUserHandler(authService)
 

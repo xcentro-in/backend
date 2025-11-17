@@ -79,6 +79,7 @@ func registerOpsAuthRoutes(clients *externalClients, cfg *config.Config, group *
 		opsUserRepo,
 		opsSessionRepo,
 		clients.rcache,
+		clients.txManager,
 		cfg,
 	)
 	if err != nil {
