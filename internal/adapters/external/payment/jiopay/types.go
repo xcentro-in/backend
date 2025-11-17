@@ -58,31 +58,20 @@ type AuditObject struct {
 	AuthorizationCode string `json:"authorizationCode"` // Mandatory: Authorization code
 }
 
-// TokenizationResponse represents the response from JioPay tokenization API
+// TokenizationResponse represents the ACTUAL response from JioPay /tokenized-card API
+// IMPORTANT: This response does NOT include vaultId
+// vaultId is only obtained later by calling /fetch-card endpoint
 type TokenizationResponse struct {
-	Status StatusObject `json:"status"`
-	Card   struct {
-		Type           int    `json:"type"`           // Card type code
-		ExpiryMm       string `json:"expiryMm"`       // Expiry month
-		ExpiryYy       string `json:"expiryYy"`       // Expiry year
-		Name           string `json:"name"`           // Cardholder name
-		Scheme         int    `json:"scheme"`         // Card scheme code
-		Remark         string `json:"remark"`         // Response remark
-		VaultID        string `json:"vaultId"`        // Vault ID (use as CardID)
-		MaskedNumber   string `json:"maskedNumber"`   // Masked card number
-		PAR            string `json:"par"`            // Payment Account Reference
-		TokenReference string `json:"tokenReference"` // Token reference
-		BankName       string `json:"bankName"`       // Issuing bank name
-		Status         string `json:"status"`         // Card status (e.g., "ACTIVE")
-		IsExpired      bool   `json:"isExpired"`      // Expiry status
-		IsDomestic     bool   `json:"isDomestic"`     // Domestic/international
-		CVVLess        int    `json:"cvvLess"`        // CVV-less transaction support
-		Consent        struct {
-			ID        string `json:"id"`        // Consent ID
-			Timestamp string `json:"timestamp"` // Consent timestamp
-		} `json:"consent"`
-	} `json:"card"`
-	Secure *SecureObject `json:"secure,omitempty"` // May be present in some responses
+	ResponseID        string `json:"responseId"`        // Unique response identifier
+	ResponseHost      string `json:"responseHost"`      // Response host (may be null)
+	TokenReference    string `json:"tokenReference"`    // Token reference (PRIMARY TOKEN - use this for payments)
+	PanLastFourDigits string `json:"panLastFourDigits"` // Last 4 digits of card
+	CardReference     string `json:"cardReference"`     // Card reference (similar to PAR)
+	BankName          string `json:"bankName"`          // Issuing bank name (may be null)
+	BankID            string `json:"bankId"`            // Bank identifier (may be null)
+	PAR               string `json:"par"`               // Payment Account Reference
+	Expiry            string `json:"expiry"`            // Expiry in MMYYYY format (e.g., "122029" = Dec 2029)
+	TokenRequestorID  string `json:"tokenRequestorId"`  // Token requestor identifier
 }
 
 // ============================================================================

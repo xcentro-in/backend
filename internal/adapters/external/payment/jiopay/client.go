@@ -201,34 +201,46 @@ func (c *JioPayClient) TokenizeCard(ctx context.Context, request payment.Gateway
 		return nil, fmt.Errorf("failed to parse tokenization response: %w", err)
 	}
 
-	if tokenResp.Status.Status != "SUCCESS" {
-		return nil, fmt.Errorf("tokenization failed: %s", tokenResp.Status.Status)
+	// Validate response - check if tokenReference is present
+	if tokenResp.TokenReference == "" {
+		return nil, fmt.Errorf("tokenization failed: empty tokenReference in response")
 	}
 
-	fmt.Printf("✅ Token created: VaultID %s\n", tokenResp.Card.VaultID)
+	fmt.Printf("✅ Token created: TokenReference %s\n", tokenResp.TokenReference)
+	fmt.Printf("📝 Card Reference: %s\n", tokenResp.CardReference)
+	fmt.Printf("🔢 Last 4 digits: %s\n", tokenResp.PanLastFourDigits)
+	fmt.Printf("📅 Expiry: %s\n", tokenResp.Expiry)
+
+	// IMPORTANT: JioPay tokenization does NOT return vaultId in this response
+	// vaultId is obtained later by calling /fetch-card endpoint
+	// For now, use cardReference as a placeholder CardID
 
 	// Map to gateway response
 	response := &payment.GatewayTokenizeResponse{
-		Token:         tokenResp.Card.TokenReference, // Use token reference as token
-		CardID:        tokenResp.Card.VaultID,        // Use vault ID as card ID
+		Token:         tokenResp.TokenReference,    // PRIMARY: Token reference for future payments
+		CardID:        tokenResp.CardReference,     // Use cardReference as CardID (vaultId not available yet)
 		TransactionID: request.TransactionID,
 		Status:        "success",
-		Message:       tokenResp.Card.Remark,
+		Message:       "Card tokenized successfully",
 		Metadata: map[string]any{
-			"gateway":           "jiopay",
-			"tokenization_flow": "vault_api",
-			"vault_id":          tokenResp.Card.VaultID,
-			"masked_number":     tokenResp.Card.MaskedNumber,
-			"bank_name":         tokenResp.Card.BankName,
-			"card_scheme":       mapJioPayCardScheme(tokenResp.Card.Scheme),
-			"card_type":         mapJioPayCardType(tokenResp.Card.Type),
-			"is_domestic":       tokenResp.Card.IsDomestic,
-			"cvv_less":          tokenResp.Card.CVVLess,
-			"par":               tokenResp.Card.PAR,
+			"gateway":             "jiopay",
+			"tokenization_flow":   "vault_api",
+			"token_reference":     tokenResp.TokenReference,
+			"card_reference":      tokenResp.CardReference,
+			"pan_last_4_digits":   tokenResp.PanLastFourDigits,
+			"bank_name":           tokenResp.BankName,
+			"bank_id":             tokenResp.BankID,
+			"par":                 tokenResp.PAR,
+			"expiry":              tokenResp.Expiry, // MMYYYY format
+			"token_requestor_id":  tokenResp.TokenRequestorID,
+			"response_id":         tokenResp.ResponseID,
+			// NOTE: vaultId will be available only after calling /fetch-card later
+			"vault_id_available":  false,
 		},
 	}
 
 	fmt.Println("=== JIOPAY GATEWAY: Tokenization Complete ===")
+	fmt.Println("⚠️  Note: vaultId will be obtained when fetching card for payment")
 
 	return response, nil
 }
