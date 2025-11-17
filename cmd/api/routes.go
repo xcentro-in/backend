@@ -54,6 +54,7 @@ import (
 	voucherSvc "xcentro.in/internal/services/voucher"
 	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/logger"
+	"xcentro.in/internal/shared/utils"
 )
 
 // Shared service factory to avoid duplication
@@ -187,6 +188,7 @@ func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group
 	businessRepo := business.NewPgBusinessRepository(clients.db).(*business.PgBusinessRepository)
 	invoiceRepository := invoiceRepo.NewPgInvoiceRepository(clients.db)
 	invoiceService := invoiceSvc.NewInvoiceService(invoiceRepository)
+	pdfGenerator := utils.NewPDFGenerator()
 
 	webhookHandler := payment.NewWebhookHandler(paymentRepository, jioPayClient, easebuzzClient, mockPGClient, cfg.MockPG.Enabled, stateChangeRepository)
 	webhookGroup := processPaymentGroup.Group("/webhooks")
@@ -206,7 +208,6 @@ func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group
 	processPaymentGroup.GET("/callback_page", paymentCallbackHandler.HandlePaymentCallback)
 
 	// Invoice routes (user-facing)
-	pdfGenerator := invoiceSvc.NewPDFGenerator()
 	invoiceGroup := group.Group("/invoices")
 	invoiceUserHandler := invoiceHandler.NewInvoiceHandler(invoiceService, pdfGenerator)
 	invoiceGroup.Use(middleware.JWTMiddleware(authSvc))

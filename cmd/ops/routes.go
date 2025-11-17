@@ -30,6 +30,7 @@ import (
 	"xcentro.in/internal/services/verification"
 	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/logger"
+	"xcentro.in/internal/shared/utils"
 )
 
 // Shared service factory to avoid duplication
@@ -200,7 +201,7 @@ func registerOpsInvoiceRoutes(clients *externalClients, cfg *config.Config, grou
 
 	// Create invoice service
 	invoiceService := invoiceSvc.NewInvoiceService(invoiceRepository)
-	pdfGenerator := invoiceSvc.NewPDFGenerator()
+	pdfGenerator := utils.NewPDFGenerator()
 
 	// Create handler
 	opsInvoiceHandler := invoiceHandler.NewOpsInvoiceHandler(invoiceService, pdfGenerator)

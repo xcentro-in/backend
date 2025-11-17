@@ -10,15 +10,16 @@ import (
 	"xcentro.in/internal/core/invoice"
 	invoiceService "xcentro.in/internal/services/invoice"
 	"xcentro.in/internal/shared/logger"
+	"xcentro.in/internal/shared/utils"
 )
 
 type OpsInvoiceHandler struct {
 	invoiceService *invoiceService.InvoiceService
-	pdfGenerator   *invoiceService.PDFGenerator
+	pdfGenerator   *utils.PDFGenerator
 	logger         *logger.Logger
 }
 
-func NewOpsInvoiceHandler(invoiceService *invoiceService.InvoiceService, pdfGenerator *invoiceService.PDFGenerator) *OpsInvoiceHandler {
+func NewOpsInvoiceHandler(invoiceService *invoiceService.InvoiceService, pdfGenerator *utils.PDFGenerator) *OpsInvoiceHandler {
 	return &OpsInvoiceHandler{
 		invoiceService: invoiceService,
 		pdfGenerator:   pdfGenerator,
