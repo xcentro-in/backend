@@ -219,20 +219,38 @@ func (c *JioPayClient) TokenizeCard(ctx context.Context, request payment.Gateway
 	return response, nil
 }
 
-// GenerateCryptogram generates JioPay-specific cryptogram
+// GenerateCryptogram generates JioPay-specific cryptogram for a tokenized card
 //
-// API: POST https://uat.jiopay.co.in/qatsp/api/vault/getCryptogram
+// API: POST https://uat.jiopay.co.in/qatsp/api/vault/getCryptogram/{vaultId}
 // Content-Type: application/json
 // Body: {user, entity, amount}
+//
+// IMPORTANT: vaultId MUST be obtained via FetchCardByLast4Digits first
 func (c *JioPayClient) GenerateCryptogram(ctx context.Context, request payment.CryptogramRequest) (*payment.CryptogramResponse, error) {
 	fmt.Println("=== JIOPAY GATEWAY: GenerateCryptogram (Vault API) ===")
-	fmt.Printf("🔐 Token: %s\n", request.Token[:10]+"...")
 	fmt.Printf("💰 Amount: %d %s\n", request.Amount, request.Currency)
+
+	// Extract vaultId and ownerMobile from metadata
+	vaultID, ok := request.Metadata["vault_id"].(string)
+	if !ok || vaultID == "" {
+		return nil, fmt.Errorf("vault_id is required in metadata for JioPay cryptogram generation")
+	}
+	fmt.Printf("🔑 VaultID: %s\n", vaultID)
+
+	ownerMobile, ok := request.Metadata["owner_mobile"].(string)
+	if !ok || ownerMobile == "" {
+		return nil, fmt.Errorf("owner_mobile is required in metadata for JioPay cryptogram generation")
+	}
+	fmt.Printf("📱 Owner Mobile: %s\n", ownerMobile)
+
+	// Construct externalId: entityId + ownerMobile (e.g., "100001000217424" + "8412819692")
+	externalID := c.merchantID + ownerMobile
+	fmt.Printf("🔑 ExternalID: %s (entityId: %s + mobile: %s)\n", externalID, c.merchantID, ownerMobile)
 
 	// Build cryptogram request
 	cryptoReq := CryptogramRequest{
 		User: UserObject{
-			ExternalID: request.BusinessID,
+			ExternalID: externalID, // CRITICAL: entityId + ownerMobile
 		},
 		Entity: EntityObject{
 			EntityID: c.merchantID,
@@ -262,8 +280,11 @@ func (c *JioPayClient) GenerateCryptogram(ctx context.Context, request payment.C
 	fmt.Printf("📋 x-trace-id: %s\n", xTraceID)
 	fmt.Printf("🔐 x-app-token: %s...\n", xAppToken[:20])
 
-	// Make HTTP POST to cryptogram API
-	req, err := http.NewRequestWithContext(ctx, "POST", c.tokenizationBaseURL+"/getCryptogram", bytes.NewReader(jsonPayload))
+	// Make HTTP POST to cryptogram API with vaultId in path
+	cryptogramURL := fmt.Sprintf("%s/getCryptogram/%s", c.tokenizationBaseURL, vaultID)
+	fmt.Printf("🌐 Cryptogram URL: %s\n", cryptogramURL)
+
+	req, err := http.NewRequestWithContext(ctx, "POST", cryptogramURL, bytes.NewReader(jsonPayload))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -592,4 +613,119 @@ func extractOwnerMobile(metadata map[string]any) string {
 		return mobile
 	}
 	return ""
+}
+
+// FetchCardByLast4Digits fetches all cards for a customer and returns the vaultId
+// for the card matching the last 4 digits for this particular business.
+//
+// This is CRITICAL for JioPay payment flow because:
+// - JioPay tokenization returns tokenReference but NOT vaultId
+// - To generate cryptogram, we MUST have vaultId
+// - Solution: Fetch all cards, match by last 4 digits, extract vaultId
+//
+// API: POST https://uat.jiopay.co.in/qatsp/api/vault/fetch-card
+func (c *JioPayClient) FetchCardByLast4Digits(ctx context.Context, businessID string, last4Digits string, ownerMobile string) (string, error) {
+	fmt.Println("=== JIOPAY GATEWAY: FetchCardByLast4Digits (Vault API) ===")
+	fmt.Printf("🔍 Business ID: %s\n", businessID)
+	fmt.Printf("🔍 Last 4 Digits: %s\n", last4Digits)
+	fmt.Printf("📱 Owner Mobile: %s\n", ownerMobile)
+
+	// Construct externalId: entityId + ownerMobile (e.g., "100001000217424" + "8412819692")
+	externalID := c.merchantID + ownerMobile
+	fmt.Printf("🔑 ExternalID: %s (entityId: %s + mobile: %s)\n", externalID, c.merchantID, ownerMobile)
+
+	// Build fetch-card request
+	fetchReq := FetchCardRequest{
+		Entity: EntityObject{
+			EntityID: c.merchantID,
+		},
+		User: UserObject{
+			ExternalID: externalID, // CRITICAL: entityId + ownerMobile
+		},
+	}
+
+	// Marshal to JSON
+	jsonPayload, err := json.Marshal(fetchReq)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal fetch-card request: %w", err)
+	}
+
+	fmt.Printf("📝 Payload size: %d bytes\n", len(jsonPayload))
+
+	// Generate mandatory headers for JioPay Vault API
+	xTimestampID := generateXTimestampID()
+	xTraceID := generateXTraceID()
+	xAppToken, err := generateXAppToken(c.appID, xTraceID, xTimestampID, c.encryptionKey)
+	if err != nil {
+		return "", fmt.Errorf("failed to generate x-app-token: %w", err)
+	}
+
+	fmt.Printf("📋 x-timestamp-id: %s\n", xTimestampID)
+	fmt.Printf("📋 x-trace-id: %s\n", xTraceID)
+	fmt.Printf("🔐 x-app-token: %s...\n", xAppToken[:20])
+
+	// Make HTTP POST to fetch-card API
+	req, err := http.NewRequestWithContext(ctx, "POST", c.tokenizationBaseURL+"/fetch-card", bytes.NewReader(jsonPayload))
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+
+	// Set mandatory headers
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-app-id", c.appID)
+	req.Header.Set("x-timestamp-id", xTimestampID)
+	req.Header.Set("x-trace-id", xTraceID)
+	req.Header.Set("x-app-token", xAppToken)
+
+	fmt.Println("🚀 Calling JioPay Vault API to fetch all cards...")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("HTTP request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+	}
+
+	// Parse response
+	var fetchResp FetchCardResponse
+	if err := json.Unmarshal(body, &fetchResp); err != nil {
+		return "", fmt.Errorf("failed to parse fetch-card response: %w", err)
+	}
+
+	if fetchResp.Status.Status != "SUCCESS" {
+		return "", fmt.Errorf("fetch-card failed: %s", fetchResp.Status.Status)
+	}
+
+	fmt.Printf("✅ Fetched %d cards for customer\n", len(fetchResp.Card))
+
+	// Match by last 4 digits
+	// IMPORTANT: User specified "match the last four digit forthis particular business"
+	// We're doing the business scoping at the service layer (by passing businessID context)
+	for _, card := range fetchResp.Card {
+		// Extract last 4 digits from masked number (e.g., "XXXXXXXXXXXX0055" -> "0055")
+		if len(card.MaskedNumber) < 4 {
+			continue // Skip invalid masked numbers
+		}
+		cardLast4 := card.MaskedNumber[len(card.MaskedNumber)-4:]
+
+		fmt.Printf("🔍 Checking card: VaultID=%s, MaskedNumber=%s, Last4=%s, Status=%s\n",
+			card.VaultID, card.MaskedNumber, cardLast4, card.Status)
+
+		// Match by last 4 digits AND ensure card is ACTIVE
+		if cardLast4 == last4Digits && card.Status == "ACTIVE" {
+			fmt.Printf("✅ Found matching card! VaultID: %s\n", card.VaultID)
+			return card.VaultID, nil
+		}
+	}
+
+	// No matching card found
+	return "", fmt.Errorf("no active card found with last 4 digits: %s for business: %s", last4Digits, businessID)
 }

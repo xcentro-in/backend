@@ -110,7 +110,7 @@ func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group
 	pendingVoucherRepository := paymentRepo.NewPaymentVoucherPendingRepository(clients.db)
 	stateChangeRepository := paymentRepo.NewPostgresPaymentStateChangeRepository(clients.db)
 
-	_, _, _, _, _, busSvc, authSvc := factory.createCoreServices(nil)
+	userRepository, _, _, businessUserRelRepo, _, busSvc, authSvc := factory.createCoreServices(nil)
 
 	// Initialize payment gateway clients
 	easebuzzClient := easebuzz.NewEasebuzzClient(cfg.Easebuzz.BaseURL, cfg.Easebuzz.MerchantKey, cfg.Easebuzz.Salt, cfg.Easebuzz.APIKey)
@@ -118,7 +118,7 @@ func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group
 	mockPGClient := mockpg.NewMockPGClient(cfg.MockPG.MerchantID, cfg.MockPG.APIKey, cfg.MockPG.SimulateSuccess)
 
 	// Create payment orchestrator with all gateway clients
-	orchestrator := corePayment.NewPaymentOrchestrator(paymentRepository, storedCardRepository, jioPayClient, easebuzzClient, mockPGClient, cfg.MockPG.Enabled, logger.GetDefault())
+	orchestrator := corePayment.NewPaymentOrchestrator(paymentRepository, storedCardRepository, businessUserRelRepo, userRepository, jioPayClient, easebuzzClient, mockPGClient, cfg.MockPG.Enabled, logger.GetDefault())
 	feeCalculator := business_rules.NewFeeCalculator()
 	walletService := business_rules.NewWalletService(storedCardRepository, bankAccountRepository, clients.txManager, busSvc, logger.GetDefault())
 

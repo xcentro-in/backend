@@ -52,4 +52,6 @@ type BusinessUserRelationRepository interface {
 	SetOwnerRoleToNull(ctx context.Context, bid string) error
 	ResetAllUserRelationsForRejectedKYC(ctx context.Context, userID string) error
 	OpsUpdateUserRole(ctx context.Context, bid string, userID string, role shared.UserRole) error
+	// Payment-related methods
+	GetBusinessOwnerUserID(ctx context.Context, businessID string) (string, error) // Get owner's user_id for JioPay tokenization
 }
