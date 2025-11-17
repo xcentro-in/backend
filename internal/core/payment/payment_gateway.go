@@ -26,6 +26,11 @@ type PaymentGateway interface {
 
 	// ValidateWebhook validates incoming webhook signatures
 	ValidateWebhook(payload []byte, signature string) error
+
+	// IsAggregatorModel returns the payment model for this gateway
+	// false = Normal model: merchant passes total amount (base + convenience fee) to PG
+	// true = Aggregator model: merchant passes base amount, PG charges convenience fee from customer
+	IsAggregatorModel() bool
 }
 
 // === GATEWAY REQUEST/RESPONSE STRUCTURES ===

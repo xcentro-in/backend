@@ -35,6 +35,7 @@ func TestJioPayClientWithMock_RegularPayment(t *testing.T) {
 		"api-key",
 		"app-id",
 		"1234567890123456", // 16-byte encryption key for AES
+		false,              // isAggregatorModel
 		&MockBusinessService{},
 	)
 
@@ -307,6 +308,7 @@ func TestJioPayClientWithMock_CardTokenization(t *testing.T) {
 		"api-key",
 		"app-id",
 		"1234567890123456",
+		false, // isAggregatorModel
 		&MockBusinessService{},
 	)
 

@@ -15,8 +15,9 @@ import (
 // MockPGClient implements the PaymentGateway interface for testing purposes
 // This gateway simulates real payment gateway behavior without making external API calls
 type MockPGClient struct {
-	merchantID string
-	apiKey     string
+	merchantID        string
+	apiKey            string
+	isAggregatorModel bool // Payment model: false = normal (merchant charges), true = aggregator (PG charges)
 	// Configuration for simulating different scenarios
 	simulateSuccess bool          // If true, always return success; if false, simulate failures
 	delayMs         int           // Artificial delay in milliseconds to simulate network latency
@@ -29,6 +30,7 @@ type MockPGClient struct {
 //   - merchantID: Mock merchant identifier (from env)
 //   - apiKey: Mock API key (from env)
 //   - simulateSuccess: If true, all operations succeed; if false, simulate realistic failures
+//   - isAggregatorModel: MOCKPG_IS_AGGREGATOR_MODEL from environment (payment model)
 //
 // Usage:
 //
@@ -36,20 +38,27 @@ type MockPGClient struct {
 //	    cfg.MockPG.MerchantID,
 //	    cfg.MockPG.APIKey,
 //	    true, // Always succeed for testing
+//	    cfg.MockPG.IsAggregatorModel,
 //	)
-func NewMockPGClient(merchantID, apiKey string, simulateSuccess bool) payment.PaymentGateway {
+func NewMockPGClient(merchantID, apiKey string, simulateSuccess bool, isAggregatorModel bool) payment.PaymentGateway {
 	return &MockPGClient{
-		merchantID:      merchantID,
-		apiKey:          apiKey,
-		simulateSuccess: simulateSuccess,
-		delayMs:         100,           // Simulate 100ms network delay
-		webhookDelay:    2 * time.Minute, // Send webhook after 2 minutes
+		merchantID:        merchantID,
+		apiKey:            apiKey,
+		isAggregatorModel: isAggregatorModel,
+		simulateSuccess:   simulateSuccess,
+		delayMs:           100,             // Simulate 100ms network delay
+		webhookDelay:      2 * time.Minute, // Send webhook after 2 minutes
 	}
 }
 
 // GetGatewayType returns the gateway type identifier
 func (c *MockPGClient) GetGatewayType() payment.GatewayType {
 	return payment.GatewayMockPG
+}
+
+// IsAggregatorModel returns the payment model for this gateway
+func (c *MockPGClient) IsAggregatorModel() bool {
+	return c.isAggregatorModel
 }
 
 // TokenizeCard implements mock card tokenization flow

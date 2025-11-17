@@ -117,8 +117,9 @@ func ExampleMockTransport_usage() {
 		"merchant-id",
 		"api-key",
 		"app-id",
-		"1234567890123456", // 16-byte encryption key for AES
-		&MockBusinessService{}, // businessService - using mock
+		"1234567890123456",      // 16-byte encryption key for AES
+		false,                   // isAggregatorModel
+		&MockBusinessService{},  // businessService - using mock
 	)
 
 	// Step 4: Inject mock HTTP client

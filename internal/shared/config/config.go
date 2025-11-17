@@ -112,25 +112,28 @@ type JioPayConfig struct {
 	AppID               string `json:"-" env:"JIOPAY_APP_ID"`                                                                                           // x-app-id header for vault APIs (sensitive)
 	EncryptionKey       string `json:"-" env:"JIOPAY_ENCRYPTION_KEY"`                                                                                   // AES-128 encryption key for x-app-token (sensitive)
 	WebhookSecret       string `json:"-" env:"JIOPAY_WEBHOOK_SECRET"`                                                                                   // Webhook signature verification (sensitive)
+	IsAggregatorModel   bool   `json:"is_aggregator_model" env:"JIOPAY_IS_AGGREGATOR_MODEL" env-default:"false"`                                       // Payment model: true = aggregator (PG charges customer), false = normal (merchant charges customer)
 }
 
 // EasebuzzConfig holds Easebuzz payment gateway configuration.
 type EasebuzzConfig struct {
-	BaseURL       string `json:"base_url" env:"EASEBUZZ_BASE_URL" env-default:"https://pay.easebuzz.in"`
-	MerchantKey   string `json:"-" env:"EASEBUZZ_MERCHANT_KEY"`   // Merchant key (sensitive)
-	Salt          string `json:"-" env:"EASEBUZZ_SALT"`           // Hash salt (sensitive)
-	APIKey        string `json:"-" env:"EASEBUZZ_API_KEY"`        // API key for tokenization (EBZ-KEY header, sensitive)
-	EncryptionKey string `json:"-" env:"EASEBUZZ_ENCRYPTION_KEY"` // AES encryption key (sensitive, optional)
-	EncryptionIV  string `json:"-" env:"EASEBUZZ_ENCRYPTION_IV"`  // Fixed AES IV in base64 (sensitive, optional)
-	WebhookSecret string `json:"-" env:"EASEBUZZ_WEBHOOK_SECRET"` // Webhook signature verification (sensitive)
+	BaseURL           string `json:"base_url" env:"EASEBUZZ_BASE_URL" env-default:"https://pay.easebuzz.in"`
+	MerchantKey       string `json:"-" env:"EASEBUZZ_MERCHANT_KEY"`                                                      // Merchant key (sensitive)
+	Salt              string `json:"-" env:"EASEBUZZ_SALT"`                                                              // Hash salt (sensitive)
+	APIKey            string `json:"-" env:"EASEBUZZ_API_KEY"`                                                           // API key for tokenization (EBZ-KEY header, sensitive)
+	EncryptionKey     string `json:"-" env:"EASEBUZZ_ENCRYPTION_KEY"`                                                    // AES encryption key (sensitive, optional)
+	EncryptionIV      string `json:"-" env:"EASEBUZZ_ENCRYPTION_IV"`                                                     // Fixed AES IV in base64 (sensitive, optional)
+	WebhookSecret     string `json:"-" env:"EASEBUZZ_WEBHOOK_SECRET"`                                                    // Webhook signature verification (sensitive)
+	IsAggregatorModel bool   `json:"is_aggregator_model" env:"EASEBUZZ_IS_AGGREGATOR_MODEL" env-default:"false"`        // Payment model: true = aggregator (PG charges customer), false = normal (merchant charges customer)
 }
 
 // MockPGConfig holds Mock Payment Gateway configuration for testing.
 type MockPGConfig struct {
-	Enabled         bool   `json:"enabled" env:"MOCKPG_ENABLED" env-default:"false"`                  // Enable mock PG (bypass real gateways)
-	MerchantID      string `json:"merchant_id" env:"MOCKPG_MERCHANT_ID" env-default:"MOCK_MERCH"`     // Mock merchant identifier
-	APIKey          string `json:"-" env:"MOCKPG_API_KEY" env-default:"mock_api_key_123"`             // Mock API key (sensitive)
-	SimulateSuccess bool   `json:"simulate_success" env:"MOCKPG_SIMULATE_SUCCESS" env-default:"true"` // If true, always succeed; if false, simulate random failures
+	Enabled           bool   `json:"enabled" env:"MOCKPG_ENABLED" env-default:"false"`                                 // Enable mock PG (bypass real gateways)
+	MerchantID        string `json:"merchant_id" env:"MOCKPG_MERCHANT_ID" env-default:"MOCK_MERCH"`                    // Mock merchant identifier
+	APIKey            string `json:"-" env:"MOCKPG_API_KEY" env-default:"mock_api_key_123"`                            // Mock API key (sensitive)
+	SimulateSuccess   bool   `json:"simulate_success" env:"MOCKPG_SIMULATE_SUCCESS" env-default:"true"`                // If true, always succeed; if false, simulate random failures
+	IsAggregatorModel bool   `json:"is_aggregator_model" env:"MOCKPG_IS_AGGREGATOR_MODEL" env-default:"false"`        // Payment model: true = aggregator (PG charges customer), false = normal (merchant charges customer)
 }
 
 // CloudWatchConfig holds AWS CloudWatch metrics configuration.

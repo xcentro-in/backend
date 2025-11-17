@@ -22,6 +22,7 @@ type JioPayClient struct {
 	apiKey              string      // API authentication key for HMAC
 	appID               string      // x-app-id header for vault APIs
 	encryptionKey       string                 // AES-128 encryption key for x-app-token
+	isAggregatorModel   bool                   // Payment model: false = normal (merchant charges), true = aggregator (PG charges)
 	httpClient          *http.Client
 	hashGenerator       *SecureHashGenerator   // Hash generator for request/response signatures
 	businessOwnerSvc    business.BusinessService // Business service for fetching owner mobile (JioPay externalId requirement)
@@ -36,6 +37,7 @@ type JioPayClient struct {
 //   - apiKey: JIOPAY_API_KEY from environment (for HMAC-SHA256)
 //   - appID: JIOPAY_APP_ID from environment (for x-app-id header)
 //   - encryptionKey: JIOPAY_ENCRYPTION_KEY from environment (16 bytes for AES-128)
+//   - isAggregatorModel: JIOPAY_IS_AGGREGATOR_MODEL from environment (payment model)
 //   - businessOwnerSvc: Service to fetch business owner mobile (required for JioPay externalId)
 //
 // Usage:
@@ -47,9 +49,10 @@ type JioPayClient struct {
 //	    cfg.JioPay.APIKey,
 //	    cfg.JioPay.AppID,
 //	    cfg.JioPay.EncryptionKey,
+//	    cfg.JioPay.IsAggregatorModel,
 //	    businessOwnerService,
 //	)
-func NewJioPayClient(baseURL, tokenizationBaseURL, merchantID, apiKey, appID, encryptionKey string, businessOwnerSvc business.BusinessService) payment.PaymentGateway {
+func NewJioPayClient(baseURL, tokenizationBaseURL, merchantID, apiKey, appID, encryptionKey string, isAggregatorModel bool, businessOwnerSvc business.BusinessService) payment.PaymentGateway {
 	return &JioPayClient{
 		baseURL:             baseURL,
 		tokenizationBaseURL: tokenizationBaseURL,
@@ -57,6 +60,7 @@ func NewJioPayClient(baseURL, tokenizationBaseURL, merchantID, apiKey, appID, en
 		apiKey:              apiKey,
 		appID:               appID,
 		encryptionKey:       encryptionKey,
+		isAggregatorModel:   isAggregatorModel,
 		businessOwnerSvc:    businessOwnerSvc,
 		httpClient: &http.Client{
 			Timeout: 60 * time.Second, // JioPay tokenization can take longer
@@ -77,6 +81,11 @@ func (c *JioPayClient) SetHTTPClient(client *http.Client) {
 // GetGatewayType returns the gateway type identifier
 func (c *JioPayClient) GetGatewayType() payment.GatewayType {
 	return payment.GatewayJioPay
+}
+
+// IsAggregatorModel returns the payment model for this gateway
+func (c *JioPayClient) IsAggregatorModel() bool {
+	return c.isAggregatorModel
 }
 
 // TokenizeCard implements JioPay card tokenization flow
