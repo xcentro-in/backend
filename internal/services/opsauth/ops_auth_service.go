@@ -8,7 +8,6 @@ import (
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/oauth2"
-	"golang.org/x/oauth2/microsoft"
 	redis "xcentro.in/internal/adapters/cache/redis/client"
 	"xcentro.in/internal/adapters/cache/redis/keys"
 	"xcentro.in/internal/core/opsauth"
@@ -40,18 +39,18 @@ func NewOpsAuthService(
 	// https://login.microsoftonline.com/{tenant}/v2.0
 	issuerURL := fmt.Sprintf("https://login.microsoftonline.com/%s/v2.0", cfg.OpsOAuth.TenantID)
 
-	// Create OIDC provider
+	// Create OIDC provider (automatically discovers endpoints via .well-known/openid-configuration)
 	provider, err := oidc.NewProvider(context.Background(), issuerURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create OIDC provider: %w", err)
 	}
 
-	// Configure OAuth2
+	// Configure OAuth2 using discovered endpoints from OIDC provider
 	oauth2Config := &oauth2.Config{
 		ClientID:     cfg.OpsOAuth.ClientID,
 		ClientSecret: cfg.OpsOAuth.ClientSecret,
 		RedirectURL:  cfg.OpsOAuth.RedirectURL,
-		Endpoint:     microsoft.AzureADEndpoint(cfg.OpsOAuth.TenantID),
+		Endpoint:     provider.Endpoint(), // Use discovered endpoints instead of hardcoded
 		Scopes:       []string{oidc.ScopeOpenID, "profile", "email", "offline_access"},
 	}
 
