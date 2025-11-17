@@ -183,6 +183,10 @@ type InitiateSaleRequest struct {
 	AggregatorID string `json:"aggregatorID,omitempty"` // Aggregator ID
 	CustomerID   string `json:"customerID,omitempty"`   // Customer ID
 
+	// Tokenization fields
+	SaveCardIndicator  string `json:"saveCardIndicator,omitempty"`  // "Y" or "N" - for tokenization
+	PaymentOptionCodes string `json:"paymentOptionCodes,omitempty"` // "CC", "DC", etc.
+
 	// Security
 	SecureHash string `json:"secureHash"` // SHA-256 hash
 }

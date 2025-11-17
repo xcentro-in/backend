@@ -72,15 +72,25 @@ func (c *JioPayClient) GetGatewayType() payment.GatewayType {
 // Content-Type: application/json
 // Body: {user, entity, card, consent, audit}
 func (c *JioPayClient) TokenizeCard(ctx context.Context, request payment.GatewayTokenizeRequest) (*payment.GatewayTokenizeResponse, error) {
-	fmt.Println("=== JIOPAY GATEWAY: Tokenization (Vault API) ===")
+	fmt.Println("=== JIOPAY GATEWAY: Tokenization (Vault API - /tokenized-card) ===")
 	fmt.Printf("📥 Business ID: %s\n", request.BusinessID)
 	fmt.Printf("📥 Transaction ID: %s\n", request.TransactionID)
 	fmt.Printf("💳 Card: %s %s ending in %s\n",
 		request.CardDetails.CardCategory, request.CardDetails.CardType, request.CardDetails.LastFourDigits)
 
+	// Extract business owner mobile from metadata (required for externalId)
+	ownerMobile := extractOwnerMobile(request.Metadata)
+	if ownerMobile == "" {
+		return nil, fmt.Errorf("business owner mobile is required for JioPay tokenization")
+	}
+
+	// Construct externalId: entityId + ownerMobile (e.g., "100001000217424" + "8412819692")
+	externalID := c.merchantID + ownerMobile
+	fmt.Printf("🔑 ExternalID: %s (entityId: %s + mobile: %s)\n", externalID, c.merchantID, ownerMobile)
+
 	// Build user object
 	userObj := UserObject{
-		ExternalID: request.BusinessID, // Use business ID as external customer ID
+		ExternalID: externalID, // CRITICAL: entityId + userMobile
 		Email:      extractCustomerEmail(request.Metadata),
 		Name:       extractCustomerName(request.Metadata),
 		Mobile:     buildMobileObject(request.Metadata),
@@ -142,7 +152,7 @@ func (c *JioPayClient) TokenizeCard(ctx context.Context, request payment.Gateway
 	fmt.Printf("🔐 x-app-token: %s...\n", xAppToken[:20])
 
 	// Make HTTP POST to tokenization API
-	req, err := http.NewRequestWithContext(ctx, "POST", c.tokenizationBaseURL+"/fetch-card", bytes.NewReader(jsonPayload))
+	req, err := http.NewRequestWithContext(ctx, "POST", c.tokenizationBaseURL+"/tokenized-card", bytes.NewReader(jsonPayload))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -327,27 +337,40 @@ func (c *JioPayClient) GenerateCryptogram(ctx context.Context, request payment.C
 
 // InitiatePayment implements JioPay payment initiation
 // API: POST https://uat.jiopay.co.in/pg/api/v2/initiateSale
-// Supports token-based card payments with cryptogram
+// Supports:
+// 1. Token-based card payments (with cryptogram)
+// 2. Raw card payments for tokenization (with saveCardIndicator)
 func (c *JioPayClient) InitiatePayment(ctx context.Context, request payment.GatewayPaymentRequest) (*payment.GatewayPaymentResponse, error) {
 	fmt.Println("=== JIOPAY GATEWAY: InitiatePayment Called ===")
 	fmt.Printf("📥 Business ID: %s\n", request.BusinessID)
 	fmt.Printf("📥 Transaction ID: %s\n", request.TransactionID)
 	fmt.Printf("💰 Amount: %d %s\n", request.Amount, request.Currency)
 	fmt.Printf("🔀 Payment Method: %s\n", request.PaymentMethod)
+	fmt.Printf("🔀 Payment Type: %s\n", request.PaymentType)
 
-	// Only support card payments for now (token-based)
+	// Only support card payments for now
 	if request.PaymentMethod != payment.PaymentMethodCard {
 		return nil, fmt.Errorf("unsupported payment method: %s (only CARD supported for now)", request.PaymentMethod)
 	}
 
-	// Verify token and cryptogram are provided
-	if request.Token == "" || request.Cryptogram == "" {
-		return nil, fmt.Errorf("token and cryptogram are required for token-based card payments")
-	}
+	// Determine if this is tokenization or token-based payment
+	isTokenization := request.PaymentType == payment.PaymentTypeTokenization
 
-	fmt.Println("💳 Processing token-based card payment...")
-	fmt.Printf("🎫 Token: %s...\n", request.Token[:10])
-	fmt.Printf("🔐 Cryptogram: %s...\n", request.Cryptogram[:20])
+	if isTokenization {
+		fmt.Println("🔑 Processing TOKENIZATION payment (raw card with saveCardIndicator)")
+		// For tokenization, we need raw card details
+		if request.CardDetails == nil {
+			return nil, fmt.Errorf("card details are required for tokenization payments")
+		}
+	} else {
+		fmt.Println("💳 Processing TOKEN-BASED card payment (with cryptogram)")
+		// For token-based, we need token and cryptogram
+		if request.Token == "" || request.Cryptogram == "" {
+			return nil, fmt.Errorf("token and cryptogram are required for token-based card payments")
+		}
+		fmt.Printf("🎫 Token: %s...\n", request.Token[:10])
+		fmt.Printf("🔐 Cryptogram: %s...\n", request.Cryptogram[:20])
+	}
 
 	// Extract customer details from metadata
 	customerEmail := extractCustomerEmail(request.Metadata)
@@ -400,14 +423,7 @@ func (c *JioPayClient) InitiatePayment(ctx context.Context, request payment.Gate
 		TxnDate:         txnDate,
 
 		// Payment method
-		PaymentMode: "CARD",
-
-		// Token card details
-		CardNo:          request.Token,      // Network token
-		CardExpiry:      cardExpiry,         // YYYYMM format
-		NameOnCard:      nameOnCard,         // Name on card
-		TokenCryptogram: request.Cryptogram, // Cryptogram from getCryptogram
-		TokenRefID:      tokenRefID,         // Token reference ID
+		PaymentMode: "Card", // JioPay expects "Card" not "CARD"
 
 		// Optional customer details
 		CustomerName:     customerName,
@@ -418,6 +434,28 @@ func (c *JioPayClient) InitiatePayment(ctx context.Context, request payment.Gate
 
 		// Security - will be calculated below
 		SecureHash: "", // Set after hash generation
+	}
+
+	// Populate payment-type-specific fields
+	if isTokenization {
+		// TOKENIZATION FLOW: Use raw card details + saveCardIndicator
+		fmt.Println("🔑 Building tokenization payment request...")
+		saleReq.CardNo = request.CardDetails.Number // PCI DSS: Sent directly to gateway, never stored
+		saleReq.CardExpiry = cardExpiry             // YYYYMM format
+		saleReq.NameOnCard = nameOnCard
+		saleReq.CVV = request.CardDetails.CVV // PCI DSS: Transient only, never stored
+		saleReq.SaveCardIndicator = "Y"       // KEY: Tells JioPay to tokenize
+		saleReq.PaymentOptionCodes = determinePaymentOptionCode(request.CardDetails.CardCategory)
+		fmt.Printf("🔑 SaveCardIndicator: Y, PaymentOptionCodes: %s\n", saleReq.PaymentOptionCodes)
+	} else {
+		// TOKEN-BASED FLOW: Use network token + cryptogram
+		fmt.Println("💳 Building token-based payment request...")
+		saleReq.CardNo = request.Token               // Network token
+		saleReq.CardExpiry = cardExpiry              // YYYYMM format
+		saleReq.NameOnCard = nameOnCard              // Name on card
+		saleReq.TokenCryptogram = request.Cryptogram // Cryptogram from getCryptogram
+		saleReq.TokenRefID = tokenRefID              // Token reference ID
+		fmt.Printf("💳 Token: %s..., Cryptogram: %s...\n", request.Token[:10], request.Cryptogram[:20])
 	}
 
 	// Generate secure hash for outgoing request
@@ -530,4 +568,28 @@ func (c *JioPayClient) ValidateWebhook(payload []byte, signature string) error {
 
 	// Delegate to hash generator for validation
 	return c.hashGenerator.ValidateFromResponse(payload, signature)
+}
+
+// determinePaymentOptionCode maps card category to JioPay payment option codes
+// CC = Credit Card, DC = Debit Card
+func determinePaymentOptionCode(cardCategory payment.CardCategory) string {
+	switch cardCategory {
+	case payment.CardCategoryCredit:
+		return "CC"
+	case payment.CardCategoryDebit:
+		return "DC"
+	case payment.CardCategoryCorporate:
+		return "CC" // Corporate cards use CC code
+	default:
+		return "CC" // Default to credit card
+	}
+}
+
+// extractOwnerMobile extracts business owner mobile from metadata
+// Returns empty string if not found
+func extractOwnerMobile(metadata map[string]any) string {
+	if mobile, ok := metadata["owner_mobile"].(string); ok {
+		return mobile
+	}
+	return ""
 }
