@@ -65,6 +65,15 @@ func NewJioPayClient(baseURL, tokenizationBaseURL, merchantID, apiKey, appID, en
 	}
 }
 
+// SetHTTPClient allows setting a custom HTTP client (useful for testing with mock transport)
+// Example in tests:
+//   mockTransport := NewMockTransport()
+//   mockTransport.AddRoute("POST", "/initiateSale", `{"status":"success"}`, 200)
+//   client.SetHTTPClient(&http.Client{Transport: mockTransport})
+func (c *JioPayClient) SetHTTPClient(client *http.Client) {
+	c.httpClient = client
+}
+
 // GetGatewayType returns the gateway type identifier
 func (c *JioPayClient) GetGatewayType() payment.GatewayType {
 	return payment.GatewayJioPay
