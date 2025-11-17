@@ -267,16 +267,13 @@ func (c *MockPGClient) InitiatePayment(ctx context.Context, request payment.Gate
 		},
 	}
 
-	// For tokenization payments, store ONLY card_number in metadata
+	// For tokenization payments, mark that tokenization is required after payment success
 	// Mock PG is an "immature" gateway - needs to call tokenize API after payment success
-	// Other card details (expiry, holder name, etc.) are already in stored_card table from Phase 1
-	if isTokenization && request.CardDetails != nil {
-		fmt.Println("🔑 Storing card number in metadata for tokenization after payment success")
-		response.Metadata["_tokenization_card_details"] = map[string]any{
-			"card_number": request.CardDetails.Number, // Only field not stored in DB (PCI compliance)
-		}
+	// PCI DSS: We do NOT store card_number anywhere - gateway already has it from the payment transaction
+	if isTokenization {
+		fmt.Println("🔑 Tokenization payment marked - will tokenize after payment success")
 		response.Metadata["_requires_tokenization"] = true
-		fmt.Println("✅ Card number stored securely in metadata (other details in stored_card table)")
+		fmt.Println("✅ Gateway will tokenize based on transaction_id (PCI compliant - no card storage)")
 	}
 
 	fmt.Printf("📌 Note: User should open the redirect URL to complete authentication\n")

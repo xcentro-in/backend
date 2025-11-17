@@ -488,32 +488,27 @@ func (h *CallbackHandler) handleTokenizationAfterPayment(ctx context.Context, pm
 		storedCard.CardCategory, storedCard.CardType, storedCard.LastFourDigits,
 		storedCard.Metadata["status"])
 
-	// Step 3: Build tokenization request using stored card details
+	// Step 3: Build tokenization request
+	// PCI DSS: We do NOT send full card number - gateway already has it from payment transaction
+	// Gateway will tokenize based on transaction_id (references the payment where card was used)
 	tokenizeReq := payment.GatewayTokenizeRequest{
 		BusinessID:    pmt.BusinessID,
-		TransactionID: pmt.ID,
+		TransactionID: pmt.ID, // Gateway uses this to reference the card from payment
 		CardDetails: payment.Card{
-			Number:         "", // We don't store the full card number
+			// Card details for reference/verification only - gateway already has full card number
+			LastFourDigits: storedCard.LastFourDigits,
 			ExpiryMonth:    storedCard.ExpiryMonth,
 			ExpiryYear:     storedCard.ExpiryYear,
-			HolderName:     storedCard.CardHolderName,
 			CardType:       storedCard.CardType,
 			CardCategory:   storedCard.CardCategory,
-			LastFourDigits: storedCard.LastFourDigits,
+			HolderName:     storedCard.CardHolderName,
+			// Number field is intentionally empty - PCI DSS compliant
 		},
 		CallbackURL: pmt.CallbackURL,
 	}
 
-	// For immature PGs, we need the full card number from payment metadata
-	if cardDetailsRaw, exists := pmt.Metadata["_tokenization_card_details"]; exists {
-		cardDetailsMap, ok := cardDetailsRaw.(map[string]any)
-		if ok {
-			if cardNumber, ok := cardDetailsMap["card_number"].(string); ok {
-				tokenizeReq.CardDetails.Number = cardNumber
-				fmt.Println("🔑 Retrieved full card number from payment metadata for tokenization")
-			}
-		}
-	}
+	fmt.Println("🔑 Tokenization request built (PCI compliant - no card number sent)")
+	fmt.Printf("🔑 Gateway will tokenize card from transaction: %s\n", pmt.ID)
 
 	// Step 4: Call gateway tokenization API
 	var tokenizeResp *payment.GatewayTokenizeResponse
