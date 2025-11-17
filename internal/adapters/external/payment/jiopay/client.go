@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"xcentro.in/internal/core/business"
 	"xcentro.in/internal/core/payment"
 )
 
@@ -20,10 +21,10 @@ type JioPayClient struct {
 	merchantID          string      // JioPay merchant identifier
 	apiKey              string      // API authentication key for HMAC
 	appID               string      // x-app-id header for vault APIs
-	encryptionKey       string      // AES-128 encryption key for x-app-token
+	encryptionKey       string                 // AES-128 encryption key for x-app-token
 	httpClient          *http.Client
-	hashGenerator       *SecureHashGenerator // Hash generator for request/response signatures
-	businessOwnerSvc    interface{}          // Business owner service for fetching owner mobile (JioPay externalId requirement)
+	hashGenerator       *SecureHashGenerator   // Hash generator for request/response signatures
+	businessOwnerSvc    business.BusinessService // Business service for fetching owner mobile (JioPay externalId requirement)
 }
 
 // NewJioPayClient creates a new JioPay payment gateway client
@@ -48,7 +49,7 @@ type JioPayClient struct {
 //	    cfg.JioPay.EncryptionKey,
 //	    businessOwnerService,
 //	)
-func NewJioPayClient(baseURL, tokenizationBaseURL, merchantID, apiKey, appID, encryptionKey string, businessOwnerSvc interface{}) payment.PaymentGateway {
+func NewJioPayClient(baseURL, tokenizationBaseURL, merchantID, apiKey, appID, encryptionKey string, businessOwnerSvc business.BusinessService) payment.PaymentGateway {
 	return &JioPayClient{
 		baseURL:             baseURL,
 		tokenizationBaseURL: tokenizationBaseURL,
@@ -397,16 +398,11 @@ func (c *JioPayClient) InitiatePayment(ctx context.Context, request payment.Gate
 			fmt.Println("🔐 Cryptogram not provided - generating internally (JioPay 3-step flow)")
 
 			// Step 1: Get owner mobile using business service
-			type businessOwnerService interface {
-				GetOwnerMobile(ctx context.Context, businessID string) (string, error)
+			if c.businessOwnerSvc == nil {
+				return nil, fmt.Errorf("business service not configured for JioPay")
 			}
 
-			ownerSvc, ok := c.businessOwnerSvc.(businessOwnerService)
-			if !ok || ownerSvc == nil {
-				return nil, fmt.Errorf("business owner service not configured for JioPay")
-			}
-
-			ownerMobile, err := ownerSvc.GetOwnerMobile(ctx, request.BusinessID)
+			ownerMobile, err := c.businessOwnerSvc.GetOwnerMobile(ctx, request.BusinessID)
 			if err != nil {
 				return nil, fmt.Errorf("failed to get owner mobile: %w", err)
 			}
