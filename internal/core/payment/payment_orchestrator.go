@@ -639,13 +639,6 @@ func (o *paymentOrchestratorImpl) selectGatewayForCard(card *Card, amount int64)
 		}
 	}
 
-	// Prepaid cards (if any) - fallback to JioPay
-	if card.CardCategory == CardCategoryCredit { // Assuming prepaid would be similar category
-		o.logger.InfoWith("Gateway selected: Prepaid Card → JioPay (fallback)",
-			"rule", "prepaid_jiopay_fallback")
-		return GatewayJioPay, nil
-	}
-
 	o.logger.ErrorWith("Unsupported card combination",
 		"card_category", card.CardCategory,
 		"card_type", card.CardType)
