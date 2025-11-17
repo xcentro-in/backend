@@ -34,6 +34,7 @@ type Config struct {
 	BankAccountEncryption BankAccountEncryptionConfig `json:"bank_account_encryption"`
 	AuthBridge            AuthBridgeConfig            `json:"authbridge"`
 	RateLimiter           RateLimiterConfig           `json:"rate_limiter"`
+	OpsAccess             OpsAccessConfig             `json:"ops_access"`
 }
 
 // JWTSecretConfig holds JWT secret configuration.
@@ -234,6 +235,11 @@ type AuthBridgeConfig struct {
 	Username string `json:"username" env:"TRUTHSCREEN_USERNAME" env-required:"true"` // AuthBridge/TruthScreen username
 	Password string `json:"-" env:"TRUTHSCREEN_PASSWORD" env-required:"true"`        // AuthBridge/TruthScreen password (sensitive)
 	UseMock  bool   `json:"use_mock" env:"AUTHBRIDGE_USE_MOCK" env-default:"false"`  // Use mock responses instead of real API calls
+}
+
+// OpsAccessConfig holds configuration for ops dashboard access control.
+type OpsAccessConfig struct {
+	RejectAccess bool `json:"reject_access" env:"OPS_REJECT_ACCESS" env-default:"true"` // Reject all ops dashboard requests by default
 }
 
 // RateLimiterConfig holds rate limiter configuration for token-bucket algorithm.

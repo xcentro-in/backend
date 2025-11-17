@@ -8,6 +8,7 @@ import (
 	businessHandler "xcentro.in/internal/handlers/http/business"
 	notificationHandler "xcentro.in/internal/handlers/http/notification"
 	userHandler "xcentro.in/internal/handlers/http/user"
+	"xcentro.in/internal/middleware"
 	businessSvc "xcentro.in/internal/services/business"
 	notificationSvc "xcentro.in/internal/services/notification"
 	userSvc "xcentro.in/internal/services/user"
@@ -95,6 +96,9 @@ func registerOpsUserRoutes(clients *externalClients, cfg *config.Config, group *
 
 func registerOpsV1Routes(s *opsDashboardServer) {
 	v1 := s.echo.Group("/ops/v1")
+
+	// Apply ops access control middleware to all routes
+	v1.Use(middleware.OpsAccessMiddleware(&s.meta.config))
 
 	v1.GET("/health", func(c echo.Context) error {
 		return c.JSON(200, map[string]string{"status": "ok", "service": "ops-dashboard"})
