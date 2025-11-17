@@ -396,6 +396,25 @@ func (s *PaymentService) TokenizeCard(ctx context.Context, req payment.TokenizeR
 	// Step 3: Pass payment ID to orchestrator as transaction ID
 	req.TransactionID = paymentID
 
+	// Step 3.5: Fetch business owner mobile for JioPay tokenization (required for externalId)
+	// JioPay requires owner_mobile in metadata to construct externalId = entityId + ownerMobile
+	s.logger.DebugWith("Fetching business owner mobile for tokenization")
+	ownerMobile, mobileErr := s.businessService.GetOwnerMobile(ctx, req.BusinessID)
+	if mobileErr != nil {
+		s.logger.ErrorWith("Failed to get owner mobile", "error", mobileErr)
+		// Update payment status to failed
+		failureMetadata := map[string]any{"error": mobileErr.Error()}
+		_ = s.paymentRepo.UpdatePaymentStatus(ctx, paymentID, payment.PaymentStatusFailed, failureMetadata)
+		return nil, fmt.Errorf("failed to get owner mobile: %w", mobileErr)
+	}
+	s.logger.DebugWith("Owner mobile fetched", "mobile_length", len(ownerMobile))
+
+	// Add owner_mobile to request metadata for gateway to use
+	if req.Metadata == nil {
+		req.Metadata = make(map[string]any)
+	}
+	req.Metadata["owner_mobile"] = ownerMobile
+
 	// Step 4: Call orchestrator for tokenization
 	s.logger.DebugWith("Calling payment orchestrator for tokenization")
 	response, err := s.orchestrator.TokenizeCard(ctx, req)

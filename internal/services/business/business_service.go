@@ -1262,3 +1262,22 @@ func (s *BusinessServiceImpl) OpsUpdateUserRole(ctx context.Context, bid string,
 	s.logger.Infof("Successfully updated user %s role to %s in business %s via ops", userID, role, bid)
 	return nil
 }
+
+// GetOwnerMobile retrieves the mobile number of the business owner
+// This is a convenience method for payment gateways that require owner mobile
+// (e.g., JioPay externalId = entityId + ownerMobile)
+func (s *BusinessServiceImpl) GetOwnerMobile(ctx context.Context, businessID string) (string, error) {
+	// Step 1: Get business owner user ID
+	ownerUserID, err := s.businessUserRelRepo.GetBusinessOwnerUserID(ctx, businessID)
+	if err != nil {
+		return "", fmt.Errorf("failed to get business owner: %w", err)
+	}
+
+	// Step 2: Get owner's mobile number
+	ownerMobile, err := s.userRepo.GetUserMobileByID(ctx, ownerUserID)
+	if err != nil {
+		return "", fmt.Errorf("failed to get owner mobile: %w", err)
+	}
+
+	return ownerMobile, nil
+}

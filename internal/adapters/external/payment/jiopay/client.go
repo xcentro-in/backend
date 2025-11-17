@@ -15,14 +15,15 @@ import (
 
 // JioPayClient implements the PaymentGateway interface for JioPay
 type JioPayClient struct {
-	baseURL             string // Base URL for payment APIs
-	tokenizationBaseURL string // Vault API base URL
-	merchantID          string // JioPay merchant identifier
-	apiKey              string // API authentication key for HMAC
-	appID               string // x-app-id header for vault APIs
-	encryptionKey       string // AES-128 encryption key for x-app-token
+	baseURL             string      // Base URL for payment APIs
+	tokenizationBaseURL string      // Vault API base URL
+	merchantID          string      // JioPay merchant identifier
+	apiKey              string      // API authentication key for HMAC
+	appID               string      // x-app-id header for vault APIs
+	encryptionKey       string      // AES-128 encryption key for x-app-token
 	httpClient          *http.Client
 	hashGenerator       *SecureHashGenerator // Hash generator for request/response signatures
+	businessOwnerSvc    interface{}          // Business owner service for fetching owner mobile (JioPay externalId requirement)
 }
 
 // NewJioPayClient creates a new JioPay payment gateway client
@@ -34,6 +35,7 @@ type JioPayClient struct {
 //   - apiKey: JIOPAY_API_KEY from environment (for HMAC-SHA256)
 //   - appID: JIOPAY_APP_ID from environment (for x-app-id header)
 //   - encryptionKey: JIOPAY_ENCRYPTION_KEY from environment (16 bytes for AES-128)
+//   - businessOwnerSvc: Service to fetch business owner mobile (required for JioPay externalId)
 //
 // Usage:
 //
@@ -44,8 +46,9 @@ type JioPayClient struct {
 //	    cfg.JioPay.APIKey,
 //	    cfg.JioPay.AppID,
 //	    cfg.JioPay.EncryptionKey,
+//	    businessOwnerService,
 //	)
-func NewJioPayClient(baseURL, tokenizationBaseURL, merchantID, apiKey, appID, encryptionKey string) payment.PaymentGateway {
+func NewJioPayClient(baseURL, tokenizationBaseURL, merchantID, apiKey, appID, encryptionKey string, businessOwnerSvc interface{}) payment.PaymentGateway {
 	return &JioPayClient{
 		baseURL:             baseURL,
 		tokenizationBaseURL: tokenizationBaseURL,
@@ -53,6 +56,7 @@ func NewJioPayClient(baseURL, tokenizationBaseURL, merchantID, apiKey, appID, en
 		apiKey:              apiKey,
 		appID:               appID,
 		encryptionKey:       encryptionKey,
+		businessOwnerSvc:    businessOwnerSvc,
 		httpClient: &http.Client{
 			Timeout: 60 * time.Second, // JioPay tokenization can take longer
 		},
@@ -376,6 +380,7 @@ func (c *JioPayClient) InitiatePayment(ctx context.Context, request payment.Gate
 
 	// Determine if this is tokenization or token-based payment
 	isTokenization := request.PaymentType == payment.PaymentTypeTokenization
+	isTokenBased := request.Token != "" // Token-based payment uses stored card
 
 	if isTokenization {
 		fmt.Println("🔑 Processing TOKENIZATION payment (raw card with saveCardIndicator)")
@@ -383,14 +388,75 @@ func (c *JioPayClient) InitiatePayment(ctx context.Context, request payment.Gate
 		if request.CardDetails == nil {
 			return nil, fmt.Errorf("card details are required for tokenization payments")
 		}
-	} else {
-		fmt.Println("💳 Processing TOKEN-BASED card payment (with cryptogram)")
-		// For token-based, we need token and cryptogram
-		if request.Token == "" || request.Cryptogram == "" {
-			return nil, fmt.Errorf("token and cryptogram are required for token-based card payments")
+	} else if isTokenBased {
+		fmt.Println("💳 Processing TOKEN-BASED card payment")
+
+		// JioPay-specific: Generate cryptogram if not provided by orchestrator
+		// This encapsulates JioPay's complex cryptogram generation flow
+		if request.Cryptogram == "" {
+			fmt.Println("🔐 Cryptogram not provided - generating internally (JioPay 3-step flow)")
+
+			// Step 1: Get owner mobile using business service
+			type businessOwnerService interface {
+				GetOwnerMobile(ctx context.Context, businessID string) (string, error)
+			}
+
+			ownerSvc, ok := c.businessOwnerSvc.(businessOwnerService)
+			if !ok || ownerSvc == nil {
+				return nil, fmt.Errorf("business owner service not configured for JioPay")
+			}
+
+			ownerMobile, err := ownerSvc.GetOwnerMobile(ctx, request.BusinessID)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get owner mobile: %w", err)
+			}
+			fmt.Printf("📱 Owner mobile fetched: %d digits\n", len(ownerMobile))
+
+			// Step 2: Get stored card details from metadata
+			storedCard, ok := request.Metadata["stored_card"].(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf("stored_card metadata required for token-based payment")
+			}
+
+			last4Digits, _ := storedCard["last_four_digits"].(string)
+			if last4Digits == "" {
+				return nil, fmt.Errorf("last_four_digits required in stored_card metadata")
+			}
+
+			// Step 3: Fetch vaultId by matching last 4 digits
+			fmt.Printf("🔍 Fetching vaultId for card ending in %s\n", last4Digits)
+			vaultID, err := c.FetchCardByLast4Digits(ctx, request.BusinessID, last4Digits, ownerMobile)
+			if err != nil {
+				return nil, fmt.Errorf("failed to fetch vaultId: %w", err)
+			}
+			fmt.Printf("✅ VaultID found: %s\n", vaultID)
+
+			// Step 4: Generate cryptogram internally
+			cryptogramReq := payment.CryptogramRequest{
+				Token:         request.Token,
+				Amount:        request.Amount,
+				Currency:      request.Currency,
+				TransactionID: request.TransactionID,
+				BusinessID:    request.BusinessID,
+				Metadata: map[string]any{
+					"vault_id":     vaultID,
+					"owner_mobile": ownerMobile,
+				},
+			}
+
+			cryptogramResp, err := c.GenerateCryptogram(ctx, cryptogramReq)
+			if err != nil {
+				return nil, fmt.Errorf("failed to generate cryptogram: %w", err)
+			}
+
+			// Use generated cryptogram
+			request.Cryptogram = cryptogramResp.Cryptogram
+			fmt.Printf("✅ Cryptogram generated: %s...\n", request.Cryptogram[:20])
+		} else {
+			fmt.Println("🔐 Using cryptogram provided by orchestrator")
+			fmt.Printf("🎫 Token: %s...\n", request.Token[:10])
+			fmt.Printf("🔐 Cryptogram: %s...\n", request.Cryptogram[:20])
 		}
-		fmt.Printf("🎫 Token: %s...\n", request.Token[:10])
-		fmt.Printf("🔐 Cryptogram: %s...\n", request.Cryptogram[:20])
 	}
 
 	// Extract customer details from metadata

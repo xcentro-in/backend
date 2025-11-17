@@ -27,10 +27,8 @@ type paymentOrchestratorImpl struct {
 	mockPGEnabled   bool            // Flag to enable mock PG bypass
 	// Repository dependencies - read-only access for gateway communication
 	// NOTE: All database writes are handled by service layer within transactions
-	paymentRepo         PaymentRepository
-	storedCardRepo      StoredCardRepository
-	businessUserRelRepo interface{} // Business user relation repository for owner lookup
-	userRepo            interface{} // User repository for mobile lookup
+	paymentRepo    PaymentRepository
+	storedCardRepo StoredCardRepository
 	// Logger for structured logging
 	logger *logger.Logger
 }
@@ -42,8 +40,6 @@ type paymentOrchestratorImpl struct {
 func NewPaymentOrchestrator(
 	paymentRepo PaymentRepository,
 	storedCardRepo StoredCardRepository,
-	businessUserRelRepo interface{}, // Business user relation repository
-	userRepo interface{}, // User repository
 	jioPayClient PaymentGateway, // JioPay gateway client
 	easebuzzClient PaymentGateway, // Easebuzz gateway client
 	mockPGClient PaymentGateway, // Mock PG client for testing
@@ -51,15 +47,13 @@ func NewPaymentOrchestrator(
 	log *logger.Logger,
 ) PaymentOrchestrator {
 	return &paymentOrchestratorImpl{
-		jioPayGateway:       jioPayClient,
-		easebuzzGateway:     easebuzzClient,
-		mockPGGateway:       mockPGClient,
-		mockPGEnabled:       mockPGEnabled,
-		paymentRepo:         paymentRepo,
-		storedCardRepo:      storedCardRepo,
-		businessUserRelRepo: businessUserRelRepo,
-		userRepo:            userRepo,
-		logger:              log,
+		jioPayGateway:   jioPayClient,
+		easebuzzGateway: easebuzzClient,
+		mockPGGateway:   mockPGClient,
+		mockPGEnabled:   mockPGEnabled,
+		paymentRepo:     paymentRepo,
+		storedCardRepo:  storedCardRepo,
+		logger:          log,
 	}
 }
 
@@ -212,15 +206,23 @@ func (o *paymentOrchestratorImpl) TokenizeCard(ctx context.Context, request Toke
 	}
 
 	// Prepare gateway tokenization request
+	gatewayMetadata := map[string]any{
+		"tokenization_request": true,
+		"business_id":          request.BusinessID,
+	}
+	// Merge request metadata (e.g., owner_mobile for JioPay)
+	if request.Metadata != nil {
+		for key, value := range request.Metadata {
+			gatewayMetadata[key] = value
+		}
+	}
+
 	gatewayRequest := GatewayTokenizeRequest{
 		BusinessID:    request.BusinessID,
 		TransactionID: request.TransactionID, // Payment UUID from service layer
 		CardDetails:   request.CardDetails,
 		CallbackURL:   "https://mock-callback.com/tokenize", // TODO: Make configurable
-		Metadata: map[string]any{
-			"tokenization_request": true,
-			"business_id":          request.BusinessID,
-		},
+		Metadata:      gatewayMetadata,
 	}
 
 	// For Easebuzz, amount is implicit (₹1 built into tokenization API)
@@ -331,132 +333,40 @@ func (o *paymentOrchestratorImpl) ProcessTokenizedPayment(ctx context.Context, r
 		return nil, fmt.Errorf("gateway instance not found: %s", selectedGatewayType)
 	}
 
-	// Step 3: Generate fresh cryptogram for this payment
-	// JioPay-specific flow: Requires fetching vaultId first because tokenization only returns tokenReference
-	o.logger.DebugWith("Generating cryptogram from gateway", "gateway", storedCard.GatewayUsed)
-
-	// Build base cryptogram request metadata
-	cryptogramMetadata := map[string]any{
-		"payment_type": "tokenized",
-		"card_id":      storedCard.CardID,
-	}
-
-	// JioPay-specific: Fetch vaultId before generating cryptogram
-	if selectedGatewayType == GatewayJioPay && !o.mockPGEnabled {
-		o.logger.InfoWith("JioPay tokenized payment detected - fetching vaultId via 3-step flow")
-
-		// Step 3a: Fetch business owner mobile (required for externalId)
-		o.logger.DebugWith("Fetching business owner user_id", "business_id", request.BusinessID)
-
-		// Type assert to access the methods
-		type businessUserRelRepo interface {
-			GetBusinessOwnerUserID(ctx context.Context, businessID string) (string, error)
-		}
-		type userRepo interface {
-			GetUserMobileByID(ctx context.Context, userID string) (string, error)
-		}
-
-		businessRelRepo, ok := o.businessUserRelRepo.(businessUserRelRepo)
-		if !ok {
-			o.logger.ErrorWith("Business user relation repository type assertion failed")
-			return nil, fmt.Errorf("business user relation repository not properly configured")
-		}
-
-		ownerUserID, err := businessRelRepo.GetBusinessOwnerUserID(ctx, request.BusinessID)
-		if err != nil {
-			o.logger.ErrorWith("Failed to fetch business owner user_id", "error", err)
-			return nil, fmt.Errorf("failed to fetch business owner: %w", err)
-		}
-		o.logger.DebugWith("Found business owner", "owner_user_id", ownerUserID)
-
-		userRepository, ok := o.userRepo.(userRepo)
-		if !ok {
-			o.logger.ErrorWith("User repository type assertion failed")
-			return nil, fmt.Errorf("user repository not properly configured")
-		}
-
-		ownerMobile, err := userRepository.GetUserMobileByID(ctx, ownerUserID)
-		if err != nil {
-			o.logger.ErrorWith("Failed to fetch owner mobile", "error", err)
-			return nil, fmt.Errorf("failed to fetch owner mobile: %w", err)
-		}
-		o.logger.InfoWith("Found owner mobile", "owner_user_id", ownerUserID, "mobile_length", len(ownerMobile))
-
-		// Step 3b: Type-assert to JioPayClient to call FetchCardByLast4Digits
-		type jioPayClientWithFetch interface {
-			PaymentGateway
-			FetchCardByLast4Digits(ctx context.Context, businessID string, last4Digits string, ownerMobile string) (string, error)
-		}
-
-		jioPayClient, ok := selectedGateway.(jioPayClientWithFetch)
-		if !ok {
-			o.logger.ErrorWith("Gateway does not support FetchCardByLast4Digits")
-			return nil, fmt.Errorf("gateway does not support vaultId lookup")
-		}
-
-		// Call FetchCardByLast4Digits to get vaultId
-		o.logger.InfoWith("Calling JioPay FetchCardByLast4Digits",
-			"business_id", request.BusinessID,
-			"last_4_digits", storedCard.LastFourDigits,
-			"owner_mobile_length", len(ownerMobile))
-
-		vaultID, err := jioPayClient.FetchCardByLast4Digits(ctx, request.BusinessID, storedCard.LastFourDigits, ownerMobile)
-		if err != nil {
-			o.logger.ErrorWith("Failed to fetch vaultId from JioPay", "error", err)
-			return nil, fmt.Errorf("failed to fetch vaultId: %w", err)
-		}
-
-		o.logger.InfoWith("Successfully fetched vaultId from JioPay", "vault_id", vaultID)
-
-		// Add vaultId and owner_mobile to metadata for GenerateCryptogram
-		cryptogramMetadata["vault_id"] = vaultID
-		cryptogramMetadata["owner_mobile"] = ownerMobile
-	}
-
-	cryptogramRequest := CryptogramRequest{
-		Token:         storedCard.Token,
-		Amount:        request.Amount,
-		Currency:      request.Currency,
-		TransactionID: paymentID, // Use payment UUID as transaction ID
-		BusinessID:    request.BusinessID,
-		Metadata:      cryptogramMetadata,
-	}
-
-	cryptogramResponse, err := selectedGateway.GenerateCryptogram(ctx, cryptogramRequest)
-	if err != nil {
-		o.logger.ErrorWith("Cryptogram generation failed", "gateway", storedCard.GatewayUsed, "error", err)
-		return nil, fmt.Errorf("failed to generate cryptogram: %w", err)
-	}
-
-	o.logger.InfoWith("Cryptogram generated successfully",
-		"cryptogram_prefix", cryptogramResponse.Cryptogram[:10],
-		"expires_at", cryptogramResponse.ExpiresAt.Format("15:04:05"))
-
-	// Step 4: Calculate fees (same as regular payments)
+	// Step 3: Calculate fees (same as regular payments)
 	feeAmount := o.calculateMockFee(request.Amount, PaymentMethodCard) // Use card method for fee calc
 	o.logger.DebugWith("Fee calculated for tokenized payment", "fee_amount", feeAmount, "currency", request.Currency)
 
-	// Step 5: Prepare gateway payment request with token + cryptogram
+	// Step 4: Prepare gateway payment request
+	// Gateway will handle cryptogram generation internally if needed (e.g., JioPay)
 	// Note: CallbackURL comes from request (set by payment service based on calling device)
 	// We don't fetch from DB because payment is in uncommitted transaction
 	gatewayRequest := GatewayPaymentRequest{
 		BusinessID:    request.BusinessID,
-		TransactionID: cryptogramRequest.TransactionID,
+		TransactionID: paymentID,
 		Amount:        request.Amount + feeAmount,
 		Currency:      request.Currency,
 		PaymentMethod: PaymentMethodCard, // Gateway sees this as card payment
 		Description:   request.Description,
 		CallbackURL:   request.CallbackURL, // From request, not DB
 		Token:         storedCard.Token,
-		Cryptogram:    cryptogramResponse.Cryptogram,
+		Cryptogram:    "", // Empty - gateway will generate if needed
 		Metadata: map[string]any{
-			"payment_type":      "tokenized",
-			"card_id":           storedCard.CardID,
+			"payment_type": "tokenized",
+			"card_id":      storedCard.CardID,
+			// Pass stored_card details for gateway to use
+			"stored_card": map[string]any{
+				"last_four_digits": storedCard.LastFourDigits,
+				"card_type":        storedCard.CardType,
+				"card_category":    storedCard.CardCategory,
+				"expiry_month":     storedCard.ExpiryMonth,
+				"expiry_year":      storedCard.ExpiryYear,
+			},
 			"original_metadata": request.Metadata,
 		},
 	}
 
-	// Step 7: Process payment with specific gateway
+	// Step 5: Process payment with specific gateway
 	o.logger.InfoWith("Processing tokenized payment with gateway", "gateway", selectedGatewayType)
 	gatewayResponse, err := selectedGateway.InitiatePayment(ctx, gatewayRequest)
 

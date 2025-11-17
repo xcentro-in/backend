@@ -143,10 +143,11 @@ type PaymentResponse struct {
 
 // TokenizeRequest represents a request to tokenize a card
 type TokenizeRequest struct {
-	UserID        string `json:"user_id"`
-	BusinessID    string `json:"business_id"`
-	TransactionID string `json:"transaction_id,omitempty"` // Payment ID for the ₹1 tokenization payment
-	CardDetails   Card   `json:"card_details"`
+	UserID        string         `json:"user_id"`
+	BusinessID    string         `json:"business_id"`
+	TransactionID string         `json:"transaction_id,omitempty"` // Payment ID for the ₹1 tokenization payment
+	CardDetails   Card           `json:"card_details"`
+	Metadata      map[string]any `json:"metadata,omitempty"` // Additional metadata for gateway-specific requirements
 }
 
 // TokenizeResponse represents a response from card tokenization
