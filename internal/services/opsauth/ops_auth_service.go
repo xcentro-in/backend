@@ -144,18 +144,11 @@ func (s *OpsAuthService) HandleCallback(
 		return nil, fmt.Errorf("failed to encrypt OIDC refresh token: %w", err)
 	}
 
-	// Calculate expiry based on OIDC token expiry
-	// Use OIDC token expiry if available, otherwise fallback to configured expiry
-	var refreshTokenExpiry time.Duration
-	if !oauth2Token.Expiry.IsZero() {
-		refreshTokenExpiry = time.Until(oauth2Token.Expiry)
-		// Ensure expiry is positive and reasonable
-		if refreshTokenExpiry <= 0 {
-			refreshTokenExpiry = s.jwtConfig.RefreshTokenExpiry
-		}
-	} else {
-		refreshTokenExpiry = s.jwtConfig.RefreshTokenExpiry
-	}
+	// Use configured refresh token expiry for internal refresh tokens
+	// Note: oauth2Token.Expiry refers to OIDC access token expiry (~1 hour),
+	// NOT the OIDC refresh token expiry (which is typically much longer)
+	// We control our internal refresh token lifetime independently
+	refreshTokenExpiry := s.jwtConfig.RefreshTokenExpiry
 
 	// Use transaction to ensure atomicity of user creation + session creation
 	var opsUserID string
