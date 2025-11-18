@@ -76,7 +76,8 @@ func (r *PgStoredCardRepository) CreateStoredCard(ctx context.Context, card *pay
 	return nil
 }
 
-// GetStoredCardByID retrieves a stored card by ID
+// GetStoredCardByID retrieves a stored card by ID (regardless of active status)
+// Callers should check IsActive flag if needed
 func (r *PgStoredCardRepository) GetStoredCardByID(ctx context.Context, cardID string) (*payment.StoredCard, error) {
 	fmt.Printf("[PgStoredCardRepository] GetStoredCardByID called - CardID: %s\n", cardID)
 
@@ -85,7 +86,7 @@ func (r *PgStoredCardRepository) GetStoredCardByID(ctx context.Context, cardID s
 		       expiry_month, expiry_year, issuer_bank, card_holder_name,
 		       is_active, is_failed_tokenization, failure_reason, gateway_used, added_at, last_used_at, metadata
 		FROM xcentro.stored_cards
-		WHERE card_id = $1 AND is_active = TRUE
+		WHERE card_id = $1
 	`
 
 	var card payment.StoredCard

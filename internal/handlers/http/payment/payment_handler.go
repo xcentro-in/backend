@@ -179,6 +179,15 @@ func (h *PaymentHandler) UpdateCardStatus(c echo.Context) error {
 		})
 	}
 
+	// Check if card exists
+	if card == nil {
+		h.logger.WarnWith("Card not found", "card_id", cardID)
+		return c.JSON(http.StatusNotFound, map[string]any{
+			"error":   "CARD_NOT_FOUND",
+			"message": "Card not found",
+		})
+	}
+
 	// Verify card belongs to the business
 	if card.BusinessID != businessID {
 		h.logger.WarnWith("Card does not belong to business",
