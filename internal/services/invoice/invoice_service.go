@@ -168,3 +168,64 @@ func (s *InvoiceService) ListInvoices(ctx context.Context, filter *invoice.Invoi
 		TotalPages: totalPages,
 	}, nil
 }
+
+// VerifyInvoice verifies that an existing invoice matches the expected payment details
+// Returns true if invoice is valid, false if there's a mismatch
+func (s *InvoiceService) VerifyInvoice(ctx context.Context, inv *invoice.Invoice, gstinRecipient string, convenienceFee, convenienceFeeGST int64) bool {
+	s.logger.Info(fmt.Sprintf("[InvoiceService] VerifyInvoice called - InvoiceID: %d, PaymentID: %s", inv.InvoiceID, inv.PaymentID))
+
+	// Calculate expected amounts (convert from paise to rupees)
+	expectedTaxableValue := float64(convenienceFee) / 100.0
+	expectedGSTAmount := float64(convenienceFeeGST) / 100.0
+	expectedTotalAmount := expectedTaxableValue + expectedGSTAmount
+
+	// Verify GSTIN recipient
+	if inv.GSTINRecipient != gstinRecipient {
+		s.logger.Error(fmt.Sprintf("[InvoiceService] GSTIN mismatch - Expected: %s, Got: %s", gstinRecipient, inv.GSTINRecipient))
+		return false
+	}
+
+	// Verify taxable value (allow small floating point tolerance)
+	const tolerance = 0.01
+	if !floatEquals(inv.TaxableValue, expectedTaxableValue, tolerance) {
+		s.logger.Error(fmt.Sprintf("[InvoiceService] Taxable value mismatch - Expected: %.2f, Got: %.2f", expectedTaxableValue, inv.TaxableValue))
+		return false
+	}
+
+	// Verify GST amount
+	if !floatEquals(inv.GSTAmount, expectedGSTAmount, tolerance) {
+		s.logger.Error(fmt.Sprintf("[InvoiceService] GST amount mismatch - Expected: %.2f, Got: %.2f", expectedGSTAmount, inv.GSTAmount))
+		return false
+	}
+
+	// Verify total amount
+	if !floatEquals(inv.TotalAmount, expectedTotalAmount, tolerance) {
+		s.logger.Error(fmt.Sprintf("[InvoiceService] Total amount mismatch - Expected: %.2f, Got: %.2f", expectedTotalAmount, inv.TotalAmount))
+		return false
+	}
+
+	s.logger.Info(fmt.Sprintf("[InvoiceService] Invoice verification passed - InvoiceID: %d", inv.InvoiceID))
+	return true
+}
+
+// DeleteInvoice deletes an invoice by ID
+func (s *InvoiceService) DeleteInvoice(ctx context.Context, invoiceID int64) error {
+	s.logger.Info(fmt.Sprintf("[InvoiceService] DeleteInvoice called - InvoiceID: %d", invoiceID))
+
+	err := s.invoiceRepo.DeleteInvoice(ctx, invoiceID)
+	if err != nil {
+		return fmt.Errorf("failed to delete invoice: %w", err)
+	}
+
+	s.logger.Info(fmt.Sprintf("[InvoiceService] Invoice deleted successfully - InvoiceID: %d", invoiceID))
+	return nil
+}
+
+// floatEquals checks if two floats are equal within a tolerance
+func floatEquals(a, b, tolerance float64) bool {
+	diff := a - b
+	if diff < 0 {
+		diff = -diff
+	}
+	return diff <= tolerance
+}

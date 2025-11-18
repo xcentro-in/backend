@@ -17,6 +17,9 @@ type InvoiceRepository interface {
 	UpdateFilingStatus(ctx context.Context, invoiceID int64, status FilingStatus) error
 	UpdateQRCode(ctx context.Context, invoiceID int64, qrCode string) error
 
+	// Delete operations
+	DeleteInvoice(ctx context.Context, invoiceID int64) error
+
 	// Transaction support
 	WithTx(tx interface{}) InvoiceRepository
 }

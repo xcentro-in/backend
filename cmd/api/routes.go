@@ -183,20 +183,20 @@ func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group
 	processPaymentGroup := group.Group("/process_payment")
 
 	// Register public routes FIRST (no JWT required) - these are called by external systems
-	// 1. Webhooks (called by payment gateways)
-	// Invoice dependencies (needed by webhook handler)
+	// Invoice dependencies (needed by both callback and webhook handlers)
 	businessRepo := business.NewPgBusinessRepository(clients.db).(*business.PgBusinessRepository)
 	invoiceRepository := invoiceRepo.NewPgInvoiceRepository(clients.db)
 	invoiceService := invoiceSvc.NewInvoiceService(invoiceRepository)
 	pdfGenerator := utils.NewPDFGenerator()
 
-	webhookHandler := payment.NewWebhookHandler(paymentRepository, jioPayClient, easebuzzClient, mockPGClient, cfg.MockPG.Enabled, stateChangeRepository)
+	// 1. Webhooks (called by payment gateways)
+	webhookHandler := payment.NewWebhookHandler(paymentRepository, jioPayClient, easebuzzClient, mockPGClient, cfg.MockPG.Enabled, stateChangeRepository, businessRepo, invoiceService)
 	webhookGroup := processPaymentGroup.Group("/webhooks")
 	webhookGroup.POST("/payment_status", webhookHandler.HandlePaymentStatusWebhook)
 	webhookGroup.POST("/settlement_status", webhookHandler.HandleSettlementStatusWebhook)
 
 	// 2. Callbacks (redirects from payment gateways after payment completion)
-	callbackHandler := payment.NewCallbackHandler(paymentRepository, storedCardRepository, walletService, jioPayClient, easebuzzClient, mockPGClient, cfg.MockPG.Enabled, pendingVoucherRepository, voucherRepository, clients.txManager, stateChangeRepository)
+	callbackHandler := payment.NewCallbackHandler(paymentRepository, storedCardRepository, walletService, jioPayClient, easebuzzClient, mockPGClient, cfg.MockPG.Enabled, pendingVoucherRepository, voucherRepository, clients.txManager, stateChangeRepository, businessRepo, invoiceService)
 	processPaymentGroup.POST("/callback", callbackHandler.HandleCallback)
 
 	// 3. Mock 3DS page (simulates bank OTP/3DS page for testing)

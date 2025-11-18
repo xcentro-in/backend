@@ -390,3 +390,20 @@ func (r *PgInvoiceRepository) UpdateQRCode(ctx context.Context, invoiceID int64,
 
 	return nil
 }
+
+// DeleteInvoice deletes an invoice by ID
+func (r *PgInvoiceRepository) DeleteInvoice(ctx context.Context, invoiceID int64) error {
+	r.logger.Info(fmt.Sprintf("[PgInvoiceRepository] DeleteInvoice called - InvoiceID: %d", invoiceID))
+
+	query := `
+		DELETE FROM xcentro.payment_invoices
+		WHERE invoice_id = $1
+	`
+
+	_, err := r.querier.Exec(ctx, query, invoiceID)
+	if err != nil {
+		return fmt.Errorf("failed to delete invoice: %w", err)
+	}
+
+	return nil
+}

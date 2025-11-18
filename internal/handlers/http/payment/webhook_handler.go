@@ -185,21 +185,32 @@ func (h *WebhookHandler) handleJioPayPaymentWebhook(c echo.Context) error {
 				fmt.Println("✅ Settlement status initialized to pending")
 			}
 
-			// Create invoice for successful payment
+			// Verify existing invoice (should have been created by callback)
 			if h.invoiceService != nil && h.businessRepo != nil {
 				// Fetch business to get GSTIN
 				bizEntity, err := h.businessRepo.FindByID(ctx, pmt.BusinessID)
 				if err != nil {
-					fmt.Printf("⚠️  Failed to fetch business for invoice creation: %v\n", err)
+					fmt.Printf("⚠️  Failed to fetch business for invoice verification: %v\n", err)
 				} else if bizEntity != nil && bizEntity.GSTIN != "" {
-					_, err := h.invoiceService.CreateInvoiceForPayment(ctx, pmt.ID, bizEntity.GSTIN, pmt.ConvenienceFee, pmt.ConvenienceFeeGST)
+					// Get existing invoice
+					existingInvoice, err := h.invoiceService.GetInvoiceByPaymentID(ctx, pmt.ID)
 					if err != nil {
-						fmt.Printf("⚠️  Failed to create invoice: %v\n", err)
+						fmt.Printf("⚠️  Failed to fetch invoice for verification: %v\n", err)
+					} else if existingInvoice != nil {
+						// Verify invoice matches payment details
+						if !h.invoiceService.VerifyInvoice(ctx, existingInvoice, bizEntity.GSTIN, pmt.ConvenienceFee, pmt.ConvenienceFeeGST) {
+							fmt.Printf("❌ Invoice verification failed - deleting mismatched invoice ID: %d\n", existingInvoice.InvoiceID)
+							if err := h.invoiceService.DeleteInvoice(ctx, existingInvoice.InvoiceID); err != nil {
+								fmt.Printf("⚠️  Failed to delete mismatched invoice: %v\n", err)
+							} else {
+								fmt.Println("✅ Mismatched invoice deleted successfully")
+							}
+						} else {
+							fmt.Println("✅ Invoice verification passed")
+						}
 					} else {
-						fmt.Println("✅ Invoice created successfully")
+						fmt.Printf("⚠️  No invoice found for payment (should have been created by callback)\n")
 					}
-				} else {
-					fmt.Printf("⚠️  Business GSTIN not available for invoice creation\n")
 				}
 			}
 		}
@@ -341,21 +352,32 @@ func (h *WebhookHandler) handleEasebuzzPaymentWebhook(c echo.Context) error {
 				fmt.Println("✅ Settlement status initialized to pending")
 			}
 
-			// Create invoice for successful payment
+			// Verify existing invoice (should have been created by callback)
 			if h.invoiceService != nil && h.businessRepo != nil {
 				// Fetch business to get GSTIN
 				bizEntity, err := h.businessRepo.FindByID(ctx, pmt.BusinessID)
 				if err != nil {
-					fmt.Printf("⚠️  Failed to fetch business for invoice creation: %v\n", err)
+					fmt.Printf("⚠️  Failed to fetch business for invoice verification: %v\n", err)
 				} else if bizEntity != nil && bizEntity.GSTIN != "" {
-					_, err := h.invoiceService.CreateInvoiceForPayment(ctx, pmt.ID, bizEntity.GSTIN, pmt.ConvenienceFee, pmt.ConvenienceFeeGST)
+					// Get existing invoice
+					existingInvoice, err := h.invoiceService.GetInvoiceByPaymentID(ctx, pmt.ID)
 					if err != nil {
-						fmt.Printf("⚠️  Failed to create invoice: %v\n", err)
+						fmt.Printf("⚠️  Failed to fetch invoice for verification: %v\n", err)
+					} else if existingInvoice != nil {
+						// Verify invoice matches payment details
+						if !h.invoiceService.VerifyInvoice(ctx, existingInvoice, bizEntity.GSTIN, pmt.ConvenienceFee, pmt.ConvenienceFeeGST) {
+							fmt.Printf("❌ Invoice verification failed - deleting mismatched invoice ID: %d\n", existingInvoice.InvoiceID)
+							if err := h.invoiceService.DeleteInvoice(ctx, existingInvoice.InvoiceID); err != nil {
+								fmt.Printf("⚠️  Failed to delete mismatched invoice: %v\n", err)
+							} else {
+								fmt.Println("✅ Mismatched invoice deleted successfully")
+							}
+						} else {
+							fmt.Println("✅ Invoice verification passed")
+						}
 					} else {
-						fmt.Println("✅ Invoice created successfully")
+						fmt.Printf("⚠️  No invoice found for payment (should have been created by callback)\n")
 					}
-				} else {
-					fmt.Printf("⚠️  Business GSTIN not available for invoice creation\n")
 				}
 			}
 		}
@@ -489,21 +511,32 @@ func (h *WebhookHandler) handleMockPGPaymentWebhook(c echo.Context) error {
 				fmt.Println("✅ Settlement status initialized to pending")
 			}
 
-			// Create invoice for successful payment
+			// Verify existing invoice (should have been created by callback)
 			if h.invoiceService != nil && h.businessRepo != nil {
 				// Fetch business to get GSTIN
 				bizEntity, err := h.businessRepo.FindByID(ctx, pmt.BusinessID)
 				if err != nil {
-					fmt.Printf("⚠️  Failed to fetch business for invoice creation: %v\n", err)
+					fmt.Printf("⚠️  Failed to fetch business for invoice verification: %v\n", err)
 				} else if bizEntity != nil && bizEntity.GSTIN != "" {
-					_, err := h.invoiceService.CreateInvoiceForPayment(ctx, pmt.ID, bizEntity.GSTIN, pmt.ConvenienceFee, pmt.ConvenienceFeeGST)
+					// Get existing invoice
+					existingInvoice, err := h.invoiceService.GetInvoiceByPaymentID(ctx, pmt.ID)
 					if err != nil {
-						fmt.Printf("⚠️  Failed to create invoice: %v\n", err)
+						fmt.Printf("⚠️  Failed to fetch invoice for verification: %v\n", err)
+					} else if existingInvoice != nil {
+						// Verify invoice matches payment details
+						if !h.invoiceService.VerifyInvoice(ctx, existingInvoice, bizEntity.GSTIN, pmt.ConvenienceFee, pmt.ConvenienceFeeGST) {
+							fmt.Printf("❌ Invoice verification failed - deleting mismatched invoice ID: %d\n", existingInvoice.InvoiceID)
+							if err := h.invoiceService.DeleteInvoice(ctx, existingInvoice.InvoiceID); err != nil {
+								fmt.Printf("⚠️  Failed to delete mismatched invoice: %v\n", err)
+							} else {
+								fmt.Println("✅ Mismatched invoice deleted successfully")
+							}
+						} else {
+							fmt.Println("✅ Invoice verification passed")
+						}
 					} else {
-						fmt.Println("✅ Invoice created successfully")
+						fmt.Printf("⚠️  No invoice found for payment (should have been created by callback)\n")
 					}
-				} else {
-					fmt.Printf("⚠️  Business GSTIN not available for invoice creation\n")
 				}
 			}
 		}
