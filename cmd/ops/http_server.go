@@ -16,6 +16,7 @@ import (
 	"xcentro.in/internal/adapters/providers/fileupload"
 	"xcentro.in/internal/adapters/providers/mailers"
 	metricsProvider "xcentro.in/internal/adapters/providers/metrics"
+	"xcentro.in/internal/adapters/providers/sms"
 	"xcentro.in/internal/core/metrics"
 	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/logger"
@@ -28,6 +29,7 @@ type externalClients struct {
 	txManager    client.TxManager
 	rcache       *redis.RedisClient
 	emailService mailers.EmailService
+	smsService   sms.SMSService // Not used in ops dashboard, kept for interface compliance
 	metrics      metrics.MetricsProvider
 	s3Client     *fileupload.S3Client
 }
@@ -47,6 +49,10 @@ func (e *externalClients) GetRedisClient() *redis.RedisClient {
 
 func (e *externalClients) GetEmailService() mailers.EmailService {
 	return e.emailService
+}
+
+func (e *externalClients) GetSMSService() sms.SMSService {
+	return e.smsService
 }
 
 func (e *externalClients) GetMetrics() interface{} {
