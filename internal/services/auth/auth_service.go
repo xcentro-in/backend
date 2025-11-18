@@ -11,6 +11,7 @@ import (
 	"xcentro.in/internal/adapters/cache/redis/keys"
 	"xcentro.in/internal/adapters/database/postgres/client"
 	"xcentro.in/internal/adapters/providers/mailers"
+	"xcentro.in/internal/adapters/providers/sms"
 	"xcentro.in/internal/core/auth"
 	"xcentro.in/internal/core/business"
 	"xcentro.in/internal/core/metrics"
@@ -32,6 +33,8 @@ type AuthService struct {
 	userService     user.UserService
 	businessService business.BusinessService
 	emailService    mailers.EmailService
+	smsService      sms.SMSService
+	smsConfig       *config.SMSConfig
 	metrics         metrics.MetricsProvider
 	appConfig       *config.Config
 	txManager       client.TxManager
@@ -54,6 +57,8 @@ func NewAuthService(
 		userService:     userService,
 		businessService: businessService,
 		emailService:    clients.GetEmailService(), // Extract from clients
+		smsService:      clients.GetSMSService(),   // Extract from clients
+		smsConfig:       &cfg.SMS,                  // Extract SMS config
 		metrics:         clients.GetMetrics().(metrics.MetricsProvider),
 		appConfig:       cfg,
 		txManager:       clients.GetTxManager(), // Extract from clients
