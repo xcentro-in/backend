@@ -83,13 +83,14 @@ func (r *PgStoredCardRepository) GetStoredCardByID(ctx context.Context, cardID s
 	query := `
 		SELECT card_id, business_id, token, last_four_digits, card_type, card_category,
 		       expiry_month, expiry_year, issuer_bank, card_holder_name,
-		       is_active, gateway_used, added_at, last_used_at, metadata
+		       is_active, failure_reason, gateway_used, added_at, last_used_at, metadata
 		FROM xcentro.stored_cards
 		WHERE card_id = $1 AND is_active = TRUE
 	`
 
 	var card payment.StoredCard
 	var lastUsedAt *time.Time
+	var failureReason *string
 	var metadataJSON []byte
 
 	err := r.querier.QueryRow(ctx, query, cardID).Scan(
@@ -104,6 +105,7 @@ func (r *PgStoredCardRepository) GetStoredCardByID(ctx context.Context, cardID s
 		&card.IssuerBank,
 		&card.CardHolderName,
 		&card.IsActive,
+		&failureReason,
 		&card.GatewayUsed,
 		&card.AddedAt,
 		&lastUsedAt,
@@ -118,6 +120,9 @@ func (r *PgStoredCardRepository) GetStoredCardByID(ctx context.Context, cardID s
 	}
 
 	card.LastUsedAt = lastUsedAt
+	if failureReason != nil {
+		card.FailureReason = *failureReason
+	}
 
 	if len(metadataJSON) > 0 {
 		if err := json.Unmarshal(metadataJSON, &card.Metadata); err != nil {
@@ -135,7 +140,7 @@ func (r *PgStoredCardRepository) GetStoredCardsByBusinessID(ctx context.Context,
 	query := `
 		SELECT card_id, business_id, token, last_four_digits, card_type, card_category,
 		       expiry_month, expiry_year, issuer_bank, card_holder_name,
-		       is_active, gateway_used, added_at, last_used_at, metadata
+		       is_active, failure_reason, gateway_used, added_at, last_used_at, metadata
 		FROM xcentro.stored_cards
 		WHERE business_id = $1 AND is_active = TRUE
 		ORDER BY added_at DESC
@@ -151,6 +156,7 @@ func (r *PgStoredCardRepository) GetStoredCardsByBusinessID(ctx context.Context,
 	for rows.Next() {
 		var card payment.StoredCard
 		var lastUsedAt *time.Time
+		var failureReason *string
 		var metadataJSON []byte
 
 		err := rows.Scan(
@@ -165,6 +171,7 @@ func (r *PgStoredCardRepository) GetStoredCardsByBusinessID(ctx context.Context,
 			&card.IssuerBank,
 			&card.CardHolderName,
 			&card.IsActive,
+			&failureReason,
 			&card.GatewayUsed,
 			&card.AddedAt,
 			&lastUsedAt,
@@ -175,6 +182,9 @@ func (r *PgStoredCardRepository) GetStoredCardsByBusinessID(ctx context.Context,
 		}
 
 		card.LastUsedAt = lastUsedAt
+		if failureReason != nil {
+			card.FailureReason = *failureReason
+		}
 
 		if len(metadataJSON) > 0 {
 			if err := json.Unmarshal(metadataJSON, &card.Metadata); err != nil {
@@ -244,4 +254,25 @@ func (r *PgStoredCardRepository) UpdateLastUsedAt(ctx context.Context, cardID st
 	query := `UPDATE xcentro.stored_cards SET last_used_at = $1 WHERE card_id = $2`
 	_, err := r.querier.Exec(ctx, query, usedAt, cardID)
 	return err
+}
+
+// UpdateCardStatus updates card active status and failure reason
+// Used when tokenization fails (FURL callback) to mark card inactive with reason
+func (r *PgStoredCardRepository) UpdateCardStatus(ctx context.Context, cardID string, isActive bool, failureReason string) error {
+	fmt.Printf("[PgStoredCardRepository] UpdateCardStatus called - CardID: %s, IsActive: %t, FailureReason: %s\n",
+		cardID, isActive, failureReason)
+
+	query := `
+		UPDATE xcentro.stored_cards
+		SET is_active = $1,
+		    failure_reason = $2
+		WHERE card_id = $3
+	`
+
+	_, err := r.querier.Exec(ctx, query, isActive, failureReason, cardID)
+	if err != nil {
+		return fmt.Errorf("failed to update card status: %w", err)
+	}
+
+	return nil
 }

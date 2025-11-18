@@ -188,6 +188,19 @@ func (h *CallbackHandler) handleJioPayCallback(c echo.Context) error {
 						fmt.Println("✅ [Background] Card tokenized successfully")
 					}
 				}(pmt)
+			} else if pmt.PaymentType == payment.PaymentTypeTokenization && newStatus == payment.PaymentStatusFailed {
+				// Step 6.1b: Mark card as inactive if tokenization payment failed
+				fmt.Println("❌ TOKENIZATION PAYMENT FAILED: Marking card as inactive")
+				go func(paymentCopy *payment.Payment) {
+					bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+					defer cancel()
+
+					if err := h.handleTokenizationFailure(bgCtx, paymentCopy, callback.RespDescription); err != nil {
+						fmt.Printf("⚠️  [Background] Failed to mark card inactive: %v\n", err)
+					} else {
+						fmt.Println("✅ [Background] Card marked as inactive")
+					}
+				}(pmt)
 			}
 
 			// Step 6.2: Handle post-update operations (state changes, voucher finalization)
@@ -426,6 +439,19 @@ func (h *CallbackHandler) handleMockPGCallback(c echo.Context) error {
 						fmt.Printf("⚠️  [Background] Tokenization failed: %v\n", err)
 					} else {
 						fmt.Println("✅ [Background] Card tokenized successfully")
+					}
+				}(pmt)
+			} else if pmt.PaymentType == payment.PaymentTypeTokenization && newStatus == payment.PaymentStatusFailed {
+				// Step 6.1b: Mark card as inactive if tokenization payment failed
+				fmt.Println("❌ TOKENIZATION PAYMENT FAILED: Marking card as inactive")
+				go func(paymentCopy *payment.Payment) {
+					bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+					defer cancel()
+
+					if err := h.handleTokenizationFailure(bgCtx, paymentCopy, "Payment failed"); err != nil {
+						fmt.Printf("⚠️  [Background] Failed to mark card inactive: %v\n", err)
+					} else {
+						fmt.Println("✅ [Background] Card marked as inactive")
 					}
 				}(pmt)
 			}
@@ -760,6 +786,32 @@ func (h *CallbackHandler) handlePostPaymentUpdate(
 			fmt.Println("✅ Vouchers finalized successfully")
 		}
 	}
+
+	return nil
+}
+
+// handleTokenizationFailure marks card as inactive when tokenization payment fails
+// Called after failed tokenization payment (FURL callback)
+func (h *CallbackHandler) handleTokenizationFailure(ctx context.Context, pmt *payment.Payment, failureReason string) error {
+	fmt.Println("=== TOKENIZATION FAILURE: Marking card as inactive ===")
+
+	// Step 1: Get the stored_card_id from payment.payment_source_id
+	if pmt.PaymentSourceID == nil || *pmt.PaymentSourceID == "" {
+		fmt.Println("⚠️  No payment_source_id found - card might not have been created yet")
+		return nil // Non-fatal: card might not have been created yet
+	}
+
+	storedCardID := *pmt.PaymentSourceID
+	fmt.Printf("🔑 Payment linked to stored_card: %s\n", storedCardID)
+
+	// Step 2: Update card status to inactive with failure reason
+	if err := h.storedCardRepo.UpdateCardStatus(ctx, storedCardID, false, failureReason); err != nil {
+		fmt.Printf("❌ Failed to update card status: %v\n", err)
+		return fmt.Errorf("failed to update card status: %w", err)
+	}
+
+	fmt.Printf("✅ Card marked as inactive: %s (reason: %s)\n", storedCardID, failureReason)
+	fmt.Println("=== TOKENIZATION FAILURE: Complete ===")
 
 	return nil
 }

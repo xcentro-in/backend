@@ -16,6 +16,7 @@ type StoredCardRepository interface {
 	// Card lifecycle management
 	DeactivateCard(ctx context.Context, cardID string) error
 	UpdateLastUsedAt(ctx context.Context, cardID string, usedAt time.Time) error
+	UpdateCardStatus(ctx context.Context, cardID string, isActive bool, failureReason string) error // Update card status and failure reason
 
 	// Transaction support
 	WithTx(tx interface{}) StoredCardRepository
