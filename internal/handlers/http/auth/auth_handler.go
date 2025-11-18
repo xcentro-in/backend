@@ -335,7 +335,7 @@ func (ah AuthHandler) HandleResetPassword(c echo.Context) error {
 	}
 
 	// Delegate to service
-	if err := ah.authService.ResetPasswordWithToken(c.Request().Context(), req.Token, req.NewPassword); err != nil {
+	if err := ah.authService.ResetPasswordWithToken(c.Request().Context(), req.UserID, req.Token, req.Signature, req.NewPassword); err != nil {
 		logger.Errorf("Password reset failed: %v", err)
 		return c.JSON(400, map[string]any{"message": err.Error(), "data": nil})
 	}
@@ -436,7 +436,7 @@ func (ah AuthHandler) HandleVerifyEmail(c echo.Context) error {
 		return c.JSON(400, map[string]any{"message": "Validation failed", "data": nil})
 	}
 
-	if err := ah.authService.VerifyEmailWithToken(c.Request().Context(), req.Token); err != nil {
+	if err := ah.authService.VerifyEmailWithToken(c.Request().Context(), req.UserID, req.Token, req.Signature); err != nil {
 		logger.Errorf("Error verifying email with token: %v", err)
 
 		// Handle specific error cases
@@ -447,6 +447,8 @@ func (ah AuthHandler) HandleVerifyEmail(c echo.Context) error {
 			return c.JSON(400, map[string]string{"message": "Verification token has already been used"})
 		case "verification token has expired":
 			return c.JSON(400, map[string]string{"message": "Verification token has expired"})
+		case "invalid or tampered verification link":
+			return c.JSON(400, map[string]string{"message": "Invalid or tampered verification link"})
 		default:
 			return c.JSON(500, map[string]string{"message": "Failed to verify email"})
 		}

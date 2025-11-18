@@ -25,12 +25,12 @@ type AuthService interface {
 
 	// Password reset
 	SendPasswordResetEmail(ctx context.Context, email string, emailType string) error
-	ResetPasswordWithToken(ctx context.Context, token string, newPassword string) error
+	ResetPasswordWithToken(ctx context.Context, userID, token, signature, newPassword string) error
 	ChangePassword(ctx context.Context, userID, oldPassword, newPassword string) error
 
 	// Email verification
 	SendEmailVerification(ctx context.Context, userID string) error
-	VerifyEmailWithToken(ctx context.Context, token string) error
+	VerifyEmailWithToken(ctx context.Context, userID, token, signature string) error
 	ResendEmailVerification(ctx context.Context, email string) error
 
 	// Utility
