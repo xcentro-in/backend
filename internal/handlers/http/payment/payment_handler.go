@@ -140,7 +140,11 @@ func convertStoredCardsToResponse(cards []*payment.StoredCard) []StoredCardRespo
 			cardStatus = "active"
 		} else if card.IsFailedTokenization {
 			cardStatus = "failed"
+		} else if card.Token != "" {
+			// Has token but inactive = user manually deactivated
+			cardStatus = "inactive"
 		} else {
+			// No token and not failed = awaiting tokenization callback
 			cardStatus = "pending"
 		}
 

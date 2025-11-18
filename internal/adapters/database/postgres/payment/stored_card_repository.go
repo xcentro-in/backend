@@ -136,13 +136,13 @@ func (r *PgStoredCardRepository) GetStoredCardByID(ctx context.Context, cardID s
 
 // GetStoredCardsByBusinessID retrieves cards for a business
 // When showInactive = false: only active cards
-// When showInactive = true: active cards + pending cards (1 hour) + failed cards (7 days)
+// When showInactive = true: active + user-deactivated + pending (1 hour) + failed (7 days)
 func (r *PgStoredCardRepository) GetStoredCardsByBusinessID(ctx context.Context, businessID string, showInactive bool) ([]*payment.StoredCard, error) {
 	fmt.Printf("[PgStoredCardRepository] GetStoredCardsByBusinessID called - BusinessID: %s, ShowInactive: %t\n", businessID, showInactive)
 
 	var query string
 	if showInactive {
-		// Show: Active + Pending (1 hour window) + Failed (7 day window)
+		// Show: Active + Pending (1 hour window) + Failed (7 day window) + User-Deactivated (has token)
 		query = `
 			SELECT card_id, business_id, token, last_four_digits, card_type, card_category,
 			       expiry_month, expiry_year, issuer_bank, card_holder_name,
@@ -153,12 +153,14 @@ func (r *PgStoredCardRepository) GetStoredCardsByBusinessID(ctx context.Context,
 			      is_active = TRUE
 			      OR (is_failed_tokenization = TRUE AND added_at > NOW() - INTERVAL '7 days')
 			      OR (is_active = FALSE AND is_failed_tokenization = FALSE AND added_at > NOW() - INTERVAL '1 hour')
+			      OR (is_active = FALSE AND is_failed_tokenization = FALSE AND token != '')
 			  )
 			ORDER BY
 			  CASE
 			    WHEN is_active = TRUE THEN 1
-			    WHEN is_active = FALSE AND is_failed_tokenization = FALSE THEN 2
-			    ELSE 3
+			    WHEN is_active = FALSE AND is_failed_tokenization = FALSE AND token != '' THEN 2
+			    WHEN is_active = FALSE AND is_failed_tokenization = FALSE THEN 3
+			    ELSE 4
 			  END,
 			  added_at DESC
 		`

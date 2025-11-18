@@ -115,7 +115,7 @@ type StoredCardResponse struct {
 	ExpiryMonth          string `json:"expiry_month"`
 	ExpiryYear           string `json:"expiry_year"`
 	IssuerBank           string `json:"issuer_bank"`
-	CardStatus           string `json:"card_status"` // "active" | "pending" | "failed"
+	CardStatus           string `json:"card_status"` // "active" | "pending" | "failed" | "inactive"
 	IsActive             bool   `json:"is_active"`
 	IsFailedTokenization bool   `json:"is_failed_tokenization"`
 	FailureReason        string `json:"failure_reason,omitempty"`
