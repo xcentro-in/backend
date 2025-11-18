@@ -73,6 +73,29 @@ type ResendVerificationRequest struct {
 	Email string `json:"email" validate:"required,email"`
 }
 
+// VerifyEmailWithMobileRequest represents the request to verify email and capture mobile number
+type VerifyEmailWithMobileRequest struct {
+	UserID      string `json:"uid" validate:"required"`
+	Token       string `json:"token" validate:"required"`
+	Signature   string `json:"sig" validate:"required"`
+	MobileNumber string `json:"mobileNumber" validate:"required,phone_in"`
+}
+
+// VerifyMobileOTPRequest represents the request to verify mobile OTP
+type VerifyMobileOTPRequest struct {
+	UserID string `json:"uid" validate:"required"`
+	OTP    string `json:"otp" validate:"required,len=6,numeric"`
+}
+
+// ResetPasswordWithMobileOTPRequest represents the request to reset password with mobile OTP
+type ResetPasswordWithMobileOTPRequest struct {
+	UserID      string `json:"uid" validate:"required"`
+	Token       string `json:"token" validate:"required"`
+	Signature   string `json:"sig" validate:"required"`
+	OTP         string `json:"otp" validate:"required,len=6,numeric"`
+	NewPassword string `json:"newPassword" validate:"required,strong_password"`
+}
+
 // type AuthJWTClaim struct {
 // 	jwt.RegisteredClaims
 // 	Roles []shared.UserRole `json:"rls"`
