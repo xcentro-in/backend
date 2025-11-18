@@ -170,6 +170,12 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 		convenienceFeeGST := int64(float64(convenienceFee) * 0.18)
 		totalFee := convenienceFee + convenienceFeeGST
 
+		// Default payment type to 'payment' if not specified
+		paymentType := req.PaymentType
+		if paymentType == "" {
+			paymentType = payment.PaymentTypePayment
+		}
+
 		p := &payment.Payment{
 			ID:               paymentID,
 			UserID:           req.UserID,
@@ -177,7 +183,7 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 			Amount:           req.Amount,
 			Currency:         req.Currency,
 			PaymentMethod:    req.PaymentMethod,
-			PaymentType:      payment.PaymentTypePayment,
+			PaymentType:      paymentType, // Use payment type from request (payment/tokenization/refund), default to 'payment'
 			Status:           payment.PaymentStatusPending,
 			Description:      req.Description,
 			CallbackURL:      callbackURL,
