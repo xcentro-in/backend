@@ -134,6 +134,16 @@ func convertStoredCardsToResponse(cards []*payment.StoredCard) []StoredCardRespo
 			}
 		}
 
+		// Compute card status for frontend
+		var cardStatus string
+		if card.IsActive {
+			cardStatus = "active"
+		} else if card.IsFailedTokenization {
+			cardStatus = "failed"
+		} else {
+			cardStatus = "pending"
+		}
+
 		response = append(response, StoredCardResponse{
 			CardID:               card.CardID,
 			LastFourDigits:       card.LastFourDigits,
@@ -142,6 +152,7 @@ func convertStoredCardsToResponse(cards []*payment.StoredCard) []StoredCardRespo
 			ExpiryMonth:          card.ExpiryMonth,
 			ExpiryYear:           card.ExpiryYear,
 			IssuerBank:           card.IssuerBank,
+			CardStatus:           cardStatus,
 			IsActive:             card.IsActive,
 			IsFailedTokenization: card.IsFailedTokenization,
 			FailureReason:        card.FailureReason,
