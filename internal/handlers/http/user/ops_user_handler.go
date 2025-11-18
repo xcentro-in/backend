@@ -131,10 +131,17 @@ func (h *OpsUserHandler) GetUserDetails(c echo.Context) error {
 func (h *OpsUserHandler) ReloadUserPANData(c echo.Context) error {
 	var req user.OpsReloadUserPANRequest
 
-	// Bind path and query parameters
-	if err := c.Bind(&req); err != nil {
+	// Bind path parameters
+	if err := (&echo.DefaultBinder{}).BindPathParams(c, &req); err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]string{
-			"error": "Invalid request parameters",
+			"error": "Invalid path parameters",
+		})
+	}
+
+	// Bind query parameters
+	if err := (&echo.DefaultBinder{}).BindQueryParams(c, &req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Invalid query parameters",
 		})
 	}
 
@@ -174,10 +181,24 @@ func (h *OpsUserHandler) ReloadUserPANData(c echo.Context) error {
 func (h *OpsUserHandler) KYCAction(c echo.Context) error {
 	var req user.OpsKYCActionRequest
 
-	// Bind path and query parameters
-	if err := c.Bind(&req); err != nil {
+	// Bind path parameters
+	if err := (&echo.DefaultBinder{}).BindPathParams(c, &req); err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]string{
-			"error": "Invalid request parameters",
+			"error": "Invalid path parameters",
+		})
+	}
+
+	// Bind query parameters
+	if err := (&echo.DefaultBinder{}).BindQueryParams(c, &req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Invalid query parameters",
+		})
+	}
+
+	// Bind JSON body (notes field)
+	if err := (&echo.DefaultBinder{}).BindBody(c, &req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Invalid request body",
 		})
 	}
 

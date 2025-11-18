@@ -34,6 +34,7 @@ type BusinessServiceImpl struct {
 	rclient             *redisClient.RedisClient
 	verificationService *verification.DocumentVerificationService
 	s3Config            *config.S3Config
+	externalClients     sharedClients.ExternalClients // Store full clients interface for S3 access
 	logger              *logger.Logger
 }
 
@@ -61,6 +62,7 @@ func NewBusinessService(
 		rclient:             clients.GetRedisClient(), // Extract from clients
 		verificationService: verificationSvc,
 		s3Config:            &cfg.S3,
+		externalClients:     clients, // Store full clients interface
 		logger:              logger.GetDefault(),
 	}
 }
@@ -993,7 +995,29 @@ func (s *BusinessServiceImpl) SearchBusinesses(ctx context.Context, searchTerm s
 
 // GetBusinessDetailsForOps retrieves complete business details for ops dashboard
 func (s *BusinessServiceImpl) GetBusinessDetailsForOps(ctx context.Context, bid string) (*business.OpsBusinessDetails, error) {
-	return s.businessRepo.GetBusinessDetailsForOps(ctx, bid)
+	details, err := s.businessRepo.GetBusinessDetailsForOps(ctx, bid)
+	if err != nil {
+		return nil, err
+	}
+
+	// Generate presigned URL for business deed document if it exists
+	if details.DocPath != "" {
+		// Try to get S3 client from externalClients interface
+		if s3Getter, ok := s.externalClients.(interface{ GetS3Client() *fileupload.S3Client }); ok {
+			s3Client := s3Getter.GetS3Client()
+			if s3Client != nil {
+				// Generate presigned download URL with 15 minute expiration
+				presignedURL, err := s3Client.GetPresignedDownloadURL(ctx, details.DocPath, 15*time.Minute)
+				if err != nil {
+					s.logger.Warnf("Failed to generate presigned URL for DocPath %s: %v", details.DocPath, err)
+				} else {
+					details.DocUrl = presignedURL
+				}
+			}
+		}
+	}
+
+	return details, nil
 }
 
 // ReloadBusinessData reloads verification data for business (GSTIN, ITID, or CID)
@@ -1126,6 +1150,22 @@ func (s *BusinessServiceImpl) RejectKYB(ctx context.Context, bid string, notes s
 		return err
 	}
 
+	// Invalidate caches after KYB rejection
+	go func() {
+		bgCtx := context.Background()
+		// Invalidate business details cache
+		if err := s.rclient.Delete(bgCtx, keys.Business.Details(bid)); err != nil {
+			s.logger.Warnf("Failed to invalidate business details cache for BID %s: %v", bid, err)
+		}
+		// Invalidate owner's user roles cache if an owner was found
+		if userIDToNotify != "" {
+			invalidationKeys := keys.InvalidateUserRoles(userIDToNotify)
+			if err := s.rclient.Delete(bgCtx, invalidationKeys...); err != nil {
+				s.logger.Warnf("Failed to invalidate user roles cache for user %s after KYB rejection: %v", userIDToNotify, err)
+			}
+		}
+	}()
+
 	// Trigger notification if notes are present and user found
 	if notes != "" && userIDToNotify != "" {
 		go func() {
@@ -1221,4 +1261,23 @@ func (s *BusinessServiceImpl) OpsUpdateUserRole(ctx context.Context, bid string,
 
 	s.logger.Infof("Successfully updated user %s role to %s in business %s via ops", userID, role, bid)
 	return nil
+}
+
+// GetOwnerMobile retrieves the mobile number of the business owner
+// This is a convenience method for payment gateways that require owner mobile
+// (e.g., JioPay externalId = entityId + ownerMobile)
+func (s *BusinessServiceImpl) GetOwnerMobile(ctx context.Context, businessID string) (string, error) {
+	// Step 1: Get business owner user ID
+	ownerUserID, err := s.businessUserRelRepo.GetBusinessOwnerUserID(ctx, businessID)
+	if err != nil {
+		return "", fmt.Errorf("failed to get business owner: %w", err)
+	}
+
+	// Step 2: Get owner's mobile number
+	ownerMobile, err := s.userRepo.GetUserMobileByID(ctx, ownerUserID)
+	if err != nil {
+		return "", fmt.Errorf("failed to get owner mobile: %w", err)
+	}
+
+	return ownerMobile, nil
 }

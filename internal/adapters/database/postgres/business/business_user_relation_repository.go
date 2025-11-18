@@ -68,6 +68,25 @@ func (r *PgBusinessUserRelationRepository) UpdateKycNeeded(ctx context.Context, 
 	return nil
 }
 
+// GetBusinessOwnerUserID gets the owner's user_id for a given business
+// Returns the user_id of the owner, or error if not found
+func (r *PgBusinessUserRelationRepository) GetBusinessOwnerUserID(ctx context.Context, businessID string) (string, error) {
+	query := `
+		SELECT user_id
+		FROM xcentro.business_user_relation
+		WHERE bid = $1 AND role = 'owner'
+		LIMIT 1
+	`
+
+	var ownerUserID string
+	err := r.querier.QueryRow(ctx, query, businessID).Scan(&ownerUserID)
+	if err != nil {
+		return "", fmt.Errorf("failed to get business owner: %w", err)
+	}
+
+	return ownerUserID, nil
+}
+
 // FindByUser finds all business relations for a user
 func (r *PgBusinessUserRelationRepository) FindByUser(ctx context.Context, userID string) ([]*business.BusinessUserRelation, error) {
 	query := `
@@ -374,19 +393,19 @@ func (r *PgBusinessUserRelationRepository) GetKYBInitiatedStatus(ctx context.Con
 	return &kybData, &bus, nil
 }
 
-// SetOwnerRoleToNull sets the owner's role to NULL for a business
+// SetOwnerRoleToNull sets all user roles to NULL for a business (used when KYB is rejected)
 func (r *PgBusinessUserRelationRepository) SetOwnerRoleToNull(ctx context.Context, bid string) error {
-	query := `UPDATE xcentro.business_user_relation SET role = NULL WHERE bid = $1 AND role = 'owner'`
+	query := `UPDATE xcentro.business_user_relation SET role = NULL WHERE bid = $1`
 	_, err := r.querier.Exec(ctx, query, bid)
 	if err != nil {
-		return fmt.Errorf("failed to set owner role to NULL: %w", err)
+		return fmt.Errorf("failed to set roles to NULL: %w", err)
 	}
 	return nil
 }
 
 // ResetAllUserRelationsForRejectedKYC resets all business relations for a user (role='none', kyc_needed=true)
 func (r *PgBusinessUserRelationRepository) ResetAllUserRelationsForRejectedKYC(ctx context.Context, userID string) error {
-	query := `UPDATE xcentro.business_user_relation SET role = 'none', kyc_needed = true WHERE userid = $1`
+	query := `UPDATE xcentro.business_user_relation SET role = 'none', kyc_needed = true WHERE user_id = $1`
 	_, err := r.querier.Exec(ctx, query, userID)
 	if err != nil {
 		return fmt.Errorf("failed to reset user relations for rejected KYC: %w", err)
@@ -396,7 +415,7 @@ func (r *PgBusinessUserRelationRepository) ResetAllUserRelationsForRejectedKYC(c
 
 // OpsUpdateUserRole updates a user's role in a business (ops endpoint - simple update with WHERE check)
 func (r *PgBusinessUserRelationRepository) OpsUpdateUserRole(ctx context.Context, bid string, userID string, role shared.UserRole) error {
-	query := `UPDATE xcentro.business_user_relation SET role = $1 WHERE bid = $2 AND userid = $3`
+	query := `UPDATE xcentro.business_user_relation SET role = $1 WHERE bid = $2 AND user_id = $3`
 	result, err := r.querier.Exec(ctx, query, role, bid, userID)
 	if err != nil {
 		return fmt.Errorf("failed to update user role: %w", err)

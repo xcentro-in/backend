@@ -402,15 +402,19 @@ func (r *PgBusinessRepository) ListBusinessesPaginated(ctx context.Context, page
 			gstin,
 			kyb_status,
 			business_type,
-			COALESCE(updated_at::text, '') as updated_at
+			COALESCE(updated_at::text, '') as updated_at,
+			has_completed_onboarding,
+			has_added_payment_method,
+			has_added_vendor,
+			has_created_first_payment
 		FROM
 			xcentro.business` +
 		whereClause + `
 		ORDER BY
 			CASE kyb_status
 				WHEN 'kyc_completed' THEN 1
-				WHEN 'kyc_inprogress' THEN 2
-				WHEN 'kyb_verified' THEN 99
+				WHEN 'kyc_in_progress' THEN 2
+				WHEN 'kyc_verified' THEN 99
 				ELSE 3
 			END ASC,
 			updated_at DESC
@@ -430,6 +434,7 @@ func (r *PgBusinessRepository) ListBusinessesPaginated(ctx context.Context, page
 		var item business.OpsBusinessListItem
 		var kybStatusStr string
 		var businessType sql.NullString
+		var hasCompletedOnboarding, hasAddedPaymentMethod, hasAddedVendor, hasCreatedFirstPayment sql.NullBool
 
 		err := rows.Scan(
 			&item.BID,
@@ -438,6 +443,10 @@ func (r *PgBusinessRepository) ListBusinessesPaginated(ctx context.Context, page
 			&kybStatusStr,
 			&businessType,
 			&item.UpdatedAt,
+			&hasCompletedOnboarding,
+			&hasAddedPaymentMethod,
+			&hasAddedVendor,
+			&hasCreatedFirstPayment,
 		)
 		if err != nil {
 			return nil, 0, fmt.Errorf("error scanning business row: %w", err)
@@ -445,6 +454,10 @@ func (r *PgBusinessRepository) ListBusinessesPaginated(ctx context.Context, page
 
 		item.KybStatus = shared.KYBstatus(kybStatusStr)
 		item.BusinessType = shared.BusinessType(businessType.String)
+		item.HasCompletedOnboarding = hasCompletedOnboarding.Bool
+		item.HasAddedPaymentMethod = hasAddedPaymentMethod.Bool
+		item.HasAddedVendor = hasAddedVendor.Bool
+		item.HasCreatedFirstPayment = hasCreatedFirstPayment.Bool
 		businesses = append(businesses, &item)
 	}
 
@@ -542,7 +555,7 @@ func (r *PgBusinessRepository) GetBusinessDetailsForOps(ctx context.Context, bid
 		&countryCode, &currencyCode, &details.UpdatedAt,
 		&details.HasCompletedOnboarding, &details.HasAddedPaymentMethod,
 		&details.HasAddedVendor, &details.HasCreatedFirstPayment,
-		&details.ITIDData, &details.CID, &details.CIDData, &details.DocUrl,
+		&details.ITIDData, &details.CID, &details.CIDData, &details.DocPath,
 	)
 
 	if err != nil {
@@ -562,13 +575,13 @@ func (r *PgBusinessRepository) GetBusinessDetailsForOps(ctx context.Context, bid
 	// Fetch users related to this business
 	usersQuery := `
 		SELECT
-			u.id, u.email, u.name, u.mobile,
+			u.id, u.email, u.name, COALESCE(u.mobile, ''),
 			bur.role, bur.role_claim, u.kyc_status, bur.kyc_needed,
 			COALESCE(ui.tax_id, ''), COALESCE(ui.national_id, ''),
 			u.email_verified, u.mobile_verified,
 			bur.added_at::text, COALESCE(bur.updated_at::text, '')
 		FROM xcentro.business_user_relation bur
-		JOIN xcentro.user_table u ON bur.userid = u.id
+		JOIN xcentro.user_table u ON bur.user_id = u.id
 		LEFT JOIN xcentro.user_identity ui ON u.tax_id = ui.tax_id
 		WHERE bur.bid = $1
 		ORDER BY bur.added_at DESC
@@ -583,7 +596,8 @@ func (r *PgBusinessRepository) GetBusinessDetailsForOps(ctx context.Context, bid
 	var users []*business.OpsUserDetails
 	for rows.Next() {
 		var user business.OpsUserDetails
-		var roleStr, roleClaimStr, kycStatusStr string
+		var roleStr, roleClaimStr sql.NullString
+		var kycStatusStr string
 
 		err := rows.Scan(
 			&user.UserID, &user.Email, &user.Name, &user.Mobile,
@@ -596,8 +610,12 @@ func (r *PgBusinessRepository) GetBusinessDetailsForOps(ctx context.Context, bid
 			return nil, fmt.Errorf("error scanning user row: %w", err)
 		}
 
-		user.Role = shared.UserRole(roleStr)
-		user.RoleClaim = shared.UserRole(roleClaimStr)
+		if roleStr.Valid {
+			user.Role = shared.UserRole(roleStr.String)
+		}
+		if roleClaimStr.Valid {
+			user.RoleClaim = shared.UserRole(roleClaimStr.String)
+		}
 		user.KycStatus = shared.KYCStatus(kycStatusStr)
 		users = append(users, &user)
 	}
@@ -642,7 +660,7 @@ func (r *PgBusinessRepository) UpdateCompanyIDData(ctx context.Context, itid str
 
 // SetKYBStatusRejected sets business KYB status to rejected
 func (r *PgBusinessRepository) SetKYBStatusRejected(ctx context.Context, bid string) error {
-	query := `UPDATE xcentro.business SET kyb_status = 'kyb_rejected' WHERE bid = $1`
+	query := `UPDATE xcentro.business SET kyb_status = 'kyc_rejected' WHERE bid = $1`
 	_, err := r.querier.Exec(ctx, query, bid)
 	if err != nil {
 		return fmt.Errorf("failed to set KYB status to rejected: %w", err)
@@ -668,7 +686,7 @@ func (r *PgBusinessRepository) ClearKYBData(ctx context.Context, itid string) er
 
 // SetKYBStatusVerified sets business KYB status to verified
 func (r *PgBusinessRepository) SetKYBStatusVerified(ctx context.Context, bid string) error {
-	query := `UPDATE xcentro.business SET kyb_status = 'kyb_verified' WHERE bid = $1`
+	query := `UPDATE xcentro.business SET kyb_status = 'kyc_verified' WHERE bid = $1`
 	_, err := r.querier.Exec(ctx, query, bid)
 	if err != nil {
 		return fmt.Errorf("failed to set KYB status to verified: %w", err)
@@ -679,7 +697,7 @@ func (r *PgBusinessRepository) SetKYBStatusVerified(ctx context.Context, bid str
 // GetOwnerUserID retrieves the user ID of the owner (role='owner') for a business
 func (r *PgBusinessRepository) GetOwnerUserID(ctx context.Context, bid string) (string, error) {
 	query := `
-		SELECT userid
+		SELECT user_id
 		FROM xcentro.business_user_relation
 		WHERE bid = $1 AND role = 'owner'
 		LIMIT 1

@@ -88,13 +88,8 @@ func (h *OpsNotificationHandler) TriggerNotifications(c echo.Context) error {
 				})
 			}
 		case coreNotification.TargetBroadcast:
-			// Broadcast must have MinimumRole
-			if target.MinimumRole == nil || *target.MinimumRole == "" {
-				return c.JSON(http.StatusBadRequest, map[string]string{
-					"error": "Broadcast target must have MinimumRole",
-					"index": string(rune(i)),
-				})
-			}
+			// Broadcast optionally has MinimumRole (nil means all users)
+			// No additional validation needed for broadcast
 		default:
 			return c.JSON(http.StatusBadRequest, map[string]string{
 				"error": "Invalid target type",

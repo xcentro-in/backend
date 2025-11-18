@@ -101,6 +101,24 @@ func (r *PgUserRepository) GetUserByID(ctx context.Context, userID string) (*use
 	return &u, nil
 }
 
+// GetUserMobileByID retrieves only the mobile number for a user
+// Returns the mobile number, or empty string if not set
+func (r *PgUserRepository) GetUserMobileByID(ctx context.Context, userID string) (string, error) {
+	query := `
+		SELECT mobile
+		FROM xcentro.user_table
+		WHERE id = $1
+	`
+
+	var mobile sql.NullString
+	err := r.querier.QueryRow(ctx, query, userID).Scan(&mobile)
+	if err != nil {
+		return "", fmt.Errorf("failed to get user mobile: %w", err)
+	}
+
+	return mobile.String, nil
+}
+
 // parseKYCStatus converts string enum to KYCStatus
 func parseKYCStatus(status string) shared.KYCStatus {
 	switch status {
@@ -777,10 +795,10 @@ func (r *PgUserRepository) SearchUsersByBusinesses(ctx context.Context, business
 	query := `
 		SELECT DISTINCT u.id, COALESCE(u.name, '') as name, bur.bid as business_id
 		FROM xcentro.user_table u
-		JOIN xcentro.business_user_relation bur ON u.id = bur.userid
+		JOIN xcentro.business_user_relation bur ON u.id = bur.user_id
 		WHERE bur.bid = ANY($1)
 		AND (u.name ILIKE $2 OR u.email ILIKE $2)
-		ORDER BY u.name
+		ORDER BY name
 		LIMIT 50
 	`
 
@@ -818,15 +836,15 @@ func (r *PgUserRepository) GetUserDetailsForOps(ctx context.Context, userID stri
 		query = `
 			SELECT
 				u.id, u.email, COALESCE(u.mobile, '') as mobile, COALESCE(u.name, '') as name,
-				COALESCE(u.dob, '') as dob, COALESCE(u.tax_id, '') as tax_id,
+				COALESCE(u.dob::text, '') as dob, COALESCE(u.tax_id, '') as tax_id,
 				u.kyc_status, u.kyc_needed, u.email_verified, u.mobile_verified,
 				u.created_at::text, COALESCE(u.updated_at::text, '') as updated_at,
-				COALESCE(ui.tax_id_data, '') as tax_id_data, COALESCE(ui.national_id, '') as national_id,
-				COALESCE(ui.national_id_data, '') as national_id_data, COALESCE(ui.n_txn_id, '') as n_txn_id,
-				COALESCE(bur.role, '') as role, COALESCE(bur.role_claim, '') as role_claim
+				COALESCE(ui.tax_id_data::text, '') as tax_id_data, COALESCE(ui.national_id, '') as national_id,
+				COALESCE(ui.national_id_data::text, '') as national_id_data, COALESCE(ui.n_txn_id, '') as n_txn_id,
+				bur.role, bur.role_claim
 			FROM xcentro.user_table u
 			LEFT JOIN xcentro.user_identity ui ON u.tax_id = ui.tax_id
-			LEFT JOIN xcentro.business_user_relation bur ON u.id = bur.userid AND bur.bid = $2
+			LEFT JOIN xcentro.business_user_relation bur ON u.id = bur.user_id AND bur.bid = $2
 			WHERE u.id = $1
 		`
 		args = []interface{}{userID, businessID}
@@ -835,11 +853,11 @@ func (r *PgUserRepository) GetUserDetailsForOps(ctx context.Context, userID stri
 		query = `
 			SELECT
 				u.id, u.email, COALESCE(u.mobile, '') as mobile, COALESCE(u.name, '') as name,
-				COALESCE(u.dob, '') as dob, COALESCE(u.tax_id, '') as tax_id,
+				COALESCE(u.dob::text, '') as dob, COALESCE(u.tax_id, '') as tax_id,
 				u.kyc_status, u.kyc_needed, u.email_verified, u.mobile_verified,
 				u.created_at::text, COALESCE(u.updated_at::text, '') as updated_at,
-				COALESCE(ui.tax_id_data, '') as tax_id_data, COALESCE(ui.national_id, '') as national_id,
-				COALESCE(ui.national_id_data, '') as national_id_data, COALESCE(ui.n_txn_id, '') as n_txn_id
+				COALESCE(ui.tax_id_data::text, '') as tax_id_data, COALESCE(ui.national_id, '') as national_id,
+				COALESCE(ui.national_id_data::text, '') as national_id_data, COALESCE(ui.n_txn_id, '') as n_txn_id
 			FROM xcentro.user_table u
 			LEFT JOIN xcentro.user_identity ui ON u.tax_id = ui.tax_id
 			WHERE u.id = $1

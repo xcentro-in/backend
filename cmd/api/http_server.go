@@ -81,7 +81,12 @@ func NewXcentroServer() *xcentroServer {
 func (s *xcentroServer) registerGlobalMiddleware() {
 	s.echo.Use(middleware.RequestID())
 	s.echo.Use(middleware.Logger())
-	s.echo.Use(middleware.Recover())
+	s.echo.Use(middleware.RecoverWithConfig(middleware.RecoverConfig{
+		LogErrorFunc: func(c echo.Context, err error, stack []byte) error {
+			logger.GetDefault().Errorf("[PANIC RECOVERED] %v\n%s", err, stack)
+			return err
+		},
+	}))
 	s.echo.Use(middleware.CORSWithConfig(middleware.CORSConfig{
 		AllowOrigins:     s.meta.config.CORS.AllowOrigins,
 		AllowCredentials: s.meta.config.CORS.AllowCredentials,

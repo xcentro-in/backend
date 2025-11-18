@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"github.com/redis/go-redis/v9/maintnotifications"
 	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/logger"
 )
@@ -23,6 +24,9 @@ func NewRedisClient(cfg config.RedisConfig) (*RedisClient, error) {
 		Password:       cfg.Password,
 		DB:             cfg.DB,
 		MaxActiveConns: cfg.MaxConnections,
+		MaintNotificationsConfig: &maintnotifications.Config{
+			Mode: maintnotifications.ModeDisabled,
+		},
 	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

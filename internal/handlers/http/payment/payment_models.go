@@ -108,15 +108,18 @@ type FetchWalletResponse struct {
 
 // StoredCardResponse represents a stored card in the API response
 type StoredCardResponse struct {
-	CardID         string `json:"card_id"`
-	LastFourDigits string `json:"last_four_digits"`
-	CardType       string `json:"card_type"`
-	CardCategory   string `json:"card_category"`
-	ExpiryMonth    string `json:"expiry_month"`
-	ExpiryYear     string `json:"expiry_year"`
-	IssuerBank     string `json:"issuer_bank"`
-	IsActive       bool   `json:"is_active"`
-	Nickname       string `json:"nickname,omitempty"`
+	CardID               string `json:"card_id"`
+	LastFourDigits       string `json:"last_four_digits"`
+	CardType             string `json:"card_type"`
+	CardCategory         string `json:"card_category"`
+	ExpiryMonth          string `json:"expiry_month"`
+	ExpiryYear           string `json:"expiry_year"`
+	IssuerBank           string `json:"issuer_bank"`
+	CardStatus           string `json:"card_status"` // "active" | "pending" | "failed" | "inactive"
+	IsActive             bool   `json:"is_active"`
+	IsFailedTokenization bool   `json:"is_failed_tokenization"`
+	FailureReason        string `json:"failure_reason,omitempty"`
+	Nickname             string `json:"nickname,omitempty"`
 }
 
 // BankAccountResponse represents a bank account in the API response
@@ -211,6 +214,19 @@ type VerifiedUPIDetails struct {
 	UPIAddress string `json:"upi_address"`
 	Provider   string `json:"provider"`
 	IsActive   bool   `json:"is_active"`
+}
+
+// UpdateCardStatusRequest represents the request to toggle card active/inactive status
+type UpdateCardStatusRequest struct {
+	IsActive bool `json:"is_active"`
+}
+
+// UpdateCardStatusResponse represents the response after updating card status
+type UpdateCardStatusResponse struct {
+	CardID     string `json:"card_id"`
+	CardStatus string `json:"card_status"` // "active" | "inactive"
+	IsActive   bool   `json:"is_active"`
+	Message    string `json:"message"`
 }
 
 // === COMMON RESPONSE MODELS ===

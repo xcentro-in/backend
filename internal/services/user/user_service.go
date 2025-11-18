@@ -1015,6 +1015,7 @@ func (s *UserServiceImpl) RejectKYC(ctx context.Context, userID string, notes st
 	// Use transaction to ensure atomicity
 	err = s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
 		txUserRepo := s.userRepo.WithTx(tx)
+		txBusinessUserRelRepo := s.businessUserRelRepo.WithTx(tx)
 
 		// 1. Set KYC status to rejected
 		if err := txUserRepo.SetKYCStatusRejected(ctx, userID); err != nil {
@@ -1022,7 +1023,7 @@ func (s *UserServiceImpl) RejectKYC(ctx context.Context, userID string, notes st
 		}
 
 		// 2. Reset all business_user_relation entries (role='none', kyc_needed=true)
-		if err := s.businessUserRelRepo.ResetAllUserRelationsForRejectedKYC(ctx, userID); err != nil {
+		if err := txBusinessUserRelRepo.ResetAllUserRelationsForRejectedKYC(ctx, userID); err != nil {
 			return err
 		}
 
@@ -1040,6 +1041,15 @@ func (s *UserServiceImpl) RejectKYC(ctx context.Context, userID string, notes st
 	if err != nil {
 		return err
 	}
+
+	// Invalidate user cache after KYC rejection
+	go func() {
+		bgCtx := context.Background()
+		invalidationKeys := keys.InvalidateUser(userID)
+		if err := s.rclient.Delete(bgCtx, invalidationKeys...); err != nil {
+			s.logger.Warnf("Failed to invalidate user cache after KYC rejection: %v", err)
+		}
+	}()
 
 	// Trigger notification if notes are present (unicast to the user)
 	if notes != "" {
