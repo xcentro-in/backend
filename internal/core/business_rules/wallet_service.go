@@ -16,7 +16,7 @@ import (
 
 // WalletService defines the interface for business wallet operations
 type WalletService interface {
-	GetBusinessWallet(ctx context.Context, businessID string) (*payment.BusinessWallet, error)
+	GetBusinessWallet(ctx context.Context, businessID string, showInactive bool) (*payment.BusinessWallet, error)
 	AddPaymentSource(ctx context.Context, businessID string, source payment.PaymentSource) error
 	RemovePaymentSource(ctx context.Context, businessID string, sourceID string, sourceType payment.PaymentSourceType) error
 	GetPaymentSource(ctx context.Context, businessID string, sourceID string, sourceType payment.PaymentSourceType) (payment.PaymentSource, error)
@@ -52,11 +52,12 @@ func NewWalletService(storedCardRepo payment.StoredCardRepository, bankAccountRe
 
 // GetBusinessWallet retrieves the complete business wallet with all payment sources
 // All data is fetched from database repositories
-func (ws *WalletServiceImpl) GetBusinessWallet(ctx context.Context, businessID string) (*payment.BusinessWallet, error) {
-	ws.logger.InfoWith("Fetching business wallet", "business_id", businessID)
+// showInactive: false (default) = only active cards, true = active + failed cards from last 7 days
+func (ws *WalletServiceImpl) GetBusinessWallet(ctx context.Context, businessID string, showInactive bool) (*payment.BusinessWallet, error) {
+	ws.logger.InfoWith("Fetching business wallet", "business_id", businessID, "show_inactive", showInactive)
 
 	// Fetch stored cards from database
-	storedCards, err := ws.storedCardRepo.GetStoredCardsByBusinessID(ctx, businessID)
+	storedCards, err := ws.storedCardRepo.GetStoredCardsByBusinessID(ctx, businessID, showInactive)
 	if err != nil {
 		ws.logger.ErrorWith("Failed to fetch stored cards", "error", err, "business_id", businessID)
 		storedCards = make([]*payment.StoredCard, 0) // Return empty slice on error

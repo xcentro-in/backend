@@ -24,6 +24,11 @@ func (g *MockJioPayGateway) GetGatewayType() GatewayType {
 	return GatewayJioPay
 }
 
+// IsAggregatorModel returns the payment model for this gateway
+func (g *MockJioPayGateway) IsAggregatorModel() bool {
+	return false // Mock JioPay uses normal model
+}
+
 // TokenizeCard implements JioPay-specific tokenization flow
 // JioPay Flow: ₹1 Transaction → extract authResponseCode → call tokenize API
 func (g *MockJioPayGateway) TokenizeCard(ctx context.Context, request GatewayTokenizeRequest) (*GatewayTokenizeResponse, error) {

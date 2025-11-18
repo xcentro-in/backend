@@ -68,6 +68,25 @@ func (r *PgBusinessUserRelationRepository) UpdateKycNeeded(ctx context.Context, 
 	return nil
 }
 
+// GetBusinessOwnerUserID gets the owner's user_id for a given business
+// Returns the user_id of the owner, or error if not found
+func (r *PgBusinessUserRelationRepository) GetBusinessOwnerUserID(ctx context.Context, businessID string) (string, error) {
+	query := `
+		SELECT user_id
+		FROM xcentro.business_user_relation
+		WHERE bid = $1 AND role = 'owner'
+		LIMIT 1
+	`
+
+	var ownerUserID string
+	err := r.querier.QueryRow(ctx, query, businessID).Scan(&ownerUserID)
+	if err != nil {
+		return "", fmt.Errorf("failed to get business owner: %w", err)
+	}
+
+	return ownerUserID, nil
+}
+
 // FindByUser finds all business relations for a user
 func (r *PgBusinessUserRelationRepository) FindByUser(ctx context.Context, userID string) ([]*business.BusinessUserRelation, error) {
 	query := `

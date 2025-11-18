@@ -58,36 +58,77 @@ type AuditObject struct {
 	AuthorizationCode string `json:"authorizationCode"` // Mandatory: Authorization code
 }
 
-// TokenizationResponse represents the response from JioPay tokenization API
+// TokenizationResponse represents the ACTUAL response from JioPay /tokenized-card API
+// IMPORTANT: This response does NOT include vaultId
+// vaultId is only obtained later by calling /fetch-card endpoint
 type TokenizationResponse struct {
-	Status StatusObject `json:"status"`
-	Card   struct {
-		Type           int    `json:"type"`           // Card type code
-		ExpiryMm       string `json:"expiryMm"`       // Expiry month
-		ExpiryYy       string `json:"expiryYy"`       // Expiry year
-		Name           string `json:"name"`           // Cardholder name
-		Scheme         int    `json:"scheme"`         // Card scheme code
-		Remark         string `json:"remark"`         // Response remark
-		VaultID        string `json:"vaultId"`        // Vault ID (use as CardID)
-		MaskedNumber   string `json:"maskedNumber"`   // Masked card number
-		PAR            string `json:"par"`            // Payment Account Reference
-		TokenReference string `json:"tokenReference"` // Token reference
-		BankName       string `json:"bankName"`       // Issuing bank name
-		Status         string `json:"status"`         // Card status (e.g., "ACTIVE")
-		IsExpired      bool   `json:"isExpired"`      // Expiry status
-		IsDomestic     bool   `json:"isDomestic"`     // Domestic/international
-		CVVLess        int    `json:"cvvLess"`        // CVV-less transaction support
-		Consent        struct {
-			ID        string `json:"id"`        // Consent ID
-			Timestamp string `json:"timestamp"` // Consent timestamp
-		} `json:"consent"`
-	} `json:"card"`
-	Secure *SecureObject `json:"secure,omitempty"` // May be present in some responses
+	ResponseID        string `json:"responseId"`        // Unique response identifier
+	ResponseHost      string `json:"responseHost"`      // Response host (may be null)
+	TokenReference    string `json:"tokenReference"`    // Token reference (PRIMARY TOKEN - use this for payments)
+	PanLastFourDigits string `json:"panLastFourDigits"` // Last 4 digits of card
+	CardReference     string `json:"cardReference"`     // Card reference (similar to PAR)
+	BankName          string `json:"bankName"`          // Issuing bank name (may be null)
+	BankID            string `json:"bankId"`            // Bank identifier (may be null)
+	PAR               string `json:"par"`               // Payment Account Reference
+	Expiry            string `json:"expiry"`            // Expiry in MMYYYY format (e.g., "122029" = Dec 2029)
+	TokenRequestorID  string `json:"tokenRequestorId"`  // Token requestor identifier
+}
+
+// ============================================================================
+// FETCH CARD API TYPES
+// API: POST https://uat.jiopay.co.in/qatsp/api/vault/fetch-card
+// Used to retrieve all cards for a customer (to match and get vaultId)
+// ============================================================================
+
+// FetchCardRequest represents the request to fetch all cards for a customer
+type FetchCardRequest struct {
+	Entity EntityObject `json:"entity"` // Mandatory: Entity (merchant) details
+	User   UserObject   `json:"user"`   // Mandatory: User details (with externalId)
+}
+
+// FetchCardResponse represents the response from fetch-card API
+type FetchCardResponse struct {
+	Status StatusObject `json:"status"` // API status
+	Card   []CardInfo   `json:"card"`   // List of cards for this customer
+	// Other payment instruments (not needed for our use case)
+	FoodCard          []interface{} `json:"foodCard,omitempty"`
+	UPIVPA            []interface{} `json:"upiVpa,omitempty"`
+	BankAccount       []interface{} `json:"bankAccount,omitempty"`
+	PrePaidInstrument []interface{} `json:"prePaidInstrument,omitempty"`
+	PreferredBank     []interface{} `json:"preferredBank,omitempty"`
+}
+
+// CardInfo represents a single card in the fetch-card response
+type CardInfo struct {
+	Type               int    `json:"type"`               // Card type code
+	ExpiryMm           string `json:"expiryMm"`           // Expiry month (may be masked)
+	ExpiryYy           string `json:"expiryYy"`           // Expiry year (may be masked)
+	Name               string `json:"name"`               // Cardholder name (may be masked)
+	Scheme             int    `json:"scheme"`             // Card scheme code (104=Visa, etc.)
+	BankID             string `json:"bankId"`             // Bank ID
+	Remark             string `json:"remark"`             // Remark (often contains customer ID)
+	VaultID            string `json:"vaultId"`            // CRITICAL: Vault ID (needed for cryptogram)
+	MaskedNumber       string `json:"maskedNumber"`       // CRITICAL: Masked number (e.g., "XXXXXXXXXXXX0055")
+	Product            string `json:"product"`            // Product type
+	CountryCode        string `json:"countryCode"`        // Country code
+	TokenReference     string `json:"tokenReference"`     // Token reference
+	BankName           string `json:"bankName"`           // Bank name
+	PAR                string `json:"par"`                // Payment Account Reference
+	AuthorizationState string `json:"authorizationState"` // Authorization state
+	CVVLess            int    `json:"cvvLess"`            // CVV-less transaction support (0/1)
+	Secure             struct {
+		TokenExpiry string `json:"tokenExpiry"` // Token expiry (MMYYYY)
+	} `json:"secure"`
+	Status          string `json:"status"`          // Card status (e.g., "ACTIVE")
+	CardReference   string `json:"cardReference"`   // Card reference
+	ProductType     string `json:"productType"`     // Product type (e.g., "Normal")
+	IsExpired       bool   `json:"isExpired"`       // Expiry status
+	IsDomestic      bool   `json:"isDomestic"`      // Domestic/international
 }
 
 // ============================================================================
 // CRYPTOGRAM API TYPES
-// API: POST https://uat.jiopay.co.in/qatsp/api/vault/getCryptogram
+// API: POST https://uat.jiopay.co.in/qatsp/api/vault/getCryptogram/{vaultId}
 // ============================================================================
 
 // CryptogramRequest represents the get cryptogram request structure
@@ -182,6 +223,10 @@ type InitiateSaleRequest struct {
 	// Additional optional fields
 	AggregatorID string `json:"aggregatorID,omitempty"` // Aggregator ID
 	CustomerID   string `json:"customerID,omitempty"`   // Customer ID
+
+	// Tokenization fields
+	SaveCardIndicator  string `json:"saveCardIndicator,omitempty"`  // "Y" or "N" - for tokenization
+	PaymentOptionCodes string `json:"paymentOptionCodes,omitempty"` // "CC", "DC", etc.
 
 	// Security
 	SecureHash string `json:"secureHash"` // SHA-256 hash

@@ -25,6 +25,7 @@ import (
 // after user completes payment. Response is HTML page for visual feedback.
 type CallbackHandler struct {
 	paymentRepo        payment.PaymentRepository
+	storedCardRepo     payment.StoredCardRepository
 	jioPayGateway      payment.PaymentGateway
 	easebuzzGateway    payment.PaymentGateway
 	mockPGGateway      payment.PaymentGateway
@@ -39,6 +40,7 @@ type CallbackHandler struct {
 // NewCallbackHandler creates a new callback handler
 func NewCallbackHandler(
 	paymentRepoParam payment.PaymentRepository,
+	storedCardRepo payment.StoredCardRepository,
 	jioPayGateway payment.PaymentGateway,
 	easebuzzGateway payment.PaymentGateway,
 	mockPGGateway payment.PaymentGateway,
@@ -50,6 +52,7 @@ func NewCallbackHandler(
 ) *CallbackHandler {
 	return &CallbackHandler{
 		paymentRepo:        paymentRepoParam,
+		storedCardRepo:     storedCardRepo,
 		jioPayGateway:      jioPayGateway,
 		easebuzzGateway:    easebuzzGateway,
 		mockPGGateway:      mockPGGateway,
@@ -169,7 +172,38 @@ func (h *CallbackHandler) handleJioPayCallback(c echo.Context) error {
 		} else {
 			fmt.Printf("✅ Payment status updated to: %s\n", newStatus)
 
-			// Step 6.1: Handle post-update operations (state changes, voucher finalization)
+			// Step 6.1: Launch tokenization in background if this is a tokenization payment
+			if pmt.PaymentType == payment.PaymentTypeTokenization && newStatus == payment.PaymentStatusSuccess {
+				fmt.Println("🔑 TOKENIZATION PAYMENT: Will handle tokenization in background after sending response")
+				// Launch goroutine to handle tokenization asynchronously
+				go func(paymentCopy *payment.Payment) {
+					// Create a new context with timeout for background work
+					bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+					defer cancel()
+
+					fmt.Println("🔑 [Background] Starting card tokenization...")
+					if err := h.handleTokenizationAfterPayment(bgCtx, paymentCopy); err != nil {
+						fmt.Printf("⚠️  [Background] Tokenization failed: %v\n", err)
+					} else {
+						fmt.Println("✅ [Background] Card tokenized successfully")
+					}
+				}(pmt)
+			} else if pmt.PaymentType == payment.PaymentTypeTokenization && newStatus == payment.PaymentStatusFailed {
+				// Step 6.1b: Mark card as inactive if tokenization payment failed
+				fmt.Println("❌ TOKENIZATION PAYMENT FAILED: Marking card as inactive")
+				go func(paymentCopy *payment.Payment) {
+					bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+					defer cancel()
+
+					if err := h.handleTokenizationFailure(bgCtx, paymentCopy, callback.RespDescription); err != nil {
+						fmt.Printf("⚠️  [Background] Failed to mark card inactive: %v\n", err)
+					} else {
+						fmt.Println("✅ [Background] Card marked as inactive")
+					}
+				}(pmt)
+			}
+
+			// Step 6.2: Handle post-update operations (state changes, voucher finalization)
 			if err := h.handlePostPaymentUpdate(ctx, pmt, newStatus, "jiopay", metadata); err != nil {
 				fmt.Printf("⚠️  Post-update operations had issues: %v\n", err)
 				// Non-fatal: callback continues
@@ -188,8 +222,8 @@ func (h *CallbackHandler) handleJioPayCallback(c echo.Context) error {
 		fmt.Printf("⚠️  Payment already in terminal state: %s (skipping update)\n", pmt.Status)
 	}
 
-	// Step 7: Return HTML response to user
-	fmt.Println("=== JIOPAY CALLBACK: Complete ===")
+	// Step 7: Send 200 OK response immediately (before tokenization completes)
+	fmt.Println("=== JIOPAY CALLBACK: Sending response to gateway ===")
 
 	switch newStatus {
 	case payment.PaymentStatusSuccess:
@@ -391,7 +425,38 @@ func (h *CallbackHandler) handleMockPGCallback(c echo.Context) error {
 		} else {
 			fmt.Printf("✅ Payment status updated to: %s\n", newStatus)
 
-			// Step 6.1: Handle post-update operations (state changes, voucher finalization)
+			// Step 6.1: Launch tokenization in background if this is a tokenization payment
+			if pmt.PaymentType == payment.PaymentTypeTokenization && newStatus == payment.PaymentStatusSuccess {
+				fmt.Println("🔑 TOKENIZATION PAYMENT: Will handle tokenization in background after sending response")
+				// Launch goroutine to handle tokenization asynchronously
+				go func(paymentCopy *payment.Payment) {
+					// Create a new context with timeout for background work
+					bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+					defer cancel()
+
+					fmt.Println("🔑 [Background] Starting card tokenization...")
+					if err := h.handleTokenizationAfterPayment(bgCtx, paymentCopy); err != nil {
+						fmt.Printf("⚠️  [Background] Tokenization failed: %v\n", err)
+					} else {
+						fmt.Println("✅ [Background] Card tokenized successfully")
+					}
+				}(pmt)
+			} else if pmt.PaymentType == payment.PaymentTypeTokenization && newStatus == payment.PaymentStatusFailed {
+				// Step 6.1b: Mark card as inactive if tokenization payment failed
+				fmt.Println("❌ TOKENIZATION PAYMENT FAILED: Marking card as inactive")
+				go func(paymentCopy *payment.Payment) {
+					bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+					defer cancel()
+
+					if err := h.handleTokenizationFailure(bgCtx, paymentCopy, "Payment failed"); err != nil {
+						fmt.Printf("⚠️  [Background] Failed to mark card inactive: %v\n", err)
+					} else {
+						fmt.Println("✅ [Background] Card marked as inactive")
+					}
+				}(pmt)
+			}
+
+			// Step 6.2: Handle post-update operations (state changes, voucher finalization)
 			if err := h.handlePostPaymentUpdate(ctx, pmt, newStatus, "mockpg", metadata); err != nil {
 				fmt.Printf("⚠️  Post-update operations had issues: %v\n", err)
 				// Non-fatal: callback continues
@@ -410,8 +475,8 @@ func (h *CallbackHandler) handleMockPGCallback(c echo.Context) error {
 		fmt.Printf("⚠️  Payment already in terminal state: %s (skipping update)\n", pmt.Status)
 	}
 
-	// Step 7: Return HTML response to user
-	fmt.Println("=== MOCK PG CALLBACK: Complete ===")
+	// Step 7: Send 200 OK response immediately (before tokenization completes)
+	fmt.Println("=== MOCK PG CALLBACK: Sending response to gateway ===")
 
 	switch newStatus {
 	case payment.PaymentStatusSuccess:
@@ -421,6 +486,117 @@ func (h *CallbackHandler) handleMockPGCallback(c echo.Context) error {
 	default:
 		return c.HTML(http.StatusOK, generateFailureHTML(pmt, callback.TransactionID, "Payment failed"))
 	}
+}
+
+// handleTokenizationAfterPayment handles card tokenization for immature PGs (Mock PG, JioPay)
+// Called after successful ₹1 tokenization payment
+// PHASE 2: Updates the stored_card record created in Phase 1 with token and issuing bank
+func (h *CallbackHandler) handleTokenizationAfterPayment(ctx context.Context, pmt *payment.Payment) error {
+	fmt.Println("=== TOKENIZATION PHASE 2: Starting post-payment tokenization ===")
+
+	// Step 1: Get the stored_card_id from payment.payment_source_id
+	if pmt.PaymentSourceID == nil {
+		fmt.Println("❌ Payment has no payment_source_id - cannot track stored_card")
+		return fmt.Errorf("payment has no payment_source_id")
+	}
+
+	storedCardID := *pmt.PaymentSourceID
+	fmt.Printf("🔑 Payment linked to stored_card: %s\n", storedCardID)
+
+	// Step 2: Load the existing stored_card record (created in Phase 1)
+	storedCard, err := h.storedCardRepo.GetStoredCardByID(ctx, storedCardID)
+	if err != nil {
+		fmt.Printf("❌ Failed to load stored_card: %v\n", err)
+		return fmt.Errorf("failed to load stored_card: %w", err)
+	}
+
+	fmt.Printf("🔑 Found stored_card: %s %s ending in %s (status: %v)\n",
+		storedCard.CardCategory, storedCard.CardType, storedCard.LastFourDigits,
+		storedCard.Metadata["status"])
+
+	// Step 3: Build tokenization request
+	// PCI DSS: We do NOT send full card number - gateway already has it from payment transaction
+	// Gateway will tokenize based on transaction_id (references the payment where card was used)
+	tokenizeReq := payment.GatewayTokenizeRequest{
+		BusinessID:    pmt.BusinessID,
+		TransactionID: pmt.ID, // Gateway uses this to reference the card from payment
+		CardDetails: payment.Card{
+			// Card details for reference/verification only - gateway already has full card number
+			LastFourDigits: storedCard.LastFourDigits,
+			ExpiryMonth:    storedCard.ExpiryMonth,
+			ExpiryYear:     storedCard.ExpiryYear,
+			CardType:       storedCard.CardType,
+			CardCategory:   storedCard.CardCategory,
+			HolderName:     storedCard.CardHolderName,
+			// Number field is intentionally empty - PCI DSS compliant
+		},
+		CallbackURL: pmt.CallbackURL,
+	}
+
+	fmt.Println("🔑 Tokenization request built (PCI compliant - no card number sent)")
+	fmt.Printf("🔑 Gateway will tokenize card from transaction: %s\n", pmt.ID)
+
+	// Step 4: Call gateway tokenization API
+	var tokenizeResp *payment.GatewayTokenizeResponse
+
+	switch pmt.GatewayUsed {
+	case payment.GatewayMockPG:
+		fmt.Println("🔑 Calling Mock PG tokenization API...")
+		tokenizeResp, err = h.mockPGGateway.TokenizeCard(ctx, tokenizeReq)
+	case payment.GatewayJioPay:
+		fmt.Println("🔑 Calling JioPay tokenization API...")
+		tokenizeResp, err = h.jioPayGateway.TokenizeCard(ctx, tokenizeReq)
+	case payment.GatewayEasebuzz:
+		fmt.Println("🔑 Calling Easebuzz tokenization API...")
+		tokenizeResp, err = h.easebuzzGateway.TokenizeCard(ctx, tokenizeReq)
+	default:
+		fmt.Printf("❌ Unknown gateway: %s\n", pmt.GatewayUsed)
+		return fmt.Errorf("unknown gateway: %s", pmt.GatewayUsed)
+	}
+
+	if err != nil {
+		fmt.Printf("❌ Tokenization failed: %v\n", err)
+		return fmt.Errorf("tokenization failed: %w", err)
+	}
+
+	fmt.Printf("✅ Tokenization successful: Token=%s..., Gateway Card ID=%s\n",
+		tokenizeResp.Token[:min(20, len(tokenizeResp.Token))],
+		tokenizeResp.CardID)
+
+	// Step 5: Update the stored_card record with tokenization data (Phase 2 completion)
+	storedCard.Token = tokenizeResp.Token
+	storedCard.GatewayUsed = pmt.GatewayUsed
+	storedCard.IsActive = true
+	storedCard.IssuerBank = "Unknown" // TODO: Extract from metadata or separate API call if needed
+
+	// Update metadata to reflect Phase 2 completion
+	if storedCard.Metadata == nil {
+		storedCard.Metadata = make(map[string]any)
+	}
+	storedCard.Metadata["status"] = "active"
+	storedCard.Metadata["phase"] = "2_tokenization_complete"
+	storedCard.Metadata["tokenization_date"] = time.Now().Format("2006-01-02")
+	storedCard.Metadata["tokenization_payment_id"] = pmt.ID
+	storedCard.Metadata["gateway_card_id"] = tokenizeResp.CardID
+
+	// Update the stored_card record in database
+	if err := h.storedCardRepo.UpdateStoredCard(ctx, storedCard); err != nil {
+		fmt.Printf("❌ Failed to update stored_card: %v\n", err)
+		return fmt.Errorf("failed to update stored_card: %w", err)
+	}
+
+	fmt.Printf("✅ Stored card updated successfully: %s (now active)\n", storedCard.CardID)
+	fmt.Println("=== TOKENIZATION PHASE 2: Complete ===")
+
+	return nil
+}
+
+// min returns the minimum of two integers
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // ============================================================================
@@ -610,6 +786,32 @@ func (h *CallbackHandler) handlePostPaymentUpdate(
 			fmt.Println("✅ Vouchers finalized successfully")
 		}
 	}
+
+	return nil
+}
+
+// handleTokenizationFailure marks card as inactive when tokenization payment fails
+// Called after failed tokenization payment (FURL callback)
+func (h *CallbackHandler) handleTokenizationFailure(ctx context.Context, pmt *payment.Payment, failureReason string) error {
+	fmt.Println("=== TOKENIZATION FAILURE: Marking card as inactive ===")
+
+	// Step 1: Get the stored_card_id from payment.payment_source_id
+	if pmt.PaymentSourceID == nil || *pmt.PaymentSourceID == "" {
+		fmt.Println("⚠️  No payment_source_id found - card might not have been created yet")
+		return nil // Non-fatal: card might not have been created yet
+	}
+
+	storedCardID := *pmt.PaymentSourceID
+	fmt.Printf("🔑 Payment linked to stored_card: %s\n", storedCardID)
+
+	// Step 2: Update card status to inactive with failure reason
+	if err := h.storedCardRepo.UpdateCardStatus(ctx, storedCardID, false, failureReason); err != nil {
+		fmt.Printf("❌ Failed to update card status: %v\n", err)
+		return fmt.Errorf("failed to update card status: %w", err)
+	}
+
+	fmt.Printf("✅ Card marked as inactive: %s (reason: %s)\n", storedCardID, failureReason)
+	fmt.Println("=== TOKENIZATION FAILURE: Complete ===")
 
 	return nil
 }

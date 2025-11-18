@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+
 	"github.com/labstack/echo/v4"
 	authRepo "xcentro.in/internal/adapters/database/postgres/auth"
 	batchPaymentRepo "xcentro.in/internal/adapters/database/postgres/batch_payment"
@@ -54,6 +56,30 @@ import (
 type serviceFactory struct {
 	clients *externalClients
 	cfg     *config.Config
+}
+
+// feeCalculatorAdapter adapts business_rules.DatabaseFeeCalculator to payment.FeeCalculatorWithTax
+type feeCalculatorAdapter struct {
+	calc business_rules.DatabaseFeeCalculator
+}
+
+// CalculateWithTax adapts the call from payment package to business_rules package
+func (a *feeCalculatorAdapter) CalculateWithTax(ctx context.Context, amount int64, method corePayment.PaymentMethod, cardType *corePayment.CardType, cardCategory *corePayment.CardCategory) (*corePayment.FeeCalculationWithTax, error) {
+	result, err := a.calc.CalculateWithTax(ctx, amount, method, cardType, cardCategory)
+	if err != nil {
+		return nil, err
+	}
+
+	// Convert business_rules.FeeCalculationWithTax to payment.FeeCalculationWithTax
+	return &corePayment.FeeCalculationWithTax{
+		BaseAmount:            result.BaseAmount,
+		ConvenienceFee:        result.ConvenienceFee,
+		ConvenienceFeeGST:     result.ConvenienceFeeGST,
+		TotalFee:              result.TotalFee,
+		TotalAmount:           result.TotalAmount,
+		ConvenienceFeePercent: result.ConvenienceFeePercent,
+		GSTPercent:            result.GSTPercent,
+	}, nil
 }
 
 // createCoreServices creates commonly used repositories and services together
@@ -113,17 +139,21 @@ func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group
 	_, _, _, _, _, busSvc, authSvc := factory.createCoreServices(nil)
 
 	// Initialize payment gateway clients
-	easebuzzClient := easebuzz.NewEasebuzzClient(cfg.Easebuzz.BaseURL, cfg.Easebuzz.MerchantKey, cfg.Easebuzz.Salt, cfg.Easebuzz.APIKey)
-	jioPayClient := jiopay.NewJioPayClient(cfg.JioPay.BaseURL, cfg.JioPay.TokenizationBaseURL, cfg.JioPay.MerchantID, cfg.JioPay.APIKey, cfg.JioPay.AppID, cfg.JioPay.EncryptionKey)
-	mockPGClient := mockpg.NewMockPGClient(cfg.MockPG.MerchantID, cfg.MockPG.APIKey, cfg.MockPG.SimulateSuccess)
+	easebuzzClient := easebuzz.NewEasebuzzClient(cfg.Easebuzz.BaseURL, cfg.Easebuzz.MerchantKey, cfg.Easebuzz.Salt, cfg.Easebuzz.APIKey, cfg.Easebuzz.IsAggregatorModel)
+	jioPayClient := jiopay.NewJioPayClient(cfg.JioPay.BaseURL, cfg.JioPay.TokenizationBaseURL, cfg.JioPay.MerchantID, cfg.JioPay.APIKey, cfg.JioPay.AppID, cfg.JioPay.EncryptionKey, cfg.JioPay.IsAggregatorModel, busSvc)
+	mockPGClient := mockpg.NewMockPGClient(cfg.MockPG.MerchantID, cfg.MockPG.APIKey, cfg.MockPG.SimulateSuccess, cfg.MockPG.IsAggregatorModel)
 
-	// Create payment orchestrator with all gateway clients
-	orchestrator := corePayment.NewPaymentOrchestrator(paymentRepository, storedCardRepository, jioPayClient, easebuzzClient, mockPGClient, cfg.MockPG.Enabled, logger.GetDefault())
-	feeCalculator := business_rules.NewFeeCalculator()
-	walletService := business_rules.NewWalletService(storedCardRepository, bankAccountRepository, clients.txManager, busSvc, logger.GetDefault())
-
+	// Initialize fee calculator
 	feeRulesRepository := paymentRepo.NewPostgresFeeRulesRepository(clients.db)
 	databaseFeeCalculator := business_rules.NewDatabaseFeeCalculator(feeRulesRepository)
+
+	// Adapter to convert business_rules.DatabaseFeeCalculator to payment.FeeCalculatorWithTax
+	feeCalculatorAdapter := &feeCalculatorAdapter{calc: databaseFeeCalculator}
+
+	// Create payment orchestrator with all gateway clients and fee calculator
+	orchestrator := corePayment.NewPaymentOrchestrator(paymentRepository, storedCardRepository, jioPayClient, easebuzzClient, mockPGClient, cfg.MockPG.Enabled, feeCalculatorAdapter, logger.GetDefault())
+	feeCalculator := business_rules.NewFeeCalculator()
+	walletService := business_rules.NewWalletService(storedCardRepository, bankAccountRepository, clients.txManager, busSvc, logger.GetDefault())
 	paymentSourceService := payments.NewPaymentSourceService(walletService, databaseFeeCalculator)
 
 	voucherRepository := voucherRepo.NewPostgresVoucherRepository(clients.db, cfg.BankAccountEncryption.EncryptionKey)
@@ -136,16 +166,16 @@ func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group
 	paymentService := payments.NewPaymentService(orchestrator, paymentRepository, storedCardRepository, bankAccountRepository, walletService, feeCalculator, clients.txManager, voucherService, voucherRepository, pendingVoucherRepository, busSvc, cfg, logger.GetDefault())
 
 	processPaymentGroup := group.Group("/process_payment")
-	payment.RegisterPaymentRoutes(processPaymentGroup, paymentService, paymentSourceService, authSvc, voucherRepository, stateChangeRepository, businessPayeeRelationRepo, storedCardRepository, bankAccountRepository, logger.GetDefault())
+	payment.RegisterPaymentRoutes(processPaymentGroup, paymentService, paymentSourceService, walletService, authSvc, voucherRepository, stateChangeRepository, businessPayeeRelationRepo, storedCardRepository, bankAccountRepository, logger.GetDefault())
 
 	walletGroup := group.Group("/wallet")
-	payment.RegisterWalletRoutes(walletGroup, paymentService, paymentSourceService, authSvc, logger.GetDefault())
+	payment.RegisterWalletRoutes(walletGroup, paymentService, paymentSourceService, walletService, authSvc, storedCardRepository, logger.GetDefault())
 
 	// Mock 3DS page handler (for mock PG testing)
 	mock3DSHandler := payment.NewMock3DSHandler(paymentRepository, cfg.Server.URL)
 	processPaymentGroup.GET("/mock_3ds", mock3DSHandler.HandleMock3DSPage)
 
-	callbackHandler := payment.NewCallbackHandler(paymentRepository, jioPayClient, easebuzzClient, mockPGClient, cfg.MockPG.Enabled, pendingVoucherRepository, voucherRepository, clients.txManager, stateChangeRepository)
+	callbackHandler := payment.NewCallbackHandler(paymentRepository, storedCardRepository, jioPayClient, easebuzzClient, mockPGClient, cfg.MockPG.Enabled, pendingVoucherRepository, voucherRepository, clients.txManager, stateChangeRepository)
 	processPaymentGroup.POST("/callback", callbackHandler.HandleCallback)
 
 	webhookHandler := payment.NewWebhookHandler(paymentRepository, jioPayClient, easebuzzClient, mockPGClient, cfg.MockPG.Enabled)

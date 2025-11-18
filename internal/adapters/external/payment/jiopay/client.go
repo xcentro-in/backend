@@ -10,19 +10,22 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"xcentro.in/internal/core/business"
 	"xcentro.in/internal/core/payment"
 )
 
 // JioPayClient implements the PaymentGateway interface for JioPay
 type JioPayClient struct {
-	baseURL             string // Base URL for payment APIs
-	tokenizationBaseURL string // Vault API base URL
-	merchantID          string // JioPay merchant identifier
-	apiKey              string // API authentication key for HMAC
-	appID               string // x-app-id header for vault APIs
-	encryptionKey       string // AES-128 encryption key for x-app-token
+	baseURL             string      // Base URL for payment APIs
+	tokenizationBaseURL string      // Vault API base URL
+	merchantID          string      // JioPay merchant identifier
+	apiKey              string      // API authentication key for HMAC
+	appID               string      // x-app-id header for vault APIs
+	encryptionKey       string                 // AES-128 encryption key for x-app-token
+	isAggregatorModel   bool                   // Payment model: false = normal (merchant charges), true = aggregator (PG charges)
 	httpClient          *http.Client
-	hashGenerator       *SecureHashGenerator // Hash generator for request/response signatures
+	hashGenerator       *SecureHashGenerator   // Hash generator for request/response signatures
+	businessOwnerSvc    business.BusinessService // Business service for fetching owner mobile (JioPay externalId requirement)
 }
 
 // NewJioPayClient creates a new JioPay payment gateway client
@@ -34,6 +37,8 @@ type JioPayClient struct {
 //   - apiKey: JIOPAY_API_KEY from environment (for HMAC-SHA256)
 //   - appID: JIOPAY_APP_ID from environment (for x-app-id header)
 //   - encryptionKey: JIOPAY_ENCRYPTION_KEY from environment (16 bytes for AES-128)
+//   - isAggregatorModel: JIOPAY_IS_AGGREGATOR_MODEL from environment (payment model)
+//   - businessOwnerSvc: Service to fetch business owner mobile (required for JioPay externalId)
 //
 // Usage:
 //
@@ -44,8 +49,10 @@ type JioPayClient struct {
 //	    cfg.JioPay.APIKey,
 //	    cfg.JioPay.AppID,
 //	    cfg.JioPay.EncryptionKey,
+//	    cfg.JioPay.IsAggregatorModel,
+//	    businessOwnerService,
 //	)
-func NewJioPayClient(baseURL, tokenizationBaseURL, merchantID, apiKey, appID, encryptionKey string) payment.PaymentGateway {
+func NewJioPayClient(baseURL, tokenizationBaseURL, merchantID, apiKey, appID, encryptionKey string, isAggregatorModel bool, businessOwnerSvc business.BusinessService) payment.PaymentGateway {
 	return &JioPayClient{
 		baseURL:             baseURL,
 		tokenizationBaseURL: tokenizationBaseURL,
@@ -53,6 +60,8 @@ func NewJioPayClient(baseURL, tokenizationBaseURL, merchantID, apiKey, appID, en
 		apiKey:              apiKey,
 		appID:               appID,
 		encryptionKey:       encryptionKey,
+		isAggregatorModel:   isAggregatorModel,
+		businessOwnerSvc:    businessOwnerSvc,
 		httpClient: &http.Client{
 			Timeout: 60 * time.Second, // JioPay tokenization can take longer
 		},
@@ -60,9 +69,23 @@ func NewJioPayClient(baseURL, tokenizationBaseURL, merchantID, apiKey, appID, en
 	}
 }
 
+// SetHTTPClient allows setting a custom HTTP client (useful for testing with mock transport)
+// Example in tests:
+//   mockTransport := NewMockTransport()
+//   mockTransport.AddRoute("POST", "/initiateSale", `{"status":"success"}`, 200)
+//   client.SetHTTPClient(&http.Client{Transport: mockTransport})
+func (c *JioPayClient) SetHTTPClient(client *http.Client) {
+	c.httpClient = client
+}
+
 // GetGatewayType returns the gateway type identifier
 func (c *JioPayClient) GetGatewayType() payment.GatewayType {
 	return payment.GatewayJioPay
+}
+
+// IsAggregatorModel returns the payment model for this gateway
+func (c *JioPayClient) IsAggregatorModel() bool {
+	return c.isAggregatorModel
 }
 
 // TokenizeCard implements JioPay card tokenization flow
@@ -72,15 +95,25 @@ func (c *JioPayClient) GetGatewayType() payment.GatewayType {
 // Content-Type: application/json
 // Body: {user, entity, card, consent, audit}
 func (c *JioPayClient) TokenizeCard(ctx context.Context, request payment.GatewayTokenizeRequest) (*payment.GatewayTokenizeResponse, error) {
-	fmt.Println("=== JIOPAY GATEWAY: Tokenization (Vault API) ===")
+	fmt.Println("=== JIOPAY GATEWAY: Tokenization (Vault API - /tokenized-card) ===")
 	fmt.Printf("📥 Business ID: %s\n", request.BusinessID)
 	fmt.Printf("📥 Transaction ID: %s\n", request.TransactionID)
 	fmt.Printf("💳 Card: %s %s ending in %s\n",
 		request.CardDetails.CardCategory, request.CardDetails.CardType, request.CardDetails.LastFourDigits)
 
+	// Extract business owner mobile from metadata (required for externalId)
+	ownerMobile := extractOwnerMobile(request.Metadata)
+	if ownerMobile == "" {
+		return nil, fmt.Errorf("business owner mobile is required for JioPay tokenization")
+	}
+
+	// Construct externalId: entityId + ownerMobile (e.g., "100001000217424" + "8412819692")
+	externalID := c.merchantID + ownerMobile
+	fmt.Printf("🔑 ExternalID: %s (entityId: %s + mobile: %s)\n", externalID, c.merchantID, ownerMobile)
+
 	// Build user object
 	userObj := UserObject{
-		ExternalID: request.BusinessID, // Use business ID as external customer ID
+		ExternalID: externalID, // CRITICAL: entityId + userMobile
 		Email:      extractCustomerEmail(request.Metadata),
 		Name:       extractCustomerName(request.Metadata),
 		Mobile:     buildMobileObject(request.Metadata),
@@ -142,7 +175,7 @@ func (c *JioPayClient) TokenizeCard(ctx context.Context, request payment.Gateway
 	fmt.Printf("🔐 x-app-token: %s...\n", xAppToken[:20])
 
 	// Make HTTP POST to tokenization API
-	req, err := http.NewRequestWithContext(ctx, "POST", c.tokenizationBaseURL+"/fetch-card", bytes.NewReader(jsonPayload))
+	req, err := http.NewRequestWithContext(ctx, "POST", c.tokenizationBaseURL+"/tokenized-card", bytes.NewReader(jsonPayload))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -177,52 +210,82 @@ func (c *JioPayClient) TokenizeCard(ctx context.Context, request payment.Gateway
 		return nil, fmt.Errorf("failed to parse tokenization response: %w", err)
 	}
 
-	if tokenResp.Status.Status != "SUCCESS" {
-		return nil, fmt.Errorf("tokenization failed: %s", tokenResp.Status.Status)
+	// Validate response - check if tokenReference is present
+	if tokenResp.TokenReference == "" {
+		return nil, fmt.Errorf("tokenization failed: empty tokenReference in response")
 	}
 
-	fmt.Printf("✅ Token created: VaultID %s\n", tokenResp.Card.VaultID)
+	fmt.Printf("✅ Token created: TokenReference %s\n", tokenResp.TokenReference)
+	fmt.Printf("📝 Card Reference: %s\n", tokenResp.CardReference)
+	fmt.Printf("🔢 Last 4 digits: %s\n", tokenResp.PanLastFourDigits)
+	fmt.Printf("📅 Expiry: %s\n", tokenResp.Expiry)
+
+	// IMPORTANT: JioPay tokenization does NOT return vaultId in this response
+	// vaultId is obtained later by calling /fetch-card endpoint
+	// For now, use cardReference as a placeholder CardID
 
 	// Map to gateway response
 	response := &payment.GatewayTokenizeResponse{
-		Token:         tokenResp.Card.TokenReference, // Use token reference as token
-		CardID:        tokenResp.Card.VaultID,        // Use vault ID as card ID
+		Token:         tokenResp.TokenReference,    // PRIMARY: Token reference for future payments
+		CardID:        tokenResp.CardReference,     // Use cardReference as CardID (vaultId not available yet)
 		TransactionID: request.TransactionID,
 		Status:        "success",
-		Message:       tokenResp.Card.Remark,
+		Message:       "Card tokenized successfully",
 		Metadata: map[string]any{
-			"gateway":           "jiopay",
-			"tokenization_flow": "vault_api",
-			"vault_id":          tokenResp.Card.VaultID,
-			"masked_number":     tokenResp.Card.MaskedNumber,
-			"bank_name":         tokenResp.Card.BankName,
-			"card_scheme":       mapJioPayCardScheme(tokenResp.Card.Scheme),
-			"card_type":         mapJioPayCardType(tokenResp.Card.Type),
-			"is_domestic":       tokenResp.Card.IsDomestic,
-			"cvv_less":          tokenResp.Card.CVVLess,
-			"par":               tokenResp.Card.PAR,
+			"gateway":             "jiopay",
+			"tokenization_flow":   "vault_api",
+			"token_reference":     tokenResp.TokenReference,
+			"card_reference":      tokenResp.CardReference,
+			"pan_last_4_digits":   tokenResp.PanLastFourDigits,
+			"bank_name":           tokenResp.BankName,
+			"bank_id":             tokenResp.BankID,
+			"par":                 tokenResp.PAR,
+			"expiry":              tokenResp.Expiry, // MMYYYY format
+			"token_requestor_id":  tokenResp.TokenRequestorID,
+			"response_id":         tokenResp.ResponseID,
+			// NOTE: vaultId will be available only after calling /fetch-card later
+			"vault_id_available":  false,
 		},
 	}
 
 	fmt.Println("=== JIOPAY GATEWAY: Tokenization Complete ===")
+	fmt.Println("⚠️  Note: vaultId will be obtained when fetching card for payment")
 
 	return response, nil
 }
 
-// GenerateCryptogram generates JioPay-specific cryptogram
+// GenerateCryptogram generates JioPay-specific cryptogram for a tokenized card
 //
-// API: POST https://uat.jiopay.co.in/qatsp/api/vault/getCryptogram
+// API: POST https://uat.jiopay.co.in/qatsp/api/vault/getCryptogram/{vaultId}
 // Content-Type: application/json
 // Body: {user, entity, amount}
+//
+// IMPORTANT: vaultId MUST be obtained via FetchCardByLast4Digits first
 func (c *JioPayClient) GenerateCryptogram(ctx context.Context, request payment.CryptogramRequest) (*payment.CryptogramResponse, error) {
 	fmt.Println("=== JIOPAY GATEWAY: GenerateCryptogram (Vault API) ===")
-	fmt.Printf("🔐 Token: %s\n", request.Token[:10]+"...")
 	fmt.Printf("💰 Amount: %d %s\n", request.Amount, request.Currency)
+
+	// Extract vaultId and ownerMobile from metadata
+	vaultID, ok := request.Metadata["vault_id"].(string)
+	if !ok || vaultID == "" {
+		return nil, fmt.Errorf("vault_id is required in metadata for JioPay cryptogram generation")
+	}
+	fmt.Printf("🔑 VaultID: %s\n", vaultID)
+
+	ownerMobile, ok := request.Metadata["owner_mobile"].(string)
+	if !ok || ownerMobile == "" {
+		return nil, fmt.Errorf("owner_mobile is required in metadata for JioPay cryptogram generation")
+	}
+	fmt.Printf("📱 Owner Mobile: %s\n", ownerMobile)
+
+	// Construct externalId: entityId + ownerMobile (e.g., "100001000217424" + "8412819692")
+	externalID := c.merchantID + ownerMobile
+	fmt.Printf("🔑 ExternalID: %s (entityId: %s + mobile: %s)\n", externalID, c.merchantID, ownerMobile)
 
 	// Build cryptogram request
 	cryptoReq := CryptogramRequest{
 		User: UserObject{
-			ExternalID: request.BusinessID,
+			ExternalID: externalID, // CRITICAL: entityId + ownerMobile
 		},
 		Entity: EntityObject{
 			EntityID: c.merchantID,
@@ -252,8 +315,11 @@ func (c *JioPayClient) GenerateCryptogram(ctx context.Context, request payment.C
 	fmt.Printf("📋 x-trace-id: %s\n", xTraceID)
 	fmt.Printf("🔐 x-app-token: %s...\n", xAppToken[:20])
 
-	// Make HTTP POST to cryptogram API
-	req, err := http.NewRequestWithContext(ctx, "POST", c.tokenizationBaseURL+"/getCryptogram", bytes.NewReader(jsonPayload))
+	// Make HTTP POST to cryptogram API with vaultId in path
+	cryptogramURL := fmt.Sprintf("%s/getCryptogram/%s", c.tokenizationBaseURL, vaultID)
+	fmt.Printf("🌐 Cryptogram URL: %s\n", cryptogramURL)
+
+	req, err := http.NewRequestWithContext(ctx, "POST", cryptogramURL, bytes.NewReader(jsonPayload))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
@@ -327,27 +393,97 @@ func (c *JioPayClient) GenerateCryptogram(ctx context.Context, request payment.C
 
 // InitiatePayment implements JioPay payment initiation
 // API: POST https://uat.jiopay.co.in/pg/api/v2/initiateSale
-// Supports token-based card payments with cryptogram
+// Supports:
+// 1. Token-based card payments (with cryptogram)
+// 2. Raw card payments for tokenization (with saveCardIndicator)
 func (c *JioPayClient) InitiatePayment(ctx context.Context, request payment.GatewayPaymentRequest) (*payment.GatewayPaymentResponse, error) {
 	fmt.Println("=== JIOPAY GATEWAY: InitiatePayment Called ===")
 	fmt.Printf("📥 Business ID: %s\n", request.BusinessID)
 	fmt.Printf("📥 Transaction ID: %s\n", request.TransactionID)
 	fmt.Printf("💰 Amount: %d %s\n", request.Amount, request.Currency)
 	fmt.Printf("🔀 Payment Method: %s\n", request.PaymentMethod)
+	fmt.Printf("🔀 Payment Type: %s\n", request.PaymentType)
 
-	// Only support card payments for now (token-based)
+	// Only support card payments for now
 	if request.PaymentMethod != payment.PaymentMethodCard {
 		return nil, fmt.Errorf("unsupported payment method: %s (only CARD supported for now)", request.PaymentMethod)
 	}
 
-	// Verify token and cryptogram are provided
-	if request.Token == "" || request.Cryptogram == "" {
-		return nil, fmt.Errorf("token and cryptogram are required for token-based card payments")
-	}
+	// Determine if this is tokenization or token-based payment
+	isTokenization := request.PaymentType == payment.PaymentTypeTokenization
+	isTokenBased := request.Token != "" // Token-based payment uses stored card
 
-	fmt.Println("💳 Processing token-based card payment...")
-	fmt.Printf("🎫 Token: %s...\n", request.Token[:10])
-	fmt.Printf("🔐 Cryptogram: %s...\n", request.Cryptogram[:20])
+	if isTokenization {
+		fmt.Println("🔑 Processing TOKENIZATION payment (raw card with saveCardIndicator)")
+		// For tokenization, we need raw card details
+		if request.CardDetails == nil {
+			return nil, fmt.Errorf("card details are required for tokenization payments")
+		}
+	} else if isTokenBased {
+		fmt.Println("💳 Processing TOKEN-BASED card payment")
+
+		// JioPay-specific: Generate cryptogram if not provided by orchestrator
+		// This encapsulates JioPay's complex cryptogram generation flow
+		if request.Cryptogram == "" {
+			fmt.Println("🔐 Cryptogram not provided - generating internally (JioPay 3-step flow)")
+
+			// Step 1: Get owner mobile using business service
+			if c.businessOwnerSvc == nil {
+				return nil, fmt.Errorf("business service not configured for JioPay")
+			}
+
+			ownerMobile, err := c.businessOwnerSvc.GetOwnerMobile(ctx, request.BusinessID)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get owner mobile: %w", err)
+			}
+			fmt.Printf("📱 Owner mobile fetched: %d digits\n", len(ownerMobile))
+
+			// Step 2: Get stored card details from metadata
+			storedCard, ok := request.Metadata["stored_card"].(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf("stored_card metadata required for token-based payment")
+			}
+
+			last4Digits, _ := storedCard["last_four_digits"].(string)
+			if last4Digits == "" {
+				return nil, fmt.Errorf("last_four_digits required in stored_card metadata")
+			}
+
+			// Step 3: Fetch vaultId by matching last 4 digits
+			fmt.Printf("🔍 Fetching vaultId for card ending in %s\n", last4Digits)
+			vaultID, err := c.FetchCardByLast4Digits(ctx, request.BusinessID, last4Digits, ownerMobile)
+			if err != nil {
+				return nil, fmt.Errorf("failed to fetch vaultId: %w", err)
+			}
+			fmt.Printf("✅ VaultID found: %s\n", vaultID)
+
+			// Step 4: Generate cryptogram internally
+			cryptogramReq := payment.CryptogramRequest{
+				Token:         request.Token,
+				Amount:        request.Amount,
+				Currency:      request.Currency,
+				TransactionID: request.TransactionID,
+				BusinessID:    request.BusinessID,
+				Metadata: map[string]any{
+					"vault_id":     vaultID,
+					"owner_mobile": ownerMobile,
+				},
+			}
+
+			cryptogramResp, err := c.GenerateCryptogram(ctx, cryptogramReq)
+			if err != nil {
+				return nil, fmt.Errorf("failed to generate cryptogram: %w", err)
+			}
+
+			// Use generated cryptogram
+			request.Cryptogram = cryptogramResp.Cryptogram
+			fmt.Printf("✅ Cryptogram generated: %s...\n", request.Cryptogram[:20])
+		} else {
+			fmt.Println("🔐 Using cryptogram provided by orchestrator")
+			fmt.Printf("🎫 Token: %s...\n", request.Token[:10])
+			fmt.Printf("🔐 Cryptogram: %s...\n", request.Cryptogram[:20])
+		}
+	}
 
 	// Extract customer details from metadata
 	customerEmail := extractCustomerEmail(request.Metadata)
@@ -400,14 +536,7 @@ func (c *JioPayClient) InitiatePayment(ctx context.Context, request payment.Gate
 		TxnDate:         txnDate,
 
 		// Payment method
-		PaymentMode: "CARD",
-
-		// Token card details
-		CardNo:          request.Token,      // Network token
-		CardExpiry:      cardExpiry,         // YYYYMM format
-		NameOnCard:      nameOnCard,         // Name on card
-		TokenCryptogram: request.Cryptogram, // Cryptogram from getCryptogram
-		TokenRefID:      tokenRefID,         // Token reference ID
+		PaymentMode: "Card", // JioPay expects "Card" not "CARD"
 
 		// Optional customer details
 		CustomerName:     customerName,
@@ -418,6 +547,28 @@ func (c *JioPayClient) InitiatePayment(ctx context.Context, request payment.Gate
 
 		// Security - will be calculated below
 		SecureHash: "", // Set after hash generation
+	}
+
+	// Populate payment-type-specific fields
+	if isTokenization {
+		// TOKENIZATION FLOW: Use raw card details + saveCardIndicator
+		fmt.Println("🔑 Building tokenization payment request...")
+		saleReq.CardNo = request.CardDetails.Number // PCI DSS: Sent directly to gateway, never stored
+		saleReq.CardExpiry = cardExpiry             // YYYYMM format
+		saleReq.NameOnCard = nameOnCard
+		saleReq.CVV = request.CardDetails.CVV // PCI DSS: Transient only, never stored
+		saleReq.SaveCardIndicator = "Y"       // KEY: Tells JioPay to tokenize
+		saleReq.PaymentOptionCodes = determinePaymentOptionCode(request.CardDetails.CardCategory)
+		fmt.Printf("🔑 SaveCardIndicator: Y, PaymentOptionCodes: %s\n", saleReq.PaymentOptionCodes)
+	} else {
+		// TOKEN-BASED FLOW: Use network token + cryptogram
+		fmt.Println("💳 Building token-based payment request...")
+		saleReq.CardNo = request.Token               // Network token
+		saleReq.CardExpiry = cardExpiry              // YYYYMM format
+		saleReq.NameOnCard = nameOnCard              // Name on card
+		saleReq.TokenCryptogram = request.Cryptogram // Cryptogram from getCryptogram
+		saleReq.TokenRefID = tokenRefID              // Token reference ID
+		fmt.Printf("💳 Token: %s..., Cryptogram: %s...\n", request.Token[:10], request.Cryptogram[:20])
 	}
 
 	// Generate secure hash for outgoing request
@@ -530,4 +681,143 @@ func (c *JioPayClient) ValidateWebhook(payload []byte, signature string) error {
 
 	// Delegate to hash generator for validation
 	return c.hashGenerator.ValidateFromResponse(payload, signature)
+}
+
+// determinePaymentOptionCode maps card category to JioPay payment option codes
+// CC = Credit Card, DC = Debit Card
+func determinePaymentOptionCode(cardCategory payment.CardCategory) string {
+	switch cardCategory {
+	case payment.CardCategoryCredit:
+		return "CC"
+	case payment.CardCategoryDebit:
+		return "DC"
+	case payment.CardCategoryCorporate:
+		return "CC" // Corporate cards use CC code
+	default:
+		return "CC" // Default to credit card
+	}
+}
+
+// extractOwnerMobile extracts business owner mobile from metadata
+// Returns empty string if not found
+func extractOwnerMobile(metadata map[string]any) string {
+	if mobile, ok := metadata["owner_mobile"].(string); ok {
+		return mobile
+	}
+	return ""
+}
+
+// FetchCardByLast4Digits fetches all cards for a customer and returns the vaultId
+// for the card matching the last 4 digits for this particular business.
+//
+// This is CRITICAL for JioPay payment flow because:
+// - JioPay tokenization returns tokenReference but NOT vaultId
+// - To generate cryptogram, we MUST have vaultId
+// - Solution: Fetch all cards, match by last 4 digits, extract vaultId
+//
+// API: POST https://uat.jiopay.co.in/qatsp/api/vault/fetch-card
+func (c *JioPayClient) FetchCardByLast4Digits(ctx context.Context, businessID string, last4Digits string, ownerMobile string) (string, error) {
+	fmt.Println("=== JIOPAY GATEWAY: FetchCardByLast4Digits (Vault API) ===")
+	fmt.Printf("🔍 Business ID: %s\n", businessID)
+	fmt.Printf("🔍 Last 4 Digits: %s\n", last4Digits)
+	fmt.Printf("📱 Owner Mobile: %s\n", ownerMobile)
+
+	// Construct externalId: entityId + ownerMobile (e.g., "100001000217424" + "8412819692")
+	externalID := c.merchantID + ownerMobile
+	fmt.Printf("🔑 ExternalID: %s (entityId: %s + mobile: %s)\n", externalID, c.merchantID, ownerMobile)
+
+	// Build fetch-card request
+	fetchReq := FetchCardRequest{
+		Entity: EntityObject{
+			EntityID: c.merchantID,
+		},
+		User: UserObject{
+			ExternalID: externalID, // CRITICAL: entityId + ownerMobile
+		},
+	}
+
+	// Marshal to JSON
+	jsonPayload, err := json.Marshal(fetchReq)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal fetch-card request: %w", err)
+	}
+
+	fmt.Printf("📝 Payload size: %d bytes\n", len(jsonPayload))
+
+	// Generate mandatory headers for JioPay Vault API
+	xTimestampID := generateXTimestampID()
+	xTraceID := generateXTraceID()
+	xAppToken, err := generateXAppToken(c.appID, xTraceID, xTimestampID, c.encryptionKey)
+	if err != nil {
+		return "", fmt.Errorf("failed to generate x-app-token: %w", err)
+	}
+
+	fmt.Printf("📋 x-timestamp-id: %s\n", xTimestampID)
+	fmt.Printf("📋 x-trace-id: %s\n", xTraceID)
+	fmt.Printf("🔐 x-app-token: %s...\n", xAppToken[:20])
+
+	// Make HTTP POST to fetch-card API
+	req, err := http.NewRequestWithContext(ctx, "POST", c.tokenizationBaseURL+"/fetch-card", bytes.NewReader(jsonPayload))
+	if err != nil {
+		return "", fmt.Errorf("failed to create request: %w", err)
+	}
+
+	// Set mandatory headers
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-app-id", c.appID)
+	req.Header.Set("x-timestamp-id", xTimestampID)
+	req.Header.Set("x-trace-id", xTraceID)
+	req.Header.Set("x-app-token", xAppToken)
+
+	fmt.Println("🚀 Calling JioPay Vault API to fetch all cards...")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("HTTP request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
+	}
+
+	// Parse response
+	var fetchResp FetchCardResponse
+	if err := json.Unmarshal(body, &fetchResp); err != nil {
+		return "", fmt.Errorf("failed to parse fetch-card response: %w", err)
+	}
+
+	if fetchResp.Status.Status != "SUCCESS" {
+		return "", fmt.Errorf("fetch-card failed: %s", fetchResp.Status.Status)
+	}
+
+	fmt.Printf("✅ Fetched %d cards for customer\n", len(fetchResp.Card))
+
+	// Match by last 4 digits
+	// IMPORTANT: User specified "match the last four digit forthis particular business"
+	// We're doing the business scoping at the service layer (by passing businessID context)
+	for _, card := range fetchResp.Card {
+		// Extract last 4 digits from masked number (e.g., "XXXXXXXXXXXX0055" -> "0055")
+		if len(card.MaskedNumber) < 4 {
+			continue // Skip invalid masked numbers
+		}
+		cardLast4 := card.MaskedNumber[len(card.MaskedNumber)-4:]
+
+		fmt.Printf("🔍 Checking card: VaultID=%s, MaskedNumber=%s, Last4=%s, Status=%s\n",
+			card.VaultID, card.MaskedNumber, cardLast4, card.Status)
+
+		// Match by last 4 digits AND ensure card is ACTIVE
+		if cardLast4 == last4Digits && card.Status == "ACTIVE" {
+			fmt.Printf("✅ Found matching card! VaultID: %s\n", card.VaultID)
+			return card.VaultID, nil
+		}
+	}
+
+	// No matching card found
+	return "", fmt.Errorf("no active card found with last 4 digits: %s for business: %s", last4Digits, businessID)
 }

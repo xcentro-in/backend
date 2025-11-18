@@ -42,4 +42,9 @@ type BusinessService interface {
 	RejectKYB(ctx context.Context, bid string, notes string) error
 	VerifyKYB(ctx context.Context, bid string, notes string) error
 	OpsUpdateUserRole(ctx context.Context, bid string, userID string, role shared.UserRole) error
+
+	// Payment gateway support methods
+	// GetOwnerMobile retrieves the mobile number of the business owner
+	// Used by payment gateways (e.g., JioPay) that require owner mobile for externalId construction
+	GetOwnerMobile(ctx context.Context, businessID string) (string, error)
 }

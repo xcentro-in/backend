@@ -74,8 +74,8 @@ func (s *PaymentSourceService) GetPaymentSourcesWithFees(
 		return nil, fmt.Errorf("invalid payment context: %s", paymentContext)
 	}
 
-	// Fetch business wallet
-	wallet, err := s.walletService.GetBusinessWallet(ctx, businessID)
+	// Fetch business wallet (showInactive = false - only active payment sources)
+	wallet, err := s.walletService.GetBusinessWallet(ctx, businessID, false)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get business wallet: %w", err)
 	}

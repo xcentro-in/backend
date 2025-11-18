@@ -24,6 +24,11 @@ func (g *MockEasebuzzGateway) GetGatewayType() GatewayType {
 	return GatewayEasebuzz
 }
 
+// IsAggregatorModel returns the payment model for this gateway
+func (g *MockEasebuzzGateway) IsAggregatorModel() bool {
+	return false // Mock Easebuzz uses normal model
+}
+
 // TokenizeCard implements Easebuzz-specific tokenization flow
 // Easebuzz Flow: Direct tokenize API with implicit ₹1 → credit + tokenize
 func (g *MockEasebuzzGateway) TokenizeCard(ctx context.Context, request GatewayTokenizeRequest) (*GatewayTokenizeResponse, error) {
