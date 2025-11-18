@@ -54,6 +54,14 @@ func (r *PgStoredCardRepository) CreateStoredCard(ctx context.Context, card *pay
 		}
 	}
 
+	// Handle empty gateway_used (Phase 1) by using NULL
+	var gatewayUsed interface{}
+	if card.GatewayUsed == "" {
+		gatewayUsed = nil
+	} else {
+		gatewayUsed = card.GatewayUsed
+	}
+
 	err := r.querier.QueryRow(ctx, query,
 		card.BusinessID,
 		card.Token,
@@ -65,7 +73,7 @@ func (r *PgStoredCardRepository) CreateStoredCard(ctx context.Context, card *pay
 		card.IssuerBank,
 		card.CardHolderName,
 		card.IsActive,
-		card.GatewayUsed,
+		gatewayUsed,
 		metadataJSON,
 	).Scan(&card.CardID, &card.AddedAt)
 
@@ -92,6 +100,7 @@ func (r *PgStoredCardRepository) GetStoredCardByID(ctx context.Context, cardID s
 	var card payment.StoredCard
 	var lastUsedAt *time.Time
 	var failureReason *string
+	var gatewayUsed *string
 	var metadataJSON []byte
 
 	err := r.querier.QueryRow(ctx, query, cardID).Scan(
@@ -108,7 +117,7 @@ func (r *PgStoredCardRepository) GetStoredCardByID(ctx context.Context, cardID s
 		&card.IsActive,
 		&card.IsFailedTokenization,
 		&failureReason,
-		&card.GatewayUsed,
+		&gatewayUsed,
 		&card.AddedAt,
 		&lastUsedAt,
 		&metadataJSON,
@@ -124,6 +133,9 @@ func (r *PgStoredCardRepository) GetStoredCardByID(ctx context.Context, cardID s
 	card.LastUsedAt = lastUsedAt
 	if failureReason != nil {
 		card.FailureReason = *failureReason
+	}
+	if gatewayUsed != nil {
+		card.GatewayUsed = payment.GatewayType(*gatewayUsed)
 	}
 
 	if len(metadataJSON) > 0 {
@@ -188,6 +200,7 @@ func (r *PgStoredCardRepository) GetStoredCardsByBusinessID(ctx context.Context,
 		var card payment.StoredCard
 		var lastUsedAt *time.Time
 		var failureReason *string
+		var gatewayUsed *string
 		var metadataJSON []byte
 
 		err := rows.Scan(
@@ -204,7 +217,7 @@ func (r *PgStoredCardRepository) GetStoredCardsByBusinessID(ctx context.Context,
 			&card.IsActive,
 			&card.IsFailedTokenization,
 			&failureReason,
-			&card.GatewayUsed,
+			&gatewayUsed,
 			&card.AddedAt,
 			&lastUsedAt,
 			&metadataJSON,
@@ -216,6 +229,9 @@ func (r *PgStoredCardRepository) GetStoredCardsByBusinessID(ctx context.Context,
 		card.LastUsedAt = lastUsedAt
 		if failureReason != nil {
 			card.FailureReason = *failureReason
+		}
+		if gatewayUsed != nil {
+			card.GatewayUsed = payment.GatewayType(*gatewayUsed)
 		}
 
 		if len(metadataJSON) > 0 {
@@ -254,11 +270,19 @@ func (r *PgStoredCardRepository) UpdateStoredCard(ctx context.Context, card *pay
 		}
 	}
 
+	// Handle empty gateway_used by using NULL
+	var gatewayUsed interface{}
+	if card.GatewayUsed == "" {
+		gatewayUsed = nil
+	} else {
+		gatewayUsed = card.GatewayUsed
+	}
+
 	_, err := r.querier.Exec(ctx, query,
 		card.Token,
 		card.IssuerBank,
 		card.IsActive,
-		card.GatewayUsed,
+		gatewayUsed,
 		metadataJSON,
 		card.CardID,
 	)
