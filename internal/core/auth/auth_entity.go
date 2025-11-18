@@ -59,6 +59,7 @@ type ResetPasswordRequest struct {
 type ChangePasswordRequest struct {
 	OldPassword string `json:"oldPassword" validate:"required"`
 	NewPassword string `json:"newPassword" validate:"required,strong_password"`
+	OTP         string `json:"otp" validate:"required,len=6,numeric"`
 }
 
 // VerifyEmailRequest represents the request to verify email with token

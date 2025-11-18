@@ -26,7 +26,7 @@ type AuthService interface {
 	// Password reset
 	SendPasswordResetEmail(ctx context.Context, email string, emailType string) error
 	ResetPasswordWithToken(ctx context.Context, userID, token, signature, newPassword string) error
-	ChangePassword(ctx context.Context, userID, oldPassword, newPassword string) error
+	ChangePassword(ctx context.Context, userID, oldPassword, newPassword, otp string) error
 
 	// Email verification
 	SendEmailVerification(ctx context.Context, userID string) error
@@ -35,6 +35,7 @@ type AuthService interface {
 
 	// Mobile verification
 	SendMobileVerificationOTP(ctx context.Context, userID, mobileNumber string) error
+	GenerateMobileOTP(ctx context.Context, userID string) error
 	VerifyEmailWithMobile(ctx context.Context, userID, token, signature, mobileNumber string) error
 	VerifyMobileOTP(ctx context.Context, userID, otp string) error
 	ResetPasswordWithMobileOTP(ctx context.Context, userID, token, signature, otp, newPassword string) error

@@ -58,6 +58,7 @@ func RegisterAuthRoutes(e *echo.Group, authService auth.AuthService, businessSer
 	protectedAuth.Use(ratelimiter.MiddlewareDefault())
 	protectedAuth.POST("/revoke", authHandler.HandleRevokeToken)
 	protectedAuth.POST("/revoke-all", authHandler.HandleRevokeAllTokens)
+	protectedAuth.POST("/generate-mobile-otp", authHandler.HandleGenerateMobileOTP)
 	protectedAuth.POST("/change-password", authHandler.HandleChangePassword)
 	protectedAuth.GET("/onboarding-status", authHandler.HandleGetBusinessOnboardingFlags)
 
@@ -349,6 +350,33 @@ func (ah AuthHandler) HandleResetPassword(c echo.Context) error {
 	})
 }
 
+// HandleGenerateMobileOTP generates and sends OTP to user's registered mobile number
+func (ah AuthHandler) HandleGenerateMobileOTP(c echo.Context) error {
+	// Get userID from context (set by JWT middleware)
+	userID, ok := c.Get("userId").(string)
+	if !ok || userID == "" {
+		return c.JSON(401, map[string]any{"message": "Unauthorized", "data": nil})
+	}
+
+	// Delegate to service (no request body needed, uses userID from JWT)
+	if err := ah.authService.GenerateMobileOTP(c.Request().Context(), userID); err != nil {
+		logger.Errorf("Failed to generate mobile OTP for user %s: %v", userID, err)
+
+		// Return 404 if user doesn't have mobile number
+		if err.Error() == "user does not have a mobile number registered" {
+			return c.JSON(404, map[string]any{"message": "Mobile number not registered. Please update your profile.", "data": nil})
+		}
+
+		// Return 500 for other errors
+		return c.JSON(500, map[string]any{"message": "Failed to send OTP", "data": nil})
+	}
+
+	return c.JSON(200, map[string]any{
+		"message": "OTP sent successfully to your registered mobile number",
+		"data":    nil,
+	})
+}
+
 // HandleChangePassword processes requests to change the user's password
 func (ah AuthHandler) HandleChangePassword(c echo.Context) error {
 	// Get userID from context (set by middleware)
@@ -375,11 +403,15 @@ func (ah AuthHandler) HandleChangePassword(c echo.Context) error {
 	}
 
 	// Delegate to service
-	if err := ah.authService.ChangePassword(c.Request().Context(), userID, req.OldPassword, req.NewPassword); err != nil {
+	if err := ah.authService.ChangePassword(c.Request().Context(), userID, req.OldPassword, req.NewPassword, req.OTP); err != nil {
 		logger.Errorf("Password change failed: %v", err)
 		// Return 401 for authentication failures (wrong old password)
 		if err.Error() == "invalid old password" {
 			return c.JSON(401, map[string]any{"message": "Current password is incorrect", "data": nil})
+		}
+		// Return 400 for OTP errors
+		if err.Error() == "invalid or expired OTP" || err.Error() == "OTP already used" || err.Error() == "OTP has expired" {
+			return c.JSON(400, map[string]any{"message": err.Error(), "data": nil})
 		}
 		// Return 400 for validation errors
 		if err.Error() == "new password cannot be the same as old password" ||
