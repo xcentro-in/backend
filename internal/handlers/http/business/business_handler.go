@@ -418,19 +418,29 @@ func (h *BusinessHandler) InviteUser(c echo.Context) error {
 		})
 	}
 
-	// Send invitation email using auth service (after successful DB operations)
+	// Send invitation email and mobile OTP using auth service (after successful DB operations)
 	go func() {
 		bgCtx := context.Background()
+
+		// Send password reset email
 		if err := h.authService.SendPasswordResetEmail(bgCtx, req.Email, "invite"); err != nil {
 			h.logger.Errorf("Error sending invitation email: %v", err)
 			h.logger.Warnf("User %s created but invitation email failed to send", response.UserID)
 		} else {
 			h.logger.Infof("Invitation email sent successfully to %s", req.Email)
 		}
+
+		// Send mobile OTP for verification
+		if err := h.authService.SendMobileVerificationOTP(bgCtx, response.UserID, req.Mobile); err != nil {
+			h.logger.Errorf("Error sending mobile OTP: %v", err)
+			h.logger.Warnf("User %s created but mobile OTP failed to send", response.UserID)
+		} else {
+			h.logger.Infof("Mobile OTP sent successfully to %s", req.Mobile)
+		}
 	}()
 
 	return c.JSON(201, map[string]interface{}{
-		"message": "User invited successfully. Invitation email sent.",
+		"message": "User invited successfully. Invitation email and mobile OTP sent.",
 		"data":    response,
 	})
 }
