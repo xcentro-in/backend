@@ -49,7 +49,9 @@ type RevokeTokenRequest struct {
 
 // ResetPasswordRequest represents the request to reset password with token
 type ResetPasswordRequest struct {
+	UserID      string `json:"uid" validate:"required"`
 	Token       string `json:"token" validate:"required"`
+	Signature   string `json:"sig" validate:"required"`
 	NewPassword string `json:"newPassword" validate:"required,strong_password"`
 }
 
@@ -61,7 +63,9 @@ type ChangePasswordRequest struct {
 
 // VerifyEmailRequest represents the request to verify email with token
 type VerifyEmailRequest struct {
-	Token string `json:"token" validate:"required"`
+	UserID    string `json:"uid" validate:"required"`
+	Token     string `json:"token" validate:"required"`
+	Signature string `json:"sig" validate:"required"`
 }
 
 // ResendVerificationRequest represents the request to resend email verification

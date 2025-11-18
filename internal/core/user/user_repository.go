@@ -30,8 +30,10 @@ type UserRepository interface {
 	CreateVerificationCode(ctx context.Context, code *UserVerificationCodes) error
 	VerifyVerificationCode(ctx context.Context, userID, code string, codeType shared.VerificationType) (bool, error)
 	GetVerificationCodeByCode(ctx context.Context, code string, codeType shared.VerificationType) (*UserVerificationCodes, error)
+	GetVerificationCodeByUserIDAndCode(ctx context.Context, userID, code string, codeType shared.VerificationType) (*UserVerificationCodes, error)
 	MarkVerificationCodeAsUsed(ctx context.Context, codeID string) error
 	UpdateUserEmailVerification(ctx context.Context, userID string, verified bool) error
+	UpdateUserMobileVerification(ctx context.Context, userID string, verified bool) error
 	CheckUserEmailVerified(ctx context.Context, userID string) (bool, error)
 	CheckUserMobileVerified(ctx context.Context, userID string) (bool, error)
 	CheckUserEmailMobileVerified(ctx context.Context, userID string) (bool, error)

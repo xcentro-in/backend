@@ -530,8 +530,12 @@ func (s *AuthService) SendPasswordResetEmail(ctx context.Context, emailAddr stri
 		return fmt.Errorf("failed to create verification code: %w", err)
 	}
 
-	// Create password reset URL with token as query parameter
-	resetURL := fmt.Sprintf("%s/reset-password?token=%s", s.appConfig.Frontend.URL, resetToken)
+	// Generate HMAC signature for uid:token
+	signature := security.GenerateHMACSignature(userObj.Id, resetToken, s.config.SecretKey)
+
+	// Create password reset URL with uid, token, and sig as query parameters
+	resetURL := fmt.Sprintf("%s/reset-password?uid=%s&token=%s&sig=%s",
+		s.appConfig.Frontend.URL, userObj.Id, resetToken, signature)
 
 	// Render email templates using the email renderer
 	renderer := email.GetRenderer()
@@ -580,16 +584,22 @@ func (s *AuthService) SendPasswordResetEmail(ctx context.Context, emailAddr stri
 	return nil
 }
 
-// ResetPasswordWithToken resets user's password using verification token
-func (s *AuthService) ResetPasswordWithToken(ctx context.Context, token string, newPassword string) error {
-	logger.Infof("Resetting password with token")
+// ResetPasswordWithToken resets user's password using verification token with HMAC signature validation
+func (s *AuthService) ResetPasswordWithToken(ctx context.Context, userID, token, signature, newPassword string) error {
+	logger.Infof("Resetting password with token for user: %s", userID)
 
-	if token == "" {
-		return fmt.Errorf("reset token is required")
+	if userID == "" || token == "" || signature == "" {
+		return fmt.Errorf("userID, token, and signature are required")
 	}
 
 	if newPassword == "" {
 		return fmt.Errorf("new password is required")
+	}
+
+	// Validate HMAC signature first (prevents tampering)
+	if !security.ValidateHMACSignature(userID, token, signature, s.config.SecretKey) {
+		logger.Errorf("Invalid HMAC signature for user: %s", userID)
+		return fmt.Errorf("invalid or tampered reset link")
 	}
 
 	// Validate new password strength
@@ -608,14 +618,12 @@ func (s *AuthService) ResetPasswordWithToken(ctx context.Context, token string, 
 		return fmt.Errorf("failed to hash password: %w", err)
 	}
 
-	var userID string
-
 	// Use transaction to ensure atomicity
 	err = s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
 		txUserRepo := s.userRepo.WithTx(tx)
 
-		// Get verification code record using hashed token
-		verificationCode, err := txUserRepo.GetVerificationCodeByCode(ctx, hashedToken, shared.PasswordReset)
+		// Get verification code record using userID and hashed token (faster with userID index)
+		verificationCode, err := txUserRepo.GetVerificationCodeByUserIDAndCode(ctx, userID, hashedToken, shared.PasswordReset)
 		if err != nil {
 			logger.Errorf("Failed to get password reset code: %v", err)
 			return fmt.Errorf("invalid or expired reset token")
@@ -649,7 +657,6 @@ func (s *AuthService) ResetPasswordWithToken(ctx context.Context, token string, 
 			return fmt.Errorf("failed to update password: %w", err)
 		}
 
-		userID = verificationCode.UserID
 		return nil
 	})
 
@@ -723,8 +730,12 @@ func (s *AuthService) SendEmailVerification(ctx context.Context, userID string) 
 		return fmt.Errorf("failed to create verification code: %w", err)
 	}
 
-	// Create verification URL
-	verificationURL := fmt.Sprintf("%s/verify-email?token=%s", s.appConfig.Frontend.URL, verificationToken)
+	// Generate HMAC signature for uid:token
+	signature := security.GenerateHMACSignature(userID, verificationToken, s.config.SecretKey)
+
+	// Create verification URL with uid, token, and sig
+	verificationURL := fmt.Sprintf("%s/verify-email?uid=%s&token=%s&sig=%s",
+		s.appConfig.Frontend.URL, userID, verificationToken, signature)
 
 	// Render email templates using the email renderer
 	renderer := email.GetRenderer()
@@ -756,25 +767,29 @@ func (s *AuthService) SendEmailVerification(ctx context.Context, userID string) 
 	return nil
 }
 
-// VerifyEmailWithToken verifies user's email using verification token
-func (s *AuthService) VerifyEmailWithToken(ctx context.Context, token string) error {
-	logger.Infof("Verifying email with token")
+// VerifyEmailWithToken verifies user's email using verification token with HMAC signature validation
+func (s *AuthService) VerifyEmailWithToken(ctx context.Context, userID, token, signature string) error {
+	logger.Infof("Verifying email with token for user: %s", userID)
 
-	if token == "" {
-		return fmt.Errorf("verification token is required")
+	if userID == "" || token == "" || signature == "" {
+		return fmt.Errorf("userID, token, and signature are required")
+	}
+
+	// Validate HMAC signature first (prevents tampering)
+	if !security.ValidateHMACSignature(userID, token, signature, s.config.SecretKey) {
+		logger.Errorf("Invalid HMAC signature for user: %s", userID)
+		return fmt.Errorf("invalid or tampered verification link")
 	}
 
 	// Hash the incoming token to compare with stored hash
 	hashedToken := security.HashTokenWithPepper(token, s.bcryptConfig.Pepper)
 
-	var userID string
-
 	// Use transaction to ensure atomicity
 	err := s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
 		txUserRepo := s.userRepo.WithTx(tx)
 
-		// Get verification code record using hashed token
-		verificationCode, err := txUserRepo.GetVerificationCodeByCode(ctx, hashedToken, shared.EmailVerification)
+		// Get verification code record using userID and hashed token (faster with userID index)
+		verificationCode, err := txUserRepo.GetVerificationCodeByUserIDAndCode(ctx, userID, hashedToken, shared.EmailVerification)
 		if err != nil {
 			logger.Errorf("Failed to get verification code: %v", err)
 			return fmt.Errorf("invalid or expired verification token")
@@ -808,7 +823,6 @@ func (s *AuthService) VerifyEmailWithToken(ctx context.Context, token string) er
 			return fmt.Errorf("failed to update user email verification: %w", err)
 		}
 
-		userID = verificationCode.UserID
 		return nil
 	})
 
