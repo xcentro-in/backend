@@ -216,6 +216,19 @@ type VerifiedUPIDetails struct {
 	IsActive   bool   `json:"is_active"`
 }
 
+// UpdateCardStatusRequest represents the request to toggle card active/inactive status
+type UpdateCardStatusRequest struct {
+	IsActive bool `json:"is_active"`
+}
+
+// UpdateCardStatusResponse represents the response after updating card status
+type UpdateCardStatusResponse struct {
+	CardID     string `json:"card_id"`
+	CardStatus string `json:"card_status"` // "active" | "inactive"
+	IsActive   bool   `json:"is_active"`
+	Message    string `json:"message"`
+}
+
 // === COMMON RESPONSE MODELS ===
 
 // StandardResponse represents a standard API response

@@ -122,6 +122,163 @@ func (h *PaymentHandler) FetchWallet(c echo.Context) error {
 	})
 }
 
+// UpdateCardStatus handles PATCH /wallet/cards/:card_id/status
+func (h *PaymentHandler) UpdateCardStatus(c echo.Context) error {
+	h.logger.Info("UpdateCardStatus API called")
+
+	// Extract userId from JWT context (set by JWTMiddleware)
+	userID, ok := c.Get("userId").(string)
+	if !ok || userID == "" {
+		h.logger.Warn("Missing userId in JWT context")
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "MISSING_USER_ID",
+			"message": "User ID not found in token",
+		})
+	}
+	h.logger.DebugWith("User authenticated", "user_id", userID)
+
+	// Extract business_id from X-Business-ID header
+	businessID := c.Request().Header.Get("X-Business-ID")
+	if businessID == "" {
+		h.logger.Warn("Missing X-Business-ID header")
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "MISSING_BUSINESS_ID",
+			"message": "X-Business-ID header is required",
+		})
+	}
+
+	// Extract card_id from URL parameter
+	cardID := c.Param("card_id")
+	if cardID == "" {
+		h.logger.Warn("Missing card_id parameter")
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "MISSING_CARD_ID",
+			"message": "card_id parameter is required",
+		})
+	}
+
+	h.logger.DebugWith("Updating card status", "card_id", cardID, "business_id", businessID)
+
+	// Bind request body
+	var req UpdateCardStatusRequest
+	if err := c.Bind(&req); err != nil {
+		h.logger.WarnWith("Invalid request body", "error", err)
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "INVALID_REQUEST",
+			"message": "Invalid request body",
+		})
+	}
+
+	// Fetch the card to verify it belongs to the business
+	card, err := h.storedCardRepo.GetStoredCardByID(c.Request().Context(), cardID)
+	if err != nil {
+		h.logger.ErrorWith("Failed to fetch card", "error", err, "card_id", cardID)
+		return c.JSON(http.StatusNotFound, map[string]any{
+			"error":   "CARD_NOT_FOUND",
+			"message": "Card not found",
+		})
+	}
+
+	// Verify card belongs to the business
+	if card.BusinessID != businessID {
+		h.logger.WarnWith("Card does not belong to business",
+			"card_id", cardID,
+			"card_business_id", card.BusinessID,
+			"request_business_id", businessID)
+		return c.JSON(http.StatusForbidden, map[string]any{
+			"error":   "FORBIDDEN",
+			"message": "Card does not belong to this business",
+		})
+	}
+
+	// Validate card can be toggled (must have token - i.e., successfully tokenized)
+	if card.Token == "" {
+		h.logger.WarnWith("Cannot toggle pending/failed card",
+			"card_id", cardID,
+			"is_failed", card.IsFailedTokenization)
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "INVALID_CARD_STATE",
+			"message": "Cannot toggle status of pending or failed cards. Only successfully tokenized cards can be toggled.",
+		})
+	}
+
+	// Check if already in desired state
+	if card.IsActive == req.IsActive {
+		h.logger.InfoWith("Card already in desired state",
+			"card_id", cardID,
+			"current_state", card.IsActive,
+			"requested_state", req.IsActive)
+
+		cardStatus := "active"
+		if !card.IsActive {
+			cardStatus = "inactive"
+		}
+
+		return c.JSON(http.StatusOK, map[string]any{
+			"message":  "Card status unchanged",
+			"endpoint": "PATCH /v1/wallet/cards/:card_id/status",
+			"status":   "success",
+			"data": UpdateCardStatusResponse{
+				CardID:     cardID,
+				CardStatus: cardStatus,
+				IsActive:   card.IsActive,
+				Message:    "Card already in requested state",
+			},
+		})
+	}
+
+	// Update card status
+	// Use DeactivateCard if setting to inactive, or update IsActive directly
+	if req.IsActive {
+		// Reactivate card
+		card.IsActive = true
+		if err := h.storedCardRepo.UpdateStoredCard(c.Request().Context(), card); err != nil {
+			h.logger.ErrorWith("Failed to reactivate card", "error", err, "card_id", cardID)
+			return c.JSON(http.StatusInternalServerError, map[string]any{
+				"error":   "UPDATE_FAILED",
+				"message": "Failed to update card status",
+			})
+		}
+
+		h.logger.InfoWith("Card reactivated", "card_id", cardID)
+
+		return c.JSON(http.StatusOK, map[string]any{
+			"message":  "Card activated successfully",
+			"endpoint": "PATCH /v1/wallet/cards/:card_id/status",
+			"status":   "success",
+			"data": UpdateCardStatusResponse{
+				CardID:     cardID,
+				CardStatus: "active",
+				IsActive:   true,
+				Message:    "Card is now active and can be used for payments",
+			},
+		})
+	} else {
+		// Deactivate card
+		if err := h.storedCardRepo.DeactivateCard(c.Request().Context(), cardID); err != nil {
+			h.logger.ErrorWith("Failed to deactivate card", "error", err, "card_id", cardID)
+			return c.JSON(http.StatusInternalServerError, map[string]any{
+				"error":   "UPDATE_FAILED",
+				"message": "Failed to update card status",
+			})
+		}
+
+		h.logger.InfoWith("Card deactivated", "card_id", cardID)
+
+		return c.JSON(http.StatusOK, map[string]any{
+			"message":  "Card deactivated successfully",
+			"endpoint": "PATCH /v1/wallet/cards/:card_id/status",
+			"status":   "success",
+			"data": UpdateCardStatusResponse{
+				CardID:     cardID,
+				CardStatus: "inactive",
+				IsActive:   false,
+				Message:    "Card is now inactive and cannot be used for payments",
+			},
+		})
+	}
+}
+
 // Helper functions to convert domain entities to response models
 
 func convertStoredCardsToResponse(cards []*payment.StoredCard) []StoredCardResponse {
@@ -1144,16 +1301,17 @@ func RegisterPaymentRoutes(
 }
 
 // RegisterWalletRoutes registers all wallet management routes
-func RegisterWalletRoutes(group *echo.Group, paymentService *payments.PaymentService, paymentSourceService *payments.PaymentSourceService, walletService business_rules.WalletService, authService auth.AuthService, log *logger.Logger) {
-	// Wallet routes don't need the additional repositories for payment details
-	handler := NewPaymentHandler(paymentService, paymentSourceService, walletService, nil, nil, nil, nil, nil, log)
+func RegisterWalletRoutes(group *echo.Group, paymentService *payments.PaymentService, paymentSourceService *payments.PaymentSourceService, walletService business_rules.WalletService, authService auth.AuthService, storedCardRepo payment.StoredCardRepository, log *logger.Logger) {
+	// Wallet routes need storedCardRepo for card status updates
+	handler := NewPaymentHandler(paymentService, paymentSourceService, walletService, nil, nil, nil, storedCardRepo, nil, log)
 
 	// Apply JWT middleware to all wallet routes
 	group.Use(middleware.JWTMiddleware(authService))
 
 	// Wallet operations
-	group.GET("", handler.FetchWallet)             // GET /wallet - fetch wallet with inactive cards
-	group.POST("/add_source", handler.AddPaymentSource)
+	group.GET("", handler.FetchWallet)                            // GET /wallet - fetch wallet with inactive cards
+	group.POST("/add_source", handler.AddPaymentSource)           // POST /wallet/add_source - add new payment source
+	group.PATCH("/cards/:card_id/status", handler.UpdateCardStatus) // PATCH /wallet/cards/:card_id/status - toggle card active/inactive
 }
 
 // GetPaymentList handles GET /payments

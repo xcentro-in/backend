@@ -169,7 +169,7 @@ func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group
 	payment.RegisterPaymentRoutes(processPaymentGroup, paymentService, paymentSourceService, walletService, authSvc, voucherRepository, stateChangeRepository, businessPayeeRelationRepo, storedCardRepository, bankAccountRepository, logger.GetDefault())
 
 	walletGroup := group.Group("/wallet")
-	payment.RegisterWalletRoutes(walletGroup, paymentService, paymentSourceService, walletService, authSvc, logger.GetDefault())
+	payment.RegisterWalletRoutes(walletGroup, paymentService, paymentSourceService, walletService, authSvc, storedCardRepository, logger.GetDefault())
 
 	// Mock 3DS page handler (for mock PG testing)
 	mock3DSHandler := payment.NewMock3DSHandler(paymentRepository, cfg.Server.URL)
