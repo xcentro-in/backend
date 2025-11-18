@@ -24,6 +24,7 @@ type Config struct {
 	CORS                  CORSConfig                  `json:"cors"`
 	S3                    S3Config                    `json:"s3"`
 	SES                   SESConfig                   `json:"ses"`
+	SMS                   SMSConfig                   `json:"sms"`
 	Castler               CastlerConfig               `json:"castler"`
 	Payout                PayoutConfig                `json:"payout"`
 	JioPay                JioPayConfig                `json:"jiopay"`
@@ -95,6 +96,21 @@ type SESConfig struct {
 	SecretKey             string `json:"-" env:"SES_SECRET_KEY"`
 	SessionToken          string `json:"-" env:"SES_SESSION_TOKEN"`
 	Profile               string `json:"profile" env:"AWS_PROFILE"` // optional shared profile
+}
+
+// SMSConfig holds AWS End User Messaging SMS configuration.
+// Access/Secret keys are optional if the environment uses IAM roles or other providers.
+type SMSConfig struct {
+	Region           string        `json:"region" env:"SMS_REGION" env-required:"true"`
+	OriginationID    string        `json:"origination_id" env:"SMS_ORIGINATION_ID" env-default:"Xcentro"` // Sender ID (alphanumeric, max 11 chars)
+	Endpoint         string        `json:"endpoint" env:"SMS_ENDPOINT"`                                   // optional custom endpoint (localstack)
+	AccessKey        string        `json:"-" env:"SMS_ACCESS_KEY"`                                        // optional static credentials
+	SecretKey        string        `json:"-" env:"SMS_SECRET_KEY"`
+	SessionToken     string        `json:"-" env:"SMS_SESSION_TOKEN"`
+	Profile          string        `json:"profile" env:"AWS_PROFILE"`                                                // optional shared profile
+	OTPExpiryMinutes int           `json:"otp_expiry_minutes" env:"SMS_OTP_EXPIRY_MINUTES" env-default:"10"`         // OTP expiry in minutes
+	OTPLength        int           `json:"otp_length" env:"SMS_OTP_LENGTH" env-default:"6"`                          // OTP length (default 6 digits)
+	OTPExpiry        time.Duration `json:"otp_expiry" env:"SMS_OTP_EXPIRY" env-default:"10m"`                        // Calculated from OTPExpiryMinutes
 }
 
 // CastlerConfig holds Castler payout provider configuration.
@@ -399,6 +415,9 @@ func (c Config) Safe() Config {
 	c.SES.AccessKey = "***REDACTED***"
 	c.SES.SecretKey = "***REDACTED***"
 	c.SES.SessionToken = "***REDACTED***"
+	c.SMS.AccessKey = "***REDACTED***"
+	c.SMS.SecretKey = "***REDACTED***"
+	c.SMS.SessionToken = "***REDACTED***"
 	c.Castler.APIKey = "***REDACTED***"
 	c.Castler.SecretKey = "***REDACTED***"
 	c.Castler.WebhookSecret = "***REDACTED***"
