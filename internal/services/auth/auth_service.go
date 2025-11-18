@@ -279,9 +279,13 @@ func (s *AuthService) parseAndValidateToken(tokenString string) (*jwt.Registered
 	return claims, nil
 }
 
-// ChangePassword changes the user's password after verifying the old password.
-func (s *AuthService) ChangePassword(ctx context.Context, userID, oldPassword, newPassword string) error {
+// ChangePassword changes the user's password after verifying OTP and old password.
+func (s *AuthService) ChangePassword(ctx context.Context, userID, oldPassword, newPassword, otp string) error {
 	logger.Infof("Processing password change for user: %s", userID)
+
+	if userID == "" || oldPassword == "" || newPassword == "" || otp == "" {
+		return fmt.Errorf("all fields are required")
+	}
 
 	// Validate new password strength
 	if err := security.ValidatePasswordStrength(newPassword); err != nil {
@@ -289,16 +293,43 @@ func (s *AuthService) ChangePassword(ctx context.Context, userID, oldPassword, n
 		return err
 	}
 
-	// Hash new password upfront
+	// Hash new password and OTP upfront
 	hashedPassword, err := s.HashPassword(newPassword)
 	if err != nil {
 		logger.Errorf("Failed to hash new password: %v", err)
 		return fmt.Errorf("failed to process new password")
 	}
+	hashedOTP := security.HashOTP(otp)
 
 	// Use transaction to ensure atomicity
 	err = s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
 		txUserRepo := s.userRepo.WithTx(tx)
+
+		// Verify OTP first
+		verificationCode, err := txUserRepo.GetVerificationCodeByUserIDAndCode(ctx, userID, hashedOTP, shared.MobileVerification)
+		if err != nil {
+			logger.Errorf("Failed to get mobile verification code: %v", err)
+			return fmt.Errorf("invalid or expired OTP")
+		}
+
+		if verificationCode.Used {
+			return fmt.Errorf("OTP already used")
+		}
+
+		// Check OTP expiry
+		expiresAt, err := time.Parse(time.RFC3339, verificationCode.ExpiresAt)
+		if err != nil {
+			return fmt.Errorf("invalid expiration time format")
+		}
+
+		if time.Now().After(expiresAt) {
+			return fmt.Errorf("OTP has expired")
+		}
+
+		// Mark OTP as used
+		if err := txUserRepo.MarkVerificationCodeAsUsed(ctx, verificationCode.ID); err != nil {
+			return fmt.Errorf("failed to mark OTP as used: %w", err)
+		}
 
 		// Get user by ID within transaction
 		userObj, err := txUserRepo.GetUserByID(ctx, userID)
@@ -915,6 +946,28 @@ func (s *AuthService) SendMobileVerificationOTP(ctx context.Context, userID, mob
 
 	logger.Infof("SMS OTP sent successfully to %s, Message ID: %s", mobileNumber, messageID)
 	return nil
+}
+
+// GenerateMobileOTP fetches user's mobile number and sends OTP (generic method for protected routes)
+func (s *AuthService) GenerateMobileOTP(ctx context.Context, userID string) error {
+	logger.Infof("Generating mobile OTP for user: %s", userID)
+
+	if userID == "" {
+		return fmt.Errorf("userID is required")
+	}
+
+	// Fetch user to get mobile number
+	usr, err := s.userRepo.GetUserByID(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("failed to fetch user: %w", err)
+	}
+
+	if usr.Mobile == "" {
+		return fmt.Errorf("user does not have a mobile number registered")
+	}
+
+	// Reuse existing SendMobileVerificationOTP method
+	return s.SendMobileVerificationOTP(ctx, userID, usr.Mobile)
 }
 
 // VerifyEmailWithMobile verifies email with token/signature and captures mobile number for OTP
