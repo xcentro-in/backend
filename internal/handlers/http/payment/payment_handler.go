@@ -24,6 +24,7 @@ import (
 type PaymentHandler struct {
 	paymentService       *payments.PaymentService
 	paymentSourceService *payments.PaymentSourceService // Phase 10
+	walletService        business_rules.WalletService   // Direct access for wallet operations
 	// Additional repositories for detailed payment information
 	voucherRepo       voucherCore.VoucherRepository
 	stateChangeRepo   payment.PaymentStateChangeRepository
@@ -37,6 +38,7 @@ type PaymentHandler struct {
 func NewPaymentHandler(
 	paymentService *payments.PaymentService,
 	paymentSourceService *payments.PaymentSourceService,
+	walletService business_rules.WalletService,
 	voucherRepo voucherCore.VoucherRepository,
 	stateChangeRepo payment.PaymentStateChangeRepository,
 	payeeRelationRepo payeeCore.BusinessPayeeRelationRepository,
@@ -47,6 +49,7 @@ func NewPaymentHandler(
 	return &PaymentHandler{
 		paymentService:       paymentService,
 		paymentSourceService: paymentSourceService,
+		walletService:        walletService,
 		voucherRepo:          voucherRepo,
 		stateChangeRepo:      stateChangeRepo,
 		payeeRelationRepo:    payeeRelationRepo,
@@ -56,7 +59,7 @@ func NewPaymentHandler(
 	}
 }
 
-// FetchWallet handles POST /wallet/fetch
+// FetchWallet handles GET /wallet
 func (h *PaymentHandler) FetchWallet(c echo.Context) error {
 	h.logger.Info("FetchWallet API called")
 
@@ -82,9 +85,10 @@ func (h *PaymentHandler) FetchWallet(c echo.Context) error {
 	}
 	h.logger.DebugWith("Business ID extracted", "business_id", businessID)
 
-	// Call payment service to get business wallet information
-	h.logger.Debug("Fetching business wallet from service")
-	businessWallet, err := h.paymentService.GetBusinessWallet(c.Request().Context(), businessID)
+	// Call wallet service directly to get business wallet information
+	// showInactive = true to include failed tokenization cards within 7-day window
+	h.logger.Debug("Fetching business wallet from wallet service")
+	businessWallet, err := h.walletService.GetBusinessWallet(c.Request().Context(), businessID, true)
 	if err != nil {
 		h.logger.ErrorWith("Wallet service error", "error", err, "business_id", businessID)
 		return c.JSON(http.StatusInternalServerError, map[string]any{
@@ -112,7 +116,7 @@ func (h *PaymentHandler) FetchWallet(c echo.Context) error {
 
 	return c.JSON(http.StatusOK, map[string]any{
 		"message":  "Business wallet retrieved successfully",
-		"endpoint": "POST /v1/wallet/fetch",
+		"endpoint": "GET /v1/wallet",
 		"status":   "success",
 		"data":     response,
 	})
@@ -131,15 +135,17 @@ func convertStoredCardsToResponse(cards []*payment.StoredCard) []StoredCardRespo
 		}
 
 		response = append(response, StoredCardResponse{
-			CardID:         card.CardID,
-			LastFourDigits: card.LastFourDigits,
-			CardType:       string(card.CardType),
-			CardCategory:   string(card.CardCategory),
-			ExpiryMonth:    card.ExpiryMonth,
-			ExpiryYear:     card.ExpiryYear,
-			IssuerBank:     card.IssuerBank,
-			IsActive:       card.IsActive,
-			Nickname:       nickname,
+			CardID:               card.CardID,
+			LastFourDigits:       card.LastFourDigits,
+			CardType:             string(card.CardType),
+			CardCategory:         string(card.CardCategory),
+			ExpiryMonth:          card.ExpiryMonth,
+			ExpiryYear:           card.ExpiryYear,
+			IssuerBank:           card.IssuerBank,
+			IsActive:             card.IsActive,
+			IsFailedTokenization: card.IsFailedTokenization,
+			FailureReason:        card.FailureReason,
+			Nickname:             nickname,
 		})
 	}
 	return response
@@ -1094,6 +1100,7 @@ func RegisterPaymentRoutes(
 	group *echo.Group,
 	paymentService *payments.PaymentService,
 	paymentSourceService *payments.PaymentSourceService,
+	walletService business_rules.WalletService,
 	authService auth.AuthService,
 	voucherRepo voucherCore.VoucherRepository,
 	stateChangeRepo payment.PaymentStateChangeRepository,
@@ -1102,7 +1109,7 @@ func RegisterPaymentRoutes(
 	bankAccountRepo payment.BankAccountRepository,
 	log *logger.Logger,
 ) {
-	handler := NewPaymentHandler(paymentService, paymentSourceService, voucherRepo, stateChangeRepo, payeeRelationRepo, storedCardRepo, bankAccountRepo, log)
+	handler := NewPaymentHandler(paymentService, paymentSourceService, walletService, voucherRepo, stateChangeRepo, payeeRelationRepo, storedCardRepo, bankAccountRepo, log)
 
 	// Apply JWT middleware to all payment routes
 	group.Use(middleware.JWTMiddleware(authService))
@@ -1122,15 +1129,15 @@ func RegisterPaymentRoutes(
 }
 
 // RegisterWalletRoutes registers all wallet management routes
-func RegisterWalletRoutes(group *echo.Group, paymentService *payments.PaymentService, paymentSourceService *payments.PaymentSourceService, authService auth.AuthService, log *logger.Logger) {
+func RegisterWalletRoutes(group *echo.Group, paymentService *payments.PaymentService, paymentSourceService *payments.PaymentSourceService, walletService business_rules.WalletService, authService auth.AuthService, log *logger.Logger) {
 	// Wallet routes don't need the additional repositories for payment details
-	handler := NewPaymentHandler(paymentService, paymentSourceService, nil, nil, nil, nil, nil, log)
+	handler := NewPaymentHandler(paymentService, paymentSourceService, walletService, nil, nil, nil, nil, nil, log)
 
 	// Apply JWT middleware to all wallet routes
 	group.Use(middleware.JWTMiddleware(authService))
 
 	// Wallet operations
-	group.POST("/fetch", handler.FetchWallet)
+	group.GET("", handler.FetchWallet)             // GET /wallet - fetch wallet with inactive cards
 	group.POST("/add_source", handler.AddPaymentSource)
 }
 

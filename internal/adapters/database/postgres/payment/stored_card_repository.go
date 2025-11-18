@@ -83,7 +83,7 @@ func (r *PgStoredCardRepository) GetStoredCardByID(ctx context.Context, cardID s
 	query := `
 		SELECT card_id, business_id, token, last_four_digits, card_type, card_category,
 		       expiry_month, expiry_year, issuer_bank, card_holder_name,
-		       is_active, failure_reason, gateway_used, added_at, last_used_at, metadata
+		       is_active, is_failed_tokenization, failure_reason, gateway_used, added_at, last_used_at, metadata
 		FROM xcentro.stored_cards
 		WHERE card_id = $1 AND is_active = TRUE
 	`
@@ -105,6 +105,7 @@ func (r *PgStoredCardRepository) GetStoredCardByID(ctx context.Context, cardID s
 		&card.IssuerBank,
 		&card.CardHolderName,
 		&card.IsActive,
+		&card.IsFailedTokenization,
 		&failureReason,
 		&card.GatewayUsed,
 		&card.AddedAt,
@@ -133,18 +134,38 @@ func (r *PgStoredCardRepository) GetStoredCardByID(ctx context.Context, cardID s
 	return &card, nil
 }
 
-// GetStoredCardsByBusinessID retrieves all active cards for a business
-func (r *PgStoredCardRepository) GetStoredCardsByBusinessID(ctx context.Context, businessID string) ([]*payment.StoredCard, error) {
-	fmt.Printf("[PgStoredCardRepository] GetStoredCardsByBusinessID called - BusinessID: %s\n", businessID)
+// GetStoredCardsByBusinessID retrieves cards for a business
+// When showInactive = false: only active cards
+// When showInactive = true: active cards + failed tokenization cards from last 7 days
+func (r *PgStoredCardRepository) GetStoredCardsByBusinessID(ctx context.Context, businessID string, showInactive bool) ([]*payment.StoredCard, error) {
+	fmt.Printf("[PgStoredCardRepository] GetStoredCardsByBusinessID called - BusinessID: %s, ShowInactive: %t\n", businessID, showInactive)
 
-	query := `
-		SELECT card_id, business_id, token, last_four_digits, card_type, card_category,
-		       expiry_month, expiry_year, issuer_bank, card_holder_name,
-		       is_active, failure_reason, gateway_used, added_at, last_used_at, metadata
-		FROM xcentro.stored_cards
-		WHERE business_id = $1 AND is_active = TRUE
-		ORDER BY added_at DESC
-	`
+	var query string
+	if showInactive {
+		// Show active cards + failed tokenization cards from last 7 days
+		query = `
+			SELECT card_id, business_id, token, last_four_digits, card_type, card_category,
+			       expiry_month, expiry_year, issuer_bank, card_holder_name,
+			       is_active, is_failed_tokenization, failure_reason, gateway_used, added_at, last_used_at, metadata
+			FROM xcentro.stored_cards
+			WHERE business_id = $1
+			  AND (
+			      is_active = TRUE
+			      OR (is_failed_tokenization = TRUE AND added_at > NOW() - INTERVAL '7 days')
+			  )
+			ORDER BY is_active DESC, added_at DESC
+		`
+	} else {
+		// Show only active cards
+		query = `
+			SELECT card_id, business_id, token, last_four_digits, card_type, card_category,
+			       expiry_month, expiry_year, issuer_bank, card_holder_name,
+			       is_active, is_failed_tokenization, failure_reason, gateway_used, added_at, last_used_at, metadata
+			FROM xcentro.stored_cards
+			WHERE business_id = $1 AND is_active = TRUE
+			ORDER BY added_at DESC
+		`
+	}
 
 	rows, err := r.querier.Query(ctx, query, businessID)
 	if err != nil {
@@ -171,6 +192,7 @@ func (r *PgStoredCardRepository) GetStoredCardsByBusinessID(ctx context.Context,
 			&card.IssuerBank,
 			&card.CardHolderName,
 			&card.IsActive,
+			&card.IsFailedTokenization,
 			&failureReason,
 			&card.GatewayUsed,
 			&card.AddedAt,
@@ -262,14 +284,18 @@ func (r *PgStoredCardRepository) UpdateCardStatus(ctx context.Context, cardID st
 	fmt.Printf("[PgStoredCardRepository] UpdateCardStatus called - CardID: %s, IsActive: %t, FailureReason: %s\n",
 		cardID, isActive, failureReason)
 
+	// When marking as inactive with failure reason, set is_failed_tokenization = true
+	isFailedTokenization := !isActive && failureReason != ""
+
 	query := `
 		UPDATE xcentro.stored_cards
 		SET is_active = $1,
-		    failure_reason = $2
-		WHERE card_id = $3
+		    failure_reason = $2,
+		    is_failed_tokenization = $3
+		WHERE card_id = $4
 	`
 
-	_, err := r.querier.Exec(ctx, query, isActive, failureReason, cardID)
+	_, err := r.querier.Exec(ctx, query, isActive, failureReason, isFailedTokenization, cardID)
 	if err != nil {
 		return fmt.Errorf("failed to update card status: %w", err)
 	}

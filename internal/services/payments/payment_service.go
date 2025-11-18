@@ -344,7 +344,7 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 // GetBusinessWallet retrieves wallet for a business
 func (s *PaymentService) GetBusinessWallet(ctx context.Context, businessID string) (*payment.BusinessWallet, error) {
 	s.logger.DebugWith("Fetching business wallet", "business_id", businessID)
-	return s.walletService.GetBusinessWallet(ctx, businessID)
+	return s.walletService.GetBusinessWallet(ctx, businessID, false)
 }
 
 // AddPaymentSource adds a payment source to business wallet

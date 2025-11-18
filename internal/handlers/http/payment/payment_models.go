@@ -108,15 +108,17 @@ type FetchWalletResponse struct {
 
 // StoredCardResponse represents a stored card in the API response
 type StoredCardResponse struct {
-	CardID         string `json:"card_id"`
-	LastFourDigits string `json:"last_four_digits"`
-	CardType       string `json:"card_type"`
-	CardCategory   string `json:"card_category"`
-	ExpiryMonth    string `json:"expiry_month"`
-	ExpiryYear     string `json:"expiry_year"`
-	IssuerBank     string `json:"issuer_bank"`
-	IsActive       bool   `json:"is_active"`
-	Nickname       string `json:"nickname,omitempty"`
+	CardID               string `json:"card_id"`
+	LastFourDigits       string `json:"last_four_digits"`
+	CardType             string `json:"card_type"`
+	CardCategory         string `json:"card_category"`
+	ExpiryMonth          string `json:"expiry_month"`
+	ExpiryYear           string `json:"expiry_year"`
+	IssuerBank           string `json:"issuer_bank"`
+	IsActive             bool   `json:"is_active"`
+	IsFailedTokenization bool   `json:"is_failed_tokenization"`
+	FailureReason        string `json:"failure_reason,omitempty"`
+	Nickname             string `json:"nickname,omitempty"`
 }
 
 // BankAccountResponse represents a bank account in the API response

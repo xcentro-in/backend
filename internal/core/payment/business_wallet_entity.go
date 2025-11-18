@@ -28,11 +28,12 @@ type StoredCard struct {
 	ExpiryMonth    string         `json:"expiry_month"`     // MM format
 	ExpiryYear     string         `json:"expiry_year"`      // YY format
 	IssuerBank     string         `json:"issuer_bank"`      // Bank name
-	CardHolderName string         `json:"card_holder_name"` // Masked or business name
-	IsActive       bool           `json:"is_active"`
-	FailureReason  string         `json:"failure_reason,omitempty"` // Reason for tokenization failure (when is_active = false)
-	GatewayUsed    GatewayType    `json:"gateway_used"`             // Which gateway tokenized this
-	AddedAt        time.Time      `json:"added_at"`
+	CardHolderName         string         `json:"card_holder_name"` // Masked or business name
+	IsActive               bool           `json:"is_active"`
+	IsFailedTokenization   bool           `json:"is_failed_tokenization"`       // True if tokenization payment failed (vs user deactivation)
+	FailureReason          string         `json:"failure_reason,omitempty"`     // Reason for tokenization failure (when is_active = false)
+	GatewayUsed            GatewayType    `json:"gateway_used"`                 // Which gateway tokenized this
+	AddedAt                time.Time      `json:"added_at"`
 	LastUsedAt     *time.Time     `json:"last_used_at,omitempty"`
 	Metadata       map[string]any `json:"metadata,omitempty"`
 }
