@@ -154,9 +154,10 @@ type InitiateOnboardingRequest struct {
 
 // InviteUserRequest represents the request to invite a user to a business
 type InviteUserRequest struct {
-	Email string          `json:"email" validate:"required,email"`
-	Name  string          `json:"name" validate:"required"`
-	Role  shared.UserRole `json:"role" validate:"required"`
+	Email  string          `json:"email" validate:"required,email"`
+	Name   string          `json:"name" validate:"required"`
+	Mobile string          `json:"mobile" validate:"required,phone_in"` // Mobile number for OTP verification
+	Role   shared.UserRole `json:"role" validate:"required"`
 }
 
 // UpdateBusinessUserRequest represents the request to update a business user's role

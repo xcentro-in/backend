@@ -782,11 +782,11 @@ func (r *PgUserRepository) UpdateUserPasswordHash(ctx context.Context, userID, n
 }
 
 // CreateInvitedUser creates a new user for business invitation with all required fields
-func (r *PgUserRepository) CreateInvitedUser(ctx context.Context, email, passwordHash, name string, kycNeeded bool) (*user.User, error) {
+func (r *PgUserRepository) CreateInvitedUser(ctx context.Context, email, passwordHash, name, mobile string, kycNeeded bool) (*user.User, error) {
 	query := `
-		INSERT INTO xcentro.user_table (email, pwd_hash, name, kyc_needed, email_verified)
-		VALUES ($1, $2, $3, $4, true)
-		RETURNING id, email, name, kyc_needed, kyc_status, email_verified, mobile_verified
+		INSERT INTO xcentro.user_table (email, pwd_hash, name, mobile, kyc_needed, email_verified)
+		VALUES ($1, $2, $3, $4, $5, true)
+		RETURNING id, email, name, mobile, kyc_needed, kyc_status, email_verified, mobile_verified
 	`
 
 	var u user.User
@@ -796,11 +796,13 @@ func (r *PgUserRepository) CreateInvitedUser(ctx context.Context, email, passwor
 		email,
 		passwordHash,
 		name,
+		mobile,
 		kycNeeded,
 	).Scan(
 		&u.Id,
 		&u.Email,
 		&u.Name,
+		&u.Mobile,
 		&u.KycNeeded,
 		&kycStatusStr,
 		&u.EmailVerified,

@@ -28,7 +28,7 @@ type BusinessService interface {
 	UpdateOnboardingStatus(ctx context.Context, bid string, flagName string, value bool) error
 
 	// User management methods
-	InviteUserToBusiness(ctx context.Context, bid string, email string, name string, role shared.UserRole, requesterRole shared.UserRole) (*InviteUserResponse, error)
+	InviteUserToBusiness(ctx context.Context, bid string, email string, name string, mobile string, role shared.UserRole, requesterRole shared.UserRole) (*InviteUserResponse, error)
 	AddUserToBusiness(ctx context.Context, relation *BusinessUserRelation) error
 	GetBusinessUsers(ctx context.Context, bid string, requesterRole shared.UserRole) ([]*BusinessUserDTO, error)
 	UpdateUserRoleInBusiness(ctx context.Context, bid string, targetUserID string, requesterRole shared.UserRole, newRole shared.UserRole) error

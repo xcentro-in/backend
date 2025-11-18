@@ -51,7 +51,7 @@ type UserRepository interface {
 	UpdateUserPasswordHash(ctx context.Context, userID, newPasswordHash string) error
 
 	// Invited user methods
-	CreateInvitedUser(ctx context.Context, email, passwordHash, name string, kycNeeded bool) (*User, error)
+	CreateInvitedUser(ctx context.Context, email, passwordHash, name, mobile string, kycNeeded bool) (*User, error)
 	CountBusinessRelations(ctx context.Context, userID string) (int, error)
 
 	// Optimized queries for specific use cases

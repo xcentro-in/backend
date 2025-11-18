@@ -409,7 +409,7 @@ func (h *BusinessHandler) InviteUser(c echo.Context) error {
 	}
 
 	// Call service to invite user (service handles all authorization and validation)
-	response, err := h.businessService.InviteUserToBusiness(c.Request().Context(), businessID, req.Email, req.Name, req.Role, requesterRole)
+	response, err := h.businessService.InviteUserToBusiness(c.Request().Context(), businessID, req.Email, req.Name, req.Mobile, req.Role, requesterRole)
 	if err != nil {
 		h.logger.Errorf("Error inviting user: %v", err)
 		return c.JSON(500, map[string]interface{}{
