@@ -790,7 +790,6 @@ func (h *CallbackHandler) handlePostPaymentUpdate(
 
 		// Step 3: Send notification to owner about successful payment
 		h.logger.InfoWith("Triggering payment success notification", "payment_id", pmt.ID, "business_id", pmt.BusinessID)
-		fmt.Println("🔔 Sending payment success notification to owner...")
 
 		// Format amount for display (convert paise to rupees)
 		amountINR := float64(pmt.Amount) / 100.0
@@ -819,11 +818,9 @@ func (h *CallbackHandler) handlePostPaymentUpdate(
 
 		if err != nil {
 			h.logger.WarnWith("Failed to trigger payment success notification (non-fatal)", "payment_id", pmt.ID, "error", err)
-			fmt.Printf("⚠️  Failed to send notification: %v\n", err)
 			// Non-fatal: Payment is still successful
 		} else {
 			h.logger.InfoWith("Payment success notification triggered", "payment_id", pmt.ID)
-			fmt.Println("✅ Payment success notification sent")
 		}
 	}
 
