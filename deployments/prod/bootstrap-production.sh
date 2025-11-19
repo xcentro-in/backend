@@ -134,6 +134,28 @@ fi
 echo -e "${GREEN}✓ Prerequisites check passed${NC}"
 echo ""
 
+# Setup log rotation
+echo -e "${YELLOW}Setting up log rotation configuration...${NC}"
+
+# Create log directory if it doesn't exist
+sudo mkdir -p /var/log/xcentro
+
+# Create logrotate configuration
+sudo tee /etc/logrotate.d/docker-per-service > /dev/null <<'EOF'
+/var/log/xcentro/*.log {
+    size 50M       # Rotate ONLY if the file exceeds 50MB
+    rotate 5      # Keep 5 backups (Total max usage = 250MB per service)
+    missingok
+    notifempty
+    compress
+    delaycompress
+    copytruncate   # Vital for Fluent Bit
+}
+EOF
+
+echo -e "${GREEN}✓ Log rotation configured${NC}"
+echo ""
+
 # Summary
 echo -e "${BLUE}Deployment Configuration:${NC}"
 if [ $SKIP_SSL -eq 0 ]; then
@@ -198,10 +220,10 @@ if [ $SHOW_LOGS -eq 1 ]; then
     echo -e "${YELLOW}Starting services in foreground mode (showing logs)...${NC}"
     echo "Press Ctrl+C to stop"
     echo ""
-    docker compose -f docker-compose.production.yml up $SERVICES
+    docker compose -f docker-compose.yml up $SERVICES
 else
     echo ""
-    docker compose -f docker-compose.production.yml up -d $SERVICES
+    docker compose -f docker-compose.yml up -d $SERVICES
 
     echo ""
     echo "Waiting for services to be healthy..."
@@ -210,7 +232,7 @@ else
     # Check service health
     echo ""
     echo -e "${BLUE}Service Status:${NC}"
-    docker compose -f docker-compose.production.yml ps
+    docker compose -f docker-compose.yml ps
 
     echo ""
     echo -e "${GREEN}=========================================="
@@ -219,10 +241,10 @@ else
     echo ""
     echo -e "${BLUE}Next steps:${NC}"
     echo "1. Verify services are running:"
-    echo "   docker compose -f docker-compose.production.yml ps"
+    echo "   docker compose -f docker-compose.yml ps"
     echo ""
     echo "2. Check logs if needed:"
-    echo "   docker compose -f docker-compose.production.yml logs -f"
+    echo "   docker compose -f docker-compose.yml logs -f"
     echo ""
     echo "3. Access your application:"
     if [ $SKIP_SSL -eq 0 ]; then
@@ -236,7 +258,7 @@ else
     echo ""
     echo -e "${BLUE}Management commands:${NC}"
     echo "  • View certificate status: ./manage-certs.sh list"
-    echo "  • Stop services: docker compose -f docker-compose.production.yml down"
-    echo "  • View logs: docker compose -f docker-compose.production.yml logs -f [service]"
+    echo "  • Stop services: docker compose -f docker-compose.yml down"
+    echo "  • View logs: docker compose -f docker-compose.yml logs -f [service]"
     echo ""
 fi
