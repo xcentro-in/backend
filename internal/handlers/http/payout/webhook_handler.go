@@ -8,14 +8,17 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
+	corenotification "xcentro.in/internal/core/notification"
 	"xcentro.in/internal/core/payment"
 	"xcentro.in/internal/core/payout"
+	"xcentro.in/internal/services/notification"
 	"xcentro.in/internal/shared/logger"
 )
 
 // PayoutWebhookHandler handles webhook callbacks from payout providers
 type PayoutWebhookHandler struct {
 	transferRepo    payout.PayoutTransferRepository
+	paymentRepo     payment.PaymentRepository
 	stateChangeRepo payment.PaymentStateChangeRepository
 	webhookSecret   string // Castler webhook secret for signature verification
 	logger          *logger.Logger
@@ -24,11 +27,13 @@ type PayoutWebhookHandler struct {
 // NewPayoutWebhookHandler creates a new webhook handler
 func NewPayoutWebhookHandler(
 	transferRepo payout.PayoutTransferRepository,
+	paymentRepo payment.PaymentRepository,
 	stateChangeRepo payment.PaymentStateChangeRepository,
 	webhookSecret string,
 ) *PayoutWebhookHandler {
 	return &PayoutWebhookHandler{
 		transferRepo:    transferRepo,
+		paymentRepo:     paymentRepo,
 		stateChangeRepo: stateChangeRepo,
 		webhookSecret:   webhookSecret,
 		logger:          logger.GetDefault(),
@@ -222,6 +227,66 @@ func (h *PayoutWebhookHandler) handleCompleted(ctx context.Context, transfer *pa
 	h.logger.InfoWith("Transfer completed successfully",
 		"transfer_id", transfer.TransferRequestID,
 		"utr", payload.UTR)
+
+	// Step 4: Send notification to owner about successful payout
+	// First, get the payment to retrieve the business_id
+	pmt, err := h.paymentRepo.GetPaymentByID(ctx, transfer.PaymentID)
+	if err != nil {
+		h.logger.WarnWith("Failed to fetch payment for notification (non-fatal)",
+			"payment_id", transfer.PaymentID,
+			"error", err)
+		// Non-fatal: Payout is still successful, just can't send notification
+		return nil
+	}
+
+	if pmt == nil {
+		h.logger.WarnWith("Payment not found for notification (non-fatal)",
+			"payment_id", transfer.PaymentID)
+		return nil
+	}
+
+	h.logger.InfoWith("Triggering payout success notification",
+		"transfer_id", transfer.TransferRequestID,
+		"business_id", pmt.BusinessID,
+		"utr", payload.UTR)
+
+	// Format amount for display (transfer.Amount is in paise, convert to rupees)
+	amountINR := float64(transfer.Amount) / 100.0
+
+	// Create notification payload
+	transferIDStr := transfer.TransferRequestID
+	paymentIDStr := transfer.PaymentID
+	notifErr := notification.TriggerBroadcast(
+		ctx,
+		pmt.BusinessID,                              // business_id from payment
+		corenotification.RoleOwner,                  // minimum_role (owner only)
+		corenotification.EventPayoutCompleted,       // event_type
+		"Payout Completed",                          // title
+		fmt.Sprintf("Payout of ₹%.2f to %s has been completed successfully. UTR: %s",
+			amountINR, payload.BeneficiaryName, payload.UTR), // body
+		corenotification.EntityReferences{           // entities
+			BusinessID: &pmt.BusinessID,
+			PaymentID:  &paymentIDStr,
+		},
+		[]corenotification.ActionButton{             // actions
+			{
+				Type: corenotification.ButtonTypeNeutral,
+				Text: "View Details",
+				Href: fmt.Sprintf("/payouts/%s", transferIDStr),
+			},
+		},
+	)
+
+	if notifErr != nil {
+		h.logger.WarnWith("Failed to trigger payout success notification (non-fatal)",
+			"transfer_id", transfer.TransferRequestID,
+			"error", notifErr)
+		// Non-fatal: Payout is still successful
+	} else {
+		h.logger.InfoWith("Payout success notification triggered",
+			"transfer_id", transfer.TransferRequestID)
+	}
+
 	return nil
 }
 
