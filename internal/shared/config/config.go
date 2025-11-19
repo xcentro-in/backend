@@ -279,10 +279,11 @@ type LoggerConfig struct {
 
 // OpsOAuthConfig holds OAuth2/OIDC configuration for ops dashboard authentication.
 type OpsOAuthConfig struct {
-	ClientID     string `json:"client_id" env:"OPS_OAUTH_CLIENT_ID" env-required:"true"`         // Office365 Application (client) ID
-	ClientSecret string `json:"-" env:"OPS_OAUTH_CLIENT_SECRET" env-required:"true"`             // Office365 Client secret (sensitive)
-	RedirectURL  string `json:"redirect_url" env:"OPS_OAUTH_REDIRECT_URL" env-required:"true"`   // OAuth callback URL (e.g., https://ops.xcentro.in/ops/v1/auth/callback)
-	TenantID     string `json:"tenant_id" env:"OPS_OAUTH_TENANT_ID" env-default:"organizations"` // Office365 Tenant ID (default: organizations for multi-tenant)
+	ClientID       string `json:"client_id" env:"OPS_OAUTH_CLIENT_ID" env-required:"true"`         // Office365 Application (client) ID
+	ClientSecret   string `json:"-" env:"OPS_OAUTH_CLIENT_SECRET" env-required:"true"`             // Office365 Client secret (sensitive)
+	RedirectURL    string `json:"redirect_url" env:"OPS_OAUTH_REDIRECT_URL" env-required:"true"`   // OAuth callback URL (e.g., https://ops.xcentro.in/ops/v1/auth/callback)
+	TenantID       string `json:"tenant_id" env:"OPS_OAUTH_TENANT_ID" env-default:"organizations"` // Office365 Tenant ID (default: organizations for multi-tenant)
+	SkipValidation bool   `json:"skip_validation" env:"OPS_OAUTH_SKIP_VALIDATION" env-default:"false"` // Skip OAuth token validation in middleware (dev/testing only)
 }
 
 // OpsTokenEncryptionConfig holds encryption configuration for storing OIDC tokens.
