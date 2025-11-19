@@ -254,8 +254,8 @@ func (h *PayoutWebhookHandler) handleCompleted(ctx context.Context, transfer *pa
 	amountINR := float64(transfer.Amount) / 100.0
 
 	// Create notification payload
-	transferIDStr := transfer.TransferRequestID
 	paymentIDStr := transfer.PaymentID
+	voucherIDStr := transfer.VoucherID
 	notifErr := notification.TriggerBroadcast(
 		ctx,
 		pmt.BusinessID,                              // business_id from payment
@@ -267,12 +267,13 @@ func (h *PayoutWebhookHandler) handleCompleted(ctx context.Context, transfer *pa
 		corenotification.EntityReferences{           // entities
 			BusinessID: &pmt.BusinessID,
 			PaymentID:  &paymentIDStr,
+			VoucherID:  &voucherIDStr,
 		},
 		[]corenotification.ActionButton{             // actions
 			{
 				Type: corenotification.ButtonTypeNeutral,
 				Text: "View Details",
-				Href: fmt.Sprintf("/payouts/%s", transferIDStr),
+				Href: fmt.Sprintf("/bills/%s?tab=payment", voucherIDStr),
 			},
 		},
 	)
