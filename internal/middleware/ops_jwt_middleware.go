@@ -6,12 +6,21 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/labstack/echo/v4"
 	"xcentro.in/internal/core/opsauth"
+	"xcentro.in/internal/shared/config"
 )
 
 // OpsJWTMiddleware creates a middleware that validates JWT access tokens for ops users
-func OpsJWTMiddleware(authService opsauth.OpsAuthService) echo.MiddlewareFunc {
+func OpsJWTMiddleware(authService opsauth.OpsAuthService, cfg *config.Config) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
+			// Skip validation if configured (dev/testing only)
+			if cfg.OpsOAuth.SkipValidation {
+				c.Set("opsUserId", "dev-user")
+				c.Set("opsUserEmail", "dev@xcentro.in")
+				c.Set("opsUserRoles", []string{})
+				return next(c)
+			}
+
 			// Extract access token from cookie
 			cookie, err := c.Cookie("access_token")
 			if err != nil {

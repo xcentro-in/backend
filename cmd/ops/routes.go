@@ -93,7 +93,7 @@ func registerOpsAuthRoutes(clients *externalClients, cfg *config.Config, group *
 
 	// Register user routes (protected with JWT middleware)
 	userGroup := group.Group("")
-	userGroup.Use(middleware.OpsJWTMiddleware(opsAuthService))
+	userGroup.Use(middleware.OpsJWTMiddleware(opsAuthService, cfg))
 	opsAuthHandler.RegisterOpsUserRoutes(userGroup, opsAuthService)
 }
 
