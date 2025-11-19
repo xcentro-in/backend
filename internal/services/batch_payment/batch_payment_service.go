@@ -262,35 +262,76 @@ func (s *BatchPaymentService) parseCSV(reader io.Reader) ([]CSVRow, error) {
 			continue
 		}
 
+		// Validate row length and UTF-8 encoding
+		if err := utils.SanitizeAndValidateRow(record, lineNum); err != nil {
+			return nil, err
+		}
+
 		// Parse row
 		row := CSVRow{}
 
-		// Required fields
-		row.PayeeName = strings.TrimSpace(record[headerMap["payee_name"]])
-		row.PaymentContext = strings.TrimSpace(record[headerMap["payment_context"]])
-		row.Description = strings.TrimSpace(record[headerMap["description"]])
+		// Required fields - sanitize and validate
+		payeeName, err := utils.ValidatePayeeName(record[headerMap["payee_name"]], lineNum)
+		if err != nil {
+			return nil, err
+		}
+		row.PayeeName = payeeName
 
-		// Parse amount
+		paymentContext, err := utils.ValidatePaymentContext(record[headerMap["payment_context"]], lineNum)
+		if err != nil {
+			return nil, err
+		}
+		row.PaymentContext = paymentContext
+
+		description, err := utils.ValidateDescription(record[headerMap["description"]], lineNum)
+		if err != nil {
+			return nil, err
+		}
+		row.Description = description
+
+		// Parse amount - validate first
 		amountStr := strings.TrimSpace(record[headerMap["amount"]])
+		if err := utils.ValidateAmount(amountStr, lineNum); err != nil {
+			return nil, err
+		}
+		// Remove commas before parsing (e.g., "1,000.00" -> "1000.00")
+		amountStr = strings.ReplaceAll(amountStr, ",", "")
 		amount, err := strconv.ParseFloat(amountStr, 64)
 		if err != nil {
 			return nil, fmt.Errorf("invalid amount on line %d: %s", lineNum, amountStr)
 		}
 		row.Amount = amount
 
-		// Optional fields
+		// Optional fields - sanitize and validate
 		if idx, exists := headerMap["account_last_4"]; exists && idx < len(record) {
-			row.AccountLast4 = strings.TrimSpace(record[idx])
+			accountLast4, err := utils.ValidateAccountLast4(record[idx], lineNum)
+			if err != nil {
+				return nil, err
+			}
+			row.AccountLast4 = accountLast4
 		}
 		if idx, exists := headerMap["ifsc_code"]; exists && idx < len(record) {
-			row.IFSCCode = strings.TrimSpace(record[idx])
+			ifscCode, err := utils.ValidateIFSCCode(record[idx], lineNum)
+			if err != nil {
+				return nil, err
+			}
+			row.IFSCCode = ifscCode
 		}
 		if idx, exists := headerMap["expense_category"]; exists && idx < len(record) {
-			row.ExpenseCategory = strings.TrimSpace(record[idx])
+			expenseCategory, err := utils.ValidateExpenseCategory(record[idx], lineNum)
+			if err != nil {
+				return nil, err
+			}
+			row.ExpenseCategory = expenseCategory
 		}
 		if idx, exists := headerMap["gst_amount"]; exists && idx < len(record) {
 			gstStr := strings.TrimSpace(record[idx])
 			if gstStr != "" {
+				// Validate GST amount format
+				if err := utils.ValidateAmount(gstStr, lineNum); err != nil {
+					return nil, fmt.Errorf("invalid GST amount on line %d: %s", lineNum, gstStr)
+				}
+				gstStr = strings.ReplaceAll(gstStr, ",", "")
 				gst, _ := strconv.ParseFloat(gstStr, 64)
 				row.GSTAmount = gst
 			}
@@ -298,23 +339,26 @@ func (s *BatchPaymentService) parseCSV(reader io.Reader) ([]CSVRow, error) {
 		if idx, exists := headerMap["tds_amount"]; exists && idx < len(record) {
 			tdsStr := strings.TrimSpace(record[idx])
 			if tdsStr != "" {
+				// Validate TDS amount format
+				if err := utils.ValidateAmount(tdsStr, lineNum); err != nil {
+					return nil, fmt.Errorf("invalid TDS amount on line %d: %s", lineNum, tdsStr)
+				}
+				tdsStr = strings.ReplaceAll(tdsStr, ",", "")
 				tds, _ := strconv.ParseFloat(tdsStr, 64)
 				row.TDSAmount = tds
 			}
 		}
 		if idx, exists := headerMap["invoice_number"]; exists && idx < len(record) {
-			row.InvoiceNumber = strings.TrimSpace(record[idx])
+			invoiceNumber, err := utils.ValidateInvoiceNumber(record[idx], lineNum)
+			if err != nil {
+				return nil, err
+			}
+			row.InvoiceNumber = invoiceNumber
 		}
 
-		// Validate required fields
-		if row.PayeeName == "" {
-			return nil, fmt.Errorf("payee_name is empty on line %d", lineNum)
-		}
+		// Additional business logic validation
 		if row.Amount <= 0 {
 			return nil, fmt.Errorf("amount must be positive on line %d", lineNum)
-		}
-		if row.PaymentContext == "" {
-			return nil, fmt.Errorf("payment_context is empty on line %d", lineNum)
 		}
 
 		rows = append(rows, row)
