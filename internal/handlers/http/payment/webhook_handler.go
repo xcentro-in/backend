@@ -17,6 +17,7 @@ import (
 	"xcentro.in/internal/adapters/external/payment/mockpg"
 	"xcentro.in/internal/core/business"
 	"xcentro.in/internal/core/payment"
+	invoiceService "xcentro.in/internal/services/invoice"
 	paymentSvc "xcentro.in/internal/services/payment"
 )
 
@@ -29,6 +30,8 @@ type WebhookHandler struct {
 	mockPGGateway   payment.PaymentGateway
 	mockPGEnabled   bool // Flag to check if mock PG is enabled
 	stateLogger     *paymentSvc.PaymentStateLogger
+	businessRepo    business.BusinessRepository
+	invoiceService  *invoiceService.InvoiceService
 }
 
 // NewWebhookHandler creates a new webhook handler
@@ -39,6 +42,8 @@ func NewWebhookHandler(
 	mockPGGateway payment.PaymentGateway,
 	mockPGEnabled bool,
 	stateChangeRepo payment.PaymentStateChangeRepository,
+	businessRepo business.BusinessRepository,
+	invoiceService *invoiceService.InvoiceService,
 ) *WebhookHandler {
 	return &WebhookHandler{
 		paymentRepo:     paymentRepo,
@@ -47,6 +52,8 @@ func NewWebhookHandler(
 		mockPGGateway:   mockPGGateway,
 		mockPGEnabled:   mockPGEnabled,
 		stateLogger:     paymentSvc.NewPaymentStateLogger(stateChangeRepo),
+		businessRepo:    businessRepo,
+		invoiceService:  invoiceService,
 	}
 }
 
