@@ -68,7 +68,7 @@ nano .env  # Add your production credentials
 
 **Step 3: Start all services**
 ```bash
-docker compose -f docker-compose.production.yml up -d
+docker compose -f docker-compose.yml up -d
 ```
 
 Database and Redis users are created automatically via init scripts.
@@ -84,7 +84,7 @@ Database and Redis users are created automatically via init scripts.
 - **`redis-entrypoint.sh`** - Production Redis entrypoint with auto-init
 
 ### Configuration
-- **`docker-compose.production.yml`** - Production services orchestration
+- **`docker-compose.yml`** - Production services orchestration
 - **`nginx/`** - nginx reverse proxy and SSL termination configs
   - `nginx.conf` - Main nginx configuration
   - `conf.d/api.xcentro.in.conf` - API backend config
@@ -154,25 +154,25 @@ All containers have consistent naming for easy management:
 
 ```bash
 # View service status
-docker compose -f docker-compose.production.yml ps
+docker compose -f docker-compose.yml ps
 
 # View all logs
-docker compose -f docker-compose.production.yml logs -f
+docker compose -f docker-compose.yml logs -f
 
 # View specific service logs (by service name)
-docker compose -f docker-compose.production.yml logs -f api
+docker compose -f docker-compose.yml logs -f api
 
 # View specific service logs (by container name)
 docker logs -f xcentro-api
 
 # Stop all services
-docker compose -f docker-compose.production.yml down
+docker compose -f docker-compose.yml down
 
 # Stop and remove volumes (DESTRUCTIVE!)
-docker compose -f docker-compose.production.yml down -v
+docker compose -f docker-compose.yml down -v
 
 # Restart a service
-docker compose -f docker-compose.production.yml restart api
+docker compose -f docker-compose.yml restart api
 
 # Execute command in running container
 docker exec -it xcentro-api /bin/sh
@@ -240,7 +240,7 @@ Day 150: Next renewal cycle begins (new cert has 90 days)
 **To switch from staging to production:**
 ```bash
 # Stop services
-docker compose -f docker-compose.production.yml down
+docker compose -f docker-compose.yml down
 
 # Deploy with production certificates
 ./bootstrap-production.sh --email admin@xcentro.in --break-my-certs -v
@@ -314,24 +314,24 @@ postgres redis
 ### Services not starting
 ```bash
 # Check logs
-docker compose -f docker-compose.production.yml logs
+docker compose -f docker-compose.yml logs
 
 # Check specific service
-docker compose -f docker-compose.production.yml logs postgres
+docker compose -f docker-compose.yml logs postgres
 ```
 
 ### Database users not created
 ```bash
 # Users only created if volume is empty on first start
 # To reset:
-docker compose -f docker-compose.production.yml down -v
-docker compose -f docker-compose.production.yml up -d
+docker compose -f docker-compose.yml down -v
+docker compose -f docker-compose.yml up -d
 ```
 
 ### Redis users not created
 ```bash
 # Restart Redis (init script runs on start)
-docker compose -f docker-compose.production.yml restart redis
+docker compose -f docker-compose.yml restart redis
 ```
 
 ### SSL certificate issues
