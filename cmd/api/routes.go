@@ -136,7 +136,7 @@ func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group
 	pendingVoucherRepository := paymentRepo.NewPaymentVoucherPendingRepository(clients.db)
 	stateChangeRepository := paymentRepo.NewPostgresPaymentStateChangeRepository(clients.db)
 
-	_, _, _, _, _, busSvc, authSvc := factory.createCoreServices(nil)
+	_, _, _, businessUserRelRepo, _, busSvc, authSvc := factory.createCoreServices(nil)
 
 	// Initialize payment gateway clients
 	easebuzzClient := easebuzz.NewEasebuzzClient(cfg.Easebuzz.BaseURL, cfg.Easebuzz.MerchantKey, cfg.Easebuzz.Salt, cfg.Easebuzz.APIKey, cfg.Easebuzz.IsAggregatorModel)
@@ -169,7 +169,7 @@ func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group
 	payment.RegisterPaymentRoutes(processPaymentGroup, paymentService, paymentSourceService, walletService, authSvc, voucherRepository, stateChangeRepository, businessPayeeRelationRepo, storedCardRepository, bankAccountRepository, logger.GetDefault())
 
 	walletGroup := group.Group("/wallet")
-	payment.RegisterWalletRoutes(walletGroup, paymentService, paymentSourceService, walletService, authSvc, storedCardRepository, logger.GetDefault())
+	payment.RegisterWalletRoutes(walletGroup, paymentService, paymentSourceService, walletService, authSvc, storedCardRepository, businessUserRelRepo, clients.rcache, logger.GetDefault())
 
 	// Mock 3DS page handler (for mock PG testing)
 	mock3DSHandler := payment.NewMock3DSHandler(paymentRepository, cfg.Server.URL)
