@@ -19,6 +19,7 @@ import (
 	"xcentro.in/internal/adapters/external/payment/jiopay"
 	"xcentro.in/internal/adapters/external/payment/mockpg"
 	"xcentro.in/internal/adapters/external/payout/factory"
+	"xcentro.in/internal/adapters/providers/fileupload"
 	coreAuth "xcentro.in/internal/core/auth"
 	coreBusiness "xcentro.in/internal/core/business"
 	"xcentro.in/internal/core/business_rules"
@@ -295,8 +296,14 @@ func registerV1BatchPaymentRoutes(clients *externalClients, cfg *config.Config, 
 		voucherService,
 	)
 
+	// S3 client for sample CSV downloads
+	s3Client, err := fileupload.NewS3ClientFromConfig(cfg.S3)
+	if err != nil {
+		logger.GetDefault().Warnf("Failed to create S3 client for batch payments: %v (sample CSV download will be unavailable)", err)
+	}
+
 	// Handler
-	handler := batchPaymentHandler.NewBatchPaymentHandler(batchPaymentService)
+	handler := batchPaymentHandler.NewBatchPaymentHandler(batchPaymentService, s3Client)
 
 	// Routes
 	batchGroup := group.Group("/batch_payments")
@@ -306,6 +313,7 @@ func registerV1BatchPaymentRoutes(clients *externalClients, cfg *config.Config, 
 	batchGroup.GET("", handler.GetBatchList)
 	batchGroup.GET("/:batch_id", handler.GetBatchStatus)
 	batchGroup.POST("/:batch_id/process", handler.ProcessBatch)
+	batchGroup.GET("/sample_csv", handler.DownloadSampleCSV) // Download sample CSV template
 }
 
 func registerV1NotificationRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {

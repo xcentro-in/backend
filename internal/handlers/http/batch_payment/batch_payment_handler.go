@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
+	"xcentro.in/internal/adapters/providers/fileupload"
 	"xcentro.in/internal/services/batch_payment"
 	"xcentro.in/internal/shared/logger"
 )
@@ -14,13 +16,15 @@ import (
 // BatchPaymentHandler handles batch payment HTTP requests
 type BatchPaymentHandler struct {
 	batchService *batch_payment.BatchPaymentService
+	s3Client     *fileupload.S3Client
 	logger       *logger.Logger
 }
 
 // NewBatchPaymentHandler creates a new batch payment handler
-func NewBatchPaymentHandler(batchService *batch_payment.BatchPaymentService) *BatchPaymentHandler {
+func NewBatchPaymentHandler(batchService *batch_payment.BatchPaymentService, s3Client *fileupload.S3Client) *BatchPaymentHandler {
 	return &BatchPaymentHandler{
 		batchService: batchService,
+		s3Client:     s3Client,
 		logger:       logger.GetDefault(),
 	}
 }
@@ -284,6 +288,46 @@ func (h *BatchPaymentHandler) GetBatchList(c echo.Context) error {
 		"message": "Batch list retrieved successfully",
 		"status":  "success",
 		"data":    list,
+	})
+}
+
+// DownloadSampleCSV handles GET /batch_payments/sample_csv - Download sample CSV template
+func (h *BatchPaymentHandler) DownloadSampleCSV(c echo.Context) error {
+	h.logger.InfoWith("DownloadSampleCSV API called")
+
+	// Check if S3 client is available
+	if h.s3Client == nil {
+		h.logger.Error("S3 client not configured for batch payment handler")
+		return c.JSON(http.StatusInternalServerError, map[string]any{
+			"error":   "service_unavailable",
+			"message": "File download service is not available",
+		})
+	}
+
+	// TODO: Replace this placeholder with the actual S3 key for your sample CSV file
+	// Example: "templates/batch_payment_sample.csv" or "batch-payments/samples/template.csv"
+	const sampleCSVS3Key = "PLACEHOLDER_S3_KEY_FOR_SAMPLE_CSV"
+
+	// Generate presigned download URL with 15 minute expiration
+	presignedURL, err := h.s3Client.GetPresignedDownloadURL(c.Request().Context(), sampleCSVS3Key, 15*time.Minute)
+	if err != nil {
+		h.logger.ErrorWith("Failed to generate presigned URL for sample CSV", "error", err, "s3_key", sampleCSVS3Key)
+		return c.JSON(http.StatusInternalServerError, map[string]any{
+			"error":   "url_generation_failed",
+			"message": "Failed to generate download URL",
+		})
+	}
+
+	h.logger.InfoWith("Sample CSV presigned URL generated successfully", "s3_key", sampleCSVS3Key)
+
+	return c.JSON(http.StatusOK, map[string]any{
+		"message": "Sample CSV download URL generated successfully",
+		"status":  "success",
+		"data": map[string]any{
+			"download_url": presignedURL,
+			"expires_in":   900, // 15 minutes in seconds
+			"filename":     "batch_payment_sample.csv",
+		},
 	})
 }
 
