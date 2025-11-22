@@ -354,3 +354,15 @@ type PayeeListItem struct {
 	AddedAt      time.Time  `json:"added_at"`
 	UpdatedAt    time.Time  `json:"updated_at"`
 }
+
+// ############################################################################
+// # Lightweight Account Details (For GET /payees/:relation_id/acc_details)
+// ############################################################################
+
+// PayeeAccountDetails represents minimal account information for a payee
+// Returns only last 4 digits of account number, bank name, and IFSC code
+type PayeeAccountDetails struct {
+	AccountNumberLast4 string `json:"account_number_last_4"`
+	BankName           string `json:"bank_name"`
+	IFSCCode           string `json:"ifsc_code"`
+}

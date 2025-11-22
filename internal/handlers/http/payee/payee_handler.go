@@ -308,6 +308,73 @@ func (h *PayeeHandler) GetPayeeDetails(c echo.Context) error {
 	})
 }
 
+// GetPayeeAccountDetails handles GET /payees/:relation_id/acc_details - Get lightweight account information
+// Returns only last 4 digits of account number, bank name, and IFSC code
+func (h *PayeeHandler) GetPayeeAccountDetails(c echo.Context) error {
+	h.logger.InfoWith("GetPayeeAccountDetails API called")
+
+	// Extract relation_id from path parameter
+	relationID := c.Param("relation_id")
+	if relationID == "" {
+		h.logger.WarnWith("Missing relation_id path parameter")
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "invalid_request",
+			"message": "relation_id path parameter is required",
+		})
+	}
+
+	// Extract business_id from X-Business-ID header
+	businessID := c.Request().Header.Get("X-Business-ID")
+	if businessID == "" {
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "MISSING_BUSINESS_ID",
+			"message": "X-Business-ID header is required",
+		})
+	}
+
+	h.logger.DebugWith("Request parameters", "relation_id", relationID, "business_id", businessID)
+
+	// Call payee service to get full details
+	details, err := h.payeeService.GetPayeeDetailsByRelation(c.Request().Context(), businessID, relationID)
+	if err != nil {
+		h.logger.ErrorWith("Failed to fetch payee details", "error", err)
+		return c.JSON(http.StatusNotFound, map[string]any{
+			"error":   "not_found",
+			"message": err.Error(),
+		})
+	}
+
+	// Check if bank details exist
+	if details.BankDetails == nil {
+		h.logger.WarnWith("No bank details available for payee", "relation_id", relationID)
+		return c.JSON(http.StatusNotFound, map[string]any{
+			"error":   "no_bank_details",
+			"message": "Bank details not available for this payee",
+		})
+	}
+
+	// Extract last 4 digits of account number
+	accountNumber := details.BankDetails.AccountNumber
+	accountLast4 := ""
+	if len(accountNumber) >= 4 {
+		accountLast4 = accountNumber[len(accountNumber)-4:]
+	}
+
+	// Create lightweight response
+	accountDetails := &payee.PayeeAccountDetails{
+		AccountNumberLast4: accountLast4,
+		BankName:           details.BankDetails.BankName,
+		IFSCCode:           details.BankDetails.IFSCCode,
+	}
+
+	h.logger.InfoWith("Account details fetched successfully", "relation_id", relationID, "bank_name", accountDetails.BankName)
+
+	return c.JSON(http.StatusOK, map[string]any{
+		"status": "success",
+		"data":   accountDetails,
+	})
+}
+
 // UpdatePayee handles PUT /payees/:payee_id/accounts/:account_id - Update payee relationship metadata
 func (h *PayeeHandler) UpdatePayee(c echo.Context) error {
 	h.logger.InfoWith("UpdatePayee API called")
