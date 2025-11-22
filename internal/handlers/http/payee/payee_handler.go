@@ -395,6 +395,88 @@ func (h *PayeeHandler) GetPayeeAccountDetails(c echo.Context) error {
 	})
 }
 
+// UpdatePayeeStatus handles PATCH /payees/:relation_id/status - Toggle payee active status
+func (h *PayeeHandler) UpdatePayeeStatus(c echo.Context) error {
+	h.logger.InfoWith("UpdatePayeeStatus API called")
+
+	// Extract relation_id from path parameter
+	relationID := c.Param("relation_id")
+	if relationID == "" {
+		h.logger.WarnWith("Missing relation_id in path")
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "invalid_request",
+			"message": "relation_id is required",
+		})
+	}
+
+	// Extract businessID from X-Business-ID header
+	businessID := c.Request().Header.Get("X-Business-ID")
+	if businessID == "" {
+		h.logger.WarnWith("Missing X-Business-ID header")
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "MISSING_BUSINESS_ID",
+			"message": "X-Business-ID header is required",
+		})
+	}
+
+	// Parse request body
+	var req payee.UpdatePayeeStatusRequest
+	if err := c.Bind(&req); err != nil {
+		h.logger.ErrorWith("Error binding request", "error", err)
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "invalid_request",
+			"message": "Invalid request body",
+		})
+	}
+
+	// Set context values
+	req.BusinessID = businessID
+	req.RelationID = relationID
+
+	h.logger.DebugWith("Request parsed",
+		"business_id", businessID,
+		"relation_id", relationID,
+		"is_active", req.IsActive)
+
+	// Call service to update status
+	if err := h.payeeService.UpdatePayeeStatus(c.Request().Context(), businessID, relationID, req.IsActive); err != nil {
+		h.logger.ErrorWith("Failed to update payee status", "error", err)
+
+		// Check for specific error types
+		if err.Error() == "payee relation not found" {
+			return c.JSON(http.StatusNotFound, map[string]any{
+				"error":   "not_found",
+				"message": "Payee relation not found",
+			})
+		}
+
+		if err.Error() == "payee relation does not belong to this business" {
+			return c.JSON(http.StatusForbidden, map[string]any{
+				"error":   "forbidden",
+				"message": "Access denied to this payee relation",
+			})
+		}
+
+		return c.JSON(http.StatusInternalServerError, map[string]any{
+			"error":   "update_failed",
+			"message": "Failed to update payee status",
+		})
+	}
+
+	h.logger.InfoWith("Payee status updated successfully",
+		"relation_id", relationID,
+		"is_active", req.IsActive)
+
+	return c.JSON(http.StatusOK, map[string]any{
+		"status":  "success",
+		"message": "Payee status updated successfully",
+		"data": map[string]any{
+			"relation_id": relationID,
+			"is_active":   req.IsActive,
+		},
+	})
+}
+
 // UpdatePayee handles PUT /payees/:payee_id/accounts/:account_id - Update payee relationship metadata
 func (h *PayeeHandler) UpdatePayee(c echo.Context) error {
 	h.logger.InfoWith("UpdatePayee API called")

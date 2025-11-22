@@ -120,6 +120,13 @@ type UpdateRelationRequest struct {
 	Tags         []string `json:"tags,omitempty"`
 }
 
+// UpdatePayeeStatusRequest represents a request to toggle payee active status
+type UpdatePayeeStatusRequest struct {
+	BusinessID string `json:"-"` // Our customer (extracted from X-Business-ID header)
+	RelationID string `json:"-"` // Extracted from URL path parameter
+	IsActive   bool   `json:"is_active"`
+}
+
 // PayeeDetailsResponse represents detailed information about a payee (polymorphic)
 // Combines data from payee_master, type-specific tables, and business_payee_relation
 type PayeeDetailsResponse struct {

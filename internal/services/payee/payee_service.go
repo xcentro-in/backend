@@ -1159,6 +1159,54 @@ func (s *PayeeService) DeactivatePayee(ctx context.Context, businessID, payeeID,
 	return s.businessPayeeRelationRepo.DeleteRelation(ctx, businessID, payeeID, accountID)
 }
 
+// UpdatePayeeStatus toggles the is_active status for a payee relation
+func (s *PayeeService) UpdatePayeeStatus(ctx context.Context, businessID, relationID string, isActive bool) error {
+	s.logger.DebugWith("Updating payee status",
+		"business_id", businessID,
+		"relation_id", relationID,
+		"is_active", isActive)
+
+	// Fetch the relation by relation_id
+	relation, err := s.businessPayeeRelationRepo.FindRelationByID(ctx, relationID)
+	if err != nil {
+		s.logger.ErrorWith("Failed to find relation",
+			"relation_id", relationID,
+			"error", err)
+		return fmt.Errorf("failed to find payee relation: %w", err)
+	}
+
+	if relation == nil {
+		s.logger.WarnWith("Payee relation not found",
+			"relation_id", relationID)
+		return fmt.Errorf("payee relation not found")
+	}
+
+	// Verify the relation belongs to the requesting business
+	if relation.BusinessID != businessID {
+		s.logger.WarnWith("Business ID mismatch",
+			"relation_business_id", relation.BusinessID,
+			"request_business_id", businessID)
+		return fmt.Errorf("payee relation does not belong to this business")
+	}
+
+	// Update the is_active field
+	relation.IsActive = isActive
+
+	// Save the updated relation
+	if err := s.businessPayeeRelationRepo.UpdateRelation(ctx, relation); err != nil {
+		s.logger.ErrorWith("Failed to update payee status",
+			"relation_id", relationID,
+			"error", err)
+		return fmt.Errorf("failed to update payee status: %w", err)
+	}
+
+	s.logger.InfoWith("Payee status updated successfully",
+		"relation_id", relationID,
+		"is_active", isActive)
+
+	return nil
+}
+
 // Helper methods
 
 // validateVendorRequest validates vendor-specific onboarding data
