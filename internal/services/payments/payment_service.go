@@ -332,13 +332,15 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 	s.logger.DebugWith("Redirect URL generated", "redirect_url", response.RedirectURL)
 
 	// Update onboarding flag (non-blocking, first-time only, outside transaction)
-	if s.businessService != nil {
+	// Skip for tokenization payments (₹1 card verification) - only count actual voucher payments
+	if s.businessService != nil && req.PaymentType != payment.PaymentTypeTokenization {
 		flags, err := s.businessService.GetBusinessOnboardingFlags(ctx, req.BusinessID)
 		if err == nil && !flags.HasCreatedFirstPayment {
 			_ = s.businessService.UpdateOnboardingStatus(ctx, req.BusinessID, "has_created_first_payment", true)
 			s.logger.DebugWith("Onboarding flag updated",
 				"business_id", req.BusinessID,
-				"flag", "has_created_first_payment")
+				"flag", "has_created_first_payment",
+				"payment_type", req.PaymentType)
 		}
 	}
 
