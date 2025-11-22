@@ -346,7 +346,8 @@ func (s *BatchPaymentService) fuzzyMatchPayee(ctx context.Context, businessID uu
 		}
 
 		// Get full payee details including bank account
-		fullDetails, err := s.businessPayeeRelationRepo.GetPayeeFullDetailsByRelation(ctx, businessID.String(), relation.RelationID)
+		// isRestrictive = true: Only match active payees for batch payments (safety)
+		fullDetails, err := s.businessPayeeRelationRepo.GetPayeeFullDetailsByRelation(ctx, businessID.String(), relation.RelationID, true)
 		if err != nil || fullDetails == nil || fullDetails.BankDetails == nil {
 			// No bank details available, use name match only
 			matches = append(matches, PossibleMatch{

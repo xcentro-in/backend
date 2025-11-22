@@ -1653,7 +1653,8 @@ func (s *PayeeService) GetPayeeDetailsByRelation(ctx context.Context, businessID
 	}
 
 	// Fetch full details from repository (handles polymorphism and business validation)
-	details, err := s.businessPayeeRelationRepo.GetPayeeFullDetailsByRelation(ctx, businessID, relationID)
+	// isRestrictive = false: Allow viewing details for inactive payees (audit/history access)
+	details, err := s.businessPayeeRelationRepo.GetPayeeFullDetailsByRelation(ctx, businessID, relationID, false)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get payee details: %w", err)
 	}
