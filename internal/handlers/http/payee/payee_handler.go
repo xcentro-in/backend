@@ -234,9 +234,24 @@ func (h *PayeeHandler) GetPayees(c echo.Context) error {
 		})
 	}
 
-	// Convert to response (simplified - returning relations directly)
-	// In production, you might want to enrich with payee and account details
-	h.logger.InfoWith("Payees fetched successfully", "count", len(relations), "total_count", totalCount, "business_id", businessID)
+	// Convert to response DTO (exclude internal IDs)
+	payeeList := make([]*payee.PayeeListItem, len(relations))
+	for i, relation := range relations {
+		payeeList[i] = &payee.PayeeListItem{
+			RelationID:   relation.RelationID,
+			PayeeType:    relation.PayeeType,
+			DisplayName:  relation.DisplayName,
+			ContactEmail: relation.ContactEmail,
+			ContactPhone: relation.ContactPhone,
+			IsActive:     relation.IsActive,
+			IsFavorite:   relation.IsFavorite,
+			Tags:         relation.Tags,
+			AddedAt:      relation.AddedAt,
+			UpdatedAt:    relation.UpdatedAt,
+		}
+	}
+
+	h.logger.InfoWith("Payees fetched successfully", "count", len(payeeList), "total_count", totalCount, "business_id", businessID)
 
 	return c.JSON(http.StatusOK, map[string]any{
 		"message":     "Payees retrieved successfully",
@@ -244,7 +259,7 @@ func (h *PayeeHandler) GetPayees(c echo.Context) error {
 		"total_count": totalCount,
 		"page":        page,
 		"page_size":   pageSize,
-		"data":        relations,
+		"data":        payeeList,
 	})
 }
 
