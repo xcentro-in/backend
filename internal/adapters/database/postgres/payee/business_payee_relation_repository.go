@@ -268,16 +268,8 @@ func (r *PgBusinessPayeeRelationRepository) FindByBusiness(ctx context.Context, 
 			   m.payee_type
 		FROM xcentro.business_payee_relation r
 		INNER JOIN xcentro.payee_master m ON r.payee_id = m.payee_id
+		WHERE r.business_id = $1
 	`
-
-	// Join with payee_master if filtering by payee_type
-	if filters.PayeeType != "" {
-		query += `
-		INNER JOIN xcentro.payee_master m ON r.payee_id = m.payee_id
-		`
-	}
-
-	query += `WHERE r.business_id = $1`
 
 	args := []interface{}{businessID}
 	argIdx := 2

@@ -147,10 +147,27 @@ func (h *PayeeHandler) GetPayees(c echo.Context) error {
 
 	// Parse query parameters
 	displayName := c.QueryParam("display_name")
+	payeeTypeStr := c.QueryParam("type")
 	isActiveStr := c.QueryParam("is_active")
 	isFavoriteStr := c.QueryParam("is_favorite")
 	pageStr := c.QueryParam("page")
 	pageSizeStr := c.QueryParam("page_size")
+
+	// Parse payee type filter
+	var payeeTypeFilter payee.PayeeType
+	if payeeTypeStr != "" {
+		// Validate payee type
+		switch payee.PayeeType(payeeTypeStr) {
+		case payee.PayeeTypeVendor, payee.PayeeTypeEmployee, payee.PayeeTypeBiller, payee.PayeeTypeGST:
+			payeeTypeFilter = payee.PayeeType(payeeTypeStr)
+		default:
+			h.logger.WarnWith("Invalid payee type provided", "type", payeeTypeStr)
+			return c.JSON(http.StatusBadRequest, map[string]any{
+				"error":   "invalid_type",
+				"message": "Invalid payee type. Must be one of: vendor, employee, biller, gst_payment",
+			})
+		}
+	}
 
 	// Parse boolean filters
 	var isActive, isFavorite *bool
@@ -179,6 +196,7 @@ func (h *PayeeHandler) GetPayees(c echo.Context) error {
 
 	h.logger.DebugWith("Query parameters parsed",
 		"display_name", displayName,
+		"payee_type", payeeTypeFilter,
 		"is_active", isActive,
 		"is_favorite", isFavorite,
 		"page", page,
@@ -197,6 +215,7 @@ func (h *PayeeHandler) GetPayees(c echo.Context) error {
 	// Create filters for counting (without pagination)
 	countFilters := payee.RelationSearchFilters{
 		DisplayName: displayName,
+		PayeeType:   payeeTypeFilter,
 		IsActive:    isActive,
 		IsFavorite:  isFavorite,
 		Tags:        []string{}, // TODO: Parse tags from query if needed
@@ -205,6 +224,7 @@ func (h *PayeeHandler) GetPayees(c echo.Context) error {
 	// Create filters for data fetching (with pagination)
 	dataFilters := payee.RelationSearchFilters{
 		DisplayName: displayName,
+		PayeeType:   payeeTypeFilter,
 		IsActive:    isActive,
 		IsFavorite:  isFavorite,
 		Tags:        []string{}, // TODO: Parse tags from query if needed
