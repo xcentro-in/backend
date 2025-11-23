@@ -106,7 +106,7 @@ func (r *PgPaymentRepository) GetPaymentByID(ctx context.Context, paymentID stri
 	fmt.Printf("[PgPaymentRepository] GetPaymentByID called - PaymentID: %s\n", paymentID)
 
 	query := `
-		SELECT payment_id, user_id, business_id, amount, currency, payment_method, status,
+		SELECT payment_id, user_id, business_id, amount, currency, payment_method, payment_type, status,
 		       description, gateway_used, gateway_payment_id, callback_url, redirect_url,
 		       payment_source_id, payment_source_type, retry_of_payment_id, retry_count,
 		       fee_amount, convenience_fee, convenience_fee_gst, total_amount, metadata, created_at, updated_at
@@ -126,6 +126,7 @@ func (r *PgPaymentRepository) GetPaymentByID(ctx context.Context, paymentID stri
 		&p.Amount,
 		&p.Currency,
 		&p.PaymentMethod,
+		&p.PaymentType,
 		&p.Status,
 		&p.Description,
 		&gatewayUsed,
@@ -192,7 +193,7 @@ func (r *PgPaymentRepository) GetPaymentByGatewayPaymentID(ctx context.Context, 
 	fmt.Printf("[PgPaymentRepository] GetPaymentByGatewayPaymentID called - GatewayPaymentID: %s\n", gatewayPaymentID)
 
 	query := `
-		SELECT payment_id, user_id, business_id, amount, currency, payment_method, status,
+		SELECT payment_id, user_id, business_id, amount, currency, payment_method, payment_type, status,
 		       description, gateway_used, gateway_payment_id, callback_url, redirect_url,
 		       payment_source_id, payment_source_type, fee_amount, convenience_fee, convenience_fee_gst,
 		       total_amount, metadata, created_at, updated_at
@@ -212,6 +213,7 @@ func (r *PgPaymentRepository) GetPaymentByGatewayPaymentID(ctx context.Context, 
 		&p.Amount,
 		&p.Currency,
 		&p.PaymentMethod,
+		&p.PaymentType,
 		&p.Status,
 		&p.Description,
 		&gatewayUsed,

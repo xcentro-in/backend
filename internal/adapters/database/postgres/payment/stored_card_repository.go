@@ -38,11 +38,11 @@ func (r *PgStoredCardRepository) CreateStoredCard(ctx context.Context, card *pay
 
 	query := `
 		INSERT INTO xcentro.stored_cards (
-			business_id, token, last_four_digits, card_type, card_category,
+			card_id, business_id, token, last_four_digits, card_type, card_category,
 			expiry_month, expiry_year, issuer_bank, card_holder_name,
 			is_active, gateway_used, metadata
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-		RETURNING card_id, added_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+		RETURNING added_at
 	`
 
 	var metadataJSON []byte
@@ -63,6 +63,7 @@ func (r *PgStoredCardRepository) CreateStoredCard(ctx context.Context, card *pay
 	}
 
 	err := r.querier.QueryRow(ctx, query,
+		card.CardID,
 		card.BusinessID,
 		card.Token,
 		card.LastFourDigits,
@@ -75,7 +76,7 @@ func (r *PgStoredCardRepository) CreateStoredCard(ctx context.Context, card *pay
 		card.IsActive,
 		gatewayUsed,
 		metadataJSON,
-	).Scan(&card.CardID, &card.AddedAt)
+	).Scan(&card.AddedAt)
 
 	if err != nil {
 		return fmt.Errorf("failed to create stored card: %w", err)

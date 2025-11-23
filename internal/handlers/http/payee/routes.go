@@ -19,6 +19,8 @@ func RegisterPayeeRoutes(group *echo.Group, payeeService *payeeSvc.PayeeService,
 	group.POST("", handler.OnboardPayee)                       // POST /payees
 	group.GET("", handler.GetPayees)                           // GET /payees
 	group.GET("/details/:relation_id", handler.GetPayeeDetails) // GET /payees/details/:relation_id
+	group.GET("/:relation_id/acc_details", handler.GetPayeeAccountDetails) // GET /payees/:relation_id/acc_details - Lightweight account details
+	group.PATCH("/:relation_id/status", handler.UpdatePayeeStatus) // PATCH /payees/:relation_id/status - Toggle active status
 	group.DELETE("/:payee_id/accounts/:account_id", handler.DeactivatePayee) // DELETE /payees/:id/accounts/:id (kept for now)
 
 	// Employee remuneration document upload endpoints
