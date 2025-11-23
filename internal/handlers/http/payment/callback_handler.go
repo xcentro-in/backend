@@ -188,6 +188,12 @@ func (h *CallbackHandler) handleJioPayCallback(c echo.Context) error {
 					fmt.Println("🔑 [Background] Starting card tokenization...")
 					if err := h.handleTokenizationAfterPayment(bgCtx, paymentCopy); err != nil {
 						fmt.Printf("⚠️  [Background] Tokenization failed: %v\n", err)
+
+						// Mark card as failed
+						if paymentCopy.PaymentSourceID != nil {
+							fmt.Printf("❌ Marking card as failed: %s\n", *paymentCopy.PaymentSourceID)
+							_ = h.storedCardRepo.UpdateCardStatus(bgCtx, *paymentCopy.PaymentSourceID, false, err.Error())
+						}
 					} else {
 						fmt.Println("✅ [Background] Card tokenized successfully")
 					}
@@ -441,6 +447,12 @@ func (h *CallbackHandler) handleMockPGCallback(c echo.Context) error {
 					fmt.Println("🔑 [Background] Starting card tokenization...")
 					if err := h.handleTokenizationAfterPayment(bgCtx, paymentCopy); err != nil {
 						fmt.Printf("⚠️  [Background] Tokenization failed: %v\n", err)
+
+						// Mark card as failed
+						if paymentCopy.PaymentSourceID != nil {
+							fmt.Printf("❌ Marking card as failed: %s\n", *paymentCopy.PaymentSourceID)
+							_ = h.storedCardRepo.UpdateCardStatus(bgCtx, *paymentCopy.PaymentSourceID, false, err.Error())
+						}
 					} else {
 						fmt.Println("✅ [Background] Card tokenized successfully")
 					}
@@ -512,6 +524,10 @@ func (h *CallbackHandler) handleTokenizationAfterPayment(ctx context.Context, pm
 	if err != nil {
 		fmt.Printf("❌ Failed to load stored_card: %v\n", err)
 		return fmt.Errorf("failed to load stored_card: %w", err)
+	}
+	if storedCard == nil {
+		fmt.Printf("❌ Stored card not found: %s\n", storedCardID)
+		return fmt.Errorf("stored card not found: %s", storedCardID)
 	}
 
 	fmt.Printf("🔑 Found stored_card: %s %s ending in %s (status: %v)\n",

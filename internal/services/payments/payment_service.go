@@ -263,6 +263,10 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 			s.logger.ErrorWith("Failed to update gateway payment ID", "error", err)
 			return fmt.Errorf("failed to update gateway payment ID: %w", err)
 		}
+		if err := txPaymentRepo.UpdatePaymentGateway(txCtx, paymentID, resp.GatewayUsed); err != nil {
+			s.logger.ErrorWith("Failed to update gateway used", "error", err)
+			return fmt.Errorf("failed to update gateway used: %w", err)
+		}
 		s.logger.DebugWith("Payment updated with gateway details")
 
 		// Sub-step 3.5: For tokenization payments, store gateway metadata (contains card details for immature PGs)

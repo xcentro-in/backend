@@ -303,6 +303,11 @@ func (ws *WalletServiceImpl) CompleteCardTokenization(
 			"error", err)
 		return fmt.Errorf("failed to load stored card: %w", err)
 	}
+	if storedCard == nil {
+		ws.logger.ErrorWith("Stored card not found",
+			"card_id", cardID)
+		return fmt.Errorf("stored card not found: %s", cardID)
+	}
 
 	ws.logger.DebugWith("Loaded stored card for tokenization completion",
 		"card_id", cardID,
