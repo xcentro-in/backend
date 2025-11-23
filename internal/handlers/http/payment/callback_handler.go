@@ -16,6 +16,7 @@ import (
 	"xcentro.in/internal/adapters/external/payment/easebuzz"
 	"xcentro.in/internal/adapters/external/payment/jiopay"
 	"xcentro.in/internal/adapters/external/payment/mockpg"
+	"xcentro.in/internal/core/business_rules"
 	"xcentro.in/internal/core/payment"
 	"xcentro.in/internal/shared/logger"
 )
@@ -26,6 +27,7 @@ import (
 type CallbackHandler struct {
 	paymentRepo        payment.PaymentRepository
 	storedCardRepo     payment.StoredCardRepository
+	walletService      business_rules.WalletService
 	jioPayGateway      payment.PaymentGateway
 	easebuzzGateway    payment.PaymentGateway
 	mockPGGateway      payment.PaymentGateway
@@ -41,6 +43,7 @@ type CallbackHandler struct {
 func NewCallbackHandler(
 	paymentRepoParam payment.PaymentRepository,
 	storedCardRepo payment.StoredCardRepository,
+	walletService business_rules.WalletService,
 	jioPayGateway payment.PaymentGateway,
 	easebuzzGateway payment.PaymentGateway,
 	mockPGGateway payment.PaymentGateway,
@@ -53,6 +56,7 @@ func NewCallbackHandler(
 	return &CallbackHandler{
 		paymentRepo:        paymentRepoParam,
 		storedCardRepo:     storedCardRepo,
+		walletService:      walletService,
 		jioPayGateway:      jioPayGateway,
 		easebuzzGateway:    easebuzzGateway,
 		mockPGGateway:      mockPGGateway,
@@ -563,29 +567,25 @@ func (h *CallbackHandler) handleTokenizationAfterPayment(ctx context.Context, pm
 		tokenizeResp.Token[:min(20, len(tokenizeResp.Token))],
 		tokenizeResp.CardID)
 
-	// Step 5: Update the stored_card record with tokenization data (Phase 2 completion)
-	storedCard.Token = tokenizeResp.Token
-	storedCard.GatewayUsed = pmt.GatewayUsed
-	storedCard.IsActive = true
-	storedCard.IssuerBank = "Unknown" // TODO: Extract from metadata or separate API call if needed
-
-	// Update metadata to reflect Phase 2 completion
-	if storedCard.Metadata == nil {
-		storedCard.Metadata = make(map[string]any)
-	}
-	storedCard.Metadata["status"] = "active"
-	storedCard.Metadata["phase"] = "2_tokenization_complete"
-	storedCard.Metadata["tokenization_date"] = time.Now().Format("2006-01-02")
-	storedCard.Metadata["tokenization_payment_id"] = pmt.ID
-	storedCard.Metadata["gateway_card_id"] = tokenizeResp.CardID
-
-	// Update the stored_card record in database
-	if err := h.storedCardRepo.UpdateStoredCard(ctx, storedCard); err != nil {
-		fmt.Printf("❌ Failed to update stored_card: %v\n", err)
-		return fmt.Errorf("failed to update stored_card: %w", err)
+	// Step 5: Complete card tokenization via WalletService
+	// This updates the stored_card record AND sets hasAddedPaymentMethod flag
+	// Ensures consistent behavior with AddPaymentSource (bank accounts)
+	fmt.Println("🔑 Completing card tokenization via WalletService...")
+	err = h.walletService.CompleteCardTokenization(
+		ctx,
+		pmt.BusinessID,
+		storedCardID,
+		tokenizeResp.Token,
+		pmt.GatewayUsed,
+		tokenizeResp.CardID,
+	)
+	if err != nil {
+		fmt.Printf("❌ Failed to complete card tokenization: %v\n", err)
+		return fmt.Errorf("failed to complete card tokenization: %w", err)
 	}
 
-	fmt.Printf("✅ Stored card updated successfully: %s (now active)\n", storedCard.CardID)
+	fmt.Printf("✅ Card tokenization completed successfully: %s (now active)\n", storedCardID)
+	fmt.Println("✅ Onboarding flag updated if first payment method")
 	fmt.Println("=== TOKENIZATION PHASE 2: Complete ===")
 
 	return nil
