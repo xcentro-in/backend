@@ -1036,10 +1036,116 @@ func (r *PgPaymentRepository) UpdateHasSuccessfulRetry(ctx context.Context, paym
 	// via EXISTS check. This method is a no-op since we don't store it.
 	// The flag is determined by: EXISTS(SELECT 1 FROM payments WHERE retry_of_payment_id = p.payment_id AND status = 'success')
 	// So we don't need to update anything - it will automatically reflect when the retry payment has status='success'
-	
+
 	r.logger.DebugWith("UpdateHasSuccessfulRetry called (no-op - computed dynamically)",
 		"payment_id", paymentID,
 		"has_successful_retry", hasSuccessfulRetry)
-	
+
 	return nil
+}
+
+// ============================================================================
+// Ops Dashboard Methods for Collections
+// ============================================================================
+
+// ListCollectionsPaginated retrieves paginated list of payments (collections) for ops dashboard
+// Supports filtering by status: pending, payoutReady (success), failed, or all
+func (r *PgPaymentRepository) ListCollectionsPaginated(ctx context.Context, page int, limit int, status string) ([]*payment.OpsCollectionListItem, int, error) {
+	// Build status filter
+	statusFilter := ""
+	var args []interface{}
+	argIndex := 1
+
+	// Map ops status to payment status
+	switch status {
+	case "pending":
+		statusFilter = fmt.Sprintf(" AND p.status = $%d", argIndex)
+		args = append(args, "pending")
+		argIndex++
+	case "payoutReady":
+		statusFilter = fmt.Sprintf(" AND p.status = $%d", argIndex)
+		args = append(args, "success")
+		argIndex++
+	case "failed":
+		statusFilter = fmt.Sprintf(" AND p.status = $%d", argIndex)
+		args = append(args, "failed")
+		argIndex++
+	default:
+		// No filter - return all statuses
+	}
+
+	// Get total count
+	countQuery := fmt.Sprintf(`
+		SELECT COUNT(*)
+		FROM xcentro.payments p
+		WHERE p.payment_type = 'payment'%s
+	`, statusFilter)
+
+	var totalCount int
+	err := r.querier.QueryRow(ctx, countQuery, args...).Scan(&totalCount)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to get collection count: %w", err)
+	}
+
+	// Build main query with pagination
+	offset := (page - 1) * limit
+	mainQuery := fmt.Sprintf(`
+		SELECT
+			p.payment_id,
+			p.created_at,
+			p.total_amount,
+			p.status,
+			p.business_id,
+			b.name as business_name,
+			p.payment_method
+		FROM xcentro.payments p
+		LEFT JOIN xcentro.business b ON p.business_id = b.bid
+		WHERE p.payment_type = 'payment'%s
+		ORDER BY p.created_at DESC
+		LIMIT $%d OFFSET $%d
+	`, statusFilter, argIndex, argIndex+1)
+
+	// Add pagination args
+	args = append(args, limit, offset)
+
+	rows, err := r.querier.Query(ctx, mainQuery, args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to query collections: %w", err)
+	}
+	defer rows.Close()
+
+	var collections []*payment.OpsCollectionListItem
+	for rows.Next() {
+		var item payment.OpsCollectionListItem
+		var status string
+		var paymentMethod string
+		var businessName *string
+
+		err := rows.Scan(
+			&item.PaymentID,
+			&item.Date,
+			&item.TotalAmount,
+			&status,
+			&item.BusinessID,
+			&businessName,
+			&paymentMethod,
+		)
+		if err != nil {
+			return nil, 0, fmt.Errorf("failed to scan collection: %w", err)
+		}
+
+		item.Status = payment.PaymentStatus(status)
+		item.PaymentMethod = payment.PaymentMethod(paymentMethod)
+		if businessName != nil {
+			item.BusinessName = *businessName
+		}
+
+		collections = append(collections, &item)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("error iterating collection rows: %w", err)
+	}
+
+	return collections, totalCount, nil
 }

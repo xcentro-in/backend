@@ -805,3 +805,61 @@ func (s *PaymentService) validateVouchersAreInDraft(ctx context.Context, voucher
 	s.logger.DebugWith("All vouchers validated for retry", "count", len(voucherIDs))
 	return nil
 }
+
+// ============================================================================
+// Ops Dashboard Methods for Collections
+// ============================================================================
+
+// OpsListCollections retrieves paginated list of collections for ops dashboard
+func (s *PaymentService) OpsListCollections(ctx context.Context, page int, limit int, status string) (*payment.OpsListCollectionsResponse, error) {
+	s.logger.InfoWith("Ops: Fetching collections list",
+		"page", page,
+		"limit", limit,
+		"status", status)
+
+	// Set defaults
+	if page <= 0 {
+		page = 1
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+
+	// Type assert to access the ops method
+	type opsCollectionLister interface {
+		ListCollectionsPaginated(ctx context.Context, page int, limit int, status string) ([]*payment.OpsCollectionListItem, int, error)
+	}
+
+	repo, ok := s.paymentRepo.(opsCollectionLister)
+	if !ok {
+		s.logger.ErrorWith("Payment repository doesn't implement ListCollectionsPaginated")
+		return nil, fmt.Errorf("collection listing not supported")
+	}
+
+	// Fetch from repository
+	collections, totalCount, err := repo.ListCollectionsPaginated(ctx, page, limit, status)
+	if err != nil {
+		s.logger.ErrorWith("Failed to list collections", "error", err)
+		return nil, fmt.Errorf("failed to list collections: %w", err)
+	}
+
+	// Calculate total pages
+	totalPages := (totalCount + limit - 1) / limit
+
+	s.logger.InfoWith("Ops: Collections list fetched successfully",
+		"count", len(collections),
+		"total_count", totalCount)
+
+	return &payment.OpsListCollectionsResponse{
+		Data: collections,
+		Pagination: payment.PaginationResponse{
+			CurrentPage: page,
+			PageSize:    limit,
+			TotalItems:  totalCount,
+			TotalPages:  totalPages,
+		},
+	}, nil
+}

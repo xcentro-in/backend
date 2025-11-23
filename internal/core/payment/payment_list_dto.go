@@ -54,3 +54,48 @@ type PaymentListResponse struct {
 	Limit      int               `json:"limit"`
 	Offset     int               `json:"offset"`
 }
+
+// ============================================================================
+// Ops Dashboard DTOs for Collections
+// ============================================================================
+
+// OpsCollectionStatus represents valid status filters for ops collections
+type OpsCollectionStatus string
+
+const (
+	OpsCollectionStatusPending    OpsCollectionStatus = "pending"
+	OpsCollectionStatusPayoutReady OpsCollectionStatus = "payoutReady" // Maps to PaymentStatusSuccess
+	OpsCollectionStatusFailed     OpsCollectionStatus = "failed"
+)
+
+// OpsListCollectionsRequest represents the request for listing collections
+type OpsListCollectionsRequest struct {
+	Page   int                 `query:"page" validate:"omitempty,min=1"`
+	Limit  int                 `query:"limit" validate:"omitempty,min=1,max=100"`
+	Status OpsCollectionStatus `query:"status" validate:"omitempty,oneof=pending payoutReady failed"`
+}
+
+// OpsCollectionListItem represents a single collection in the ops list view
+type OpsCollectionListItem struct {
+	PaymentID     string        `json:"payment_id"`
+	Date          time.Time     `json:"date"`
+	TotalAmount   int64         `json:"total_amount"` // In paise (smallest currency unit)
+	Status        PaymentStatus `json:"status"`
+	BusinessID    string        `json:"business_id"`
+	BusinessName  string        `json:"business_name"`
+	PaymentMethod PaymentMethod `json:"payment_method"`
+}
+
+// OpsListCollectionsResponse represents the paginated response for ops collections
+type OpsListCollectionsResponse struct {
+	Data       []*OpsCollectionListItem `json:"data"`
+	Pagination PaginationResponse       `json:"pagination"`
+}
+
+// PaginationResponse represents pagination metadata
+type PaginationResponse struct {
+	CurrentPage int `json:"current_page"`
+	PageSize    int `json:"page_size"`
+	TotalItems  int `json:"total_items"`
+	TotalPages  int `json:"total_pages"`
+}
