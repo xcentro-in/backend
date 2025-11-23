@@ -1049,26 +1049,34 @@ func (r *PgPaymentRepository) UpdateHasSuccessfulRetry(ctx context.Context, paym
 // ============================================================================
 
 // ListCollectionsPaginated retrieves paginated list of payments (collections) for ops dashboard
-// Supports filtering by status: pending, payoutReady (success), failed, or all
+// Supports filtering by status: pending, success, failed, payoutReady, or all
 func (r *PgPaymentRepository) ListCollectionsPaginated(ctx context.Context, page int, limit int, status string) ([]*payment.OpsCollectionListItem, int, error) {
 	// Build status filter
 	statusFilter := ""
 	var args []interface{}
 	argIndex := 1
 
-	// Map ops status to payment status
+	// Map ops status to payment/settlement status
 	switch status {
 	case "pending":
+		// Payment is pending
 		statusFilter = fmt.Sprintf(" AND p.status = $%d", argIndex)
 		args = append(args, "pending")
 		argIndex++
-	case "payoutReady":
-		statusFilter = fmt.Sprintf(" AND p.status = $%d", argIndex)
+	case "success":
+		// Payment successful but not yet settled
+		statusFilter = fmt.Sprintf(" AND p.status = $%d AND (p.settlement_status IS NULL OR p.settlement_status != 'settled')", argIndex)
 		args = append(args, "success")
 		argIndex++
 	case "failed":
+		// Payment failed
 		statusFilter = fmt.Sprintf(" AND p.status = $%d", argIndex)
 		args = append(args, "failed")
+		argIndex++
+	case "payoutReady":
+		// Payment settled and ready for payout
+		statusFilter = fmt.Sprintf(" AND p.status = 'success' AND p.settlement_status = $%d", argIndex)
+		args = append(args, "settled")
 		argIndex++
 	default:
 		// No filter - return all statuses
