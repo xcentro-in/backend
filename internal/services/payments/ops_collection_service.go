@@ -11,7 +11,7 @@ import (
 // OpsCollectionRepository interface for repositories that support ops collection operations
 type OpsCollectionRepository interface {
 	ListCollectionsPaginated(ctx context.Context, page int, limit int, status string) ([]*payment.OpsCollectionListItem, int, error)
-	GetCollectionDetails(ctx context.Context, paymentID string) (*payment.OpsCollectionDetails, error)
+	GetCollectionSummary(ctx context.Context, paymentID string) (*payment.OpsCollectionSummary, error)
 }
 
 // OpsCollectionService provides ops-specific payment collection operations
@@ -67,20 +67,20 @@ func (s *OpsCollectionService) ListCollections(ctx context.Context, page int, li
 	}, nil
 }
 
-// GetCollectionDetails retrieves detailed information for a single collection
-func (s *OpsCollectionService) GetCollectionDetails(ctx context.Context, paymentID string) (*payment.OpsCollectionDetails, error) {
-	s.logger.Infof("Ops: Fetching collection details - payment_id=%s", paymentID)
+// GetCollectionSummary retrieves lightweight summary for a single collection
+func (s *OpsCollectionService) GetCollectionSummary(ctx context.Context, paymentID string) (*payment.OpsCollectionSummary, error) {
+	s.logger.Infof("Ops: Fetching collection summary - payment_id=%s", paymentID)
 
 	if paymentID == "" {
 		return nil, fmt.Errorf("payment_id is required")
 	}
 
-	details, err := s.repo.GetCollectionDetails(ctx, paymentID)
+	summary, err := s.repo.GetCollectionSummary(ctx, paymentID)
 	if err != nil {
-		s.logger.Errorf("Failed to get collection details: %v", err)
+		s.logger.Errorf("Failed to get collection summary: %v", err)
 		return nil, err
 	}
 
-	s.logger.Infof("Ops: Collection details fetched - payment_id=%s, status=%s", paymentID, details.Status)
-	return details, nil
+	s.logger.Infof("Ops: Collection summary fetched - payment_id=%s, status=%s", paymentID, summary.Status)
+	return summary, nil
 }

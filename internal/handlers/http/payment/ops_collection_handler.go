@@ -32,8 +32,9 @@ func RegisterOpsCollectionRoutes(e *echo.Group, collectionService *payments.OpsC
 
 	// Endpoint: Paginated list of collections
 	collectionGroup.GET("", handler.ListCollections)
-	// Endpoint: Get collection details by payment ID
-	collectionGroup.GET("/:payment_id", handler.GetCollectionDetails)
+	// Endpoint: Get lightweight collection summary (payment method, gateway, payees)
+	// Use /collections/:payment_id for full details (not yet implemented)
+	collectionGroup.GET("/summary/:payment_id", handler.GetCollectionSummary)
 }
 
 // ListCollections handles GET /collections?page=1&limit=20&status=pending|payoutReady|failed
@@ -81,8 +82,9 @@ func (h *OpsCollectionHandler) ListCollections(c echo.Context) error {
 	return c.JSON(http.StatusOK, response)
 }
 
-// GetCollectionDetails handles GET /collections/:payment_id
-func (h *OpsCollectionHandler) GetCollectionDetails(c echo.Context) error {
+// GetCollectionSummary handles GET /collections/summary/:payment_id
+// Returns lightweight collection info: payment method, gateway, and payees
+func (h *OpsCollectionHandler) GetCollectionSummary(c echo.Context) error {
 	paymentID := c.Param("payment_id")
 	if paymentID == "" {
 		return c.JSON(http.StatusBadRequest, map[string]string{
@@ -91,18 +93,18 @@ func (h *OpsCollectionHandler) GetCollectionDetails(c echo.Context) error {
 	}
 
 	// Call service layer
-	details, err := h.collectionService.GetCollectionDetails(c.Request().Context(), paymentID)
+	summary, err := h.collectionService.GetCollectionSummary(c.Request().Context(), paymentID)
 	if err != nil {
-		h.logger.Errorf("Error getting collection details: %v", err)
+		h.logger.Errorf("Error getting collection summary: %v", err)
 		if err.Error() == "payment not found" {
 			return c.JSON(http.StatusNotFound, map[string]string{
 				"error": "Collection not found",
 			})
 		}
 		return c.JSON(http.StatusInternalServerError, map[string]string{
-			"error": "Failed to fetch collection details",
+			"error": "Failed to fetch collection summary",
 		})
 	}
 
-	return c.JSON(http.StatusOK, details)
+	return c.JSON(http.StatusOK, summary)
 }

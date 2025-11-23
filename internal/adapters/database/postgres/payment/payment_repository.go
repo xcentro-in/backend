@@ -1158,9 +1158,9 @@ func (r *PgPaymentRepository) ListCollectionsPaginated(ctx context.Context, page
 	return collections, totalCount, nil
 }
 
-// GetCollectionDetails retrieves detailed information for a single collection (payment)
+// GetCollectionSummary retrieves lightweight summary for a single collection (payment)
 // Returns payment method details, gateway info, and payee details
-func (r *PgPaymentRepository) GetCollectionDetails(ctx context.Context, paymentID string) (*payment.OpsCollectionDetails, error) {
+func (r *PgPaymentRepository) GetCollectionSummary(ctx context.Context, paymentID string) (*payment.OpsCollectionSummary, error) {
 	// Query for payment with method details
 	query := `
 		SELECT
@@ -1192,7 +1192,7 @@ func (r *PgPaymentRepository) GetCollectionDetails(ctx context.Context, paymentI
 		WHERE p.payment_id = $1
 	`
 
-	var details payment.OpsCollectionDetails
+	var summary payment.OpsCollectionSummary
 	var paymentMethod, gatewayUsed, gatewayPaymentID string
 	var paymentSourceID, paymentSourceType *string
 	var cardType, cardCategory, issuerBank, cardLast4 *string
@@ -1200,9 +1200,9 @@ func (r *PgPaymentRepository) GetCollectionDetails(ctx context.Context, paymentI
 	var status string
 
 	err := r.querier.QueryRow(ctx, query, paymentID).Scan(
-		&details.PaymentID,
-		&details.Date,
-		&details.TotalAmount,
+		&summary.PaymentID,
+		&summary.Date,
+		&summary.TotalAmount,
 		&status,
 		&paymentMethod,
 		&gatewayUsed,
@@ -1221,20 +1221,20 @@ func (r *PgPaymentRepository) GetCollectionDetails(ctx context.Context, paymentI
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, fmt.Errorf("payment not found")
 		}
-		return nil, fmt.Errorf("failed to get collection details: %w", err)
+		return nil, fmt.Errorf("failed to get collection summary: %w", err)
 	}
 
-	details.Status = payment.PaymentStatus(status)
+	summary.Status = payment.PaymentStatus(status)
 
 	// Build payment method details
-	details.PaymentMethod = r.buildOpsPaymentMethodDetails(
+	summary.PaymentMethod = r.buildOpsPaymentMethodDetails(
 		paymentMethod,
 		cardType, cardCategory, issuerBank, cardLast4,
 		bankName, ifscCode, accountNumberEncrypted,
 	)
 
 	// Build gateway details
-	details.Gateway = payment.OpsGatewayDetails{
+	summary.Gateway = payment.OpsGatewayDetails{
 		Name:          gatewayUsed,
 		TransactionID: gatewayPaymentID,
 	}
@@ -1243,12 +1243,12 @@ func (r *PgPaymentRepository) GetCollectionDetails(ctx context.Context, paymentI
 	payees, err := r.getPayeesForPayment(ctx, paymentID, status)
 	if err != nil {
 		r.logger.WarnWith("Failed to fetch payees for payment", "payment_id", paymentID, "error", err)
-		details.Payees = []payment.OpsPayeeDetails{}
+		summary.Payees = []payment.OpsPayeeDetails{}
 	} else {
-		details.Payees = payees
+		summary.Payees = payees
 	}
 
-	return &details, nil
+	return &summary, nil
 }
 
 // buildOpsPaymentMethodDetails builds detailed payment method info for ops

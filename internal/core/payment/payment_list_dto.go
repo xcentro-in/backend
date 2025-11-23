@@ -102,18 +102,19 @@ type PaginationResponse struct {
 }
 
 // ============================================================================
-// Ops Collection Details DTOs (lightweight single payment view)
+// Ops Collection Summary DTOs (lightweight single payment view)
 // ============================================================================
 
-// OpsCollectionDetails represents detailed information for a single collection
-type OpsCollectionDetails struct {
-	PaymentID      string                      `json:"payment_id"`
-	Date           time.Time                   `json:"date"`
-	TotalAmount    int64                       `json:"total_amount"`
-	Status         PaymentStatus               `json:"status"`
-	PaymentMethod  OpsPaymentMethodDetails     `json:"payment_method"`
-	Gateway        OpsGatewayDetails           `json:"gateway"`
-	Payees         []OpsPayeeDetails           `json:"payees"`
+// OpsCollectionSummary represents lightweight summary for a single collection
+// Use this for quick overview; full details endpoint coming later
+type OpsCollectionSummary struct {
+	PaymentID     string                  `json:"payment_id"`
+	Date          time.Time               `json:"date"`
+	TotalAmount   int64                   `json:"total_amount"`
+	Status        PaymentStatus           `json:"status"`
+	PaymentMethod OpsPaymentMethodDetails `json:"payment_method"`
+	Gateway       OpsGatewayDetails       `json:"gateway"`
+	Payees        []OpsPayeeDetails       `json:"payees"`
 }
 
 // OpsPaymentMethodDetails represents detailed payment method info for ops
