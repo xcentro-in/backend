@@ -8,20 +8,21 @@ import (
 	"xcentro.in/internal/shared/logger"
 )
 
-// OpsCollectionLister interface for repositories that support ops collection listing
-type OpsCollectionLister interface {
+// OpsCollectionRepository interface for repositories that support ops collection operations
+type OpsCollectionRepository interface {
 	ListCollectionsPaginated(ctx context.Context, page int, limit int, status string) ([]*payment.OpsCollectionListItem, int, error)
+	GetCollectionDetails(ctx context.Context, paymentID string) (*payment.OpsCollectionDetails, error)
 }
 
 // OpsCollectionService provides ops-specific payment collection operations
 // This is a lightweight service that doesn't require all PaymentService dependencies
 type OpsCollectionService struct {
-	repo   OpsCollectionLister
+	repo   OpsCollectionRepository
 	logger *logger.Logger
 }
 
 // NewOpsCollectionService creates a new ops collection service
-func NewOpsCollectionService(repo OpsCollectionLister) *OpsCollectionService {
+func NewOpsCollectionService(repo OpsCollectionRepository) *OpsCollectionService {
 	return &OpsCollectionService{
 		repo:   repo,
 		logger: logger.GetDefault(),
@@ -64,4 +65,22 @@ func (s *OpsCollectionService) ListCollections(ctx context.Context, page int, li
 			TotalPages:  totalPages,
 		},
 	}, nil
+}
+
+// GetCollectionDetails retrieves detailed information for a single collection
+func (s *OpsCollectionService) GetCollectionDetails(ctx context.Context, paymentID string) (*payment.OpsCollectionDetails, error) {
+	s.logger.Infof("Ops: Fetching collection details - payment_id=%s", paymentID)
+
+	if paymentID == "" {
+		return nil, fmt.Errorf("payment_id is required")
+	}
+
+	details, err := s.repo.GetCollectionDetails(ctx, paymentID)
+	if err != nil {
+		s.logger.Errorf("Failed to get collection details: %v", err)
+		return nil, err
+	}
+
+	s.logger.Infof("Ops: Collection details fetched - payment_id=%s, status=%s", paymentID, details.Status)
+	return details, nil
 }

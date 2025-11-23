@@ -1157,3 +1157,214 @@ func (r *PgPaymentRepository) ListCollectionsPaginated(ctx context.Context, page
 
 	return collections, totalCount, nil
 }
+
+// GetCollectionDetails retrieves detailed information for a single collection (payment)
+// Returns payment method details, gateway info, and payee details
+func (r *PgPaymentRepository) GetCollectionDetails(ctx context.Context, paymentID string) (*payment.OpsCollectionDetails, error) {
+	// Query for payment with method details
+	query := `
+		SELECT
+			p.payment_id,
+			p.created_at,
+			p.total_amount,
+			p.status,
+			p.payment_method,
+			COALESCE(p.gateway_used, '') as gateway_used,
+			COALESCE(p.gateway_payment_id, '') as gateway_payment_id,
+			p.payment_source_id,
+			p.payment_source_type,
+			-- Card details (if payment source is card)
+			sc.card_type,
+			sc.card_category,
+			sc.issuer_bank,
+			sc.last_four_digits as card_last4,
+			-- Bank account details (if payment source is bank_account)
+			ba.bank_name,
+			ba.ifsc_code,
+			ba.account_number_encrypted
+		FROM xcentro.payments p
+		LEFT JOIN xcentro.stored_cards sc
+			ON p.payment_source_id = sc.card_id
+			AND p.payment_source_type = 'card'
+		LEFT JOIN xcentro.bank_accounts ba
+			ON p.payment_source_id = ba.account_id
+			AND p.payment_source_type = 'bank_account'
+		WHERE p.payment_id = $1
+	`
+
+	var details payment.OpsCollectionDetails
+	var paymentMethod, gatewayUsed, gatewayPaymentID string
+	var paymentSourceID, paymentSourceType *string
+	var cardType, cardCategory, issuerBank, cardLast4 *string
+	var bankName, ifscCode, accountNumberEncrypted *string
+	var status string
+
+	err := r.querier.QueryRow(ctx, query, paymentID).Scan(
+		&details.PaymentID,
+		&details.Date,
+		&details.TotalAmount,
+		&status,
+		&paymentMethod,
+		&gatewayUsed,
+		&gatewayPaymentID,
+		&paymentSourceID,
+		&paymentSourceType,
+		&cardType,
+		&cardCategory,
+		&issuerBank,
+		&cardLast4,
+		&bankName,
+		&ifscCode,
+		&accountNumberEncrypted,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("payment not found")
+		}
+		return nil, fmt.Errorf("failed to get collection details: %w", err)
+	}
+
+	details.Status = payment.PaymentStatus(status)
+
+	// Build payment method details
+	details.PaymentMethod = r.buildOpsPaymentMethodDetails(
+		paymentMethod,
+		cardType, cardCategory, issuerBank, cardLast4,
+		bankName, ifscCode, accountNumberEncrypted,
+	)
+
+	// Build gateway details
+	details.Gateway = payment.OpsGatewayDetails{
+		Name:          gatewayUsed,
+		TransactionID: gatewayPaymentID,
+	}
+
+	// Fetch payee details based on payment status
+	payees, err := r.getPayeesForPayment(ctx, paymentID, status)
+	if err != nil {
+		r.logger.WarnWith("Failed to fetch payees for payment", "payment_id", paymentID, "error", err)
+		details.Payees = []payment.OpsPayeeDetails{}
+	} else {
+		details.Payees = payees
+	}
+
+	return &details, nil
+}
+
+// buildOpsPaymentMethodDetails builds detailed payment method info for ops
+func (r *PgPaymentRepository) buildOpsPaymentMethodDetails(
+	method string,
+	cardType, cardCategory, issuerBank, cardLast4 *string,
+	bankName, ifscCode, accountNumberEncrypted *string,
+) payment.OpsPaymentMethodDetails {
+	details := payment.OpsPaymentMethodDetails{}
+
+	switch method {
+	case "card", "token_card":
+		details.Type = "card"
+		if cardCategory != nil {
+			details.CardType = *cardCategory // credit, debit, corporate
+		}
+		if cardType != nil {
+			// Map card type to display name
+			switch *cardType {
+			case "visa":
+				details.CardNetwork = "Visa"
+			case "mastercard":
+				details.CardNetwork = "Mastercard"
+			case "amex":
+				details.CardNetwork = "Amex"
+			case "rupay":
+				details.CardNetwork = "RuPay"
+			case "diners":
+				details.CardNetwork = "Diners"
+			default:
+				details.CardNetwork = *cardType
+			}
+		}
+		if issuerBank != nil {
+			details.IssuerBank = *issuerBank
+		}
+		if cardLast4 != nil {
+			details.Last4 = *cardLast4
+		}
+	case "net_banking":
+		details.Type = "bank"
+		if bankName != nil {
+			details.BankName = *bankName
+		}
+		if ifscCode != nil {
+			details.IFSC = *ifscCode
+		}
+		if accountNumberEncrypted != nil {
+			// Decrypt and extract last 4 digits
+			decrypted, err := crypto.DecryptBankAccountNumber(*accountNumberEncrypted, r.encryptionKey)
+			if err == nil {
+				details.Last4 = crypto.ExtractLastDigits(decrypted, 4)
+			} else {
+				details.Last4 = "****"
+			}
+		}
+	case "upi":
+		details.Type = "upi"
+	default:
+		details.Type = method
+	}
+
+	return details
+}
+
+// getPayeesForPayment retrieves payee details based on payment status
+// Success payments: payees from payment_vouchers table
+// Pending/Failed payments: payees from payment_voucher_pending table
+func (r *PgPaymentRepository) getPayeesForPayment(ctx context.Context, paymentID string, status string) ([]payment.OpsPayeeDetails, error) {
+	var query string
+
+	if status == "success" {
+		// Finalized vouchers - payment_id is set in payment_vouchers
+		query = `
+			SELECT DISTINCT
+				bpr.relation_id::text,
+				bpr.display_name
+			FROM xcentro.payment_vouchers v
+			INNER JOIN xcentro.business_payee_relation bpr
+				ON v.payee_id = bpr.payee_id
+				AND v.account_id = bpr.account_id
+			WHERE v.payment_id = $1
+		`
+	} else {
+		// Pending vouchers - linked via payment_voucher_pending table
+		query = `
+			SELECT DISTINCT
+				bpr.relation_id::text,
+				bpr.display_name
+			FROM xcentro.payment_voucher_pending pvp
+			INNER JOIN xcentro.payment_vouchers v ON pvp.voucher_id = v.voucher_id
+			INNER JOIN xcentro.business_payee_relation bpr
+				ON v.payee_id = bpr.payee_id
+				AND v.account_id = bpr.account_id
+			WHERE pvp.payment_id = $1
+		`
+	}
+
+	rows, err := r.querier.Query(ctx, query, paymentID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query payees: %w", err)
+	}
+	defer rows.Close()
+
+	var payees []payment.OpsPayeeDetails
+	for rows.Next() {
+		var payee payment.OpsPayeeDetails
+		if err := rows.Scan(&payee.RelationID, &payee.DisplayName); err != nil {
+			return nil, fmt.Errorf("failed to scan payee: %w", err)
+		}
+		payees = append(payees, payee)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating payee rows: %w", err)
+	}
+
+	return payees, nil
+}

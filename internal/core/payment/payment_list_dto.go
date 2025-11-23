@@ -100,3 +100,43 @@ type PaginationResponse struct {
 	TotalItems  int `json:"total_items"`
 	TotalPages  int `json:"total_pages"`
 }
+
+// ============================================================================
+// Ops Collection Details DTOs (lightweight single payment view)
+// ============================================================================
+
+// OpsCollectionDetails represents detailed information for a single collection
+type OpsCollectionDetails struct {
+	PaymentID      string                      `json:"payment_id"`
+	Date           time.Time                   `json:"date"`
+	TotalAmount    int64                       `json:"total_amount"`
+	Status         PaymentStatus               `json:"status"`
+	PaymentMethod  OpsPaymentMethodDetails     `json:"payment_method"`
+	Gateway        OpsGatewayDetails           `json:"gateway"`
+	Payees         []OpsPayeeDetails           `json:"payees"`
+}
+
+// OpsPaymentMethodDetails represents detailed payment method info for ops
+type OpsPaymentMethodDetails struct {
+	Type        string `json:"type"`                   // "card" or "bank"
+	// Card-specific fields
+	CardType    string `json:"card_type,omitempty"`    // "credit", "debit", "corporate"
+	CardNetwork string `json:"card_network,omitempty"` // "Visa", "Mastercard", "Amex", "RuPay", "Diners"
+	IssuerBank  string `json:"issuer_bank,omitempty"`  // Bank that issued the card
+	Last4       string `json:"last_4,omitempty"`       // Last 4 digits
+	// Bank-specific fields
+	BankName    string `json:"bank_name,omitempty"`    // Bank name for net banking/account
+	IFSC        string `json:"ifsc,omitempty"`         // IFSC code
+}
+
+// OpsGatewayDetails represents payment gateway information
+type OpsGatewayDetails struct {
+	Name          string `json:"name"`           // Gateway name: "jiopay", "easebuzz"
+	TransactionID string `json:"transaction_id"` // Gateway-generated transaction ID
+}
+
+// OpsPayeeDetails represents payee information for the collection
+type OpsPayeeDetails struct {
+	RelationID  string `json:"relation_id"`  // business_payee_relation.relation_id
+	DisplayName string `json:"display_name"` // Payee display name
+}
