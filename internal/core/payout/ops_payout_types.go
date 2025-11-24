@@ -47,3 +47,29 @@ type OpsPaginationResponse struct {
 	TotalItems  int `json:"total_items"`
 	TotalPages  int `json:"total_pages"`
 }
+
+// ============================================================================
+// Ops Payout Summary DTO (single payout transfer details)
+// ============================================================================
+
+// OpsPayoutSummary represents detailed summary of a single payout transfer
+type OpsPayoutSummary struct {
+	// Entity owning the voucher
+	BusinessID   string `json:"business_id"`
+	BusinessName string `json:"business_name"`
+
+	// Recipient (payee) info
+	PayeeRelationID string `json:"payee_relation_id"` // business_payee_relation composite key
+	PayeeDisplayName string `json:"payee_display_name"`
+
+	// Payout provider info
+	PayoutProvider       string  `json:"payout_provider"`          // e.g., "castler"
+	ProviderTransferID   string  `json:"provider_transfer_id"`     // Provider's transfer ID
+
+	// Settlement info
+	UTR            *string    `json:"utr"`              // Bank UTR (if settled)
+	SettlementDate *time.Time `json:"settlement_date"` // Completion date (if settled)
+
+	// Status
+	PayoutStatus string `json:"payout_status"` // initiated, processing, completed, failed, timeout
+}

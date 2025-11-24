@@ -2,8 +2,10 @@ package payout
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 
+	"github.com/jackc/pgx/v5"
 	"xcentro.in/internal/adapters/database/postgres/client"
 	"xcentro.in/internal/core/payout"
 )
@@ -105,4 +107,69 @@ func (r *PostgresOpsPayoutRepository) ListPayoutsPaginated(ctx context.Context, 
 	}
 
 	return items, totalCount, nil
+}
+
+// GetPayoutSummary retrieves detailed summary for a single payout transfer
+func (r *PostgresOpsPayoutRepository) GetPayoutSummary(ctx context.Context, transferRequestID string) (*payout.OpsPayoutSummary, error) {
+	// Query to fetch payout transfer summary with business, payee, and provider details
+	// Joins: payout_transfer_requests -> payment_vouchers -> business + business_payee_relation
+	query := `
+		SELECT
+			b.bid::text as business_id,
+			b.business_name,
+			CONCAT(pv.business_id::text, ':', pv.payee_id::text, ':', pv.account_id::text) as payee_relation_id,
+			COALESCE(bpr.display_name, pm.display_name, 'Unknown') as payee_display_name,
+			ptr.provider,
+			COALESCE(ptr.provider_transfer_id, '') as provider_transfer_id,
+			ptr.utr,
+			ptr.completed_at,
+			ptr.status::text as payout_status
+		FROM xcentro.payout_transfer_requests ptr
+		INNER JOIN xcentro.payment_vouchers pv ON ptr.voucher_id = pv.voucher_id
+		INNER JOIN xcentro.business b ON pv.business_id = b.bid
+		LEFT JOIN xcentro.business_payee_relation bpr
+			ON pv.business_id = bpr.business_id
+			AND pv.payee_id = bpr.payee_id
+			AND pv.account_id = bpr.account_id
+		LEFT JOIN xcentro.payee_master pm ON pv.payee_id = pm.payee_id
+		WHERE ptr.transfer_request_id = $1
+	`
+
+	var summary payout.OpsPayoutSummary
+	var utr, providerTransferID sql.NullString
+	var settlementDate sql.NullTime
+
+	err := r.querier.QueryRow(ctx, query, transferRequestID).Scan(
+		&summary.BusinessID,
+		&summary.BusinessName,
+		&summary.PayeeRelationID,
+		&summary.PayeeDisplayName,
+		&summary.PayoutProvider,
+		&providerTransferID,
+		&utr,
+		&settlementDate,
+		&summary.PayoutStatus,
+	)
+
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, fmt.Errorf("payout transfer not found: %s", transferRequestID)
+		}
+		return nil, fmt.Errorf("failed to get payout summary: %w", err)
+	}
+
+	// Handle nullable fields
+	if utr.Valid && utr.String != "" {
+		summary.UTR = &utr.String
+	}
+
+	if providerTransferID.Valid && providerTransferID.String != "" {
+		summary.ProviderTransferID = providerTransferID.String
+	}
+
+	if settlementDate.Valid {
+		summary.SettlementDate = &settlementDate.Time
+	}
+
+	return &summary, nil
 }

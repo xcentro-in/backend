@@ -32,6 +32,8 @@ func RegisterOpsPayoutRoutes(e *echo.Group, payoutService *payoutSvc.OpsPayoutSe
 
 	// Endpoint: Paginated list of payout transfers
 	payoutGroup.GET("", handler.ListPayouts)
+	// Endpoint: Get payout transfer summary
+	payoutGroup.GET("/summary/:id", handler.GetPayoutSummary)
 }
 
 // ListPayouts handles GET /payouts?page=1&limit=20&status=in_progress|completed|failed
@@ -77,4 +79,31 @@ func (h *OpsPayoutHandler) ListPayouts(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, response)
+}
+
+// GetPayoutSummary handles GET /payouts/summary/:id
+// Returns detailed summary of a single payout transfer
+func (h *OpsPayoutHandler) GetPayoutSummary(c echo.Context) error {
+	transferRequestID := c.Param("id")
+	if transferRequestID == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "transfer_request_id is required",
+		})
+	}
+
+	// Call service layer
+	summary, err := h.payoutService.GetPayoutSummary(c.Request().Context(), transferRequestID)
+	if err != nil {
+		h.logger.Errorf("Error getting payout summary: %v", err)
+		if err.Error() == "payout transfer not found: "+transferRequestID {
+			return c.JSON(http.StatusNotFound, map[string]string{
+				"error": "Payout transfer not found",
+			})
+		}
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Failed to fetch payout summary",
+		})
+	}
+
+	return c.JSON(http.StatusOK, summary)
 }

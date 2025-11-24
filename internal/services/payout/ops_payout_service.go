@@ -60,3 +60,21 @@ func (s *OpsPayoutService) ListPayouts(ctx context.Context, page int, limit int,
 		},
 	}, nil
 }
+
+// GetPayoutSummary retrieves detailed summary for a single payout transfer
+func (s *OpsPayoutService) GetPayoutSummary(ctx context.Context, transferRequestID string) (*payout.OpsPayoutSummary, error) {
+	s.logger.Infof("Ops: Fetching payout summary - transfer_request_id=%s", transferRequestID)
+
+	if transferRequestID == "" {
+		return nil, fmt.Errorf("transfer_request_id is required")
+	}
+
+	summary, err := s.repo.GetPayoutSummary(ctx, transferRequestID)
+	if err != nil {
+		s.logger.Errorf("Failed to get payout summary: %v", err)
+		return nil, err
+	}
+
+	s.logger.Infof("Ops: Payout summary fetched - transfer_request_id=%s, status=%s", transferRequestID, summary.PayoutStatus)
+	return summary, nil
+}
