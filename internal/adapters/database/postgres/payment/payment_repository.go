@@ -106,8 +106,8 @@ func (r *PgPaymentRepository) GetPaymentByID(ctx context.Context, paymentID stri
 	fmt.Printf("[PgPaymentRepository] GetPaymentByID called - PaymentID: %s\n", paymentID)
 
 	query := `
-		SELECT payment_id, user_id, business_id, amount, currency, payment_method, payment_type, status,
-		       description, gateway_used, gateway_payment_id, callback_url, redirect_url,
+		SELECT payment_id, user_id, business_id, amount, currency, payment_method, status,
+		       description, gateway_used::text, gateway_payment_id, callback_url, redirect_url,
 		       payment_source_id, payment_source_type, retry_of_payment_id, retry_count,
 		       fee_amount, convenience_fee, convenience_fee_gst, total_amount, metadata, created_at, updated_at
 		FROM xcentro.payments WHERE payment_id = $1
@@ -193,8 +193,9 @@ func (r *PgPaymentRepository) GetPaymentByGatewayPaymentID(ctx context.Context, 
 	fmt.Printf("[PgPaymentRepository] GetPaymentByGatewayPaymentID called - GatewayPaymentID: %s\n", gatewayPaymentID)
 
 	query := `
-		SELECT payment_id, user_id, business_id, amount, currency, payment_method, payment_type, status,
-		       description, gateway_used, gateway_payment_id, callback_url, redirect_url,
+
+		SELECT payment_id, user_id, business_id, amount, currency, payment_method, status,
+		       description, gateway_used::text, gateway_payment_id, callback_url, redirect_url,
 		       payment_source_id, payment_source_type, fee_amount, convenience_fee, convenience_fee_gst,
 		       total_amount, metadata, created_at, updated_at
 		FROM xcentro.payments
@@ -339,7 +340,7 @@ func (r *PgPaymentRepository) GetPaymentsByBusinessID(ctx context.Context, busin
 
 	query := `
 		SELECT payment_id, user_id, business_id, amount, currency, payment_method, status,
-		       description, gateway_used, gateway_payment_id, callback_url, redirect_url,
+		       description, gateway_used::text, gateway_payment_id, callback_url, redirect_url,
 		       payment_source_id, payment_source_type, fee_amount, convenience_fee, convenience_fee_gst,
 		       total_amount, metadata, created_at, updated_at
 		FROM xcentro.payments
@@ -485,7 +486,7 @@ func (r *PgPaymentRepository) GetPendingSettlements(ctx context.Context, busines
 
 	query := `
 		SELECT payment_id, user_id, business_id, amount, currency, payment_method, status,
-		       description, gateway_used, gateway_payment_id, callback_url, redirect_url,
+		       description, gateway_used::text, gateway_payment_id, callback_url, redirect_url,
 		       payment_source_id, payment_source_type, fee_amount, convenience_fee, convenience_fee_gst,
 		       total_amount, metadata, created_at, updated_at
 		FROM xcentro.payments
@@ -1171,7 +1172,7 @@ func (r *PgPaymentRepository) GetCollectionSummary(ctx context.Context, paymentI
 			p.total_amount,
 			p.status,
 			p.payment_method,
-			COALESCE(p.gateway_used, '') as gateway_used,
+			COALESCE(p.gateway_used::text, '') as gateway_used,
 			COALESCE(p.gateway_payment_id, '') as gateway_payment_id,
 			p.payment_source_id,
 			p.payment_source_type,
