@@ -19,6 +19,7 @@ import (
 	"xcentro.in/internal/adapters/external/payment/jiopay"
 	"xcentro.in/internal/adapters/external/payment/mockpg"
 	"xcentro.in/internal/adapters/external/payout/factory"
+	"xcentro.in/internal/adapters/providers/fileupload"
 	coreAuth "xcentro.in/internal/core/auth"
 	coreBusiness "xcentro.in/internal/core/business"
 	"xcentro.in/internal/core/business_rules"
@@ -136,7 +137,7 @@ func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group
 	pendingVoucherRepository := paymentRepo.NewPaymentVoucherPendingRepository(clients.db)
 	stateChangeRepository := paymentRepo.NewPostgresPaymentStateChangeRepository(clients.db)
 
-	_, _, _, _, _, busSvc, authSvc := factory.createCoreServices(nil)
+	_, _, _, businessUserRelRepo, _, busSvc, authSvc := factory.createCoreServices(nil)
 
 	// Initialize payment gateway clients
 	easebuzzClient := easebuzz.NewEasebuzzClient(cfg.Easebuzz.BaseURL, cfg.Easebuzz.MerchantKey, cfg.Easebuzz.Salt, cfg.Easebuzz.APIKey, cfg.Easebuzz.IsAggregatorModel)
@@ -169,13 +170,13 @@ func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group
 	payment.RegisterPaymentRoutes(processPaymentGroup, paymentService, paymentSourceService, walletService, authSvc, voucherRepository, stateChangeRepository, businessPayeeRelationRepo, storedCardRepository, bankAccountRepository, logger.GetDefault())
 
 	walletGroup := group.Group("/wallet")
-	payment.RegisterWalletRoutes(walletGroup, paymentService, paymentSourceService, walletService, authSvc, storedCardRepository, logger.GetDefault())
+	payment.RegisterWalletRoutes(walletGroup, paymentService, paymentSourceService, walletService, authSvc, storedCardRepository, businessUserRelRepo, clients.rcache, logger.GetDefault())
 
 	// Mock 3DS page handler (for mock PG testing)
 	mock3DSHandler := payment.NewMock3DSHandler(paymentRepository, cfg.Server.URL)
 	processPaymentGroup.GET("/mock_3ds", mock3DSHandler.HandleMock3DSPage)
 
-	callbackHandler := payment.NewCallbackHandler(paymentRepository, storedCardRepository, jioPayClient, easebuzzClient, mockPGClient, cfg.MockPG.Enabled, pendingVoucherRepository, voucherRepository, clients.txManager, stateChangeRepository)
+	callbackHandler := payment.NewCallbackHandler(paymentRepository, storedCardRepository, walletService, jioPayClient, easebuzzClient, mockPGClient, cfg.MockPG.Enabled, pendingVoucherRepository, voucherRepository, clients.txManager, stateChangeRepository)
 	processPaymentGroup.POST("/callback", callbackHandler.HandleCallback)
 
 	webhookHandler := payment.NewWebhookHandler(paymentRepository, jioPayClient, easebuzzClient, mockPGClient, cfg.MockPG.Enabled)
@@ -295,8 +296,14 @@ func registerV1BatchPaymentRoutes(clients *externalClients, cfg *config.Config, 
 		voucherService,
 	)
 
+	// S3 client for sample CSV downloads
+	s3Client, err := fileupload.NewS3ClientFromConfig(cfg.S3)
+	if err != nil {
+		logger.GetDefault().Warnf("Failed to create S3 client for batch payments: %v (sample CSV download will be unavailable)", err)
+	}
+
 	// Handler
-	handler := batchPaymentHandler.NewBatchPaymentHandler(batchPaymentService)
+	handler := batchPaymentHandler.NewBatchPaymentHandler(batchPaymentService, s3Client)
 
 	// Routes
 	batchGroup := group.Group("/batch_payments")
@@ -306,6 +313,7 @@ func registerV1BatchPaymentRoutes(clients *externalClients, cfg *config.Config, 
 	batchGroup.GET("", handler.GetBatchList)
 	batchGroup.GET("/:batch_id", handler.GetBatchStatus)
 	batchGroup.POST("/:batch_id/process", handler.ProcessBatch)
+	batchGroup.GET("/sample_csv", handler.DownloadSampleCSV) // Download sample CSV template
 }
 
 func registerV1NotificationRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {

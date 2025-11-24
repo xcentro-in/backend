@@ -236,8 +236,9 @@ func ExampleMockTransport_tokenizedPayment() {
 		"merchant-id",
 		"api-key",
 		"app-id",
-		"1234567890123456", // 16-byte encryption key for AES
-		&MockBusinessService{}, // Using mock business service
+		"1234567890123456",      // 16-byte encryption key for AES
+		false,                   // isAggregatorModel
+		&MockBusinessService{},  // Using mock business service
 	)
 
 	jioClient := client.(*jiopay.JioPayClient)
