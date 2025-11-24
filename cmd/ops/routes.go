@@ -4,13 +4,16 @@ import (
 	"github.com/labstack/echo/v4"
 	"xcentro.in/internal/adapters/database/postgres/business"
 	notificationRepo "xcentro.in/internal/adapters/database/postgres/notification"
+	payoutRepo "xcentro.in/internal/adapters/database/postgres/payout"
 	userRepo "xcentro.in/internal/adapters/database/postgres/user"
 	businessHandler "xcentro.in/internal/handlers/http/business"
 	notificationHandler "xcentro.in/internal/handlers/http/notification"
+	payoutHandler "xcentro.in/internal/handlers/http/payout"
 	userHandler "xcentro.in/internal/handlers/http/user"
 	"xcentro.in/internal/middleware"
 	businessSvc "xcentro.in/internal/services/business"
 	notificationSvc "xcentro.in/internal/services/notification"
+	payoutSvc "xcentro.in/internal/services/payout"
 	userSvc "xcentro.in/internal/services/user"
 	"xcentro.in/internal/services/verification"
 	"xcentro.in/internal/shared/config"
@@ -94,6 +97,18 @@ func registerOpsUserRoutes(clients *externalClients, cfg *config.Config, group *
 	userHandler.RegisterOpsUserRoutes(group, userService, nil)
 }
 
+// registerOpsPayoutRoutes registers ops dashboard payout routes
+func registerOpsPayoutRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
+	// Create payout repository
+	opsPayoutRepository := payoutRepo.NewPostgresOpsPayoutRepository(clients.db)
+
+	// Create ops payout service (lightweight, doesn't need full PayoutService dependencies)
+	opsPayoutService := payoutSvc.NewOpsPayoutService(opsPayoutRepository)
+
+	// Register routes
+	payoutHandler.RegisterOpsPayoutRoutes(group, opsPayoutService)
+}
+
 func registerOpsV1Routes(s *opsDashboardServer) {
 	v1 := s.echo.Group("/ops/v1")
 
@@ -111,6 +126,7 @@ func registerOpsV1Routes(s *opsDashboardServer) {
 	registerOpsBusinessRoutes(clients, cfg, v1)
 	registerOpsNotificationRoutes(clients, cfg, v1)
 	registerOpsUserRoutes(clients, cfg, v1)
+	registerOpsPayoutRoutes(clients, cfg, v1)
 }
 
 func initializeNotificationTrigger(clients *externalClients) {
