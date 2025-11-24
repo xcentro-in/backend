@@ -41,12 +41,12 @@ func (r *PostgresOpsPayoutRepository) ListPayoutsPaginated(ctx context.Context, 
 	offset := (page - 1) * limit
 
 	// Query to fetch payout transfers with recipient info
-	// Joins: payout_transfer_requests -> payment_vouchers -> business_payee_relation -> payee_master
+	// Joins: payout_transfer_requests -> payment_vouchers -> business_payee_relation
 	query := fmt.Sprintf(`
 		SELECT
 			ptr.transfer_request_id,
 			ptr.created_at,
-			COALESCE(bpr.display_name, pm.display_name, 'Unknown') as recipient_name,
+			COALESCE(bpr.display_name, 'Unknown') as recipient_name,
 			COALESCE(pm.payee_type::text, 'unknown') as payee_type,
 			ptr.amount,
 			ptr.status::text as status

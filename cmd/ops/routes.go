@@ -115,13 +115,13 @@ func registerOpsCollectionRoutes(clients *externalClients, cfg *config.Config, g
 // registerOpsPayoutRoutes registers ops dashboard payout routes
 func registerOpsPayoutRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
 	// Create payout repository
-	opsPayoutRepository := payoutRepo.NewPostgresOpsPayoutRepository(clients.db)
+	payoutRepository := payoutRepo.NewPostgresOpsPayoutRepository(clients.db)
 
-	// Create ops payout service (lightweight, doesn't need full PayoutService dependencies)
-	opsPayoutService := payoutSvc.NewOpsPayoutService(opsPayoutRepository)
+	// Create ops payout service
+	payoutService := payoutSvc.NewOpsPayoutService(payoutRepository)
 
 	// Register routes
-	payoutHandler.RegisterOpsPayoutRoutes(group, opsPayoutService)
+	payoutHandler.RegisterOpsPayoutRoutes(group, payoutService)
 }
 
 func registerOpsV1Routes(s *opsDashboardServer) {
