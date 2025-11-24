@@ -193,7 +193,8 @@ type BusinessPayeeRelationRepository interface {
 
 	// Get full payee details by relation_id (polymorphic - vendor/employee/biller)
 	// Validates that relation belongs to the specified business
-	GetPayeeFullDetailsByRelation(ctx context.Context, businessID, relationID string) (*PayeeFullDetails, error)
+	// isRestrictive: if true, only returns active payees; if false, returns all payees (for audit/history access)
+	GetPayeeFullDetailsByRelation(ctx context.Context, businessID, relationID string, isRestrictive bool) (*PayeeFullDetails, error)
 }
 
 // ############################################################################

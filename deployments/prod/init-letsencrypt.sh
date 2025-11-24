@@ -111,10 +111,10 @@ if [[ ! $REPLY =~ ^[Yy]$ ]]; then
 fi
 
 # Check if certbot container exists (nginx might not be running yet - that's ok)
-if ! docker compose -f docker-compose.production.yml ps certbot &>/dev/null; then
+if ! docker compose -f docker-compose.yml ps certbot &>/dev/null; then
     echo -e "${RED}ERROR: Docker compose services not started${NC}"
     echo "Please start the services first:"
-    echo "  docker compose -f docker-compose.production.yml up -d"
+    echo "  docker compose -f docker-compose.yml up -d"
     exit 1
 fi
 
@@ -141,9 +141,9 @@ if [ $BREAK_CERTS -ne 0 ]; then
     for domain in "${DOMAINS[@]}"; do
         cert_path="/etc/letsencrypt/live/$domain"
 
-        if docker compose -f docker-compose.production.yml run --rm --entrypoint "" certbot sh -c "test -d '$cert_path'" 2>/dev/null; then
+        if docker compose -f docker-compose.yml run --rm --entrypoint "" certbot sh -c "test -d '$cert_path'" 2>/dev/null; then
             echo -e "${YELLOW}Deleting existing certificate for $domain${NC}"
-            docker compose -f docker-compose.production.yml run --rm --entrypoint "" certbot \
+            docker compose -f docker-compose.yml run --rm --entrypoint "" certbot \
                 sh -c "rm -rf /etc/letsencrypt/live/$domain /etc/letsencrypt/archive/$domain /etc/letsencrypt/renewal/$domain.conf"
             echo -e "${GREEN}✓ Certificate deleted for $domain${NC}"
         else
@@ -166,13 +166,13 @@ for domain in "${DOMAINS[@]}"; do
     cert_path="/etc/letsencrypt/live/$domain"
 
     # Check if certificate already exists
-    if docker compose -f docker-compose.production.yml run --rm --entrypoint "" certbot sh -c "test -f '$cert_path/fullchain.pem'" 2>/dev/null; then
+    if docker compose -f docker-compose.yml run --rm --entrypoint "" certbot sh -c "test -f '$cert_path/fullchain.pem'" 2>/dev/null; then
         echo -e "${YELLOW}Certificate for $domain already exists, skipping dummy creation${NC}"
     else
         echo -e "${YELLOW}Creating dummy certificate for $domain${NC}"
 
         # Create directory structure and dummy cert in volume
-        docker compose -f docker-compose.production.yml run --rm --entrypoint "" certbot \
+        docker compose -f docker-compose.yml run --rm --entrypoint "" certbot \
             sh -c "mkdir -p /etc/letsencrypt/live/$domain && \
                    openssl req -x509 -nodes -newkey rsa:2048 -days 1 \
                    -keyout /etc/letsencrypt/live/$domain/privkey.pem \
@@ -185,14 +185,14 @@ done
 
 echo ""
 echo "Starting nginx with dummy certificates..."
-docker compose -f docker-compose.production.yml up -d nginx
+docker compose -f docker-compose.yml up -d nginx
 echo "Waiting for nginx to be ready..."
 sleep 5
 
 # Verify nginx is running
 if ! docker ps | grep -q xcentro-nginx; then
     echo -e "${RED}ERROR: nginx failed to start${NC}"
-    echo "Check logs with: docker compose -f docker-compose.production.yml logs nginx"
+    echo "Check logs with: docker compose -f docker-compose.yml logs nginx"
     exit 1
 fi
 
@@ -226,7 +226,7 @@ echo "Removing dummy certificates and old certificate data..."
 # This is safe to do while nginx is running (certs are loaded in memory)
 for domain in "${DOMAINS[@]}"; do
     echo "Cleaning certificate data for $domain..."
-    docker compose -f docker-compose.production.yml run --rm --entrypoint "" certbot \
+    docker compose -f docker-compose.yml run --rm --entrypoint "" certbot \
         sh -c "rm -rf /etc/letsencrypt/live/$domain /etc/letsencrypt/archive/$domain /etc/letsencrypt/renewal/$domain.conf" 2>/dev/null || true
 done
 echo -e "${GREEN}✓ Old certificate data cleaned${NC}"
@@ -237,7 +237,7 @@ for domain in "${DOMAINS[@]}"; do
     echo -e "${GREEN}Processing: $domain${NC}"
 
     # Request certificate fresh (no --force-renewal needed since we deleted old certs)
-    docker compose -f docker-compose.production.yml run --rm --entrypoint "certbot" certbot \
+    docker compose -f docker-compose.yml run --rm --entrypoint "certbot" certbot \
         certonly \
         --webroot \
         --webroot-path=/var/www/certbot \
@@ -262,7 +262,7 @@ for domain in "${DOMAINS[@]}"; do
         echo ""
         echo "To debug:"
         echo "  • Test with --staging flag first"
-        echo "  • Check nginx logs: docker compose -f docker-compose.production.yml logs nginx"
+        echo "  • Check nginx logs: docker compose -f docker-compose.yml logs nginx"
         echo "  • Verify DNS: dig $domain"
         echo "  • Test port: curl -I http://$domain"
         exit 1
@@ -275,13 +275,13 @@ echo "Step 3: Reloading nginx with real certs"
 echo "=========================================="
 
 # Reload nginx to pick up new certificates (nginx was running the whole time for ACME challenges)
-docker compose -f docker-compose.production.yml exec nginx nginx -s reload
+docker compose -f docker-compose.yml exec nginx nginx -s reload
 
 if [ $? -eq 0 ]; then
     echo -e "${GREEN}✓ nginx reloaded successfully with real certificates${NC}"
 else
     echo -e "${RED}ERROR: nginx reload failed${NC}"
-    echo "Check logs with: docker compose -f docker-compose.production.yml logs nginx"
+    echo "Check logs with: docker compose -f docker-compose.yml logs nginx"
     exit 1
 fi
 
@@ -297,11 +297,11 @@ echo "3. nginx reloads every 6 hours to pick up renewed certificates"
 echo ""
 echo "Useful commands:"
 echo "  - Check certificate expiry:"
-echo "    docker compose -f docker-compose.production.yml run --rm certbot certificates"
+echo "    docker compose -f docker-compose.yml run --rm certbot certificates"
 echo ""
 echo "  - Force renewal:"
-echo "    docker compose -f docker-compose.production.yml run --rm certbot renew --force-renewal"
+echo "    docker compose -f docker-compose.yml run --rm certbot renew --force-renewal"
 echo ""
 echo "  - Test renewal (dry-run):"
-echo "    docker compose -f docker-compose.production.yml run --rm certbot renew --dry-run"
+echo "    docker compose -f docker-compose.yml run --rm certbot renew --dry-run"
 echo ""

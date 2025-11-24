@@ -263,6 +263,10 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 			s.logger.ErrorWith("Failed to update gateway payment ID", "error", err)
 			return fmt.Errorf("failed to update gateway payment ID: %w", err)
 		}
+		if err := txPaymentRepo.UpdatePaymentGateway(txCtx, paymentID, resp.GatewayUsed); err != nil {
+			s.logger.ErrorWith("Failed to update gateway used", "error", err)
+			return fmt.Errorf("failed to update gateway used: %w", err)
+		}
 		s.logger.DebugWith("Payment updated with gateway details")
 
 		// Sub-step 3.5: For tokenization payments, store gateway metadata (contains card details for immature PGs)
@@ -332,13 +336,15 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 	s.logger.DebugWith("Redirect URL generated", "redirect_url", response.RedirectURL)
 
 	// Update onboarding flag (non-blocking, first-time only, outside transaction)
-	if s.businessService != nil {
+	// Skip for tokenization payments (₹1 card verification) - only count actual voucher payments
+	if s.businessService != nil && req.PaymentType != payment.PaymentTypeTokenization {
 		flags, err := s.businessService.GetBusinessOnboardingFlags(ctx, req.BusinessID)
 		if err == nil && !flags.HasCreatedFirstPayment {
 			_ = s.businessService.UpdateOnboardingStatus(ctx, req.BusinessID, "has_created_first_payment", true)
 			s.logger.DebugWith("Onboarding flag updated",
 				"business_id", req.BusinessID,
-				"flag", "has_created_first_payment")
+				"flag", "has_created_first_payment",
+				"payment_type", req.PaymentType)
 		}
 	}
 
@@ -804,4 +810,62 @@ func (s *PaymentService) validateVouchersAreInDraft(ctx context.Context, voucher
 
 	s.logger.DebugWith("All vouchers validated for retry", "count", len(voucherIDs))
 	return nil
+}
+
+// ============================================================================
+// Ops Dashboard Methods for Collections
+// ============================================================================
+
+// OpsListCollections retrieves paginated list of collections for ops dashboard
+func (s *PaymentService) OpsListCollections(ctx context.Context, page int, limit int, status string) (*payment.OpsListCollectionsResponse, error) {
+	s.logger.InfoWith("Ops: Fetching collections list",
+		"page", page,
+		"limit", limit,
+		"status", status)
+
+	// Set defaults
+	if page <= 0 {
+		page = 1
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+
+	// Type assert to access the ops method
+	type opsCollectionLister interface {
+		ListCollectionsPaginated(ctx context.Context, page int, limit int, status string) ([]*payment.OpsCollectionListItem, int, error)
+	}
+
+	repo, ok := s.paymentRepo.(opsCollectionLister)
+	if !ok {
+		s.logger.ErrorWith("Payment repository doesn't implement ListCollectionsPaginated")
+		return nil, fmt.Errorf("collection listing not supported")
+	}
+
+	// Fetch from repository
+	collections, totalCount, err := repo.ListCollectionsPaginated(ctx, page, limit, status)
+	if err != nil {
+		s.logger.ErrorWith("Failed to list collections", "error", err)
+		return nil, fmt.Errorf("failed to list collections: %w", err)
+	}
+
+	// Calculate total pages
+	totalPages := (totalCount + limit - 1) / limit
+
+	s.logger.InfoWith("Ops: Collections list fetched successfully",
+		"count", len(collections),
+		"total_count", totalCount)
+
+	return &payment.OpsListCollectionsResponse{
+		Data: collections,
+		Pagination: payment.PaginationResponse{
+			CurrentPage: page,
+			PageSize:    limit,
+			TotalItems:  totalCount,
+			TotalPages:  totalPages,
+		},
+	}, nil
 }

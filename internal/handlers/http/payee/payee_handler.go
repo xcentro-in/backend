@@ -147,10 +147,27 @@ func (h *PayeeHandler) GetPayees(c echo.Context) error {
 
 	// Parse query parameters
 	displayName := c.QueryParam("display_name")
+	payeeTypeStr := c.QueryParam("type")
 	isActiveStr := c.QueryParam("is_active")
 	isFavoriteStr := c.QueryParam("is_favorite")
 	pageStr := c.QueryParam("page")
 	pageSizeStr := c.QueryParam("page_size")
+
+	// Parse payee type filter
+	var payeeTypeFilter payee.PayeeType
+	if payeeTypeStr != "" {
+		// Validate payee type
+		switch payee.PayeeType(payeeTypeStr) {
+		case payee.PayeeTypeVendor, payee.PayeeTypeEmployee, payee.PayeeTypeBiller, payee.PayeeTypeGST:
+			payeeTypeFilter = payee.PayeeType(payeeTypeStr)
+		default:
+			h.logger.WarnWith("Invalid payee type provided", "type", payeeTypeStr)
+			return c.JSON(http.StatusBadRequest, map[string]any{
+				"error":   "invalid_type",
+				"message": "Invalid payee type. Must be one of: vendor, employee, biller, gst_payment",
+			})
+		}
+	}
 
 	// Parse boolean filters
 	var isActive, isFavorite *bool
@@ -179,6 +196,7 @@ func (h *PayeeHandler) GetPayees(c echo.Context) error {
 
 	h.logger.DebugWith("Query parameters parsed",
 		"display_name", displayName,
+		"payee_type", payeeTypeFilter,
 		"is_active", isActive,
 		"is_favorite", isFavorite,
 		"page", page,
@@ -197,6 +215,7 @@ func (h *PayeeHandler) GetPayees(c echo.Context) error {
 	// Create filters for counting (without pagination)
 	countFilters := payee.RelationSearchFilters{
 		DisplayName: displayName,
+		PayeeType:   payeeTypeFilter,
 		IsActive:    isActive,
 		IsFavorite:  isFavorite,
 		Tags:        []string{}, // TODO: Parse tags from query if needed
@@ -205,6 +224,7 @@ func (h *PayeeHandler) GetPayees(c echo.Context) error {
 	// Create filters for data fetching (with pagination)
 	dataFilters := payee.RelationSearchFilters{
 		DisplayName: displayName,
+		PayeeType:   payeeTypeFilter,
 		IsActive:    isActive,
 		IsFavorite:  isFavorite,
 		Tags:        []string{}, // TODO: Parse tags from query if needed
@@ -234,9 +254,24 @@ func (h *PayeeHandler) GetPayees(c echo.Context) error {
 		})
 	}
 
-	// Convert to response (simplified - returning relations directly)
-	// In production, you might want to enrich with payee and account details
-	h.logger.InfoWith("Payees fetched successfully", "count", len(relations), "total_count", totalCount, "business_id", businessID)
+	// Convert to response DTO (exclude internal IDs)
+	payeeList := make([]*payee.PayeeListItem, len(relations))
+	for i, relation := range relations {
+		payeeList[i] = &payee.PayeeListItem{
+			RelationID:   relation.RelationID,
+			PayeeType:    relation.PayeeType,
+			DisplayName:  relation.DisplayName,
+			ContactEmail: relation.ContactEmail,
+			ContactPhone: relation.ContactPhone,
+			IsActive:     relation.IsActive,
+			IsFavorite:   relation.IsFavorite,
+			Tags:         relation.Tags,
+			AddedAt:      relation.AddedAt,
+			UpdatedAt:    relation.UpdatedAt,
+		}
+	}
+
+	h.logger.InfoWith("Payees fetched successfully", "count", len(payeeList), "total_count", totalCount, "business_id", businessID)
 
 	return c.JSON(http.StatusOK, map[string]any{
 		"message":     "Payees retrieved successfully",
@@ -244,7 +279,7 @@ func (h *PayeeHandler) GetPayees(c echo.Context) error {
 		"total_count": totalCount,
 		"page":        page,
 		"page_size":   pageSize,
-		"data":        relations,
+		"data":        payeeList,
 	})
 }
 
@@ -290,6 +325,155 @@ func (h *PayeeHandler) GetPayeeDetails(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]any{
 		"status": "success",
 		"data":   details,
+	})
+}
+
+// GetPayeeAccountDetails handles GET /payees/:relation_id/acc_details - Get lightweight account information
+// Returns only last 4 digits of account number, bank name, and IFSC code
+func (h *PayeeHandler) GetPayeeAccountDetails(c echo.Context) error {
+	h.logger.InfoWith("GetPayeeAccountDetails API called")
+
+	// Extract relation_id from path parameter
+	relationID := c.Param("relation_id")
+	if relationID == "" {
+		h.logger.WarnWith("Missing relation_id path parameter")
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "invalid_request",
+			"message": "relation_id path parameter is required",
+		})
+	}
+
+	// Extract business_id from X-Business-ID header
+	businessID := c.Request().Header.Get("X-Business-ID")
+	if businessID == "" {
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "MISSING_BUSINESS_ID",
+			"message": "X-Business-ID header is required",
+		})
+	}
+
+	h.logger.DebugWith("Request parameters", "relation_id", relationID, "business_id", businessID)
+
+	// Call payee service to get full details
+	details, err := h.payeeService.GetPayeeDetailsByRelation(c.Request().Context(), businessID, relationID)
+	if err != nil {
+		h.logger.ErrorWith("Failed to fetch payee details", "error", err)
+		return c.JSON(http.StatusNotFound, map[string]any{
+			"error":   "not_found",
+			"message": err.Error(),
+		})
+	}
+
+	// Check if bank details exist
+	if details.BankDetails == nil {
+		h.logger.WarnWith("No bank details available for payee", "relation_id", relationID)
+		return c.JSON(http.StatusNotFound, map[string]any{
+			"error":   "no_bank_details",
+			"message": "Bank details not available for this payee",
+		})
+	}
+
+	// Extract last 4 digits of account number
+	accountNumber := details.BankDetails.AccountNumber
+	accountLast4 := ""
+	if len(accountNumber) >= 4 {
+		accountLast4 = accountNumber[len(accountNumber)-4:]
+	}
+
+	// Create lightweight response
+	accountDetails := &payee.PayeeAccountDetails{
+		AccountNumberLast4: accountLast4,
+		BankName:           details.BankDetails.BankName,
+		IFSCCode:           details.BankDetails.IFSCCode,
+	}
+
+	h.logger.InfoWith("Account details fetched successfully", "relation_id", relationID, "bank_name", accountDetails.BankName)
+
+	return c.JSON(http.StatusOK, map[string]any{
+		"status": "success",
+		"data":   accountDetails,
+	})
+}
+
+// UpdatePayeeStatus handles PATCH /payees/:relation_id/status - Toggle payee active status
+func (h *PayeeHandler) UpdatePayeeStatus(c echo.Context) error {
+	h.logger.InfoWith("UpdatePayeeStatus API called")
+
+	// Extract relation_id from path parameter
+	relationID := c.Param("relation_id")
+	if relationID == "" {
+		h.logger.WarnWith("Missing relation_id in path")
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "invalid_request",
+			"message": "relation_id is required",
+		})
+	}
+
+	// Extract businessID from X-Business-ID header
+	businessID := c.Request().Header.Get("X-Business-ID")
+	if businessID == "" {
+		h.logger.WarnWith("Missing X-Business-ID header")
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "MISSING_BUSINESS_ID",
+			"message": "X-Business-ID header is required",
+		})
+	}
+
+	// Parse request body
+	var req payee.UpdatePayeeStatusRequest
+	if err := c.Bind(&req); err != nil {
+		h.logger.ErrorWith("Error binding request", "error", err)
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "invalid_request",
+			"message": "Invalid request body",
+		})
+	}
+
+	// Set context values
+	req.BusinessID = businessID
+	req.RelationID = relationID
+
+	h.logger.DebugWith("Request parsed",
+		"business_id", businessID,
+		"relation_id", relationID,
+		"is_active", req.IsActive)
+
+	// Call service to update status
+	if err := h.payeeService.UpdatePayeeStatus(c.Request().Context(), businessID, relationID, req.IsActive); err != nil {
+		h.logger.ErrorWith("Failed to update payee status", "error", err)
+
+		// Check for specific error types
+		if err.Error() == "payee relation not found" {
+			return c.JSON(http.StatusNotFound, map[string]any{
+				"error":   "not_found",
+				"message": "Payee relation not found",
+			})
+		}
+
+		if err.Error() == "payee relation does not belong to this business" {
+			return c.JSON(http.StatusForbidden, map[string]any{
+				"error":   "forbidden",
+				"message": "Access denied to this payee relation",
+			})
+		}
+
+		return c.JSON(http.StatusInternalServerError, map[string]any{
+			"error":   "update_failed",
+			"message": "Failed to update payee status",
+		})
+	}
+
+	h.logger.InfoWith("Payee status updated successfully",
+		"relation_id", relationID,
+		"is_active", req.IsActive)
+
+	return c.JSON(http.StatusOK, map[string]any{
+		"status":  "success",
+		"message": "Payee status updated successfully",
+		"data": map[string]any{
+			"relation_id": relationID,
+			"is_active":   req.IsActive,
+		},
 	})
 }
 

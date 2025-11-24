@@ -268,16 +268,8 @@ func (r *PgBusinessPayeeRelationRepository) FindByBusiness(ctx context.Context, 
 			   m.payee_type
 		FROM xcentro.business_payee_relation r
 		INNER JOIN xcentro.payee_master m ON r.payee_id = m.payee_id
+		WHERE r.business_id = $1
 	`
-
-	// Join with payee_master if filtering by payee_type
-	if filters.PayeeType != "" {
-		query += `
-		INNER JOIN xcentro.payee_master m ON r.payee_id = m.payee_id
-		`
-	}
-
-	query += `WHERE r.business_id = $1`
 
 	args := []interface{}{businessID}
 	argIdx := 2
@@ -792,7 +784,8 @@ func (r *PgBusinessPayeeRelationRepository) ValidateRelationForBusiness(ctx cont
 // GetPayeeFullDetailsByRelation fetches complete payee details by relation_id (polymorphic)
 // Joins: business_payee_relation → payee_master → type-specific table → bank/biller account
 // Validates that the relation belongs to the specified business
-func (r *PgBusinessPayeeRelationRepository) GetPayeeFullDetailsByRelation(ctx context.Context, businessID, relationID string) (*payee.PayeeFullDetails, error) {
+// isRestrictive: if true, only returns active payees; if false, returns all payees (for audit/history access)
+func (r *PgBusinessPayeeRelationRepository) GetPayeeFullDetailsByRelation(ctx context.Context, businessID, relationID string, isRestrictive bool) (*payee.PayeeFullDetails, error) {
 	// First, get the relation and determine payee type
 	// IMPORTANT: WHERE clause includes business_id validation for security
 	query := `
@@ -810,7 +803,14 @@ func (r *PgBusinessPayeeRelationRepository) GetPayeeFullDetailsByRelation(ctx co
 		INNER JOIN xcentro.payee_master pm ON bpr.payee_id = pm.payee_id
 		WHERE bpr.relation_id = $1
 		  AND bpr.business_id = $2
-		  AND bpr.is_active = TRUE
+	`
+
+	// Conditionally add is_active filter based on isRestrictive flag
+	if isRestrictive {
+		query += `  AND bpr.is_active = TRUE`
+	}
+
+	query += `
 	`
 
 	var details payee.PayeeFullDetails
