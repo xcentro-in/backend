@@ -41,13 +41,12 @@ func (r *PostgresOpsPayoutRepository) ListPayoutsPaginated(ctx context.Context, 
 	offset := (page - 1) * limit
 
 	// Query to fetch payout transfers with recipient info
-	// Joins: payout_transfer_requests -> payment_vouchers -> business_payee_relation -> payee_master + payee_bank_accounts
+	// Joins: payout_transfer_requests -> payment_vouchers -> business_payee_relation -> payee_master
 	query := fmt.Sprintf(`
 		SELECT
 			ptr.transfer_request_id,
 			ptr.created_at,
 			COALESCE(bpr.display_name, pm.display_name, 'Unknown') as recipient_name,
-			COALESCE(RIGHT(pba.account_number_encrypted, 4), '****') as bank_account_last_4,
 			COALESCE(pm.payee_type::text, 'unknown') as payee_type,
 			ptr.amount,
 			ptr.status::text as status
@@ -58,7 +57,6 @@ func (r *PostgresOpsPayoutRepository) ListPayoutsPaginated(ctx context.Context, 
 			AND pv.payee_id = bpr.payee_id
 			AND pv.account_id = bpr.account_id
 		LEFT JOIN xcentro.payee_master pm ON pv.payee_id = pm.payee_id
-		LEFT JOIN xcentro.payee_bank_accounts pba ON pv.account_id = pba.account_id
 		WHERE %s
 		ORDER BY ptr.created_at DESC
 		LIMIT $1 OFFSET $2
@@ -78,7 +76,6 @@ func (r *PostgresOpsPayoutRepository) ListPayoutsPaginated(ctx context.Context, 
 			&item.TransferRequestID,
 			&item.CreatedAt,
 			&item.RecipientName,
-			&item.BankAccountLast4,
 			&item.PayeeType,
 			&item.Amount,
 			&item.Status,
@@ -111,14 +108,16 @@ func (r *PostgresOpsPayoutRepository) ListPayoutsPaginated(ctx context.Context, 
 
 // GetPayoutSummary retrieves detailed summary for a single payout transfer
 func (r *PostgresOpsPayoutRepository) GetPayoutSummary(ctx context.Context, transferRequestID string) (*payout.OpsPayoutSummary, error) {
-	// Query to fetch payout transfer summary with business, payee, and provider details
-	// Joins: payout_transfer_requests -> payment_vouchers -> business + business_payee_relation
+	// Query to fetch payout transfer summary with business, payee, bank, and provider details
+	// Joins: payout_transfer_requests -> payment_vouchers -> business + business_payee_relation + payee_bank_accounts
 	query := `
 		SELECT
 			b.bid::text as business_id,
 			b.business_name,
 			CONCAT(pv.business_id::text, ':', pv.payee_id::text, ':', pv.account_id::text) as payee_relation_id,
 			COALESCE(bpr.display_name, pm.display_name, 'Unknown') as payee_display_name,
+			COALESCE(pba.bank_name, 'Unknown') as bank_name,
+			COALESCE(RIGHT(pba.account_number_encrypted, 4), '****') as account_last_4,
 			ptr.provider,
 			COALESCE(ptr.provider_transfer_id, '') as provider_transfer_id,
 			ptr.utr,
@@ -132,6 +131,7 @@ func (r *PostgresOpsPayoutRepository) GetPayoutSummary(ctx context.Context, tran
 			AND pv.payee_id = bpr.payee_id
 			AND pv.account_id = bpr.account_id
 		LEFT JOIN xcentro.payee_master pm ON pv.payee_id = pm.payee_id
+		LEFT JOIN xcentro.payee_bank_accounts pba ON pv.account_id = pba.account_id
 		WHERE ptr.transfer_request_id = $1
 	`
 
@@ -144,6 +144,8 @@ func (r *PostgresOpsPayoutRepository) GetPayoutSummary(ctx context.Context, tran
 		&summary.BusinessName,
 		&summary.PayeeRelationID,
 		&summary.PayeeDisplayName,
+		&summary.BankName,
+		&summary.AccountLast4,
 		&summary.PayoutProvider,
 		&providerTransferID,
 		&utr,

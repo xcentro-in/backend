@@ -27,11 +27,10 @@ type OpsPayoutListItem struct {
 	TransferRequestID string    `json:"transfer_request_id"`
 	CreatedAt         time.Time `json:"created_at"`
 	// Recipient info
-	RecipientName        string `json:"recipient_name"`          // Payee display name
-	BankAccountLast4     string `json:"bank_account_last_4"`     // Last 4 digits of bank account
-	PayeeType            string `json:"payee_type"`              // vendor, employee, etc.
-	Amount               int64  `json:"amount"`                  // Amount in paise
-	Status               string `json:"status"`                  // initiated, processing, completed, failed, timeout
+	RecipientName string `json:"recipient_name"` // Payee display name
+	PayeeType     string `json:"payee_type"`     // vendor, employee, etc.
+	Amount        int64  `json:"amount"`         // Amount in paise
+	Status        string `json:"status"`         // initiated, processing, completed, failed, timeout
 }
 
 // OpsListPayoutsResponse represents the paginated response for ops payout transfers
@@ -59,15 +58,19 @@ type OpsPayoutSummary struct {
 	BusinessName string `json:"business_name"`
 
 	// Recipient (payee) info
-	PayeeRelationID string `json:"payee_relation_id"` // business_payee_relation composite key
+	PayeeRelationID  string `json:"payee_relation_id"`  // business_payee_relation composite key
 	PayeeDisplayName string `json:"payee_display_name"`
 
+	// Bank account info
+	BankName     string `json:"bank_name"`      // Bank name
+	AccountLast4 string `json:"account_last_4"` // Last 4 digits of account
+
 	// Payout provider info
-	PayoutProvider       string  `json:"payout_provider"`          // e.g., "castler"
-	ProviderTransferID   string  `json:"provider_transfer_id"`     // Provider's transfer ID
+	PayoutProvider     string `json:"payout_provider"`      // e.g., "castler"
+	ProviderTransferID string `json:"provider_transfer_id"` // Provider's transfer ID
 
 	// Settlement info
-	UTR            *string    `json:"utr"`              // Bank UTR (if settled)
+	UTR            *string    `json:"utr"`             // Bank UTR (if settled)
 	SettlementDate *time.Time `json:"settlement_date"` // Completion date (if settled)
 
 	// Status
