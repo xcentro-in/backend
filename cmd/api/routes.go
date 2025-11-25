@@ -167,26 +167,31 @@ func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group
 	paymentService := payments.NewPaymentService(orchestrator, paymentRepository, storedCardRepository, bankAccountRepository, walletService, feeCalculator, clients.txManager, voucherService, voucherRepository, pendingVoucherRepository, busSvc, stateChangeRepository, cfg, logger.GetDefault())
 
 	processPaymentGroup := group.Group("/process_payment")
-	payment.RegisterPaymentRoutes(processPaymentGroup, paymentService, paymentSourceService, walletService, authSvc, voucherRepository, stateChangeRepository, businessPayeeRelationRepo, storedCardRepository, bankAccountRepository, logger.GetDefault())
 
-	walletGroup := group.Group("/wallet")
-	payment.RegisterWalletRoutes(walletGroup, paymentService, paymentSourceService, walletService, authSvc, storedCardRepository, businessUserRelRepo, clients.rcache, logger.GetDefault())
-
-	// Mock 3DS page handler (for mock PG testing)
-	mock3DSHandler := payment.NewMock3DSHandler(paymentRepository, cfg.Server.URL)
-	processPaymentGroup.GET("/mock_3ds", mock3DSHandler.HandleMock3DSPage)
-
-	callbackHandler := payment.NewCallbackHandler(paymentRepository, storedCardRepository, walletService, jioPayClient, easebuzzClient, mockPGClient, cfg.MockPG.Enabled, pendingVoucherRepository, voucherRepository, clients.txManager, stateChangeRepository)
-	processPaymentGroup.POST("/callback", callbackHandler.HandleCallback)
-
+	// Register public routes FIRST (no JWT required) - these are called by external systems
+	// 1. Webhooks (called by payment gateways)
 	webhookHandler := payment.NewWebhookHandler(paymentRepository, jioPayClient, easebuzzClient, mockPGClient, cfg.MockPG.Enabled, stateChangeRepository)
 	webhookGroup := processPaymentGroup.Group("/webhooks")
 	webhookGroup.POST("/payment_status", webhookHandler.HandlePaymentStatusWebhook)
 	webhookGroup.POST("/settlement_status", webhookHandler.HandleSettlementStatusWebhook)
 
-	// Payment callback page handler (user-facing HTML redirect pages)
+	// 2. Callbacks (redirects from payment gateways after payment completion)
+	callbackHandler := payment.NewCallbackHandler(paymentRepository, storedCardRepository, walletService, jioPayClient, easebuzzClient, mockPGClient, cfg.MockPG.Enabled, pendingVoucherRepository, voucherRepository, clients.txManager, stateChangeRepository)
+	processPaymentGroup.POST("/callback", callbackHandler.HandleCallback)
+
+	// 3. Mock 3DS page (simulates bank OTP/3DS page for testing)
+	mock3DSHandler := payment.NewMock3DSHandler(paymentRepository, cfg.Server.URL)
+	processPaymentGroup.GET("/mock_3ds", mock3DSHandler.HandleMock3DSPage)
+
+	// 4. Payment callback page (user-facing HTML redirect pages)
 	paymentCallbackHandler := payment.NewPaymentCallbackHandler(paymentRepository)
 	processPaymentGroup.GET("/callback_page", paymentCallbackHandler.HandlePaymentCallback)
+
+	// Register JWT-protected routes (authenticated user operations)
+	payment.RegisterPaymentRoutes(processPaymentGroup, paymentService, paymentSourceService, walletService, authSvc, voucherRepository, stateChangeRepository, businessPayeeRelationRepo, storedCardRepository, bankAccountRepository, logger.GetDefault())
+
+	walletGroup := group.Group("/wallet")
+	payment.RegisterWalletRoutes(walletGroup, paymentService, paymentSourceService, walletService, authSvc, storedCardRepository, businessUserRelRepo, clients.rcache, logger.GetDefault())
 }
 
 func registerV1BusinessRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
