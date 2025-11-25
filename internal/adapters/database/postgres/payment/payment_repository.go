@@ -1538,7 +1538,7 @@ func (r *PgPaymentRepository) GetCollectionActivity(ctx context.Context, payment
 			psc.action_timestamp,
 			psc.actor_type::text,
 			psc.actor_user_id::text,
-			COALESCE(u.full_name, psc.actor_name, 'System') as actor_name,
+			COALESCE(u.name, psc.actor_name, 'System') as actor_name,
 			COALESCE(psc.previous_state, '') as previous_state,
 			COALESCE(psc.new_state, '') as new_state,
 			psc.amount,
