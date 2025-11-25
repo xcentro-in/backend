@@ -2,6 +2,7 @@ package payment
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -106,8 +107,8 @@ func (r *PgPaymentRepository) GetPaymentByID(ctx context.Context, paymentID stri
 	fmt.Printf("[PgPaymentRepository] GetPaymentByID called - PaymentID: %s\n", paymentID)
 
 	query := `
-		SELECT payment_id, user_id, business_id, amount, currency, payment_method, payment_type, status,
-		       description, gateway_used, gateway_payment_id, callback_url, redirect_url,
+		SELECT payment_id, user_id, business_id, amount, currency, payment_method, status,
+		       description, gateway_used::text, gateway_payment_id, callback_url, redirect_url,
 		       payment_source_id, payment_source_type, retry_of_payment_id, retry_count,
 		       fee_amount, convenience_fee, convenience_fee_gst, total_amount, metadata, created_at, updated_at
 		FROM xcentro.payments WHERE payment_id = $1
@@ -193,8 +194,9 @@ func (r *PgPaymentRepository) GetPaymentByGatewayPaymentID(ctx context.Context, 
 	fmt.Printf("[PgPaymentRepository] GetPaymentByGatewayPaymentID called - GatewayPaymentID: %s\n", gatewayPaymentID)
 
 	query := `
-		SELECT payment_id, user_id, business_id, amount, currency, payment_method, payment_type, status,
-		       description, gateway_used, gateway_payment_id, callback_url, redirect_url,
+
+		SELECT payment_id, user_id, business_id, amount, currency, payment_method, status,
+		       description, gateway_used::text, gateway_payment_id, callback_url, redirect_url,
 		       payment_source_id, payment_source_type, fee_amount, convenience_fee, convenience_fee_gst,
 		       total_amount, metadata, created_at, updated_at
 		FROM xcentro.payments
@@ -339,7 +341,7 @@ func (r *PgPaymentRepository) GetPaymentsByBusinessID(ctx context.Context, busin
 
 	query := `
 		SELECT payment_id, user_id, business_id, amount, currency, payment_method, status,
-		       description, gateway_used, gateway_payment_id, callback_url, redirect_url,
+		       description, gateway_used::text, gateway_payment_id, callback_url, redirect_url,
 		       payment_source_id, payment_source_type, fee_amount, convenience_fee, convenience_fee_gst,
 		       total_amount, metadata, created_at, updated_at
 		FROM xcentro.payments
@@ -485,7 +487,7 @@ func (r *PgPaymentRepository) GetPendingSettlements(ctx context.Context, busines
 
 	query := `
 		SELECT payment_id, user_id, business_id, amount, currency, payment_method, status,
-		       description, gateway_used, gateway_payment_id, callback_url, redirect_url,
+		       description, gateway_used::text, gateway_payment_id, callback_url, redirect_url,
 		       payment_source_id, payment_source_type, fee_amount, convenience_fee, convenience_fee_gst,
 		       total_amount, metadata, created_at, updated_at
 		FROM xcentro.payments
@@ -1171,7 +1173,7 @@ func (r *PgPaymentRepository) GetCollectionSummary(ctx context.Context, paymentI
 			p.total_amount,
 			p.status,
 			p.payment_method,
-			COALESCE(p.gateway_used, '') as gateway_used,
+			COALESCE(p.gateway_used::text, '') as gateway_used,
 			COALESCE(p.gateway_payment_id, '') as gateway_payment_id,
 			p.payment_source_id,
 			p.payment_source_type,
@@ -1369,4 +1371,251 @@ func (r *PgPaymentRepository) getPayeesForPayment(ctx context.Context, paymentID
 	}
 
 	return payees, nil
+}
+
+// GetCollectionDetails retrieves complete details for a single collection (payment)
+// Unifies data from list view, summary, payment breakdown, and settlement information
+func (r *PgPaymentRepository) GetCollectionDetails(ctx context.Context, paymentID string) (*payment.OpsCollectionDetails, error) {
+	// Query for complete payment information
+	query := `
+		SELECT
+			p.payment_id,
+			p.created_at,
+			p.status,
+			p.business_id,
+			b.name as business_name,
+			-- Payment breakdown fields
+			p.amount as base_amount,
+			p.convenience_fee,
+			p.convenience_fee_gst,
+			p.total_amount,
+			-- Payment method fields
+			p.payment_method,
+			COALESCE(p.gateway_used::text, '') as gateway_used,
+			COALESCE(p.gateway_payment_id, '') as gateway_payment_id,
+			p.payment_source_id,
+			p.payment_source_type,
+			-- Card details (if payment source is card)
+			sc.card_type,
+			sc.card_category,
+			sc.issuer_bank,
+			sc.last_four_digits as card_last4,
+			-- Bank account details (if payment source is bank_account)
+			ba.bank_name,
+			ba.ifsc_code,
+			ba.account_number_encrypted,
+			-- Settlement fields
+			COALESCE(p.settlement_status::text, '') as settlement_status,
+			COALESCE(p.settled_at::text, '') as settled_at,
+			p.settlement_amount,
+			p.mdr_amount,
+			p.net_settlement_amount,
+			COALESCE(p.settlement_utr, '') as settlement_utr,
+			COALESCE(p.settlement_reference_id, '') as settlement_reference_id
+		FROM xcentro.payments p
+		LEFT JOIN xcentro.business b ON p.business_id = b.bid
+		LEFT JOIN xcentro.stored_cards sc
+			ON p.payment_source_id = sc.card_id
+			AND p.payment_source_type = 'card'
+		LEFT JOIN xcentro.bank_accounts ba
+			ON p.payment_source_id = ba.account_id
+			AND p.payment_source_type = 'bank_account'
+		WHERE p.payment_id = $1
+	`
+
+	var details payment.OpsCollectionDetails
+	var status, paymentMethod, gatewayUsed, gatewayPaymentID string
+	var paymentSourceID, paymentSourceType *string
+	var cardType, cardCategory, issuerBank, cardLast4 *string
+	var bankName, ifscCode, accountNumberEncrypted *string
+	var businessName *string
+	var settlementStatus, settlementUTR, settlementReferenceID, settledAtStr string
+	var settlementAmount, netSettlementAmount *int64
+	var mdrAmount int64
+
+	err := r.querier.QueryRow(ctx, query, paymentID).Scan(
+		&details.PaymentID,
+		&details.Date,
+		&status,
+		&details.BusinessID,
+		&businessName,
+		// Payment breakdown
+		&details.PaymentBreakdown.BaseAmount,
+		&details.PaymentBreakdown.ConvenienceFee,
+		&details.PaymentBreakdown.ConvenienceFeeGST,
+		&details.PaymentBreakdown.TotalAmount,
+		// Payment method
+		&paymentMethod,
+		&gatewayUsed,
+		&gatewayPaymentID,
+		&paymentSourceID,
+		&paymentSourceType,
+		// Card details
+		&cardType,
+		&cardCategory,
+		&issuerBank,
+		&cardLast4,
+		// Bank details
+		&bankName,
+		&ifscCode,
+		&accountNumberEncrypted,
+		// Settlement
+		&settlementStatus,
+		&settledAtStr,
+		&settlementAmount,
+		&mdrAmount,
+		&netSettlementAmount,
+		&settlementUTR,
+		&settlementReferenceID,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("payment not found")
+		}
+		return nil, fmt.Errorf("failed to get collection details: %w", err)
+	}
+
+	// Set basic fields
+	details.Status = payment.PaymentStatus(status)
+	if businessName != nil {
+		details.BusinessName = *businessName
+	}
+
+	// Build payment method details
+	details.PaymentMethod = r.buildOpsPaymentMethodDetails(
+		paymentMethod,
+		cardType, cardCategory, issuerBank, cardLast4,
+		bankName, ifscCode, accountNumberEncrypted,
+	)
+
+	// Build gateway details
+	details.Gateway = payment.OpsGatewayDetails{
+		Name:          gatewayUsed,
+		TransactionID: gatewayPaymentID,
+	}
+
+	// Build settlement details (if applicable)
+	if settlementStatus != "" {
+		settlement := &payment.OpsSettlementDetails{
+			Status:                settlementStatus,
+			SettlementAmount:      settlementAmount,
+			MDRAmount:             mdrAmount,
+			NetSettlementAmount:   netSettlementAmount,
+			SettlementUTR:         settlementUTR,
+			SettlementReferenceID: settlementReferenceID,
+		}
+
+		// Parse settled_at timestamp if present
+		if settledAtStr != "" {
+			settledAt, err := time.Parse(time.RFC3339, settledAtStr)
+			if err == nil {
+				settlement.SettledAt = &settledAt
+			}
+		}
+
+		details.Settlement = settlement
+	}
+
+	// Fetch payee details based on payment status
+	payees, err := r.getPayeesForPayment(ctx, paymentID, status)
+	if err != nil {
+		r.logger.WarnWith("Failed to fetch payees for payment", "payment_id", paymentID, "error", err)
+		details.Payees = []payment.OpsPayeeDetails{}
+	} else {
+		details.Payees = payees
+	}
+
+	return &details, nil
+}
+
+// GetCollectionActivity retrieves complete activity log for a payment from payment_state_changes
+// Only includes payment and settlement related actions, excludes payout actions
+func (r *PgPaymentRepository) GetCollectionActivity(ctx context.Context, paymentID string) (*payment.OpsCollectionActivityResponse, error) {
+	// Query to fetch payment/settlement state changes only (exclude payout actions)
+	// Collections can fund multiple vouchers, each with separate payout lifecycle
+	query := `
+		SELECT
+			psc.state_change_id::text,
+			psc.action::text,
+			psc.action_timestamp,
+			psc.actor_type::text,
+			psc.actor_user_id::text,
+			COALESCE(u.name, psc.actor_name, 'System') as actor_name,
+			COALESCE(psc.previous_state, '') as previous_state,
+			COALESCE(psc.new_state, '') as new_state,
+			psc.amount,
+			COALESCE(psc.currency, '') as currency,
+			COALESCE(psc.utr, '') as utr,
+			COALESCE(psc.provider, '') as provider,
+			COALESCE(psc.remarks, '') as remarks,
+			psc.metadata
+		FROM xcentro.payment_state_changes psc
+		LEFT JOIN xcentro.user_table u ON psc.actor_user_id = u.id
+		WHERE psc.payment_id = $1
+		  AND psc.action::text NOT LIKE 'payout_%'
+		ORDER BY psc.action_timestamp ASC
+	`
+
+	rows, err := r.querier.Query(ctx, query, paymentID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get payment activity: %w", err)
+	}
+	defer rows.Close()
+
+	var activities []*payment.OpsCollectionActivity
+
+	for rows.Next() {
+		var activity payment.OpsCollectionActivity
+		var actorUserID *string
+		var amount sql.NullInt64
+		var metadataJSON []byte
+
+		err := rows.Scan(
+			&activity.StateChangeID,
+			&activity.Action,
+			&activity.ActionTimestamp,
+			&activity.ActorType,
+			&actorUserID,
+			&activity.ActorName,
+			&activity.PreviousState,
+			&activity.NewState,
+			&amount,
+			&activity.Currency,
+			&activity.UTR,
+			&activity.Provider,
+			&activity.Remarks,
+			&metadataJSON,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan activity: %w", err)
+		}
+
+		// Handle nullable fields
+		if actorUserID != nil {
+			activity.ActorUserID = actorUserID
+		}
+		if amount.Valid {
+			activity.Amount = &amount.Int64
+		}
+
+		// Parse metadata JSON
+		if len(metadataJSON) > 0 {
+			var metadata map[string]interface{}
+			if err := json.Unmarshal(metadataJSON, &metadata); err == nil {
+				activity.Metadata = metadata
+			}
+		}
+
+		activities = append(activities, &activity)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating activity rows: %w", err)
+	}
+
+	return &payment.OpsCollectionActivityResponse{
+		PaymentID:  paymentID,
+		Activities: activities,
+		TotalCount: len(activities),
+	}, nil
 }
