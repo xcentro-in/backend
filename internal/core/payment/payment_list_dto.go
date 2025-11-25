@@ -190,3 +190,32 @@ type OpsSettlementDetails struct {
 	SettlementUTR       string     `json:"settlement_utr,omitempty"`       // UTR reference for settlement
 	SettlementReferenceID string   `json:"settlement_reference_id,omitempty"` // Gateway settlement reference
 }
+
+// ============================================================================
+// Ops Collection Activity DTOs (activity log from payment_state_changes)
+// ============================================================================
+
+// OpsCollectionActivity represents a single activity/state change in payment lifecycle
+type OpsCollectionActivity struct {
+	StateChangeID    string    `json:"state_change_id"`
+	Action           string    `json:"action"`            // payment_action_enum value
+	ActionTimestamp  time.Time `json:"action_timestamp"`
+	ActorType        string    `json:"actor_type"`        // user, system, webhook, api
+	ActorUserID      *string   `json:"actor_user_id,omitempty"`
+	ActorName        string    `json:"actor_name"`        // User name or system/webhook name
+	PreviousState    string    `json:"previous_state,omitempty"`
+	NewState         string    `json:"new_state,omitempty"`
+	Amount           *int64    `json:"amount,omitempty"`  // Amount in paise
+	Currency         string    `json:"currency,omitempty"`
+	UTR              string    `json:"utr,omitempty"`     // Bank UTR for completed payouts
+	Provider         string    `json:"provider,omitempty"` // Gateway/provider name
+	Remarks          string    `json:"remarks,omitempty"`
+	Metadata         map[string]interface{} `json:"metadata,omitempty"`
+}
+
+// OpsCollectionActivityResponse represents the complete activity log for a payment
+type OpsCollectionActivityResponse struct {
+	PaymentID  string                   `json:"payment_id"`
+	Activities []*OpsCollectionActivity `json:"activities"`
+	TotalCount int                      `json:"total_count"`
+}

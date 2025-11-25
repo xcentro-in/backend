@@ -2,6 +2,7 @@ package payment
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1525,4 +1526,93 @@ func (r *PgPaymentRepository) GetCollectionDetails(ctx context.Context, paymentI
 	}
 
 	return &details, nil
+}
+
+// GetCollectionActivity retrieves complete activity log for a payment from payment_state_changes
+func (r *PgPaymentRepository) GetCollectionActivity(ctx context.Context, paymentID string) (*payment.OpsCollectionActivityResponse, error) {
+	// Query to fetch all state changes for a payment, ordered chronologically
+	query := `
+		SELECT
+			psc.state_change_id::text,
+			psc.action::text,
+			psc.action_timestamp,
+			psc.actor_type::text,
+			psc.actor_user_id::text,
+			COALESCE(u.full_name, psc.actor_name, 'System') as actor_name,
+			COALESCE(psc.previous_state, '') as previous_state,
+			COALESCE(psc.new_state, '') as new_state,
+			psc.amount,
+			COALESCE(psc.currency, '') as currency,
+			COALESCE(psc.utr, '') as utr,
+			COALESCE(psc.provider, '') as provider,
+			COALESCE(psc.remarks, '') as remarks,
+			psc.metadata
+		FROM xcentro.payment_state_changes psc
+		LEFT JOIN xcentro.user_table u ON psc.actor_user_id = u.id
+		WHERE psc.payment_id = $1
+		ORDER BY psc.action_timestamp ASC
+	`
+
+	rows, err := r.querier.Query(ctx, query, paymentID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get payment activity: %w", err)
+	}
+	defer rows.Close()
+
+	var activities []*payment.OpsCollectionActivity
+
+	for rows.Next() {
+		var activity payment.OpsCollectionActivity
+		var actorUserID *string
+		var amount sql.NullInt64
+		var metadataJSON []byte
+
+		err := rows.Scan(
+			&activity.StateChangeID,
+			&activity.Action,
+			&activity.ActionTimestamp,
+			&activity.ActorType,
+			&actorUserID,
+			&activity.ActorName,
+			&activity.PreviousState,
+			&activity.NewState,
+			&amount,
+			&activity.Currency,
+			&activity.UTR,
+			&activity.Provider,
+			&activity.Remarks,
+			&metadataJSON,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan activity: %w", err)
+		}
+
+		// Handle nullable fields
+		if actorUserID != nil {
+			activity.ActorUserID = actorUserID
+		}
+		if amount.Valid {
+			activity.Amount = &amount.Int64
+		}
+
+		// Parse metadata JSON
+		if len(metadataJSON) > 0 {
+			var metadata map[string]interface{}
+			if err := json.Unmarshal(metadataJSON, &metadata); err == nil {
+				activity.Metadata = metadata
+			}
+		}
+
+		activities = append(activities, &activity)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating activity rows: %w", err)
+	}
+
+	return &payment.OpsCollectionActivityResponse{
+		PaymentID:  paymentID,
+		Activities: activities,
+		TotalCount: len(activities),
+	}, nil
 }

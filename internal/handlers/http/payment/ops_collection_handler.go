@@ -36,6 +36,8 @@ func RegisterOpsCollectionRoutes(e *echo.Group, collectionService *payments.OpsC
 	collectionGroup.GET("/summary/:payment_id", handler.GetCollectionSummary)
 	// Endpoint: Get complete collection details (unified view with payment breakdown and settlement)
 	collectionGroup.GET("/:payment_id", handler.GetCollectionDetails)
+	// Endpoint: Get complete activity log for a collection (payment lifecycle)
+	collectionGroup.GET("/:payment_id/activity", handler.GetCollectionActivity)
 }
 
 // ListCollections handles GET /collections?page=1&limit=20&status=pending|payoutReady|failed
@@ -135,4 +137,26 @@ func (h *OpsCollectionHandler) GetCollectionDetails(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, details)
+}
+
+// GetCollectionActivity handles GET /collections/:payment_id/activity
+// Returns complete activity log from payment_state_changes table showing payment lifecycle
+func (h *OpsCollectionHandler) GetCollectionActivity(c echo.Context) error {
+	paymentID := c.Param("payment_id")
+	if paymentID == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "payment_id is required",
+		})
+	}
+
+	// Call service layer
+	activity, err := h.collectionService.GetCollectionActivity(c.Request().Context(), paymentID)
+	if err != nil {
+		h.logger.Errorf("Error getting collection activity: %v", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Failed to fetch collection activity",
+		})
+	}
+
+	return c.JSON(http.StatusOK, activity)
 }

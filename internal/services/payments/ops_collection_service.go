@@ -13,6 +13,7 @@ type OpsCollectionRepository interface {
 	ListCollectionsPaginated(ctx context.Context, page int, limit int, status string) ([]*payment.OpsCollectionListItem, int, error)
 	GetCollectionSummary(ctx context.Context, paymentID string) (*payment.OpsCollectionSummary, error)
 	GetCollectionDetails(ctx context.Context, paymentID string) (*payment.OpsCollectionDetails, error)
+	GetCollectionActivity(ctx context.Context, paymentID string) (*payment.OpsCollectionActivityResponse, error)
 }
 
 // OpsCollectionService provides ops-specific payment collection operations
@@ -104,4 +105,22 @@ func (s *OpsCollectionService) GetCollectionDetails(ctx context.Context, payment
 	s.logger.Infof("Ops: Collection details fetched - payment_id=%s, status=%s, total_amount=%d",
 		paymentID, details.Status, details.PaymentBreakdown.TotalAmount)
 	return details, nil
+}
+
+// GetCollectionActivity retrieves complete activity log for a single collection
+func (s *OpsCollectionService) GetCollectionActivity(ctx context.Context, paymentID string) (*payment.OpsCollectionActivityResponse, error) {
+	s.logger.Infof("Ops: Fetching collection activity - payment_id=%s", paymentID)
+
+	if paymentID == "" {
+		return nil, fmt.Errorf("payment_id is required")
+	}
+
+	activity, err := s.repo.GetCollectionActivity(ctx, paymentID)
+	if err != nil {
+		s.logger.Errorf("Failed to get collection activity: %v", err)
+		return nil, err
+	}
+
+	s.logger.Infof("Ops: Collection activity fetched - payment_id=%s, count=%d", paymentID, activity.TotalCount)
+	return activity, nil
 }
