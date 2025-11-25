@@ -1529,8 +1529,10 @@ func (r *PgPaymentRepository) GetCollectionDetails(ctx context.Context, paymentI
 }
 
 // GetCollectionActivity retrieves complete activity log for a payment from payment_state_changes
+// Only includes payment and settlement related actions, excludes payout actions
 func (r *PgPaymentRepository) GetCollectionActivity(ctx context.Context, paymentID string) (*payment.OpsCollectionActivityResponse, error) {
-	// Query to fetch all state changes for a payment, ordered chronologically
+	// Query to fetch payment/settlement state changes only (exclude payout actions)
+	// Collections can fund multiple vouchers, each with separate payout lifecycle
 	query := `
 		SELECT
 			psc.state_change_id::text,
@@ -1550,6 +1552,7 @@ func (r *PgPaymentRepository) GetCollectionActivity(ctx context.Context, payment
 		FROM xcentro.payment_state_changes psc
 		LEFT JOIN xcentro.user_table u ON psc.actor_user_id = u.id
 		WHERE psc.payment_id = $1
+		  AND psc.action::text NOT LIKE 'payout_%'
 		ORDER BY psc.action_timestamp ASC
 	`
 

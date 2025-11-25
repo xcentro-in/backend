@@ -192,13 +192,15 @@ type OpsSettlementDetails struct {
 }
 
 // ============================================================================
-// Ops Collection Activity DTOs (activity log from payment_state_changes)
+// Ops Collection Activity DTOs (payment/settlement activity only, excludes payout)
 // ============================================================================
 
 // OpsCollectionActivity represents a single activity/state change in payment lifecycle
+// Note: Only includes payment and settlement related actions, excludes payout actions
+// A collection can fund multiple vouchers, each with separate payout lifecycle
 type OpsCollectionActivity struct {
 	StateChangeID    string    `json:"state_change_id"`
-	Action           string    `json:"action"`            // payment_action_enum value
+	Action           string    `json:"action"`            // payment_action_enum value (excludes payout_*)
 	ActionTimestamp  time.Time `json:"action_timestamp"`
 	ActorType        string    `json:"actor_type"`        // user, system, webhook, api
 	ActorUserID      *string   `json:"actor_user_id,omitempty"`
@@ -207,13 +209,14 @@ type OpsCollectionActivity struct {
 	NewState         string    `json:"new_state,omitempty"`
 	Amount           *int64    `json:"amount,omitempty"`  // Amount in paise
 	Currency         string    `json:"currency,omitempty"`
-	UTR              string    `json:"utr,omitempty"`     // Bank UTR for completed payouts
-	Provider         string    `json:"provider,omitempty"` // Gateway/provider name
+	UTR              string    `json:"utr,omitempty"`     // Settlement UTR (not payout UTR)
+	Provider         string    `json:"provider,omitempty"` // Payment gateway/provider name
 	Remarks          string    `json:"remarks,omitempty"`
 	Metadata         map[string]interface{} `json:"metadata,omitempty"`
 }
 
 // OpsCollectionActivityResponse represents the complete activity log for a payment
+// Only includes payment and settlement events, payout events are tracked separately
 type OpsCollectionActivityResponse struct {
 	PaymentID  string                   `json:"payment_id"`
 	Activities []*OpsCollectionActivity `json:"activities"`
