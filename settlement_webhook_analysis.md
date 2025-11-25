@@ -9,10 +9,11 @@
 ### Settlement Webhook Endpoint
 - **URL**: `POST /v1/process_payment/webhooks/settlement_status?type=<gateway>`
 - **Location**: `cmd/api/routes.go:185`
-- **Handler**: `internal/handlers/http/payment/webhook_handler.go:647-1109`
+- **Handler**: `internal/handlers/http/payment/webhook_handler.go:647-1298`
 - **Supported Gateways**:
   - `type=jiopay` → JioPay settlement webhook handler
   - `type=easebuzz` → Easebuzz settlement webhook handler
+  - `type=mockpg` → MockPG settlement webhook handler (testing only)
 
 ### Registration in Routes
 ```go
@@ -260,18 +261,105 @@ net_settlement_amount = settlement_amount - mdr_amount (e.g., ₹5.00 - ₹0.236
 
 ---
 
-## Key Differences Between JioPay and Easebuzz
+## 3. MockPG Settlement Webhook (Testing Only)
 
-| Aspect | JioPay | Easebuzz |
-|--------|---------|----------|
-| **Data Format** | JSON (direct) | Form-urlencoded → JSON |
-| **Batch Processing** | Single transaction per webhook | Multiple transactions per webhook |
-| **Amount Format** | Strings (e.g., "1000.00") | Numbers (e.g., 1000.0) |
-| **Date Format** | YYYYMMDD (e.g., "20171101") | YYYY-MM-DD HH:MM:SS.SSSSSS |
-| **Signature** | HMAC-SHA256 (implemented) | SHA-512 (TODO - validation skipped) |
-| **Transaction ID** | `merchantTxnNo` | `txnid` |
-| **Gateway ID** | `txnID` (from payment webhook) | `easepayid` |
-| **Response** | Simple success/error | Batch summary with counters |
+### Webhook Characteristics
+- **Format**: JSON (single transaction per webhook)
+- **Trigger**: Manual testing (simulated T+1 to T+3 days after payment success)
+- **Security**: Mock signature validation
+- **Amount Format**: Int64 in paise (e.g., 100000)
+- **Processing**: One transaction per webhook call
+
+### Webhook Payload Structure (`mockpg.MockPGSettlementWebhook`)
+```json
+{
+  "merchant_id": "mock_merchant_123",
+  "transaction_id": "payment_id_789",        // KEY: Our payment_id for lookup
+  "gateway_payment_id": "MOCKPG_xxx",
+  "settlement_id": "SETTLE_BATCH_20250125",
+  "settlement_date": "2025-01-25",           // YYYY-MM-DD format
+  "settlement_amount": 100000,               // Original amount in paise (₹1000.00)
+  "mdr_amount": 0,                           // MDR charges in paise (0 for testing)
+  "service_tax": 0,                          // GST on MDR in paise (0 for testing)
+  "net_settlement_amount": 100000,           // Net amount in paise (₹1000.00)
+  "payment_method": "card",
+  "settlement_account": "9876543210",
+  "settlement_account_ifsc": "MOCK0001234",
+  "signature": "MOCK_SIG_abcd1234"
+}
+```
+
+### Handler: `handleMockPGSettlementWebhook` (Lines 1111-1298)
+
+**Processing Steps:**
+
+1. **Read & Parse**: Read JSON body and unmarshal to `mockpg.MockPGSettlementWebhook`
+
+2. **Signature Verification**: Validate mock signature using gateway client
+
+3. **Payment Lookup**: Find payment by `transaction_id` (our payment_id)
+   ```go
+   pmt, err := h.paymentRepo.GetPaymentByID(ctx, webhook.TransactionID)
+   ```
+
+4. **State Validation**:
+   - Payment status must be `success`
+   - Settlement status must be `pending`
+   - If already `settled`, perform idempotency check
+
+5. **Date Parsing**: Parse YYYY-MM-DD format to `time.Time`
+   ```go
+   settlementDate := time.Parse("2006-01-02", webhook.SettlementDate) // "2025-01-25"
+   ```
+
+6. **Amount Handling**: Amounts already in paise (int64), no conversion needed
+   ```go
+   settlementAmount := webhook.SettlementAmount     // Already in paise
+   mdrAmount := webhook.MDRAmount + webhook.ServiceTax // Typically 0 for testing
+   netSettlementAmount := webhook.NetSettlementAmount  // Already in paise
+   ```
+
+7. **Metadata Preparation**: Store full webhook payload as JSONB
+   ```go
+   settlementMetadata := map[string]any{
+       "settlement_webhook_received_at": time.Now(),
+       "settlement_gateway": "mockpg",
+       "settlement_batch_id": webhook.SettlementID,
+       "mock_simulation": true,
+       ...
+   }
+   ```
+
+8. **Database Updates**:
+   - Update settlement status: `pending` → `settled`
+   - Update settlement amounts
+   - Auto-set `settled_at` timestamp
+
+9. **Response**: Return 200 OK
+
+### Financial Calculation Formula
+```
+settlement_amount = original payment amount (e.g., ₹1000.00 = 100000 paise)
+mdr_amount = mdr_charges + service_tax (typically 0 for MockPG testing)
+net_settlement_amount = settlement_amount - mdr_amount (e.g., 100000 paise)
+```
+
+---
+
+## Key Differences Between JioPay, Easebuzz, and MockPG
+
+| Aspect | JioPay | Easebuzz | MockPG |
+|--------|---------|----------|---------|
+| **Data Format** | JSON (direct) | Form-urlencoded → JSON | JSON (direct) |
+| **Batch Processing** | Single transaction | Multiple transactions | Single transaction |
+| **Amount Format** | Strings (e.g., "1000.00") | Numbers (e.g., 1000.0) | Int64 (e.g., 100000) |
+| **Date Format** | YYYYMMDD | YYYY-MM-DD HH:MM:SS.SSSSSS | YYYY-MM-DD |
+| **Signature** | HMAC-SHA256 ✅ | SHA-512 ⚠️ | Mock validation ✅ |
+| **Transaction ID** | `merchantTxnNo` | `txnid` | `transaction_id` |
+| **Gateway ID** | `txnID` | `easepayid` | `gateway_payment_id` |
+| **MDR Amount** | Non-zero (real fees) | Non-zero (real fees) | Zero (testing) |
+| **Response** | Simple success/error | Batch summary | Simple success/error |
+| **Purpose** | Production | Production | Testing only |
 
 ---
 
@@ -432,6 +520,27 @@ curl -X POST 'http://localhost:8080/v1/process_payment/webhooks/settlement_statu
   -d 'data={"status":1,"data":{"payout_id":"PT123","settled_transactions":[...]}}'
 ```
 
+### MockPG Settlement Webhook (Testing)
+```bash
+curl -X POST 'http://localhost:8080/v1/process_payment/webhooks/settlement_status?type=mockpg' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "merchant_id": "mock_merchant_123",
+    "transaction_id": "your_payment_id_here",
+    "gateway_payment_id": "MOCKPG_xxx",
+    "settlement_id": "SETTLE_BATCH_20250125",
+    "settlement_date": "2025-01-25",
+    "settlement_amount": 100000,
+    "mdr_amount": 0,
+    "service_tax": 0,
+    "net_settlement_amount": 100000,
+    "payment_method": "card",
+    "settlement_account": "9876543210",
+    "settlement_account_ifsc": "MOCK0001234",
+    "signature": "MOCK_SIG_abcd1234"
+  }'
+```
+
 ---
 
 ## Outstanding TODOs
@@ -446,15 +555,24 @@ curl -X POST 'http://localhost:8080/v1/process_payment/webhooks/settlement_statu
 
 ## Conclusion
 
-The XCentro backend has **fully implemented settlement webhook endpoints** for both JioPay and Easebuzz payment gateways. The system handles:
+The XCentro backend has **fully implemented settlement webhook endpoints** for JioPay, Easebuzz, and MockPG payment gateways. The system handles:
 
 - ✅ Gateway-specific payload parsing (JSON vs form-urlencoded)
-- ✅ Amount format differences (strings vs numbers)
+- ✅ Amount format differences (strings vs numbers vs int64)
 - ✅ Single vs batch transaction processing
 - ✅ Financial tracking (settlement amount, MDR, net amount)
-- ✅ Signature verification (JioPay: HMAC-SHA256)
+- ✅ Signature verification (JioPay: HMAC-SHA256, MockPG: Mock validation)
 - ✅ Idempotency handling
 - ✅ Database updates with full audit trail
+- ✅ **MockPG settlement webhook for end-to-end testing**
 - ⚠️ Easebuzz signature validation pending (algorithm TBD)
+
+### Testing Capability
+
+With the new MockPG settlement webhook:
+- ✅ Complete end-to-end testing (payment → settlement → payout)
+- ✅ Payout worker can auto-trigger for MockPG payments
+- ✅ No manual database updates needed
+- ✅ Full flow validation in test environments
 
 The implementation follows a **defensive error handling strategy** where all errors return 200 OK to prevent infinite gateway retries while logging failures for investigation.

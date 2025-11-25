@@ -404,6 +404,35 @@ type MockPGWebhookPayload struct {
 	Signature        string `json:"signature"`          // Mock signature
 }
 
+// MockPGSettlementWebhook represents settlement notification from Mock PG
+// Sent when Mock PG completes settlement to merchant account (simulated T+1 to T+3 days)
+//
+// Key Characteristics:
+//   - Format: JSON (single transaction per webhook)
+//   - Amount Format: Int64 in paise (e.g., 100000 = ₹1000.00)
+//   - Security: Mock signature validation
+//
+// Financial Flow:
+//   - settlement_amount: Original payment amount (in paise)
+//   - mdr_amount: Mock MDR fee (0 for testing)
+//   - service_tax: Mock GST on MDR (0 for testing)
+//   - net_settlement_amount: Net amount = settlement_amount - mdr_amount - service_tax
+type MockPGSettlementWebhook struct {
+	MerchantID           string `json:"merchant_id"`            // Mock merchant ID
+	TransactionID        string `json:"transaction_id"`         // KEY: Our payment_id for lookup
+	GatewayPaymentID     string `json:"gateway_payment_id"`     // Mock gateway payment ID
+	SettlementID         string `json:"settlement_id"`          // Mock settlement batch ID
+	SettlementDate       string `json:"settlement_date"`        // Settlement date (YYYY-MM-DD format)
+	SettlementAmount     int64  `json:"settlement_amount"`      // Original payment amount (in paise)
+	MDRAmount            int64  `json:"mdr_amount"`             // MDR charges (in paise, 0 for testing)
+	ServiceTax           int64  `json:"service_tax"`            // GST on MDR (in paise, 0 for testing)
+	NetSettlementAmount  int64  `json:"net_settlement_amount"`  // Net amount received (in paise)
+	PaymentMethod        string `json:"payment_method"`         // Payment method: "card", "netbanking", "upi", "wallet"
+	SettlementAccount    string `json:"settlement_account"`     // Mock bank account number
+	SettlementAccountIFSC string `json:"settlement_account_ifsc"` // Mock IFSC code
+	Signature            string `json:"signature"`              // Mock signature for verification
+}
+
 // sendWebhookAfterDelay simulates the async webhook sent by payment gateways
 // This runs in a background goroutine and sends the webhook after the configured delay
 func (c *MockPGClient) sendWebhookAfterDelay(callbackURL, transactionID, gatewayPaymentID string, amount int64, currency, paymentMethod string) {
