@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"xcentro.in/internal/core/payee"
+	"xcentro.in/internal/core/payment"
 	"xcentro.in/internal/core/payout"
 	"xcentro.in/internal/core/voucher"
 	"xcentro.in/internal/shared/logger"
@@ -15,6 +16,7 @@ import (
 
 // PayoutService orchestrates payout transfer creation and management
 type PayoutService struct {
+	paymentRepo     payment.PaymentRepository
 	voucherRepo     voucher.VoucherRepository
 	transferRepo    payout.PayoutTransferRepository
 	bankAccountRepo payee.PayeeBankAccountRepository
@@ -30,6 +32,7 @@ type PayoutProviderFactory interface {
 
 // NewPayoutService creates a new payout service
 func NewPayoutService(
+	paymentRepo payment.PaymentRepository,
 	voucherRepo voucher.VoucherRepository,
 	transferRepo payout.PayoutTransferRepository,
 	bankAccountRepo payee.PayeeBankAccountRepository,
@@ -37,6 +40,7 @@ func NewPayoutService(
 	providerFactory PayoutProviderFactory,
 ) *PayoutService {
 	return &PayoutService{
+		paymentRepo:     paymentRepo,
 		voucherRepo:     voucherRepo,
 		transferRepo:    transferRepo,
 		bankAccountRepo: bankAccountRepo,
@@ -47,11 +51,16 @@ func NewPayoutService(
 }
 
 // InitiateManualPayout creates payout transfer requests for a payment
-// New flow: payment_id (required) + voucher_ids[] (optional)
+// New flow: payment_id (required) + voucher_ids[] (optional) + bypassSettlementCheck (optional)
 // If voucher_ids empty: processes all unpaid vouchers for the payment
+// If bypassSettlementCheck = false (default): requires payment.settlement_status = 'settled'
+// If bypassSettlementCheck = true: allows payout even if not settled (ops override for emergencies)
 // Returns all created transfer requests (status='initiated')
-func (s *PayoutService) InitiateManualPayout(ctx context.Context, paymentID string, voucherIDs []string) ([]*payout.PayoutTransferRequest, error) {
-	s.logger.InfoWith("InitiateManualPayout called", "payment_id", paymentID, "voucher_ids", voucherIDs)
+func (s *PayoutService) InitiateManualPayout(ctx context.Context, paymentID string, voucherIDs []string, bypassSettlementCheck bool) ([]*payout.PayoutTransferRequest, error) {
+	s.logger.InfoWith("InitiateManualPayout called",
+		"payment_id", paymentID,
+		"voucher_ids", voucherIDs,
+		"bypass_settlement_check", bypassSettlementCheck)
 
 	// Step 1: Parse payment ID
 	paymentUUID, err := uuid.Parse(paymentID)
@@ -59,7 +68,39 @@ func (s *PayoutService) InitiateManualPayout(ctx context.Context, paymentID stri
 		return nil, fmt.Errorf("invalid payment_id format: %w", err)
 	}
 
-	// Step 2: Get all vouchers for this payment
+	// Step 2: Get payment details for settlement validation
+	pmt, err := s.paymentRepo.GetPaymentByID(ctx, paymentID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get payment: %w", err)
+	}
+
+	if pmt == nil {
+		return nil, fmt.Errorf("payment not found: %s", paymentID)
+	}
+
+	// Step 3: Validate settlement status (unless bypassed by ops)
+	if !bypassSettlementCheck && pmt.SettlementStatus != "settled" {
+		s.logger.WarnWith("Payout rejected - payment not settled",
+			"payment_id", paymentID,
+			"settlement_status", pmt.SettlementStatus)
+		return nil, fmt.Errorf(
+			"payment not settled (current status: %s). Settlement must complete before payout can be initiated. "+
+				"Use bypass_checks=true in request if you need to override this (ops discretion only)",
+			pmt.SettlementStatus,
+		)
+	}
+
+	if bypassSettlementCheck {
+		s.logger.WarnWith("⚠️  SETTLEMENT CHECK BYPASSED - Manual override by ops",
+			"payment_id", paymentID,
+			"settlement_status", pmt.SettlementStatus)
+	} else {
+		s.logger.InfoWith("✅ Settlement check passed",
+			"payment_id", paymentID,
+			"settlement_status", pmt.SettlementStatus)
+	}
+
+	// Step 4: Get all vouchers for this payment
 	allVouchers, err := s.voucherRepo.GetByPaymentID(ctx, paymentUUID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get vouchers for payment: %w", err)

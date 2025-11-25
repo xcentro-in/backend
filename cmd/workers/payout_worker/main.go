@@ -39,7 +39,11 @@ func main() {
 
 	fmt.Println("✅ Database connection established")
 
+	// Create transaction manager
+	txManager := client.NewTransactionManager(db)
+
 	// Create repositories
+	paymentRepository := paymentRepo.NewPostgresPaymentRepository(db, txManager)
 	voucherRepository := voucherRepo.NewPostgresVoucherRepository(db, cfg.BankAccountEncryption.EncryptionKey)
 	transferRepository := payoutRepo.NewPostgresPayoutTransferRepository(db)
 	configRepository := payoutRepo.NewPostgresPayoutConfigurationRepository(db)
@@ -53,8 +57,9 @@ func main() {
 	fmt.Println("✅ Payout provider factory initialized (using config: Castler)")
 
 	// Initialize payout service (business logic layer)
-	// Note: PayoutService doesn't use mappingRepository (payee provider mapping is in payee module)
+	// Note: Worker uses paymentRepository for settlement status checks
 	payoutSvc := payout.NewPayoutService(
+		paymentRepository,
 		voucherRepository,
 		transferRepository,
 		nil, // bankAccountRepository - not used in worker, only in API handlers

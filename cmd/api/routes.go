@@ -245,6 +245,7 @@ func registerV1VoucherRoutes(clients *externalClients, cfg *config.Config, group
 }
 
 func registerV1PayoutRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
+	paymentRepository := paymentRepo.NewPostgresPaymentRepository(clients.db, clients.txManager)
 	transferRepository := payoutRepo.NewPostgresPayoutTransferRepository(clients.db)
 	configRepository := payoutRepo.NewPostgresPayoutConfigurationRepository(clients.db)
 	voucherRepository := voucherRepo.NewPostgresVoucherRepository(clients.db, cfg.BankAccountEncryption.EncryptionKey)
@@ -252,7 +253,7 @@ func registerV1PayoutRoutes(clients *externalClients, cfg *config.Config, group 
 	stateChangeRepository := paymentRepo.NewPostgresPaymentStateChangeRepository(clients.db)
 
 	providerFactory := factory.NewPayoutProviderFactory(cfg)
-	payoutService := payoutSvc.NewPayoutService(voucherRepository, transferRepository, bankAccountRepository, configRepository, providerFactory)
+	payoutService := payoutSvc.NewPayoutService(paymentRepository, voucherRepository, transferRepository, bankAccountRepository, configRepository, providerFactory)
 	settlementService := settlementSvc.NewSettlementVerificationService(logger.GetDefault())
 
 	webhookHandler := payoutHandler.NewPayoutWebhookHandler(transferRepository, stateChangeRepository, cfg.Castler.WebhookSecret)
