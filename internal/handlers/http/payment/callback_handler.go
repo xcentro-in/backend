@@ -18,6 +18,7 @@ import (
 	"xcentro.in/internal/adapters/external/payment/mockpg"
 	"xcentro.in/internal/core/business_rules"
 	"xcentro.in/internal/core/payment"
+	paymentSvc "xcentro.in/internal/services/payment"
 	"xcentro.in/internal/shared/logger"
 )
 
@@ -36,6 +37,7 @@ type CallbackHandler struct {
 	voucherRepo        *voucherdb.PostgresVoucherRepository
 	txManager          client.TxManager
 	stateChangeRepo    payment.PaymentStateChangeRepository
+	stateLogger        *paymentSvc.PaymentStateLogger
 	logger             *logger.Logger
 }
 
@@ -65,6 +67,7 @@ func NewCallbackHandler(
 		voucherRepo:        voucherRepo.(*voucherdb.PostgresVoucherRepository),
 		txManager:          txManager.(client.TxManager),
 		stateChangeRepo:    stateChangeRepo,
+		stateLogger:        paymentSvc.NewPaymentStateLogger(stateChangeRepo),
 		logger:             logger.GetDefault(),
 	}
 }
@@ -704,55 +707,6 @@ func (h *CallbackHandler) finalizeVouchersOnSuccess(ctx context.Context, payment
 	return nil
 }
 
-// recordPaymentStateChange records a state change in the audit trail
-func (h *CallbackHandler) recordPaymentStateChange(
-	ctx context.Context,
-	paymentID string,
-	action payment.PaymentAction,
-	previousState string,
-	newState string,
-	gatewayName string,
-	metadata map[string]any,
-) error {
-	// Parse payment ID
-	paymentUUID, err := uuid.Parse(paymentID)
-	if err != nil {
-		h.logger.ErrorWith("Failed to parse payment ID", "payment_id", paymentID, "error", err)
-		return fmt.Errorf("invalid payment ID: %w", err)
-	}
-
-	// Create state change request
-	req := &payment.CreatePaymentStateChangeRequest{
-		PaymentID:       paymentUUID,
-		Action:          action,
-		ActionTimestamp: time.Now(),
-		ActorType:       payment.ActorTypeWebhook,
-		ActorName:       fmt.Sprintf("%s_callback", gatewayName),
-		PreviousState:   previousState,
-		NewState:        newState,
-		Provider:        gatewayName,
-		Metadata:        metadata,
-		Remarks:         fmt.Sprintf("Payment status updated via %s callback", gatewayName),
-	}
-
-	// Record state change
-	stateChange, err := h.stateChangeRepo.Create(ctx, req)
-	if err != nil {
-		h.logger.ErrorWith("Failed to record state change", "payment_id", paymentID, "error", err)
-		return fmt.Errorf("failed to record state change: %w", err)
-	}
-
-	h.logger.InfoWith("Payment state change recorded",
-		"payment_id", paymentID,
-		"state_change_id", stateChange.StateChangeID,
-		"action", action,
-		"previous_state", previousState,
-		"new_state", newState,
-	)
-
-	return nil
-}
-
 // handlePostPaymentUpdate handles common post-payment-update operations for all gateways
 // This includes: 1) Recording state changes in audit trail, 2) Finalizing vouchers on success
 // This method is non-fatal - errors are logged but don't fail the callback
@@ -763,29 +717,52 @@ func (h *CallbackHandler) handlePostPaymentUpdate(
 	gatewayName string,
 	metadata map[string]any,
 ) error {
-	// Step 1: Record payment state change in audit trail
-	previousState := string(pmt.Status)
-	newStateStr := string(newStatus)
-
-	var action payment.PaymentAction
-	switch newStatus {
-	case payment.PaymentStatusSuccess:
-		action = payment.PaymentActionSuccess
-	case payment.PaymentStatusFailed:
-		action = payment.PaymentActionFailed
-	case payment.PaymentStatusPending:
-		action = payment.PaymentActionProcessing
-	default:
-		action = payment.PaymentActionProcessing
+	// Step 1: Record payment state change in audit trail using PaymentStateLogger
+	paymentUUID, err := uuid.Parse(pmt.ID)
+	if err != nil {
+		h.logger.ErrorWith("Invalid payment ID", "payment_id", pmt.ID, "error", err)
+		return fmt.Errorf("invalid payment ID: %w", err)
 	}
 
-	if err := h.recordPaymentStateChange(ctx, pmt.ID, action, previousState, newStateStr, gatewayName, metadata); err != nil {
-		h.logger.ErrorWith("Failed to record state change (non-fatal)", "payment_id", pmt.ID, "gateway", gatewayName, "error", err)
-		fmt.Printf("⚠️  Failed to record state change: %v\n", err)
-		// Non-fatal: Continue to voucher finalization
-	} else {
-		h.logger.InfoWith("Payment state change recorded", "payment_id", pmt.ID, "gateway", gatewayName, "new_status", newStatus)
-		fmt.Println("✅ Payment state change recorded")
+	// Log state change based on payment status
+	switch newStatus {
+	case payment.PaymentStatusSuccess:
+		// Get gateway payment ID from metadata or payment object
+		gatewayPaymentID := pmt.GatewayPaymentID
+		if gatewayPaymentID == "" {
+			gatewayPaymentID = pmt.ID // fallback to payment ID
+		}
+
+		if err := h.stateLogger.LogPaymentSuccess(ctx, paymentUUID, pmt.TotalAmount, gatewayName, gatewayPaymentID, metadata); err != nil {
+			h.logger.ErrorWith("Failed to record payment success (non-fatal)", "payment_id", pmt.ID, "gateway", gatewayName, "error", err)
+			fmt.Printf("⚠️  Failed to record state change: %v\n", err)
+			// Non-fatal: Continue to voucher finalization
+		} else {
+			h.logger.InfoWith("Payment success recorded", "payment_id", pmt.ID, "gateway", gatewayName)
+			fmt.Println("✅ Payment state change recorded")
+		}
+
+	case payment.PaymentStatusFailed:
+		// Extract failure reason from metadata
+		failureReason := "Payment failed"
+		if msg, ok := metadata["error_message"].(string); ok && msg != "" {
+			failureReason = msg
+		} else if msg, ok := metadata["response_description"].(string); ok && msg != "" {
+			failureReason = msg
+		}
+
+		if err := h.stateLogger.LogPaymentFailed(ctx, paymentUUID, gatewayName, failureReason, metadata); err != nil {
+			h.logger.ErrorWith("Failed to record payment failure (non-fatal)", "payment_id", pmt.ID, "gateway", gatewayName, "error", err)
+			fmt.Printf("⚠️  Failed to record state change: %v\n", err)
+			// Non-fatal: Continue
+		} else {
+			h.logger.InfoWith("Payment failure recorded", "payment_id", pmt.ID, "gateway", gatewayName)
+			fmt.Println("✅ Payment state change recorded")
+		}
+
+	default:
+		// For pending or other statuses, skip logging for now
+		h.logger.InfoWith("Payment status changed but not logging (pending/unknown)", "payment_id", pmt.ID, "status", newStatus)
 	}
 
 	// Step 2: Finalize vouchers if payment succeeded

@@ -10,11 +10,13 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 	"xcentro.in/internal/adapters/external/payment/easebuzz"
 	"xcentro.in/internal/adapters/external/payment/jiopay"
 	"xcentro.in/internal/adapters/external/payment/mockpg"
 	"xcentro.in/internal/core/payment"
+	paymentSvc "xcentro.in/internal/services/payment"
 )
 
 // WebhookHandler handles payment gateway webhooks
@@ -25,6 +27,7 @@ type WebhookHandler struct {
 	easebuzzGateway payment.PaymentGateway
 	mockPGGateway   payment.PaymentGateway
 	mockPGEnabled   bool // Flag to check if mock PG is enabled
+	stateLogger     *paymentSvc.PaymentStateLogger
 }
 
 // NewWebhookHandler creates a new webhook handler
@@ -34,6 +37,7 @@ func NewWebhookHandler(
 	easebuzzGateway payment.PaymentGateway,
 	mockPGGateway payment.PaymentGateway,
 	mockPGEnabled bool,
+	stateChangeRepo payment.PaymentStateChangeRepository,
 ) *WebhookHandler {
 	return &WebhookHandler{
 		paymentRepo:     paymentRepo,
@@ -41,6 +45,7 @@ func NewWebhookHandler(
 		easebuzzGateway: easebuzzGateway,
 		mockPGGateway:   mockPGGateway,
 		mockPGEnabled:   mockPGEnabled,
+		stateLogger:     paymentSvc.NewPaymentStateLogger(stateChangeRepo),
 	}
 }
 
@@ -914,6 +919,22 @@ func (h *WebhookHandler) handleJioPaySettlementWebhook(c echo.Context) error {
 
 	fmt.Println("✅ Settlement amounts updated successfully")
 
+	// Step 13: Log settlement received for audit trail
+	paymentUUID, parseErr := uuid.Parse(pmt.ID)
+	if parseErr != nil {
+		fmt.Printf("⚠️  Failed to parse payment ID for logging: %v\n", parseErr)
+		// Non-fatal: continue without logging
+	} else {
+		// Use SettlementID as UTR reference for JioPay
+		settlementUTR := webhook.SettlementID
+		if logErr := h.stateLogger.LogSettlementReceived(ctx, paymentUUID, netSettlementAmount, settlementUTR, settlementMetadata); logErr != nil {
+			fmt.Printf("⚠️  Failed to log settlement received (non-fatal): %v\n", logErr)
+			// Non-fatal: continue even if logging fails
+		} else {
+			fmt.Println("✅ Settlement event logged to audit trail")
+		}
+	}
+
 	// Note: settled_at is automatically set by UpdateSettlementStatus when status becomes 'settled'
 
 	fmt.Println("=== JIOPAY SETTLEMENT WEBHOOK: Processing complete ===")
@@ -1085,6 +1106,22 @@ func (h *WebhookHandler) handleEasebuzzSettlementWebhook(c echo.Context) error {
 			fmt.Printf("❌ Failed to update settlement amounts: %v\n", err)
 			errorCount++
 			continue
+		}
+
+		// Log settlement received for audit trail
+		paymentUUID, parseErr := uuid.Parse(pmt.ID)
+		if parseErr != nil {
+			fmt.Printf("⚠️  Failed to parse payment ID for logging: %v\n", parseErr)
+			// Non-fatal: continue without logging
+		} else {
+			// Use BankTransactionID as UTR reference for Easebuzz
+			settlementUTR := webhook.Data.BankTransactionID
+			if logErr := h.stateLogger.LogSettlementReceived(ctx, paymentUUID, netAmount, settlementUTR, settlementMetadata); logErr != nil {
+				fmt.Printf("⚠️  Failed to log settlement received (non-fatal): %v\n", logErr)
+				// Non-fatal: continue even if logging fails
+			} else {
+				fmt.Println("✅ Settlement event logged to audit trail")
+			}
 		}
 
 		fmt.Printf("✅ Settlement processed successfully for %s\n\n", settlement.TxnID)

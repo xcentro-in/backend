@@ -27,6 +27,15 @@ func NewPostgresPaymentStateChangeRepository(db client.DB) payment.PaymentStateC
 func (r *PostgresPaymentStateChangeRepository) Create(ctx context.Context, req *payment.CreatePaymentStateChangeRequest) (*payment.PaymentStateChange, error) {
 	stateChangeID := uuid.Must(uuid.NewV7())
 
+	// Auto-populate previous_state from last state change
+	// Repository owns this responsibility - not the caller
+	lastState, lastStateErr := r.GetLatestByPaymentID(ctx, req.PaymentID)
+	if lastStateErr == nil && lastState != nil {
+		// Last state's "new_state" becomes current state's "previous_state"
+		req.PreviousState = lastState.NewState
+	}
+	// If no previous state exists (first state change), previous_state remains empty
+
 	// Marshal metadata to JSON
 	var metadataJSON []byte
 	var err error
