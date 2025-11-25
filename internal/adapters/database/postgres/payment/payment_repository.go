@@ -52,8 +52,15 @@ func (r *PgPaymentRepository) CreatePayment(ctx context.Context, p *payment.Paym
 		sourceTypeLog = string(*p.PaymentSourceType)
 	}
 
-	fmt.Printf("[PgPaymentRepository] CreatePayment called - BusinessID: %s, UserID: %s, Amount: %d, Currency: %s, Method: %s, Type: %s, SourceID: %s, SourceType: %s\n",
-		p.BusinessID, p.UserID, p.Amount, p.Currency, p.PaymentMethod, p.PaymentType, sourceIDLog, sourceTypeLog)
+	r.logger.DebugWith("Creating payment",
+		"business_id", p.BusinessID,
+		"user_id", p.UserID,
+		"amount", p.Amount,
+		"currency", p.Currency,
+		"payment_method", p.PaymentMethod,
+		"payment_type", p.PaymentType,
+		"source_id", sourceIDLog,
+		"source_type", sourceTypeLog)
 
 	query := `
 		INSERT INTO xcentro.payments (
@@ -98,13 +105,17 @@ func (r *PgPaymentRepository) CreatePayment(ctx context.Context, p *payment.Paym
 		return fmt.Errorf("failed to create payment: %w", err)
 	}
 
-	fmt.Printf("[PgPaymentRepository] Payment created with ID: %s (source_id: %s, source_type: %s)\n", p.ID, sourceIDLog, sourceTypeLog)
+	r.logger.InfoWith("Payment created",
+		"payment_id", p.ID,
+		"source_id", sourceIDLog,
+		"source_type", sourceTypeLog)
+
 	return nil
 }
 
 // GetPaymentByID retrieves a payment by its ID
 func (r *PgPaymentRepository) GetPaymentByID(ctx context.Context, paymentID string) (*payment.Payment, error) {
-	fmt.Printf("[PgPaymentRepository] GetPaymentByID called - PaymentID: %s\n", paymentID)
+	r.logger.DebugWith("Getting payment by ID", "payment_id", paymentID)
 
 	query := `
 		SELECT payment_id, user_id, business_id, amount, currency, payment_method, status,
@@ -191,7 +202,7 @@ func (r *PgPaymentRepository) GetPaymentByID(ctx context.Context, paymentID stri
 //   - Regular payments: where gateway_payment_id = gateway's txn ID
 //   - Tokenization payments: where txnid = our payment UUID
 func (r *PgPaymentRepository) GetPaymentByGatewayPaymentID(ctx context.Context, gatewayPaymentID string) (*payment.Payment, error) {
-	fmt.Printf("[PgPaymentRepository] GetPaymentByGatewayPaymentID called - GatewayPaymentID: %s\n", gatewayPaymentID)
+	r.logger.DebugWith("Getting payment by gateway payment ID", "gateway_payment_id", gatewayPaymentID)
 
 	query := `
 
@@ -271,7 +282,7 @@ func (r *PgPaymentRepository) GetPaymentByGatewayPaymentID(ctx context.Context, 
 
 // UpdatePaymentStatus updates payment status and metadata
 func (r *PgPaymentRepository) UpdatePaymentStatus(ctx context.Context, paymentID string, status payment.PaymentStatus, metadata map[string]any) error {
-	fmt.Printf("[PgPaymentRepository] UpdatePaymentStatus called - PaymentID: %s, Status: %s\n", paymentID, status)
+	r.logger.DebugWith("Updating payment status", "payment_id", paymentID, "status", status)
 
 	query := `
 		UPDATE xcentro.payments
@@ -301,7 +312,7 @@ func (r *PgPaymentRepository) UpdatePaymentStatus(ctx context.Context, paymentID
 
 // UpdatePaymentGateway updates the selected gateway
 func (r *PgPaymentRepository) UpdatePaymentGateway(ctx context.Context, paymentID string, gateway payment.GatewayType) error {
-	fmt.Printf("[PgPaymentRepository] UpdatePaymentGateway called - PaymentID: %s, Gateway: %s\n", paymentID, gateway)
+	r.logger.DebugWith("Updating payment gateway", "payment_id", paymentID, "gateway", gateway)
 
 	query := `UPDATE xcentro.payments SET gateway_used = $1, updated_at = NOW() WHERE payment_id = $2`
 	_, err := r.querier.Exec(ctx, query, gateway, paymentID)
@@ -310,7 +321,7 @@ func (r *PgPaymentRepository) UpdatePaymentGateway(ctx context.Context, paymentI
 
 // UpdateGatewayPaymentID updates gateway transaction ID and redirect URL
 func (r *PgPaymentRepository) UpdateGatewayPaymentID(ctx context.Context, paymentID string, gatewayPaymentID, redirectURL string) error {
-	fmt.Printf("[PgPaymentRepository] UpdateGatewayPaymentID called - PaymentID: %s, GatewayPaymentID: %s\n", paymentID, gatewayPaymentID)
+	r.logger.DebugWith("Updating gateway payment ID", "payment_id", paymentID, "gateway_payment_id", gatewayPaymentID)
 
 	query := `UPDATE xcentro.payments SET gateway_payment_id = $1, redirect_url = $2, updated_at = NOW() WHERE payment_id = $3`
 	_, err := r.querier.Exec(ctx, query, gatewayPaymentID, redirectURL, paymentID)
@@ -319,7 +330,7 @@ func (r *PgPaymentRepository) UpdateGatewayPaymentID(ctx context.Context, paymen
 
 // UpdatePaymentFees updates fee breakdown
 func (r *PgPaymentRepository) UpdatePaymentFees(ctx context.Context, paymentID string, feeAmount, totalAmount int64) error {
-	fmt.Printf("[PgPaymentRepository] UpdatePaymentFees called - PaymentID: %s, FeeAmount: %d, TotalAmount: %d\n", paymentID, feeAmount, totalAmount)
+	r.logger.DebugWith("Updating payment fees", "payment_id", paymentID, "fee_amount", feeAmount, "total_amount", totalAmount)
 
 	query := `UPDATE xcentro.payments SET fee_amount = $1, total_amount = $2, updated_at = NOW() WHERE payment_id = $3`
 	_, err := r.querier.Exec(ctx, query, feeAmount, totalAmount, paymentID)
@@ -328,7 +339,7 @@ func (r *PgPaymentRepository) UpdatePaymentFees(ctx context.Context, paymentID s
 
 // UpdatePaymentSource links payment to a payment source
 func (r *PgPaymentRepository) UpdatePaymentSource(ctx context.Context, paymentID string, sourceID string, sourceType payment.PaymentSourceType) error {
-	fmt.Printf("[PgPaymentRepository] UpdatePaymentSource called - PaymentID: %s, SourceID: %s, SourceType: %s\n", paymentID, sourceID, sourceType)
+	r.logger.DebugWith("Updating payment source", "payment_id", paymentID, "source_id", sourceID, "source_type", sourceType)
 
 	query := `UPDATE xcentro.payments SET payment_source_id = $1, payment_source_type = $2, updated_at = NOW() WHERE payment_id = $3`
 	_, err := r.querier.Exec(ctx, query, sourceID, sourceType, paymentID)
@@ -337,7 +348,7 @@ func (r *PgPaymentRepository) UpdatePaymentSource(ctx context.Context, paymentID
 
 // GetPaymentsByBusinessID retrieves payments for a business with pagination
 func (r *PgPaymentRepository) GetPaymentsByBusinessID(ctx context.Context, businessID string, limit, offset int) ([]*payment.Payment, error) {
-	fmt.Printf("[PgPaymentRepository] GetPaymentsByBusinessID called - BusinessID: %s, Limit: %d, Offset: %d\n", businessID, limit, offset)
+	r.logger.DebugWith("Getting payments by business ID", "business_id", businessID, "limit", limit, "offset", offset)
 
 	query := `
 		SELECT payment_id, user_id, business_id, amount, currency, payment_method, status,
@@ -428,7 +439,7 @@ func (r *PgPaymentRepository) GetPaymentsByBusinessID(ctx context.Context, busin
 
 // UpdateSettlementStatus updates settlement status and related metadata
 func (r *PgPaymentRepository) UpdateSettlementStatus(ctx context.Context, paymentID string, status payment.SettlementStatus, metadata map[string]any) error {
-	fmt.Printf("[PgPaymentRepository] UpdateSettlementStatus called - PaymentID: %s, SettlementStatus: %s\n", paymentID, status)
+	r.logger.DebugWith("Updating settlement status", "payment_id", paymentID, "settlement_status", status)
 
 	query := `
 		UPDATE xcentro.payments
@@ -461,8 +472,11 @@ func (r *PgPaymentRepository) UpdateSettlementStatus(ctx context.Context, paymen
 
 // UpdateSettlementAmounts updates settlement financial fields
 func (r *PgPaymentRepository) UpdateSettlementAmounts(ctx context.Context, paymentID string, settlementAmount, mdrAmount, netSettlementAmount int64) error {
-	fmt.Printf("[PgPaymentRepository] UpdateSettlementAmounts called - PaymentID: %s, SettlementAmount: %d, MDR: %d, Net: %d\n",
-		paymentID, settlementAmount, mdrAmount, netSettlementAmount)
+	r.logger.DebugWith("Updating settlement amounts",
+		"payment_id", paymentID,
+		"settlement_amount", settlementAmount,
+		"mdr_amount", mdrAmount,
+		"net_settlement_amount", netSettlementAmount)
 
 	query := `
 		UPDATE xcentro.payments
@@ -483,7 +497,7 @@ func (r *PgPaymentRepository) UpdateSettlementAmounts(ctx context.Context, payme
 
 // GetPendingSettlements retrieves payments pending settlement for a business
 func (r *PgPaymentRepository) GetPendingSettlements(ctx context.Context, businessID string) ([]*payment.Payment, error) {
-	fmt.Printf("[PgPaymentRepository] GetPendingSettlements called - BusinessID: %s\n", businessID)
+	r.logger.DebugWith("Getting pending settlements", "business_id", businessID)
 
 	query := `
 		SELECT payment_id, user_id, business_id, amount, currency, payment_method, status,
@@ -1027,8 +1041,10 @@ func (r *PgPaymentRepository) UpdateRetryMetadata(ctx context.Context, paymentID
 		return fmt.Errorf("payment not found: %s", paymentID)
 	}
 
-	fmt.Printf("[PgPaymentRepository] Updated retry metadata - PaymentID: %s, RetryOf: %s, RetryCount: %d\n",
-		paymentID, retryOfPaymentID, retryCount)
+	r.logger.DebugWith("Updated retry metadata",
+		"payment_id", paymentID,
+		"retry_of_payment_id", retryOfPaymentID,
+		"retry_count", retryCount)
 
 	return nil
 }
