@@ -11,6 +11,7 @@ import (
 	"xcentro.in/internal/core/business"
 	"xcentro.in/internal/core/business_rules"
 	"xcentro.in/internal/core/payment"
+	paymentSvc "xcentro.in/internal/services/payment"
 	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/logger"
 )
@@ -28,7 +29,8 @@ type PaymentService struct {
 	voucherRepo          interface{}                                 // voucher.VoucherRepository, using interface{} to avoid circular import
 	pendingVoucherRepo   *paymentdb.PaymentVoucherPendingRepository // Concrete type for temporary voucher-payment linkage
 	businessService      business.BusinessService
-	config               *config.Config // Application configuration (server URL, etc.)
+	stateLogger          *paymentSvc.PaymentStateLogger // Payment state change logger
+	config               *config.Config                 // Application configuration (server URL, etc.)
 	logger               *logger.Logger
 }
 
@@ -45,6 +47,7 @@ func NewPaymentService(
 	voucherRepo interface{}, // voucher.VoucherRepository for transactional operations
 	pendingVoucherRepo interface{}, // PaymentVoucherPendingRepository for temporary voucher-payment linkage
 	businessService business.BusinessService,
+	stateChangeRepo payment.PaymentStateChangeRepository, // For logging payment state changes
 	cfg *config.Config, // Application configuration
 	logger *logger.Logger,
 ) *PaymentService {
@@ -60,6 +63,7 @@ func NewPaymentService(
 		voucherRepo:        voucherRepo,
 		pendingVoucherRepo: pendingVoucherRepo.(*paymentdb.PaymentVoucherPendingRepository),
 		businessService:    businessService,
+		stateLogger:        paymentSvc.NewPaymentStateLogger(stateChangeRepo),
 		config:             cfg,
 		logger:             logger,
 	}
@@ -268,6 +272,26 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 			return fmt.Errorf("failed to update gateway used: %w", err)
 		}
 		s.logger.DebugWith("Payment updated with gateway details")
+
+		// Sub-step 3.6: Log payment initiation for audit trail
+		paymentUUID, parseErr := uuid.Parse(paymentID)
+		if parseErr != nil {
+			s.logger.ErrorWith("Failed to parse payment ID for logging", "payment_id", paymentID, "error", parseErr)
+			// Non-fatal: continue without logging
+		} else {
+			userUUID, parseErr := uuid.Parse(req.UserID)
+			if parseErr != nil {
+				s.logger.ErrorWith("Failed to parse user ID for logging", "user_id", req.UserID, "error", parseErr)
+				// Non-fatal: continue without logging
+			} else {
+				if logErr := s.stateLogger.LogPaymentInitiated(txCtx, paymentUUID, userUUID, req.Amount, string(resp.GatewayUsed)); logErr != nil {
+					s.logger.ErrorWith("Failed to log payment initiation (non-fatal)", "payment_id", paymentID, "error", logErr)
+					// Non-fatal: continue even if logging fails
+				} else {
+					s.logger.DebugWith("Payment initiation logged", "payment_id", paymentID, "user_id", req.UserID)
+				}
+			}
+		}
 
 		// Sub-step 3.5: For tokenization payments, store gateway metadata (contains card details for immature PGs)
 		if req.PaymentType == payment.PaymentTypeTokenization && resp.Metadata != nil {
@@ -810,4 +834,62 @@ func (s *PaymentService) validateVouchersAreInDraft(ctx context.Context, voucher
 
 	s.logger.DebugWith("All vouchers validated for retry", "count", len(voucherIDs))
 	return nil
+}
+
+// ============================================================================
+// Ops Dashboard Methods for Collections
+// ============================================================================
+
+// OpsListCollections retrieves paginated list of collections for ops dashboard
+func (s *PaymentService) OpsListCollections(ctx context.Context, page int, limit int, status string) (*payment.OpsListCollectionsResponse, error) {
+	s.logger.InfoWith("Ops: Fetching collections list",
+		"page", page,
+		"limit", limit,
+		"status", status)
+
+	// Set defaults
+	if page <= 0 {
+		page = 1
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+
+	// Type assert to access the ops method
+	type opsCollectionLister interface {
+		ListCollectionsPaginated(ctx context.Context, page int, limit int, status string) ([]*payment.OpsCollectionListItem, int, error)
+	}
+
+	repo, ok := s.paymentRepo.(opsCollectionLister)
+	if !ok {
+		s.logger.ErrorWith("Payment repository doesn't implement ListCollectionsPaginated")
+		return nil, fmt.Errorf("collection listing not supported")
+	}
+
+	// Fetch from repository
+	collections, totalCount, err := repo.ListCollectionsPaginated(ctx, page, limit, status)
+	if err != nil {
+		s.logger.ErrorWith("Failed to list collections", "error", err)
+		return nil, fmt.Errorf("failed to list collections: %w", err)
+	}
+
+	// Calculate total pages
+	totalPages := (totalCount + limit - 1) / limit
+
+	s.logger.InfoWith("Ops: Collections list fetched successfully",
+		"count", len(collections),
+		"total_count", totalCount)
+
+	return &payment.OpsListCollectionsResponse{
+		Data: collections,
+		Pagination: payment.PaginationResponse{
+			CurrentPage: page,
+			PageSize:    limit,
+			TotalItems:  totalCount,
+			TotalPages:  totalPages,
+		},
+	}, nil
 }

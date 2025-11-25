@@ -164,7 +164,7 @@ func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group
 	notificationEventRepo := notificationRepo.NewPgNotificationEventRepository(clients.db)
 	voucherService := voucherSvc.NewVoucherService(voucherRepository, queueRepository, voucherCoreService, businessPayeeRelationRepo, notificationEventRepo, logger.GetDefault())
 
-	paymentService := payments.NewPaymentService(orchestrator, paymentRepository, storedCardRepository, bankAccountRepository, walletService, feeCalculator, clients.txManager, voucherService, voucherRepository, pendingVoucherRepository, busSvc, cfg, logger.GetDefault())
+	paymentService := payments.NewPaymentService(orchestrator, paymentRepository, storedCardRepository, bankAccountRepository, walletService, feeCalculator, clients.txManager, voucherService, voucherRepository, pendingVoucherRepository, busSvc, stateChangeRepository, cfg, logger.GetDefault())
 
 	processPaymentGroup := group.Group("/process_payment")
 	payment.RegisterPaymentRoutes(processPaymentGroup, paymentService, paymentSourceService, walletService, authSvc, voucherRepository, stateChangeRepository, businessPayeeRelationRepo, storedCardRepository, bankAccountRepository, logger.GetDefault())
@@ -179,7 +179,7 @@ func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group
 	callbackHandler := payment.NewCallbackHandler(paymentRepository, storedCardRepository, walletService, jioPayClient, easebuzzClient, mockPGClient, cfg.MockPG.Enabled, pendingVoucherRepository, voucherRepository, clients.txManager, stateChangeRepository)
 	processPaymentGroup.POST("/callback", callbackHandler.HandleCallback)
 
-	webhookHandler := payment.NewWebhookHandler(paymentRepository, jioPayClient, easebuzzClient, mockPGClient, cfg.MockPG.Enabled)
+	webhookHandler := payment.NewWebhookHandler(paymentRepository, jioPayClient, easebuzzClient, mockPGClient, cfg.MockPG.Enabled, stateChangeRepository)
 	webhookGroup := processPaymentGroup.Group("/webhooks")
 	webhookGroup.POST("/payment_status", webhookHandler.HandlePaymentStatusWebhook)
 	webhookGroup.POST("/settlement_status", webhookHandler.HandleSettlementStatusWebhook)
