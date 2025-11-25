@@ -1371,3 +1371,158 @@ func (r *PgPaymentRepository) getPayeesForPayment(ctx context.Context, paymentID
 
 	return payees, nil
 }
+
+// GetCollectionDetails retrieves complete details for a single collection (payment)
+// Unifies data from list view, summary, payment breakdown, and settlement information
+func (r *PgPaymentRepository) GetCollectionDetails(ctx context.Context, paymentID string) (*payment.OpsCollectionDetails, error) {
+	// Query for complete payment information
+	query := `
+		SELECT
+			p.payment_id,
+			p.created_at,
+			p.status,
+			p.business_id,
+			b.name as business_name,
+			-- Payment breakdown fields
+			p.amount as base_amount,
+			p.convenience_fee,
+			p.convenience_fee_gst,
+			p.total_amount,
+			-- Payment method fields
+			p.payment_method,
+			COALESCE(p.gateway_used::text, '') as gateway_used,
+			COALESCE(p.gateway_payment_id, '') as gateway_payment_id,
+			p.payment_source_id,
+			p.payment_source_type,
+			-- Card details (if payment source is card)
+			sc.card_type,
+			sc.card_category,
+			sc.issuer_bank,
+			sc.last_four_digits as card_last4,
+			-- Bank account details (if payment source is bank_account)
+			ba.bank_name,
+			ba.ifsc_code,
+			ba.account_number_encrypted,
+			-- Settlement fields
+			COALESCE(p.settlement_status::text, '') as settlement_status,
+			COALESCE(p.settled_at::text, '') as settled_at,
+			p.settlement_amount,
+			p.mdr_amount,
+			p.net_settlement_amount,
+			COALESCE(p.settlement_utr, '') as settlement_utr,
+			COALESCE(p.settlement_reference_id, '') as settlement_reference_id
+		FROM xcentro.payments p
+		LEFT JOIN xcentro.business b ON p.business_id = b.bid
+		LEFT JOIN xcentro.stored_cards sc
+			ON p.payment_source_id = sc.card_id
+			AND p.payment_source_type = 'card'
+		LEFT JOIN xcentro.bank_accounts ba
+			ON p.payment_source_id = ba.account_id
+			AND p.payment_source_type = 'bank_account'
+		WHERE p.payment_id = $1
+	`
+
+	var details payment.OpsCollectionDetails
+	var status, paymentMethod, gatewayUsed, gatewayPaymentID string
+	var paymentSourceID, paymentSourceType *string
+	var cardType, cardCategory, issuerBank, cardLast4 *string
+	var bankName, ifscCode, accountNumberEncrypted *string
+	var businessName *string
+	var settlementStatus, settlementUTR, settlementReferenceID, settledAtStr string
+	var settlementAmount, netSettlementAmount *int64
+	var mdrAmount int64
+
+	err := r.querier.QueryRow(ctx, query, paymentID).Scan(
+		&details.PaymentID,
+		&details.Date,
+		&status,
+		&details.BusinessID,
+		&businessName,
+		// Payment breakdown
+		&details.PaymentBreakdown.BaseAmount,
+		&details.PaymentBreakdown.ConvenienceFee,
+		&details.PaymentBreakdown.ConvenienceFeeGST,
+		&details.PaymentBreakdown.TotalAmount,
+		// Payment method
+		&paymentMethod,
+		&gatewayUsed,
+		&gatewayPaymentID,
+		&paymentSourceID,
+		&paymentSourceType,
+		// Card details
+		&cardType,
+		&cardCategory,
+		&issuerBank,
+		&cardLast4,
+		// Bank details
+		&bankName,
+		&ifscCode,
+		&accountNumberEncrypted,
+		// Settlement
+		&settlementStatus,
+		&settledAtStr,
+		&settlementAmount,
+		&mdrAmount,
+		&netSettlementAmount,
+		&settlementUTR,
+		&settlementReferenceID,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("payment not found")
+		}
+		return nil, fmt.Errorf("failed to get collection details: %w", err)
+	}
+
+	// Set basic fields
+	details.Status = payment.PaymentStatus(status)
+	if businessName != nil {
+		details.BusinessName = *businessName
+	}
+
+	// Build payment method details
+	details.PaymentMethod = r.buildOpsPaymentMethodDetails(
+		paymentMethod,
+		cardType, cardCategory, issuerBank, cardLast4,
+		bankName, ifscCode, accountNumberEncrypted,
+	)
+
+	// Build gateway details
+	details.Gateway = payment.OpsGatewayDetails{
+		Name:          gatewayUsed,
+		TransactionID: gatewayPaymentID,
+	}
+
+	// Build settlement details (if applicable)
+	if settlementStatus != "" {
+		settlement := &payment.OpsSettlementDetails{
+			Status:                settlementStatus,
+			SettlementAmount:      settlementAmount,
+			MDRAmount:             mdrAmount,
+			NetSettlementAmount:   netSettlementAmount,
+			SettlementUTR:         settlementUTR,
+			SettlementReferenceID: settlementReferenceID,
+		}
+
+		// Parse settled_at timestamp if present
+		if settledAtStr != "" {
+			settledAt, err := time.Parse(time.RFC3339, settledAtStr)
+			if err == nil {
+				settlement.SettledAt = &settledAt
+			}
+		}
+
+		details.Settlement = settlement
+	}
+
+	// Fetch payee details based on payment status
+	payees, err := r.getPayeesForPayment(ctx, paymentID, status)
+	if err != nil {
+		r.logger.WarnWith("Failed to fetch payees for payment", "payment_id", paymentID, "error", err)
+		details.Payees = []payment.OpsPayeeDetails{}
+	} else {
+		details.Payees = payees
+	}
+
+	return &details, nil
+}

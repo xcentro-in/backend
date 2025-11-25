@@ -141,3 +141,52 @@ type OpsPayeeDetails struct {
 	RelationID  string `json:"relation_id"`  // business_payee_relation.relation_id
 	DisplayName string `json:"display_name"` // Payee display name
 }
+
+// ============================================================================
+// Ops Collection Details DTO (unified single payment view)
+// ============================================================================
+
+// OpsCollectionDetails represents complete details for a single collection
+// Combines data from list view, summary, payment breakdown, and settlement
+type OpsCollectionDetails struct {
+	// Basic payment information (from list + summary)
+	PaymentID    string        `json:"payment_id"`
+	Date         time.Time     `json:"date"`
+	Status       PaymentStatus `json:"status"`
+	BusinessID   string        `json:"business_id"`
+	BusinessName string        `json:"business_name"`
+
+	// Payment breakdown (amounts in paise)
+	PaymentBreakdown OpsPaymentBreakdown `json:"payment_breakdown"`
+
+	// Payment method details
+	PaymentMethod OpsPaymentMethodDetails `json:"payment_method"`
+
+	// Gateway information
+	Gateway OpsGatewayDetails `json:"gateway"`
+
+	// Payees associated with this payment
+	Payees []OpsPayeeDetails `json:"payees"`
+
+	// Settlement information
+	Settlement *OpsSettlementDetails `json:"settlement,omitempty"`
+}
+
+// OpsPaymentBreakdown represents the detailed breakdown of payment amounts
+type OpsPaymentBreakdown struct {
+	BaseAmount      int64 `json:"base_amount"`       // Original amount before fees (in paise)
+	ConvenienceFee  int64 `json:"convenience_fee"`   // Convenience fee before GST (in paise)
+	ConvenienceFeeGST int64 `json:"convenience_fee_gst"` // GST on convenience fee (in paise)
+	TotalAmount     int64 `json:"total_amount"`      // Total paid: base + convenience_fee + gst (in paise)
+}
+
+// OpsSettlementDetails represents settlement information for the payment
+type OpsSettlementDetails struct {
+	Status              string     `json:"status"`                         // "pending", "settled", "failed"
+	SettledAt           *time.Time `json:"settled_at,omitempty"`           // When the settlement was received
+	SettlementAmount    *int64     `json:"settlement_amount,omitempty"`    // Actual amount settled (in paise)
+	MDRAmount           int64      `json:"mdr_amount"`                     // Merchant Discount Rate charged (in paise)
+	NetSettlementAmount *int64     `json:"net_settlement_amount,omitempty"` // Final amount after MDR (in paise)
+	SettlementUTR       string     `json:"settlement_utr,omitempty"`       // UTR reference for settlement
+	SettlementReferenceID string   `json:"settlement_reference_id,omitempty"` // Gateway settlement reference
+}

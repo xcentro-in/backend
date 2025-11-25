@@ -113,9 +113,9 @@ func (r *PostgresOpsPayoutRepository) GetPayoutSummary(ctx context.Context, tran
 	query := `
 		SELECT
 			b.bid::text as business_id,
-			b.business_name,
+			b.name as business_name,
 			CONCAT(pv.business_id::text, ':', pv.payee_id::text, ':', pv.account_id::text) as payee_relation_id,
-			COALESCE(bpr.display_name, pm.display_name, 'Unknown') as payee_display_name,
+			COALESCE(bpr.display_name, 'Unknown') as payee_display_name,
 			COALESCE(pba.bank_name, 'Unknown') as bank_name,
 			COALESCE(RIGHT(pba.account_number_encrypted, 4), '****') as account_last_4,
 			ptr.provider,
@@ -130,7 +130,6 @@ func (r *PostgresOpsPayoutRepository) GetPayoutSummary(ctx context.Context, tran
 			ON pv.business_id = bpr.business_id
 			AND pv.payee_id = bpr.payee_id
 			AND pv.account_id = bpr.account_id
-		LEFT JOIN xcentro.payee_master pm ON pv.payee_id = pm.payee_id
 		LEFT JOIN xcentro.payee_bank_accounts pba ON pv.account_id = pba.account_id
 		WHERE ptr.transfer_request_id = $1
 	`
