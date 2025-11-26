@@ -245,7 +245,7 @@ func registerV1VoucherRoutes(clients *externalClients, cfg *config.Config, group
 }
 
 func registerV1PayoutRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
-	paymentRepository := paymentRepo.NewPostgresPaymentRepository(clients.db, clients.txManager)
+	paymentRepository := paymentRepo.NewPgPaymentRepository(clients.db, cfg.BankAccountEncryption.EncryptionKey)
 	transferRepository := payoutRepo.NewPostgresPayoutTransferRepository(clients.db)
 	configRepository := payoutRepo.NewPostgresPayoutConfigurationRepository(clients.db)
 	voucherRepository := voucherRepo.NewPostgresVoucherRepository(clients.db, cfg.BankAccountEncryption.EncryptionKey)

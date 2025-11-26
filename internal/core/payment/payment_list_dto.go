@@ -222,3 +222,25 @@ type OpsCollectionActivityResponse struct {
 	Activities []*OpsCollectionActivity `json:"activities"`
 	TotalCount int                      `json:"total_count"`
 }
+
+// ============================================================================
+// Ops Collection Payouts DTOs
+// ============================================================================
+
+// OpsCollectionPayoutItem represents a single voucher-payout mapping for a collection
+type OpsCollectionPayoutItem struct {
+	VoucherID     string  `json:"voucher_id"`               // Voucher UUID
+	VoucherNumber string  `json:"voucher_number"`           // Display number (e.g., PV-2024-00001)
+	Amount        int64   `json:"amount"`                   // Voucher amount in paise
+	PayeeID       string  `json:"payee_id"`                 // Payee UUID
+	PayeeName     string  `json:"payee_name"`               // Payee display name
+	PayoutID      *string `json:"payout_id,omitempty"`      // Payout transfer ID (null if not yet paid)
+	PayoutStatus  *string `json:"payout_status,omitempty"`  // Payout status (null if not yet paid)
+}
+
+// OpsCollectionPayoutsResponse represents all vouchers and their payout status for a collection
+type OpsCollectionPayoutsResponse struct {
+	PaymentID  string                     `json:"payment_id"`
+	Data       []*OpsCollectionPayoutItem `json:"data"`        // List of vouchers with payout status
+	TotalCount int                        `json:"total_count"`
+}

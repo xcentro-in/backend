@@ -422,6 +422,7 @@ type MockPGSettlementWebhook struct {
 	TransactionID        string `json:"transaction_id"`         // KEY: Our payment_id for lookup
 	GatewayPaymentID     string `json:"gateway_payment_id"`     // Mock gateway payment ID
 	SettlementID         string `json:"settlement_id"`          // Mock settlement batch ID
+	SettlementUTR        string `json:"settlement_utr"`         // Bank UTR for the settlement transfer (unique per payment)
 	SettlementDate       string `json:"settlement_date"`        // Settlement date (YYYY-MM-DD format)
 	SettlementAmount     int64  `json:"settlement_amount"`      // Original payment amount (in paise)
 	MDRAmount            int64  `json:"mdr_amount"`             // MDR charges (in paise, 0 for testing)
