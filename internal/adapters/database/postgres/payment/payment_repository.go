@@ -2,6 +2,7 @@ package payment
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -51,8 +52,15 @@ func (r *PgPaymentRepository) CreatePayment(ctx context.Context, p *payment.Paym
 		sourceTypeLog = string(*p.PaymentSourceType)
 	}
 
-	fmt.Printf("[PgPaymentRepository] CreatePayment called - BusinessID: %s, UserID: %s, Amount: %d, Currency: %s, Method: %s, Type: %s, SourceID: %s, SourceType: %s\n",
-		p.BusinessID, p.UserID, p.Amount, p.Currency, p.PaymentMethod, p.PaymentType, sourceIDLog, sourceTypeLog)
+	r.logger.DebugWith("Creating payment",
+		"business_id", p.BusinessID,
+		"user_id", p.UserID,
+		"amount", p.Amount,
+		"currency", p.Currency,
+		"payment_method", p.PaymentMethod,
+		"payment_type", p.PaymentType,
+		"source_id", sourceIDLog,
+		"source_type", sourceTypeLog)
 
 	query := `
 		INSERT INTO xcentro.payments (
@@ -97,27 +105,37 @@ func (r *PgPaymentRepository) CreatePayment(ctx context.Context, p *payment.Paym
 		return fmt.Errorf("failed to create payment: %w", err)
 	}
 
-	fmt.Printf("[PgPaymentRepository] Payment created with ID: %s (source_id: %s, source_type: %s)\n", p.ID, sourceIDLog, sourceTypeLog)
+	r.logger.InfoWith("Payment created",
+		"payment_id", p.ID,
+		"source_id", sourceIDLog,
+		"source_type", sourceTypeLog)
+
 	return nil
 }
 
 // GetPaymentByID retrieves a payment by its ID
 func (r *PgPaymentRepository) GetPaymentByID(ctx context.Context, paymentID string) (*payment.Payment, error) {
-	fmt.Printf("[PgPaymentRepository] GetPaymentByID called - PaymentID: %s\n", paymentID)
+	r.logger.DebugWith("Getting payment by ID", "payment_id", paymentID)
 
 	query := `
 		SELECT payment_id, user_id, business_id, amount, currency, payment_method, payment_type, status,
-		       description, gateway_used, gateway_payment_id, callback_url, redirect_url,
+		       description, gateway_used::text, gateway_payment_id, callback_url, redirect_url,
 		       payment_source_id, payment_source_type, retry_of_payment_id, retry_count,
-		       fee_amount, convenience_fee, convenience_fee_gst, total_amount, metadata, created_at, updated_at
+		       fee_amount, convenience_fee, convenience_fee_gst, total_amount, metadata,
+		       settlement_status, settled_at, settlement_reference_id, settlement_utr, settlement_metadata,
+		       settlement_amount, mdr_amount, net_settlement_amount,
+		       created_at, updated_at
 		FROM xcentro.payments WHERE payment_id = $1
 	`
 
 	var p payment.Payment
 	var gatewayUsed, gatewayPaymentID, redirectURL, paymentSourceID, paymentSourceType, retryOfPaymentID *string
 	var retryCount *int
-	var metadataJSON []byte
-	var updatedAt *time.Time
+	var metadataJSON, settlementMetadataJSON []byte
+	var updatedAt, settledAt *time.Time
+	var settlementStatus *string
+	var settlementReferenceID, settlementUTR *string
+	var settlementAmount, netSettlementAmount *int64
 
 	err := r.querier.QueryRow(ctx, query, paymentID).Scan(
 		&p.ID,
@@ -142,6 +160,14 @@ func (r *PgPaymentRepository) GetPaymentByID(ctx context.Context, paymentID stri
 		&p.ConvenienceFeeGST,
 		&p.TotalAmount,
 		&metadataJSON,
+		&settlementStatus,
+		&settledAt,
+		&settlementReferenceID,
+		&settlementUTR,
+		&settlementMetadataJSON,
+		&settlementAmount,
+		&p.MDRAmount,
+		&netSettlementAmount,
 		&p.CreatedAt,
 		&updatedAt,
 	)
@@ -181,6 +207,25 @@ func (r *PgPaymentRepository) GetPaymentByID(ctx context.Context, paymentID stri
 		}
 	}
 
+	// Handle settlement fields
+	if settlementStatus != nil {
+		p.SettlementStatus = payment.SettlementStatus(*settlementStatus)
+	}
+	p.SettledAt = settledAt
+	if settlementReferenceID != nil {
+		p.SettlementReferenceID = *settlementReferenceID
+	}
+	if settlementUTR != nil {
+		p.SettlementUTR = *settlementUTR
+	}
+	if len(settlementMetadataJSON) > 0 {
+		if err := json.Unmarshal(settlementMetadataJSON, &p.SettlementMetadata); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal settlement metadata: %w", err)
+		}
+	}
+	p.SettlementAmount = settlementAmount
+	p.NetSettlementAmount = netSettlementAmount
+
 	return &p, nil
 }
 
@@ -190,21 +235,27 @@ func (r *PgPaymentRepository) GetPaymentByID(ctx context.Context, paymentID stri
 //   - Regular payments: where gateway_payment_id = gateway's txn ID
 //   - Tokenization payments: where txnid = our payment UUID
 func (r *PgPaymentRepository) GetPaymentByGatewayPaymentID(ctx context.Context, gatewayPaymentID string) (*payment.Payment, error) {
-	fmt.Printf("[PgPaymentRepository] GetPaymentByGatewayPaymentID called - GatewayPaymentID: %s\n", gatewayPaymentID)
+	r.logger.DebugWith("Getting payment by gateway payment ID", "gateway_payment_id", gatewayPaymentID)
 
 	query := `
 		SELECT payment_id, user_id, business_id, amount, currency, payment_method, payment_type, status,
-		       description, gateway_used, gateway_payment_id, callback_url, redirect_url,
+		       description, gateway_used::text, gateway_payment_id, callback_url, redirect_url,
 		       payment_source_id, payment_source_type, fee_amount, convenience_fee, convenience_fee_gst,
-		       total_amount, metadata, created_at, updated_at
+		       total_amount, metadata,
+		       settlement_status, settled_at, settlement_reference_id, settlement_utr, settlement_metadata,
+		       settlement_amount, mdr_amount, net_settlement_amount,
+		       created_at, updated_at
 		FROM xcentro.payments
 		WHERE gateway_payment_id = $1 OR payment_id = $1
 	`
 
 	var p payment.Payment
 	var gatewayUsed, gatewayPaymentIDNullable, redirectURL, paymentSourceID, paymentSourceType *string
-	var metadataJSON []byte
-	var updatedAt *time.Time
+	var metadataJSON, settlementMetadataJSON []byte
+	var updatedAt, settledAt *time.Time
+	var settlementStatus *string
+	var settlementReferenceID, settlementUTR *string
+	var settlementAmount, netSettlementAmount *int64
 
 	err := r.querier.QueryRow(ctx, query, gatewayPaymentID).Scan(
 		&p.ID,
@@ -227,6 +278,14 @@ func (r *PgPaymentRepository) GetPaymentByGatewayPaymentID(ctx context.Context, 
 		&p.ConvenienceFeeGST,
 		&p.TotalAmount,
 		&metadataJSON,
+		&settlementStatus,
+		&settledAt,
+		&settlementReferenceID,
+		&settlementUTR,
+		&settlementMetadataJSON,
+		&settlementAmount,
+		&p.MDRAmount,
+		&netSettlementAmount,
 		&p.CreatedAt,
 		&updatedAt,
 	)
@@ -264,12 +323,31 @@ func (r *PgPaymentRepository) GetPaymentByGatewayPaymentID(ctx context.Context, 
 		}
 	}
 
+	// Handle settlement fields
+	if settlementStatus != nil {
+		p.SettlementStatus = payment.SettlementStatus(*settlementStatus)
+	}
+	p.SettledAt = settledAt
+	if settlementReferenceID != nil {
+		p.SettlementReferenceID = *settlementReferenceID
+	}
+	if settlementUTR != nil {
+		p.SettlementUTR = *settlementUTR
+	}
+	if len(settlementMetadataJSON) > 0 {
+		if err := json.Unmarshal(settlementMetadataJSON, &p.SettlementMetadata); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal settlement metadata: %w", err)
+		}
+	}
+	p.SettlementAmount = settlementAmount
+	p.NetSettlementAmount = netSettlementAmount
+
 	return &p, nil
 }
 
 // UpdatePaymentStatus updates payment status and metadata
 func (r *PgPaymentRepository) UpdatePaymentStatus(ctx context.Context, paymentID string, status payment.PaymentStatus, metadata map[string]any) error {
-	fmt.Printf("[PgPaymentRepository] UpdatePaymentStatus called - PaymentID: %s, Status: %s\n", paymentID, status)
+	r.logger.DebugWith("Updating payment status", "payment_id", paymentID, "status", status)
 
 	query := `
 		UPDATE xcentro.payments
@@ -299,7 +377,7 @@ func (r *PgPaymentRepository) UpdatePaymentStatus(ctx context.Context, paymentID
 
 // UpdatePaymentGateway updates the selected gateway
 func (r *PgPaymentRepository) UpdatePaymentGateway(ctx context.Context, paymentID string, gateway payment.GatewayType) error {
-	fmt.Printf("[PgPaymentRepository] UpdatePaymentGateway called - PaymentID: %s, Gateway: %s\n", paymentID, gateway)
+	r.logger.DebugWith("Updating payment gateway", "payment_id", paymentID, "gateway", gateway)
 
 	query := `UPDATE xcentro.payments SET gateway_used = $1, updated_at = NOW() WHERE payment_id = $2`
 	_, err := r.querier.Exec(ctx, query, gateway, paymentID)
@@ -308,7 +386,7 @@ func (r *PgPaymentRepository) UpdatePaymentGateway(ctx context.Context, paymentI
 
 // UpdateGatewayPaymentID updates gateway transaction ID and redirect URL
 func (r *PgPaymentRepository) UpdateGatewayPaymentID(ctx context.Context, paymentID string, gatewayPaymentID, redirectURL string) error {
-	fmt.Printf("[PgPaymentRepository] UpdateGatewayPaymentID called - PaymentID: %s, GatewayPaymentID: %s\n", paymentID, gatewayPaymentID)
+	r.logger.DebugWith("Updating gateway payment ID", "payment_id", paymentID, "gateway_payment_id", gatewayPaymentID)
 
 	query := `UPDATE xcentro.payments SET gateway_payment_id = $1, redirect_url = $2, updated_at = NOW() WHERE payment_id = $3`
 	_, err := r.querier.Exec(ctx, query, gatewayPaymentID, redirectURL, paymentID)
@@ -317,7 +395,7 @@ func (r *PgPaymentRepository) UpdateGatewayPaymentID(ctx context.Context, paymen
 
 // UpdatePaymentFees updates fee breakdown
 func (r *PgPaymentRepository) UpdatePaymentFees(ctx context.Context, paymentID string, feeAmount, totalAmount int64) error {
-	fmt.Printf("[PgPaymentRepository] UpdatePaymentFees called - PaymentID: %s, FeeAmount: %d, TotalAmount: %d\n", paymentID, feeAmount, totalAmount)
+	r.logger.DebugWith("Updating payment fees", "payment_id", paymentID, "fee_amount", feeAmount, "total_amount", totalAmount)
 
 	query := `UPDATE xcentro.payments SET fee_amount = $1, total_amount = $2, updated_at = NOW() WHERE payment_id = $3`
 	_, err := r.querier.Exec(ctx, query, feeAmount, totalAmount, paymentID)
@@ -326,7 +404,7 @@ func (r *PgPaymentRepository) UpdatePaymentFees(ctx context.Context, paymentID s
 
 // UpdatePaymentSource links payment to a payment source
 func (r *PgPaymentRepository) UpdatePaymentSource(ctx context.Context, paymentID string, sourceID string, sourceType payment.PaymentSourceType) error {
-	fmt.Printf("[PgPaymentRepository] UpdatePaymentSource called - PaymentID: %s, SourceID: %s, SourceType: %s\n", paymentID, sourceID, sourceType)
+	r.logger.DebugWith("Updating payment source", "payment_id", paymentID, "source_id", sourceID, "source_type", sourceType)
 
 	query := `UPDATE xcentro.payments SET payment_source_id = $1, payment_source_type = $2, updated_at = NOW() WHERE payment_id = $3`
 	_, err := r.querier.Exec(ctx, query, sourceID, sourceType, paymentID)
@@ -335,11 +413,11 @@ func (r *PgPaymentRepository) UpdatePaymentSource(ctx context.Context, paymentID
 
 // GetPaymentsByBusinessID retrieves payments for a business with pagination
 func (r *PgPaymentRepository) GetPaymentsByBusinessID(ctx context.Context, businessID string, limit, offset int) ([]*payment.Payment, error) {
-	fmt.Printf("[PgPaymentRepository] GetPaymentsByBusinessID called - BusinessID: %s, Limit: %d, Offset: %d\n", businessID, limit, offset)
+	r.logger.DebugWith("Getting payments by business ID", "business_id", businessID, "limit", limit, "offset", offset)
 
 	query := `
 		SELECT payment_id, user_id, business_id, amount, currency, payment_method, status,
-		       description, gateway_used, gateway_payment_id, callback_url, redirect_url,
+		       description, gateway_used::text, gateway_payment_id, callback_url, redirect_url,
 		       payment_source_id, payment_source_type, fee_amount, convenience_fee, convenience_fee_gst,
 		       total_amount, metadata, created_at, updated_at
 		FROM xcentro.payments
@@ -425,16 +503,18 @@ func (r *PgPaymentRepository) GetPaymentsByBusinessID(ctx context.Context, busin
 // ============================================================================
 
 // UpdateSettlementStatus updates settlement status and related metadata
-func (r *PgPaymentRepository) UpdateSettlementStatus(ctx context.Context, paymentID string, status payment.SettlementStatus, metadata map[string]any) error {
-	fmt.Printf("[PgPaymentRepository] UpdateSettlementStatus called - PaymentID: %s, SettlementStatus: %s\n", paymentID, status)
+func (r *PgPaymentRepository) UpdateSettlementStatus(ctx context.Context, paymentID string, status payment.SettlementStatus, settlementReferenceID, settlementUTR string, metadata map[string]any) error {
+	r.logger.DebugWith("Updating settlement status", "payment_id", paymentID, "settlement_status", status)
 
 	query := `
 		UPDATE xcentro.payments
-		SET settlement_status = $1,
-		    settlement_metadata = COALESCE(settlement_metadata, '{}'::jsonb) || $2::jsonb,
+		SET settlement_status = $1::settlement_status_enum,
+		    settlement_reference_id = $2,
+		    settlement_utr = $3,
+		    settlement_metadata = COALESCE(settlement_metadata, '{}'::jsonb) || $4::jsonb,
 		    settled_at = CASE WHEN $1 = 'settled' THEN NOW() ELSE settled_at END,
 		    updated_at = NOW()
-		WHERE payment_id = $3
+		WHERE payment_id = $5
 	`
 
 	// Serialize metadata to JSONB
@@ -449,7 +529,7 @@ func (r *PgPaymentRepository) UpdateSettlementStatus(ctx context.Context, paymen
 		metadataJSON = []byte("{}")
 	}
 
-	_, err := r.querier.Exec(ctx, query, status, metadataJSON, paymentID)
+	_, err := r.querier.Exec(ctx, query, string(status), settlementReferenceID, settlementUTR, metadataJSON, paymentID)
 	if err != nil {
 		return fmt.Errorf("failed to update settlement status: %w", err)
 	}
@@ -459,8 +539,11 @@ func (r *PgPaymentRepository) UpdateSettlementStatus(ctx context.Context, paymen
 
 // UpdateSettlementAmounts updates settlement financial fields
 func (r *PgPaymentRepository) UpdateSettlementAmounts(ctx context.Context, paymentID string, settlementAmount, mdrAmount, netSettlementAmount int64) error {
-	fmt.Printf("[PgPaymentRepository] UpdateSettlementAmounts called - PaymentID: %s, SettlementAmount: %d, MDR: %d, Net: %d\n",
-		paymentID, settlementAmount, mdrAmount, netSettlementAmount)
+	r.logger.DebugWith("Updating settlement amounts",
+		"payment_id", paymentID,
+		"settlement_amount", settlementAmount,
+		"mdr_amount", mdrAmount,
+		"net_settlement_amount", netSettlementAmount)
 
 	query := `
 		UPDATE xcentro.payments
@@ -481,11 +564,11 @@ func (r *PgPaymentRepository) UpdateSettlementAmounts(ctx context.Context, payme
 
 // GetPendingSettlements retrieves payments pending settlement for a business
 func (r *PgPaymentRepository) GetPendingSettlements(ctx context.Context, businessID string) ([]*payment.Payment, error) {
-	fmt.Printf("[PgPaymentRepository] GetPendingSettlements called - BusinessID: %s\n", businessID)
+	r.logger.DebugWith("Getting pending settlements", "business_id", businessID)
 
 	query := `
 		SELECT payment_id, user_id, business_id, amount, currency, payment_method, status,
-		       description, gateway_used, gateway_payment_id, callback_url, redirect_url,
+		       description, gateway_used::text, gateway_payment_id, callback_url, redirect_url,
 		       payment_source_id, payment_source_type, fee_amount, convenience_fee, convenience_fee_gst,
 		       total_amount, metadata, created_at, updated_at
 		FROM xcentro.payments
@@ -1025,8 +1108,10 @@ func (r *PgPaymentRepository) UpdateRetryMetadata(ctx context.Context, paymentID
 		return fmt.Errorf("payment not found: %s", paymentID)
 	}
 
-	fmt.Printf("[PgPaymentRepository] Updated retry metadata - PaymentID: %s, RetryOf: %s, RetryCount: %d\n",
-		paymentID, retryOfPaymentID, retryCount)
+	r.logger.DebugWith("Updated retry metadata",
+		"payment_id", paymentID,
+		"retry_of_payment_id", retryOfPaymentID,
+		"retry_count", retryCount)
 
 	return nil
 }
@@ -1171,7 +1256,7 @@ func (r *PgPaymentRepository) GetCollectionSummary(ctx context.Context, paymentI
 			p.total_amount,
 			p.status,
 			p.payment_method,
-			COALESCE(p.gateway_used, '') as gateway_used,
+			COALESCE(p.gateway_used::text, '') as gateway_used,
 			COALESCE(p.gateway_payment_id, '') as gateway_payment_id,
 			p.payment_source_id,
 			p.payment_source_type,
@@ -1369,4 +1454,323 @@ func (r *PgPaymentRepository) getPayeesForPayment(ctx context.Context, paymentID
 	}
 
 	return payees, nil
+}
+
+// GetCollectionDetails retrieves complete details for a single collection (payment)
+// Unifies data from list view, summary, payment breakdown, and settlement information
+func (r *PgPaymentRepository) GetCollectionDetails(ctx context.Context, paymentID string) (*payment.OpsCollectionDetails, error) {
+	// Query for complete payment information
+	query := `
+		SELECT
+			p.payment_id,
+			p.created_at,
+			p.status,
+			p.business_id,
+			b.name as business_name,
+			-- Payment breakdown fields
+			p.amount as base_amount,
+			p.convenience_fee,
+			p.convenience_fee_gst,
+			p.total_amount,
+			-- Payment method fields
+			p.payment_method,
+			COALESCE(p.gateway_used::text, '') as gateway_used,
+			COALESCE(p.gateway_payment_id, '') as gateway_payment_id,
+			p.payment_source_id,
+			p.payment_source_type,
+			-- Card details (if payment source is card)
+			sc.card_type,
+			sc.card_category,
+			sc.issuer_bank,
+			sc.last_four_digits as card_last4,
+			-- Bank account details (if payment source is bank_account)
+			ba.bank_name,
+			ba.ifsc_code,
+			ba.account_number_encrypted,
+			-- Settlement fields
+			COALESCE(p.settlement_status::text, '') as settlement_status,
+			COALESCE(p.settled_at::text, '') as settled_at,
+			p.settlement_amount,
+			p.mdr_amount,
+			p.net_settlement_amount,
+			COALESCE(p.settlement_utr, '') as settlement_utr,
+			COALESCE(p.settlement_reference_id, '') as settlement_reference_id
+		FROM xcentro.payments p
+		LEFT JOIN xcentro.business b ON p.business_id = b.bid
+		LEFT JOIN xcentro.stored_cards sc
+			ON p.payment_source_id = sc.card_id
+			AND p.payment_source_type = 'card'
+		LEFT JOIN xcentro.bank_accounts ba
+			ON p.payment_source_id = ba.account_id
+			AND p.payment_source_type = 'bank_account'
+		WHERE p.payment_id = $1
+	`
+
+	var details payment.OpsCollectionDetails
+	var status, paymentMethod, gatewayUsed, gatewayPaymentID string
+	var paymentSourceID, paymentSourceType *string
+	var cardType, cardCategory, issuerBank, cardLast4 *string
+	var bankName, ifscCode, accountNumberEncrypted *string
+	var businessName *string
+	var settlementStatus, settlementUTR, settlementReferenceID, settledAtStr string
+	var settlementAmount, netSettlementAmount *int64
+	var mdrAmount int64
+
+	err := r.querier.QueryRow(ctx, query, paymentID).Scan(
+		&details.PaymentID,
+		&details.Date,
+		&status,
+		&details.BusinessID,
+		&businessName,
+		// Payment breakdown
+		&details.PaymentBreakdown.BaseAmount,
+		&details.PaymentBreakdown.ConvenienceFee,
+		&details.PaymentBreakdown.ConvenienceFeeGST,
+		&details.PaymentBreakdown.TotalAmount,
+		// Payment method
+		&paymentMethod,
+		&gatewayUsed,
+		&gatewayPaymentID,
+		&paymentSourceID,
+		&paymentSourceType,
+		// Card details
+		&cardType,
+		&cardCategory,
+		&issuerBank,
+		&cardLast4,
+		// Bank details
+		&bankName,
+		&ifscCode,
+		&accountNumberEncrypted,
+		// Settlement
+		&settlementStatus,
+		&settledAtStr,
+		&settlementAmount,
+		&mdrAmount,
+		&netSettlementAmount,
+		&settlementUTR,
+		&settlementReferenceID,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("payment not found")
+		}
+		return nil, fmt.Errorf("failed to get collection details: %w", err)
+	}
+
+	// Set basic fields
+	details.Status = payment.PaymentStatus(status)
+	if businessName != nil {
+		details.BusinessName = *businessName
+	}
+
+	// Build payment method details
+	details.PaymentMethod = r.buildOpsPaymentMethodDetails(
+		paymentMethod,
+		cardType, cardCategory, issuerBank, cardLast4,
+		bankName, ifscCode, accountNumberEncrypted,
+	)
+
+	// Build gateway details
+	details.Gateway = payment.OpsGatewayDetails{
+		Name:          gatewayUsed,
+		TransactionID: gatewayPaymentID,
+	}
+
+	// Build settlement details (if applicable)
+	if settlementStatus != "" {
+		settlement := &payment.OpsSettlementDetails{
+			Status:                settlementStatus,
+			SettlementAmount:      settlementAmount,
+			MDRAmount:             mdrAmount,
+			NetSettlementAmount:   netSettlementAmount,
+			SettlementUTR:         settlementUTR,
+			SettlementReferenceID: settlementReferenceID,
+		}
+
+		// Parse settled_at timestamp if present
+		if settledAtStr != "" {
+			settledAt, err := time.Parse(time.RFC3339, settledAtStr)
+			if err == nil {
+				settlement.SettledAt = &settledAt
+			}
+		}
+
+		details.Settlement = settlement
+	}
+
+	// Fetch payee details based on payment status
+	payees, err := r.getPayeesForPayment(ctx, paymentID, status)
+	if err != nil {
+		r.logger.WarnWith("Failed to fetch payees for payment", "payment_id", paymentID, "error", err)
+		details.Payees = []payment.OpsPayeeDetails{}
+	} else {
+		details.Payees = payees
+	}
+
+	return &details, nil
+}
+
+// GetCollectionActivity retrieves complete activity log for a payment from payment_state_changes
+// Only includes payment and settlement related actions, excludes payout actions
+func (r *PgPaymentRepository) GetCollectionActivity(ctx context.Context, paymentID string) (*payment.OpsCollectionActivityResponse, error) {
+	// Query to fetch payment/settlement state changes only (exclude payout actions)
+	// Collections can fund multiple vouchers, each with separate payout lifecycle
+	query := `
+		SELECT
+			psc.state_change_id::text,
+			psc.action::text,
+			psc.action_timestamp,
+			psc.actor_type::text,
+			psc.actor_user_id::text,
+			COALESCE(u.name, psc.actor_name, 'System') as actor_name,
+			COALESCE(psc.previous_state, '') as previous_state,
+			COALESCE(psc.new_state, '') as new_state,
+			psc.amount,
+			COALESCE(psc.currency, '') as currency,
+			COALESCE(psc.utr, '') as utr,
+			COALESCE(psc.provider, '') as provider,
+			COALESCE(psc.remarks, '') as remarks,
+			psc.metadata
+		FROM xcentro.payment_state_changes psc
+		LEFT JOIN xcentro.user_table u ON psc.actor_user_id = u.id
+		WHERE psc.payment_id = $1
+		  AND psc.action::text NOT LIKE 'payout_%'
+		ORDER BY psc.action_timestamp ASC
+	`
+
+	rows, err := r.querier.Query(ctx, query, paymentID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get payment activity: %w", err)
+	}
+	defer rows.Close()
+
+	var activities []*payment.OpsCollectionActivity
+
+	for rows.Next() {
+		var activity payment.OpsCollectionActivity
+		var actorUserID *string
+		var amount sql.NullInt64
+		var metadataJSON []byte
+
+		err := rows.Scan(
+			&activity.StateChangeID,
+			&activity.Action,
+			&activity.ActionTimestamp,
+			&activity.ActorType,
+			&actorUserID,
+			&activity.ActorName,
+			&activity.PreviousState,
+			&activity.NewState,
+			&amount,
+			&activity.Currency,
+			&activity.UTR,
+			&activity.Provider,
+			&activity.Remarks,
+			&metadataJSON,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan activity: %w", err)
+		}
+
+		// Handle nullable fields
+		if actorUserID != nil {
+			activity.ActorUserID = actorUserID
+		}
+		if amount.Valid {
+			activity.Amount = &amount.Int64
+		}
+
+		// Parse metadata JSON
+		if len(metadataJSON) > 0 {
+			var metadata map[string]interface{}
+			if err := json.Unmarshal(metadataJSON, &metadata); err == nil {
+				activity.Metadata = metadata
+			}
+		}
+
+		activities = append(activities, &activity)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating activity rows: %w", err)
+	}
+
+	return &payment.OpsCollectionActivityResponse{
+		PaymentID:  paymentID,
+		Activities: activities,
+		TotalCount: len(activities),
+	}, nil
+}
+
+// GetCollectionPayouts retrieves all voucher-payout mappings for a payment/collection
+// A single payment can fund multiple vouchers, each with potential payouts to payees
+func (r *PgPaymentRepository) GetCollectionPayouts(ctx context.Context, paymentID string) (*payment.OpsCollectionPayoutsResponse, error) {
+	// Query to get all vouchers linked to this payment and their payout status
+	// Uses payment_vouchers.payment_id which is set when payment is finalized
+	query := `
+		SELECT
+			v.voucher_id::text,
+			v.voucher_number,
+			v.net_amount,
+			v.payee_id::text,
+			bpr.display_name as payee_name,
+			COALESCE(pt.transfer_request_id::text, '') as payout_id,
+			COALESCE(pt.status::text, '') as payout_status
+		FROM xcentro.payment_vouchers v
+		INNER JOIN xcentro.business_payee_relation bpr
+			ON v.payee_id = bpr.payee_id
+			AND v.business_id = bpr.business_id
+		LEFT JOIN xcentro.payout_transfer_requests pt
+			ON v.voucher_id = pt.voucher_id
+		WHERE v.payment_id = $1
+		ORDER BY v.created_at ASC
+	`
+
+	rows, err := r.querier.Query(ctx, query, paymentID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get collection payouts: %w", err)
+	}
+	defer rows.Close()
+
+	// Initialize as empty slice to return [] instead of null when no vouchers
+	payouts := make([]*payment.OpsCollectionPayoutItem, 0)
+
+	for rows.Next() {
+		var item payment.OpsCollectionPayoutItem
+		var payoutID, payoutStatus string
+
+		err := rows.Scan(
+			&item.VoucherID,
+			&item.VoucherNumber,
+			&item.Amount,
+			&item.PayeeID,
+			&item.PayeeName,
+			&payoutID,
+			&payoutStatus,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan payout item: %w", err)
+		}
+
+		// Set payout fields only if payout exists
+		if payoutID != "" {
+			item.PayoutID = &payoutID
+		}
+		if payoutStatus != "" {
+			item.PayoutStatus = &payoutStatus
+		}
+
+		payouts = append(payouts, &item)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating payout rows: %w", err)
+	}
+
+	return &payment.OpsCollectionPayoutsResponse{
+		PaymentID:  paymentID,
+		Data:       payouts,
+		TotalCount: len(payouts),
+	}, nil
 }

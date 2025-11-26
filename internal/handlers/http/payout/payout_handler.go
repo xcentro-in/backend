@@ -392,8 +392,9 @@ func (h *PayoutHandler) InitiatePayoutManually(c echo.Context) error {
 	}
 
 	// Step 2: Call service to create transfer requests (status='initiated')
+	// Pass bypass_checks flag to allow settlement status override if needed
 	h.logger.DebugWith("Calling PayoutService.InitiateManualPayout")
-	transfers, err := h.service.InitiateManualPayout(ctx, req.PaymentID, req.VoucherIDs)
+	transfers, err := h.service.InitiateManualPayout(ctx, req.PaymentID, req.VoucherIDs, req.BypassChecks)
 	if err != nil {
 		h.logger.ErrorWith("Failed to initiate payout", "error", err)
 		return c.JSON(http.StatusInternalServerError, map[string]interface{}{
