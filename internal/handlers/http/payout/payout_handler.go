@@ -658,3 +658,33 @@ func (h *PayoutHandler) markTransferFailed(ctx context.Context, transfer *payout
 		"transfer_id", transfer.TransferRequestID,
 		"reason", reason)
 }
+
+// RegisterOpsDashboardPayoutRoutes registers all ops dashboard payout operation routes
+// Moved from cmd/api to cmd/ops as these are internal operations endpoints
+func RegisterOpsDashboardPayoutRoutes(
+	e *echo.Group,
+	service *payoutSvc.PayoutService,
+	transferRepo payout.PayoutTransferRepository,
+	configRepo payout.PayoutConfigurationRepository,
+	voucherRepo voucher.VoucherRepository,
+	settlementService *settlementSvc.SettlementVerificationService,
+	providerFactory payoutSvc.PayoutProviderFactory,
+	stateChangeRepo payment.PaymentStateChangeRepository,
+	logger *logger.Logger,
+) {
+	handler := NewPayoutHandler(service, transferRepo, configRepo, voucherRepo, settlementService, providerFactory, stateChangeRepo, logger)
+
+	// Operations endpoints (internal - admin/ops team)
+	payoutGroup := e.Group("/payouts")
+	payoutGroup.POST("/initiate_payout", handler.InitiatePayoutManually)
+	payoutGroup.GET("/pending-approvals", handler.GetPendingApprovals)       // DEPRECATED
+	payoutGroup.POST("/:transfer_id/approve", handler.ApproveTransfer)       // DEPRECATED
+	payoutGroup.POST("/:transfer_id/cancel", handler.CancelTransfer)
+	payoutGroup.GET("/:transfer_id", handler.GetTransferDetails)
+	payoutGroup.GET("/:transfer_id/webhooks", handler.GetWebhookHistory)
+	payoutGroup.GET("/timeouts", handler.GetTimeoutTransfers)
+	payoutGroup.POST("/:transfer_id/mark-completed", handler.MarkCompletedManually)
+	payoutGroup.GET("/config", handler.GetConfig)
+	payoutGroup.PUT("/config", handler.UpdateConfig)
+	payoutGroup.POST("/config", handler.CreateConfig)
+}

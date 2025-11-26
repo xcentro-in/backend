@@ -18,7 +18,6 @@ import (
 	"xcentro.in/internal/adapters/external/payment/easebuzz"
 	"xcentro.in/internal/adapters/external/payment/jiopay"
 	"xcentro.in/internal/adapters/external/payment/mockpg"
-	"xcentro.in/internal/adapters/external/payout/factory"
 	"xcentro.in/internal/adapters/providers/fileupload"
 	coreAuth "xcentro.in/internal/core/auth"
 	coreBusiness "xcentro.in/internal/core/business"
@@ -44,8 +43,6 @@ import (
 	notificationService "xcentro.in/internal/services/notification"
 	payeeSvc "xcentro.in/internal/services/payee"
 	"xcentro.in/internal/services/payments"
-	payoutSvc "xcentro.in/internal/services/payout"
-	settlementSvc "xcentro.in/internal/services/settlement"
 	userSvc "xcentro.in/internal/services/user"
 	"xcentro.in/internal/services/verification"
 	voucherSvc "xcentro.in/internal/services/voucher"
@@ -245,19 +242,10 @@ func registerV1VoucherRoutes(clients *externalClients, cfg *config.Config, group
 }
 
 func registerV1PayoutRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
-	paymentRepository := paymentRepo.NewPgPaymentRepository(clients.db, cfg.BankAccountEncryption.EncryptionKey)
 	transferRepository := payoutRepo.NewPostgresPayoutTransferRepository(clients.db)
-	configRepository := payoutRepo.NewPostgresPayoutConfigurationRepository(clients.db)
-	voucherRepository := voucherRepo.NewPostgresVoucherRepository(clients.db, cfg.BankAccountEncryption.EncryptionKey)
-	bankAccountRepository := payeeRepo.NewPgPayeeBankAccountRepository(clients.db, cfg.BankAccountEncryption.EncryptionKey)
 	stateChangeRepository := paymentRepo.NewPostgresPaymentStateChangeRepository(clients.db)
 
-	providerFactory := factory.NewPayoutProviderFactory(cfg)
-	payoutService := payoutSvc.NewPayoutService(paymentRepository, voucherRepository, transferRepository, bankAccountRepository, configRepository, providerFactory)
-	settlementService := settlementSvc.NewSettlementVerificationService(logger.GetDefault())
-
 	webhookHandler := payoutHandler.NewPayoutWebhookHandler(transferRepository, stateChangeRepository, cfg.Castler.WebhookSecret)
-	payoutHandler := payoutHandler.NewPayoutHandler(payoutService, transferRepository, configRepository, voucherRepository, settlementService, providerFactory, stateChangeRepository, logger.GetDefault())
 
 	// Payout routes - separated by purpose
 	payoutGroup := group.Group("/payout")
@@ -265,19 +253,8 @@ func registerV1PayoutRoutes(clients *externalClients, cfg *config.Config, group 
 	// Webhook endpoints (external - called by Castler)
 	payoutGroup.POST("/webhooks/castler", webhookHandler.HandleCastlerWebhook)
 
-	// Dashboard/Operations endpoints (internal - admin/ops team)
-	dashboardGroup := payoutGroup.Group("/dashboard")
-	dashboardGroup.POST("/initiate", payoutHandler.InitiatePayoutManually)
-	dashboardGroup.GET("/pending-approvals", payoutHandler.GetPendingApprovals) // DEPRECATED
-	dashboardGroup.POST("/:transfer_id/approve", payoutHandler.ApproveTransfer) // DEPRECATED
-	dashboardGroup.POST("/:transfer_id/cancel", payoutHandler.CancelTransfer)
-	dashboardGroup.GET("/:transfer_id", payoutHandler.GetTransferDetails)
-	dashboardGroup.GET("/:transfer_id/webhooks", payoutHandler.GetWebhookHistory)
-	dashboardGroup.GET("/timeouts", payoutHandler.GetTimeoutTransfers)
-	dashboardGroup.POST("/:transfer_id/mark-completed", payoutHandler.MarkCompletedManually)
-	dashboardGroup.GET("/config", payoutHandler.GetConfig)
-	dashboardGroup.PUT("/config", payoutHandler.UpdateConfig)
-	dashboardGroup.POST("/config", payoutHandler.CreateConfig)
+	// NOTE: Dashboard/Operations endpoints have been moved to cmd/ops (ops dashboard service)
+	// See cmd/ops/routes.go -> registerOpsPayoutRoutes() for all payout operations endpoints
 }
 
 func registerV1BatchPaymentRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
