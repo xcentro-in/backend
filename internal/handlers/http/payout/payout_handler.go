@@ -660,7 +660,9 @@ func (h *PayoutHandler) markTransferFailed(ctx context.Context, transfer *payout
 }
 
 // RegisterOpsDashboardPayoutRoutes registers all ops dashboard payout operation routes
-// Moved from cmd/api to cmd/ops as these are internal operations endpoints
+// DEPRECATED: Use RegisterOpsPayoutRoutes in ops_payout_handler.go instead
+// This handler is kept for backward compatibility but will be removed in future versions
+// The /initiate_payout endpoint has been migrated to ops_payout_handler.go with cleaner implementation
 func RegisterOpsDashboardPayoutRoutes(
 	e *echo.Group,
 	service *payoutSvc.PayoutService,
@@ -676,7 +678,7 @@ func RegisterOpsDashboardPayoutRoutes(
 
 	// Operations endpoints (internal - admin/ops team)
 	payoutGroup := e.Group("/payouts")
-	payoutGroup.POST("/initiate_payout", handler.InitiatePayoutManually)
+	// NOTE: /initiate_payout has been moved to ops_payout_handler.go
 	payoutGroup.GET("/pending-approvals", handler.GetPendingApprovals)       // DEPRECATED
 	payoutGroup.POST("/:transfer_id/approve", handler.ApproveTransfer)       // DEPRECATED
 	payoutGroup.POST("/:transfer_id/cancel", handler.CancelTransfer)

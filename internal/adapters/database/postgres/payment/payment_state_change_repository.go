@@ -23,6 +23,13 @@ func NewPostgresPaymentStateChangeRepository(db client.DB) payment.PaymentStateC
 	}
 }
 
+// WithTx creates a new repository instance that uses a transaction
+func (r *PostgresPaymentStateChangeRepository) WithTx(tx client.Tx) *PostgresPaymentStateChangeRepository {
+	return &PostgresPaymentStateChangeRepository{
+		querier: tx,
+	}
+}
+
 // Create records a new payment state change
 func (r *PostgresPaymentStateChangeRepository) Create(ctx context.Context, req *payment.CreatePaymentStateChangeRequest) (*payment.PaymentStateChange, error) {
 	stateChangeID := uuid.Must(uuid.NewV7())

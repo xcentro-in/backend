@@ -25,12 +25,12 @@ type PaymentService struct {
 	walletService        business_rules.WalletService
 	feeCalculator        business_rules.FeeCalculator
 	txManager            client.TxManager
-	voucherService       interface{}                                 // voucher.VoucherService, using interface{} to avoid circular import (Phase 6)
-	voucherRepo          interface{}                                 // voucher.VoucherRepository, using interface{} to avoid circular import
-	pendingVoucherRepo   *paymentdb.PaymentVoucherPendingRepository // Concrete type for temporary voucher-payment linkage
+	voucherService       interface{}                                         // voucher.VoucherService, using interface{} to avoid circular import (Phase 6)
+	voucherRepo          interface{}                                         // voucher.VoucherRepository, using interface{} to avoid circular import
+	pendingVoucherRepo   *paymentdb.PaymentVoucherPendingRepository         // Concrete type for temporary voucher-payment linkage
 	businessService      business.BusinessService
-	stateLogger          *paymentSvc.PaymentStateLogger // Payment state change logger
-	config               *config.Config                 // Application configuration (server URL, etc.)
+	stateChangeRepo      *paymentdb.PostgresPaymentStateChangeRepository    // Concrete type for transaction support
+	config               *config.Config                                     // Application configuration (server URL, etc.)
 	logger               *logger.Logger
 }
 
@@ -63,7 +63,7 @@ func NewPaymentService(
 		voucherRepo:        voucherRepo,
 		pendingVoucherRepo: pendingVoucherRepo.(*paymentdb.PaymentVoucherPendingRepository),
 		businessService:    businessService,
-		stateLogger:        paymentSvc.NewPaymentStateLogger(stateChangeRepo),
+		stateChangeRepo:    stateChangeRepo.(*paymentdb.PostgresPaymentStateChangeRepository),
 		config:             cfg,
 		logger:             logger,
 	}
@@ -274,6 +274,7 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 		s.logger.DebugWith("Payment updated with gateway details")
 
 		// Sub-step 3.6: Log payment initiation for audit trail
+		// Create transaction-aware state logger to ensure atomicity
 		paymentUUID, parseErr := uuid.Parse(paymentID)
 		if parseErr != nil {
 			s.logger.ErrorWith("Failed to parse payment ID for logging", "payment_id", paymentID, "error", parseErr)
@@ -284,7 +285,11 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 				s.logger.ErrorWith("Failed to parse user ID for logging", "user_id", req.UserID, "error", parseErr)
 				// Non-fatal: continue without logging
 			} else {
-				if logErr := s.stateLogger.LogPaymentInitiated(txCtx, paymentUUID, userUUID, req.Amount, string(resp.GatewayUsed)); logErr != nil {
+				// Create transaction-aware repository and logger
+				txStateChangeRepo := s.stateChangeRepo.WithTx(tx)
+				txStateLogger := paymentSvc.NewPaymentStateLogger(txStateChangeRepo)
+
+				if logErr := txStateLogger.LogPaymentInitiated(txCtx, paymentUUID, userUUID, req.Amount, string(resp.GatewayUsed)); logErr != nil {
 					s.logger.ErrorWith("Failed to log payment initiation (non-fatal)", "payment_id", paymentID, "error", logErr)
 					// Non-fatal: continue even if logging fails
 				} else {

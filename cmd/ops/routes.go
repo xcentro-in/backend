@@ -19,7 +19,6 @@ import (
 	businessSvc "xcentro.in/internal/services/business"
 	notificationSvc "xcentro.in/internal/services/notification"
 	payoutSvc "xcentro.in/internal/services/payout"
-	settlementSvc "xcentro.in/internal/services/settlement"
 	"xcentro.in/internal/services/payments"
 	userSvc "xcentro.in/internal/services/user"
 	"xcentro.in/internal/services/verification"
@@ -130,16 +129,20 @@ func registerOpsPayoutRoutes(clients *externalClients, cfg *config.Config, group
 	// Create ops payout service (for listing endpoints)
 	opsPayoutService := payoutSvc.NewOpsPayoutService(payoutRepository)
 
-	// Create payout provider factory and full payout service (for dashboard operations)
+	// Create payout provider factory and full payout service (for operations)
 	providerFactory := factory.NewPayoutProviderFactory(cfg)
-	payoutService := payoutSvc.NewPayoutService(paymentRepository, voucherRepository, transferRepository, bankAccountRepository, configRepository, providerFactory)
-	settlementService := settlementSvc.NewSettlementVerificationService(logger.GetDefault())
+	payoutService := payoutSvc.NewPayoutService(
+		paymentRepository,
+		voucherRepository,
+		transferRepository,
+		bankAccountRepository,
+		configRepository,
+		stateChangeRepository,
+		providerFactory,
+	)
 
-	// Register routes (listing endpoints)
-	payoutHandler.RegisterOpsPayoutRoutes(group, opsPayoutService)
-
-	// Register dashboard operations routes
-	payoutHandler.RegisterOpsDashboardPayoutRoutes(group, payoutService, transferRepository, configRepository, voucherRepository, settlementService, providerFactory, stateChangeRepository, logger.GetDefault())
+	// Register all payout routes (listing + operations)
+	payoutHandler.RegisterOpsPayoutRoutes(group, opsPayoutService, payoutService)
 }
 
 func registerOpsV1Routes(s *opsDashboardServer) {
