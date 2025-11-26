@@ -118,18 +118,24 @@ func (r *PgPaymentRepository) GetPaymentByID(ctx context.Context, paymentID stri
 	r.logger.DebugWith("Getting payment by ID", "payment_id", paymentID)
 
 	query := `
-		SELECT payment_id, user_id, business_id, amount, currency, payment_method, status,
+		SELECT payment_id, user_id, business_id, amount, currency, payment_method, payment_type, status,
 		       description, gateway_used::text, gateway_payment_id, callback_url, redirect_url,
 		       payment_source_id, payment_source_type, retry_of_payment_id, retry_count,
-		       fee_amount, convenience_fee, convenience_fee_gst, total_amount, metadata, created_at, updated_at
+		       fee_amount, convenience_fee, convenience_fee_gst, total_amount, metadata,
+		       settlement_status, settled_at, settlement_reference_id, settlement_utr, settlement_metadata,
+		       settlement_amount, mdr_amount, net_settlement_amount,
+		       created_at, updated_at
 		FROM xcentro.payments WHERE payment_id = $1
 	`
 
 	var p payment.Payment
 	var gatewayUsed, gatewayPaymentID, redirectURL, paymentSourceID, paymentSourceType, retryOfPaymentID *string
 	var retryCount *int
-	var metadataJSON []byte
-	var updatedAt *time.Time
+	var metadataJSON, settlementMetadataJSON []byte
+	var updatedAt, settledAt *time.Time
+	var settlementStatus *string
+	var settlementReferenceID, settlementUTR *string
+	var settlementAmount, netSettlementAmount *int64
 
 	err := r.querier.QueryRow(ctx, query, paymentID).Scan(
 		&p.ID,
@@ -154,6 +160,14 @@ func (r *PgPaymentRepository) GetPaymentByID(ctx context.Context, paymentID stri
 		&p.ConvenienceFeeGST,
 		&p.TotalAmount,
 		&metadataJSON,
+		&settlementStatus,
+		&settledAt,
+		&settlementReferenceID,
+		&settlementUTR,
+		&settlementMetadataJSON,
+		&settlementAmount,
+		&p.MDRAmount,
+		&netSettlementAmount,
 		&p.CreatedAt,
 		&updatedAt,
 	)
@@ -193,6 +207,25 @@ func (r *PgPaymentRepository) GetPaymentByID(ctx context.Context, paymentID stri
 		}
 	}
 
+	// Handle settlement fields
+	if settlementStatus != nil {
+		p.SettlementStatus = payment.SettlementStatus(*settlementStatus)
+	}
+	p.SettledAt = settledAt
+	if settlementReferenceID != nil {
+		p.SettlementReferenceID = *settlementReferenceID
+	}
+	if settlementUTR != nil {
+		p.SettlementUTR = *settlementUTR
+	}
+	if len(settlementMetadataJSON) > 0 {
+		if err := json.Unmarshal(settlementMetadataJSON, &p.SettlementMetadata); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal settlement metadata: %w", err)
+		}
+	}
+	p.SettlementAmount = settlementAmount
+	p.NetSettlementAmount = netSettlementAmount
+
 	return &p, nil
 }
 
@@ -205,19 +238,24 @@ func (r *PgPaymentRepository) GetPaymentByGatewayPaymentID(ctx context.Context, 
 	r.logger.DebugWith("Getting payment by gateway payment ID", "gateway_payment_id", gatewayPaymentID)
 
 	query := `
-
-		SELECT payment_id, user_id, business_id, amount, currency, payment_method, status,
+		SELECT payment_id, user_id, business_id, amount, currency, payment_method, payment_type, status,
 		       description, gateway_used::text, gateway_payment_id, callback_url, redirect_url,
 		       payment_source_id, payment_source_type, fee_amount, convenience_fee, convenience_fee_gst,
-		       total_amount, metadata, created_at, updated_at
+		       total_amount, metadata,
+		       settlement_status, settled_at, settlement_reference_id, settlement_utr, settlement_metadata,
+		       settlement_amount, mdr_amount, net_settlement_amount,
+		       created_at, updated_at
 		FROM xcentro.payments
 		WHERE gateway_payment_id = $1 OR payment_id = $1
 	`
 
 	var p payment.Payment
 	var gatewayUsed, gatewayPaymentIDNullable, redirectURL, paymentSourceID, paymentSourceType *string
-	var metadataJSON []byte
-	var updatedAt *time.Time
+	var metadataJSON, settlementMetadataJSON []byte
+	var updatedAt, settledAt *time.Time
+	var settlementStatus *string
+	var settlementReferenceID, settlementUTR *string
+	var settlementAmount, netSettlementAmount *int64
 
 	err := r.querier.QueryRow(ctx, query, gatewayPaymentID).Scan(
 		&p.ID,
@@ -240,6 +278,14 @@ func (r *PgPaymentRepository) GetPaymentByGatewayPaymentID(ctx context.Context, 
 		&p.ConvenienceFeeGST,
 		&p.TotalAmount,
 		&metadataJSON,
+		&settlementStatus,
+		&settledAt,
+		&settlementReferenceID,
+		&settlementUTR,
+		&settlementMetadataJSON,
+		&settlementAmount,
+		&p.MDRAmount,
+		&netSettlementAmount,
 		&p.CreatedAt,
 		&updatedAt,
 	)
@@ -276,6 +322,25 @@ func (r *PgPaymentRepository) GetPaymentByGatewayPaymentID(ctx context.Context, 
 			return nil, fmt.Errorf("failed to unmarshal metadata: %w", err)
 		}
 	}
+
+	// Handle settlement fields
+	if settlementStatus != nil {
+		p.SettlementStatus = payment.SettlementStatus(*settlementStatus)
+	}
+	p.SettledAt = settledAt
+	if settlementReferenceID != nil {
+		p.SettlementReferenceID = *settlementReferenceID
+	}
+	if settlementUTR != nil {
+		p.SettlementUTR = *settlementUTR
+	}
+	if len(settlementMetadataJSON) > 0 {
+		if err := json.Unmarshal(settlementMetadataJSON, &p.SettlementMetadata); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal settlement metadata: %w", err)
+		}
+	}
+	p.SettlementAmount = settlementAmount
+	p.NetSettlementAmount = netSettlementAmount
 
 	return &p, nil
 }
@@ -438,16 +503,18 @@ func (r *PgPaymentRepository) GetPaymentsByBusinessID(ctx context.Context, busin
 // ============================================================================
 
 // UpdateSettlementStatus updates settlement status and related metadata
-func (r *PgPaymentRepository) UpdateSettlementStatus(ctx context.Context, paymentID string, status payment.SettlementStatus, metadata map[string]any) error {
+func (r *PgPaymentRepository) UpdateSettlementStatus(ctx context.Context, paymentID string, status payment.SettlementStatus, settlementReferenceID, settlementUTR string, metadata map[string]any) error {
 	r.logger.DebugWith("Updating settlement status", "payment_id", paymentID, "settlement_status", status)
 
 	query := `
 		UPDATE xcentro.payments
-		SET settlement_status = $1,
-		    settlement_metadata = COALESCE(settlement_metadata, '{}'::jsonb) || $2::jsonb,
+		SET settlement_status = $1::settlement_status_enum,
+		    settlement_reference_id = $2,
+		    settlement_utr = $3,
+		    settlement_metadata = COALESCE(settlement_metadata, '{}'::jsonb) || $4::jsonb,
 		    settled_at = CASE WHEN $1 = 'settled' THEN NOW() ELSE settled_at END,
 		    updated_at = NOW()
-		WHERE payment_id = $3
+		WHERE payment_id = $5
 	`
 
 	// Serialize metadata to JSONB
@@ -462,7 +529,7 @@ func (r *PgPaymentRepository) UpdateSettlementStatus(ctx context.Context, paymen
 		metadataJSON = []byte("{}")
 	}
 
-	_, err := r.querier.Exec(ctx, query, status, metadataJSON, paymentID)
+	_, err := r.querier.Exec(ctx, query, string(status), settlementReferenceID, settlementUTR, metadataJSON, paymentID)
 	if err != nil {
 		return fmt.Errorf("failed to update settlement status: %w", err)
 	}
@@ -1633,5 +1700,77 @@ func (r *PgPaymentRepository) GetCollectionActivity(ctx context.Context, payment
 		PaymentID:  paymentID,
 		Activities: activities,
 		TotalCount: len(activities),
+	}, nil
+}
+
+// GetCollectionPayouts retrieves all voucher-payout mappings for a payment/collection
+// A single payment can fund multiple vouchers, each with potential payouts to payees
+func (r *PgPaymentRepository) GetCollectionPayouts(ctx context.Context, paymentID string) (*payment.OpsCollectionPayoutsResponse, error) {
+	// Query to get all vouchers linked to this payment and their payout status
+	// Uses payment_vouchers.payment_id which is set when payment is finalized
+	query := `
+		SELECT
+			v.voucher_id::text,
+			v.voucher_number,
+			v.net_amount,
+			v.payee_id::text,
+			bpr.display_name as payee_name,
+			COALESCE(pt.transfer_request_id::text, '') as payout_id,
+			COALESCE(pt.status::text, '') as payout_status
+		FROM xcentro.payment_vouchers v
+		INNER JOIN xcentro.business_payee_relation bpr
+			ON v.payee_id = bpr.payee_id
+			AND v.business_id = bpr.business_id
+		LEFT JOIN xcentro.payout_transfer_requests pt
+			ON v.voucher_id = pt.voucher_id
+		WHERE v.payment_id = $1
+		ORDER BY v.created_at ASC
+	`
+
+	rows, err := r.querier.Query(ctx, query, paymentID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get collection payouts: %w", err)
+	}
+	defer rows.Close()
+
+	// Initialize as empty slice to return [] instead of null when no vouchers
+	payouts := make([]*payment.OpsCollectionPayoutItem, 0)
+
+	for rows.Next() {
+		var item payment.OpsCollectionPayoutItem
+		var payoutID, payoutStatus string
+
+		err := rows.Scan(
+			&item.VoucherID,
+			&item.VoucherNumber,
+			&item.Amount,
+			&item.PayeeID,
+			&item.PayeeName,
+			&payoutID,
+			&payoutStatus,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan payout item: %w", err)
+		}
+
+		// Set payout fields only if payout exists
+		if payoutID != "" {
+			item.PayoutID = &payoutID
+		}
+		if payoutStatus != "" {
+			item.PayoutStatus = &payoutStatus
+		}
+
+		payouts = append(payouts, &item)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating payout rows: %w", err)
+	}
+
+	return &payment.OpsCollectionPayoutsResponse{
+		PaymentID:  paymentID,
+		Data:       payouts,
+		TotalCount: len(payouts),
 	}, nil
 }

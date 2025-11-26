@@ -178,7 +178,7 @@ func (h *WebhookHandler) handleJioPayPaymentWebhook(c echo.Context) error {
 				"settlement_initiated_at": time.Now().Format(time.RFC3339),
 				"settlement_gateway":      "jiopay",
 			}
-			if err := h.paymentRepo.UpdateSettlementStatus(ctx, pmt.ID, payment.SettlementStatusPending, settlementMetadata); err != nil {
+			if err := h.paymentRepo.UpdateSettlementStatus(ctx, pmt.ID, payment.SettlementStatusPending, "", "", settlementMetadata); err != nil {
 				fmt.Printf("⚠️  Failed to initialize settlement status: %v\n", err)
 			} else {
 				fmt.Println("✅ Settlement status initialized to pending")
@@ -316,7 +316,7 @@ func (h *WebhookHandler) handleEasebuzzPaymentWebhook(c echo.Context) error {
 				"settlement_initiated_at": time.Now().Format(time.RFC3339),
 				"settlement_gateway":      "easebuzz",
 			}
-			if err := h.paymentRepo.UpdateSettlementStatus(ctx, pmt.ID, payment.SettlementStatusPending, settlementMetadata); err != nil {
+			if err := h.paymentRepo.UpdateSettlementStatus(ctx, pmt.ID, payment.SettlementStatusPending, "", "", settlementMetadata); err != nil {
 				fmt.Printf("⚠️  Failed to initialize settlement status: %v\n", err)
 			} else {
 				fmt.Println("✅ Settlement status initialized to pending")
@@ -446,7 +446,7 @@ func (h *WebhookHandler) handleMockPGPaymentWebhook(c echo.Context) error {
 				"settlement_initiated_at": time.Now().Format(time.RFC3339),
 				"settlement_gateway":      "mockpg",
 			}
-			if err := h.paymentRepo.UpdateSettlementStatus(ctx, pmt.ID, payment.SettlementStatusPending, settlementMetadata); err != nil {
+			if err := h.paymentRepo.UpdateSettlementStatus(ctx, pmt.ID, payment.SettlementStatusPending, "", "", settlementMetadata); err != nil {
 				fmt.Printf("⚠️  Failed to initialize settlement status: %v\n", err)
 			} else {
 				fmt.Println("✅ Settlement status initialized to pending")
@@ -659,10 +659,19 @@ func (h *WebhookHandler) HandleSettlementStatusWebhook(c echo.Context) error {
 		return h.handleJioPaySettlementWebhook(c)
 	case "easebuzz":
 		return h.handleEasebuzzSettlementWebhook(c)
+	case "mockpg":
+		// Only allow mock PG webhooks if mock PG is enabled
+		if !h.mockPGEnabled {
+			return c.JSON(http.StatusForbidden, map[string]string{
+				"status":  "error",
+				"message": "Mock PG is not enabled",
+			})
+		}
+		return h.handleMockPGSettlementWebhook(c)
 	default:
 		return c.JSON(http.StatusBadRequest, map[string]string{
 			"status":  "error",
-			"message": "Invalid or missing gateway type parameter. Supported: jiopay, easebuzz",
+			"message": "Invalid or missing gateway type parameter. Supported: jiopay, easebuzz, mockpg",
 		})
 	}
 }
@@ -897,7 +906,9 @@ func (h *WebhookHandler) handleJioPaySettlementWebhook(c echo.Context) error {
 
 	// Step 11: Update settlement status to 'settled'
 	fmt.Println("🔄 Updating settlement status to 'settled'...")
-	if err := h.paymentRepo.UpdateSettlementStatus(ctx, pmt.ID, payment.SettlementStatusSettled, settlementMetadata); err != nil {
+	settlementReferenceID := webhook.SettlementID // Batch ID
+	settlementUTR := webhook.SettlementID         // JioPay uses same ID as UTR reference
+	if err := h.paymentRepo.UpdateSettlementStatus(ctx, pmt.ID, payment.SettlementStatusSettled, settlementReferenceID, settlementUTR, settlementMetadata); err != nil {
 		fmt.Printf("❌ Failed to update settlement status: %v\n", err)
 		return c.JSON(http.StatusOK, map[string]string{
 			"status":  "error",
@@ -1095,7 +1106,9 @@ func (h *WebhookHandler) handleEasebuzzSettlementWebhook(c echo.Context) error {
 		}
 
 		// Update settlement status to 'settled'
-		if err := h.paymentRepo.UpdateSettlementStatus(ctx, pmt.ID, payment.SettlementStatusSettled, settlementMetadata); err != nil {
+		settlementReferenceID := webhook.Data.PayoutID          // Batch ID
+		settlementUTR := webhook.Data.BankTransactionID         // Actual bank UTR
+		if err := h.paymentRepo.UpdateSettlementStatus(ctx, pmt.ID, payment.SettlementStatusSettled, settlementReferenceID, settlementUTR, settlementMetadata); err != nil {
 			fmt.Printf("❌ Failed to update settlement status: %v\n", err)
 			errorCount++
 			continue
@@ -1142,5 +1155,212 @@ func (h *WebhookHandler) handleEasebuzzSettlementWebhook(c echo.Context) error {
 			"skipped":            skipCount,
 			"errors":             errorCount,
 		},
+	})
+}
+
+// handleMockPGSettlementWebhook processes settlement notifications from Mock PG (testing only)
+// Sent when Mock PG completes settlement to merchant account (simulated T+1 to T+3 days)
+func (h *WebhookHandler) handleMockPGSettlementWebhook(c echo.Context) error {
+	ctx := c.Request().Context()
+
+	fmt.Println("=== MOCKPG SETTLEMENT WEBHOOK: Processing settlement notification ===")
+
+	// Step 1: Read request body
+	bodyBytes, err := io.ReadAll(c.Request().Body)
+	if err != nil {
+		fmt.Printf("❌ Failed to read webhook body: %v\n", err)
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "invalid_request",
+		})
+	}
+
+	fmt.Printf("📥 Webhook payload size: %d bytes\n", len(bodyBytes))
+
+	// Step 2: Parse settlement webhook payload
+	var webhook mockpg.MockPGSettlementWebhook
+	if err := json.Unmarshal(bodyBytes, &webhook); err != nil {
+		fmt.Printf("❌ Failed to parse webhook payload: %v\n", err)
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "invalid_payload",
+		})
+	}
+
+	fmt.Printf("📋 TransactionID: %s\n", webhook.TransactionID)
+	fmt.Printf("📋 GatewayPaymentID: %s\n", webhook.GatewayPaymentID)
+	fmt.Printf("📋 SettlementID: %s\n", webhook.SettlementID)
+	fmt.Printf("📋 SettlementDate: %s\n", webhook.SettlementDate)
+	fmt.Printf("📋 SettlementAmount: %d\n", webhook.SettlementAmount)
+	fmt.Printf("📋 MDRAmount: %d\n", webhook.MDRAmount)
+	fmt.Printf("📋 ServiceTax: %d\n", webhook.ServiceTax)
+	fmt.Printf("📋 NetSettlementAmount: %d\n", webhook.NetSettlementAmount)
+
+	// Step 3: Verify signature (mock validation)
+	if err := h.mockPGGateway.ValidateWebhook(bodyBytes, webhook.Signature); err != nil {
+		fmt.Printf("❌ Webhook signature verification failed: %v\n", err)
+		// Return 200 OK to avoid gateway retries, but log the failure
+		return c.JSON(http.StatusOK, map[string]string{
+			"status":  "error",
+			"message": "Signature verification failed",
+		})
+	}
+
+	fmt.Println("✅ Webhook signature verified")
+
+	// Step 4: Find payment by transaction_id (our payment_id)
+	pmt, err := h.paymentRepo.GetPaymentByID(ctx, webhook.TransactionID)
+	if err != nil || pmt == nil {
+		fmt.Printf("❌ Payment not found: %s, error: %v\n", webhook.TransactionID, err)
+		// Return 200 OK to avoid gateway retries
+		return c.JSON(http.StatusOK, map[string]string{
+			"status":  "error",
+			"message": "Payment not found",
+		})
+	}
+
+	fmt.Printf("✅ Payment found: %s (status: %s, settlement_status: %s)\n",
+		pmt.ID, pmt.Status, pmt.SettlementStatus)
+
+	// Step 5: Validate payment state
+	if pmt.Status != payment.PaymentStatusSuccess {
+		fmt.Printf("⚠️  Payment status is not 'success': %s (cannot settle)\n", pmt.Status)
+		return c.JSON(http.StatusOK, map[string]string{
+			"status":  "error",
+			"message": "Payment not in success state",
+		})
+	}
+
+	// Step 6: Check idempotency - if already settled, verify amounts
+	if pmt.SettlementStatus == payment.SettlementStatusSettled {
+		fmt.Println("⚠️  Payment already settled - checking idempotency...")
+
+		// Verify amounts match (idempotency check)
+		if pmt.SettlementAmount != nil && *pmt.SettlementAmount != webhook.SettlementAmount {
+			fmt.Printf("⚠️  Settlement amount mismatch! DB: %d, Webhook: %d\n",
+				*pmt.SettlementAmount, webhook.SettlementAmount)
+		}
+
+		if pmt.MDRAmount != webhook.MDRAmount {
+			fmt.Printf("⚠️  MDR amount mismatch! DB: %d, Webhook: %d\n",
+				pmt.MDRAmount, webhook.MDRAmount)
+		}
+
+		if pmt.NetSettlementAmount != nil && *pmt.NetSettlementAmount != webhook.NetSettlementAmount {
+			fmt.Printf("⚠️  Net settlement amount mismatch! DB: %d, Webhook: %d\n",
+				*pmt.NetSettlementAmount, webhook.NetSettlementAmount)
+		}
+
+		fmt.Println("✅ Payment already settled - idempotent request, returning success")
+		return c.JSON(http.StatusOK, map[string]string{
+			"status":  "success",
+			"message": "Settlement already processed (idempotent)",
+		})
+	}
+
+	// Step 7: Validate settlement status is 'pending'
+	if pmt.SettlementStatus != payment.SettlementStatusPending {
+		fmt.Printf("⚠️  Settlement status is not 'pending': %s\n", pmt.SettlementStatus)
+		return c.JSON(http.StatusOK, map[string]string{
+			"status":  "error",
+			"message": "Invalid settlement status",
+		})
+	}
+
+	// Step 8: Parse settlement date
+	settlementDate, err := time.Parse("2006-01-02", webhook.SettlementDate)
+	if err != nil {
+		fmt.Printf("❌ Failed to parse settlement date: %v\n", err)
+		return c.JSON(http.StatusOK, map[string]string{
+			"status":  "error",
+			"message": "Invalid settlement date format",
+		})
+	}
+
+	fmt.Printf("📅 Settlement date: %s\n", settlementDate.Format("2006-01-02"))
+
+	// Step 9: Calculate total MDR (charges + GST) - for MockPG, typically 0 for testing
+	mdrAmount := webhook.MDRAmount + webhook.ServiceTax
+
+	// Validate calculation: netSettlementAmount = settlementAmount - mdrAmount
+	expectedNetAmount := webhook.SettlementAmount - mdrAmount
+	if webhook.NetSettlementAmount != expectedNetAmount {
+		fmt.Printf("⚠️  Settlement calculation mismatch! Expected: %d, Got: %d\n",
+			expectedNetAmount, webhook.NetSettlementAmount)
+	}
+
+	fmt.Printf("💰 Settlement amounts (in paise):\n")
+	fmt.Printf("   - Settlement Amount: %d (₹%.2f)\n", webhook.SettlementAmount, float64(webhook.SettlementAmount)/100)
+	fmt.Printf("   - MDR Amount: %d (₹%.2f) [Charges: %d + Tax: %d]\n",
+		mdrAmount, float64(mdrAmount)/100, webhook.MDRAmount, webhook.ServiceTax)
+	fmt.Printf("   - Net Settlement: %d (₹%.2f)\n", webhook.NetSettlementAmount, float64(webhook.NetSettlementAmount)/100)
+
+	// Step 10: Prepare settlement metadata (store full webhook payload)
+	var webhookData map[string]any
+	if err := json.Unmarshal(bodyBytes, &webhookData); err != nil {
+		fmt.Printf("⚠️  Failed to parse webhook for metadata: %v\n", err)
+		webhookData = make(map[string]any)
+	}
+
+	settlementMetadata := map[string]any{
+		"settlement_webhook_received_at": time.Now().Format(time.RFC3339),
+		"settlement_gateway":             "mockpg",
+		"settlement_batch_id":            webhook.SettlementID,
+		"settlement_account":             webhook.SettlementAccount,
+		"settlement_account_ifsc":        webhook.SettlementAccountIFSC,
+		"payment_method":                 webhook.PaymentMethod,
+		"webhook_payload":                webhookData, // Store full webhook
+		"mock_simulation":                true,
+	}
+
+	// Step 11: Update settlement status to 'settled'
+	fmt.Println("🔄 Updating settlement status to 'settled'...")
+	settlementReferenceID := webhook.SettlementID  // Batch ID
+	settlementUTR := webhook.SettlementUTR         // Bank UTR (unique per payment)
+	if err := h.paymentRepo.UpdateSettlementStatus(ctx, pmt.ID, payment.SettlementStatusSettled, settlementReferenceID, settlementUTR, settlementMetadata); err != nil {
+		fmt.Printf("❌ Failed to update settlement status: %v\n", err)
+		return c.JSON(http.StatusOK, map[string]string{
+			"status":  "error",
+			"message": "Failed to update settlement status",
+		})
+	}
+
+	fmt.Println("✅ Settlement status updated to 'settled'")
+
+	// Step 12: Update settlement amounts
+	fmt.Println("🔄 Updating settlement amounts...")
+	if err := h.paymentRepo.UpdateSettlementAmounts(ctx, pmt.ID, webhook.SettlementAmount, mdrAmount, webhook.NetSettlementAmount); err != nil {
+		fmt.Printf("❌ Failed to update settlement amounts: %v\n", err)
+		return c.JSON(http.StatusOK, map[string]string{
+			"status":  "error",
+			"message": "Failed to update settlement amounts",
+		})
+	}
+
+	fmt.Println("✅ Settlement amounts updated successfully")
+
+	// Step 13: Log settlement received for audit trail
+	paymentUUID, parseErr := uuid.Parse(pmt.ID)
+	if parseErr != nil {
+		fmt.Printf("⚠️  Failed to parse payment ID for logging: %v\n", parseErr)
+		// Non-fatal: continue without logging
+	} else {
+		// Use SettlementUTR (bank UTR) as reference for MockPG
+		settlementUTR := webhook.SettlementUTR
+		if logErr := h.stateLogger.LogSettlementReceived(ctx, paymentUUID, webhook.NetSettlementAmount, settlementUTR, settlementMetadata); logErr != nil {
+			fmt.Printf("⚠️  Failed to log settlement received (non-fatal): %v\n", logErr)
+			// Non-fatal: continue even if logging fails
+		} else {
+			fmt.Println("✅ Settlement event logged to audit trail")
+		}
+	}
+
+	// Note: settled_at is automatically set by UpdateSettlementStatus when status becomes 'settled'
+
+	fmt.Println("=== MOCKPG SETTLEMENT WEBHOOK: Processing complete ===")
+	fmt.Printf("✅ Settlement processed: Payment %s → ₹%.2f (after ₹%.2f MDR)\n",
+		pmt.ID, float64(webhook.NetSettlementAmount)/100, float64(mdrAmount)/100)
+
+	return c.JSON(http.StatusOK, map[string]string{
+		"status":  "success",
+		"message": "Settlement processed successfully",
 	})
 }
