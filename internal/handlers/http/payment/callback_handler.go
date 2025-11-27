@@ -16,6 +16,8 @@ import (
 	"xcentro.in/internal/adapters/external/payment/easebuzz"
 	"xcentro.in/internal/adapters/external/payment/jiopay"
 	"xcentro.in/internal/adapters/external/payment/mockpg"
+	corenotification "xcentro.in/internal/core/notification"
+	"xcentro.in/internal/services/notification"
 	"xcentro.in/internal/core/business_rules"
 	"xcentro.in/internal/core/payment"
 	paymentSvc "xcentro.in/internal/services/payment"
@@ -777,6 +779,41 @@ func (h *CallbackHandler) handlePostPaymentUpdate(
 			// Non-fatal: Payment is still successful, vouchers can be finalized manually or by recovery job
 		} else {
 			h.logger.InfoWith("Vouchers finalized successfully", "payment_id", pmt.ID, "gateway", gatewayName)
+		}
+
+		// Step 3: Send notification to owner about successful payment
+		h.logger.InfoWith("Triggering payment success notification", "payment_id", pmt.ID, "business_id", pmt.BusinessID)
+
+		// Format amount for display (convert paise to rupees)
+		amountINR := float64(pmt.Amount) / 100.0
+
+		// Create notification payload
+		paymentIDStr := pmt.ID
+		err := notification.TriggerBroadcast(
+			ctx,
+			pmt.BusinessID,                              // business_id
+			corenotification.RoleOwner,                  // minimum_role (owner only)
+			corenotification.EventPaymentCompleted,      // event_type
+			"Payment Successful",                        // title
+			fmt.Sprintf("Payment of ₹%.2f has been processed successfully via %s", amountINR, gatewayName), // body
+			corenotification.EntityReferences{           // entities
+				BusinessID: &pmt.BusinessID,
+				PaymentID:  &paymentIDStr,
+			},
+			[]corenotification.ActionButton{             // actions
+				{
+					Type: corenotification.ButtonTypeNeutral,
+					Text: "View Details",
+					Href: fmt.Sprintf("/payments/%s", pmt.ID),
+				},
+			},
+		)
+
+		if err != nil {
+			h.logger.WarnWith("Failed to trigger payment success notification (non-fatal)", "payment_id", pmt.ID, "error", err)
+			// Non-fatal: Payment is still successful
+		} else {
+			h.logger.InfoWith("Payment success notification triggered", "payment_id", pmt.ID)
 		}
 	}
 
