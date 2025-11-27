@@ -115,6 +115,21 @@ func registerOpsCollectionRoutes(clients *externalClients, cfg *config.Config, g
 	paymentHandler.RegisterOpsCollectionRoutes(group, collectionService)
 }
 
+// registerOpsFeeRulesRoutes registers ops dashboard fee rules management routes
+func registerOpsFeeRulesRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
+	// Create fee rules repository
+	feeRulesRepository := paymentRepo.NewPostgresFeeRulesRepository(clients.db)
+
+	// Create ops fee rules handler
+	feeRulesHandler := paymentHandler.NewOpsFeeRulesHandler(
+		feeRulesRepository,
+		logger.GetDefault(),
+	)
+
+	// Register routes
+	paymentHandler.RegisterOpsFeeRulesRoutes(group, feeRulesHandler)
+}
+
 // registerOpsPayoutRoutes registers ops dashboard payout routes
 func registerOpsPayoutRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
 	// Create repositories
@@ -164,6 +179,7 @@ func registerOpsV1Routes(s *opsDashboardServer) {
 	registerOpsUserRoutes(clients, cfg, v1)
 	registerOpsPayoutRoutes(clients, cfg, v1)
 	registerOpsCollectionRoutes(clients, cfg, v1)
+	registerOpsFeeRulesRoutes(clients, cfg, v1)
 }
 
 func initializeNotificationTrigger(clients *externalClients) {

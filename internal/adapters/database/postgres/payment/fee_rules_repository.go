@@ -214,31 +214,28 @@ func (r *PostgresFeeRulesRepository) CreateFeeRule(ctx context.Context, rule *bu
 }
 
 // UpdateFeeRule updates an existing fee rule
+// Note: payment_method, card_type, and card_category are immutable and cannot be updated
 func (r *PostgresFeeRulesRepository) UpdateFeeRule(ctx context.Context, ruleID string, rule *business_rules.FeeRule) error {
 	query := `
 		UPDATE xcentro.payment_fee_rules
-		SET payment_method = $2,
-			card_type = $3,
-			card_category = $4,
-			fee_type = $5,
-			percentage_fee = $6,
-			fixed_fee = $7,
-			gst_percentage = $8,
-			gst_applicable = $9,
+		SET fee_type = $2,
+			percentage_fee = $3,
+			fixed_fee = $4,
+			gst_percentage = $5,
+			gst_applicable = $6,
+			is_active = $7,
 			updated_at = NOW()
 		WHERE rule_id = $1
 	`
 
 	result, err := r.querier.Exec(ctx, query,
 		ruleID,
-		rule.PaymentMethod,
-		nullableString(rule.CardType),
-		nullableString(rule.CardCategory),
 		rule.FeeType,
 		rule.PercentageFee,
 		rule.FixedFee,
 		rule.GSTPercentage,
 		rule.GSTApplicable,
+		rule.IsActive,
 	)
 
 	if err != nil {
