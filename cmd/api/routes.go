@@ -18,7 +18,7 @@ import (
 	"xcentro.in/internal/adapters/external/payment/easebuzz"
 	"xcentro.in/internal/adapters/external/payment/jiopay"
 	"xcentro.in/internal/adapters/external/payment/mockpg"
-	"xcentro.in/internal/adapters/external/payout/factory"
+	"xcentro.in/internal/adapters/providers/fileupload"
 	coreAuth "xcentro.in/internal/core/auth"
 	coreBusiness "xcentro.in/internal/core/business"
 	"xcentro.in/internal/core/business_rules"
@@ -43,8 +43,6 @@ import (
 	notificationService "xcentro.in/internal/services/notification"
 	payeeSvc "xcentro.in/internal/services/payee"
 	"xcentro.in/internal/services/payments"
-	payoutSvc "xcentro.in/internal/services/payout"
-	settlementSvc "xcentro.in/internal/services/settlement"
 	userSvc "xcentro.in/internal/services/user"
 	"xcentro.in/internal/services/verification"
 	voucherSvc "xcentro.in/internal/services/voucher"
@@ -136,7 +134,7 @@ func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group
 	pendingVoucherRepository := paymentRepo.NewPaymentVoucherPendingRepository(clients.db)
 	stateChangeRepository := paymentRepo.NewPostgresPaymentStateChangeRepository(clients.db)
 
-	_, _, _, _, _, busSvc, authSvc := factory.createCoreServices(nil)
+	_, _, _, businessUserRelRepo, _, busSvc, authSvc := factory.createCoreServices(nil)
 
 	// Initialize payment gateway clients
 	easebuzzClient := easebuzz.NewEasebuzzClient(cfg.Easebuzz.BaseURL, cfg.Easebuzz.MerchantKey, cfg.Easebuzz.Salt, cfg.Easebuzz.APIKey, cfg.Easebuzz.IsAggregatorModel)
@@ -163,29 +161,34 @@ func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group
 	notificationEventRepo := notificationRepo.NewPgNotificationEventRepository(clients.db)
 	voucherService := voucherSvc.NewVoucherService(voucherRepository, queueRepository, voucherCoreService, businessPayeeRelationRepo, notificationEventRepo, logger.GetDefault())
 
-	paymentService := payments.NewPaymentService(orchestrator, paymentRepository, storedCardRepository, bankAccountRepository, walletService, feeCalculator, clients.txManager, voucherService, voucherRepository, pendingVoucherRepository, busSvc, cfg, logger.GetDefault())
+	paymentService := payments.NewPaymentService(orchestrator, paymentRepository, storedCardRepository, bankAccountRepository, walletService, feeCalculator, clients.txManager, voucherService, voucherRepository, pendingVoucherRepository, busSvc, stateChangeRepository, cfg, logger.GetDefault())
 
 	processPaymentGroup := group.Group("/process_payment")
-	payment.RegisterPaymentRoutes(processPaymentGroup, paymentService, paymentSourceService, walletService, authSvc, voucherRepository, stateChangeRepository, businessPayeeRelationRepo, storedCardRepository, bankAccountRepository, logger.GetDefault())
 
-	walletGroup := group.Group("/wallet")
-	payment.RegisterWalletRoutes(walletGroup, paymentService, paymentSourceService, walletService, authSvc, storedCardRepository, logger.GetDefault())
-
-	// Mock 3DS page handler (for mock PG testing)
-	mock3DSHandler := payment.NewMock3DSHandler(paymentRepository, cfg.Server.URL)
-	processPaymentGroup.GET("/mock_3ds", mock3DSHandler.HandleMock3DSPage)
-
-	callbackHandler := payment.NewCallbackHandler(paymentRepository, storedCardRepository, jioPayClient, easebuzzClient, mockPGClient, cfg.MockPG.Enabled, pendingVoucherRepository, voucherRepository, clients.txManager, stateChangeRepository)
-	processPaymentGroup.POST("/callback", callbackHandler.HandleCallback)
-
-	webhookHandler := payment.NewWebhookHandler(paymentRepository, jioPayClient, easebuzzClient, mockPGClient, cfg.MockPG.Enabled)
+	// Register public routes FIRST (no JWT required) - these are called by external systems
+	// 1. Webhooks (called by payment gateways)
+	webhookHandler := payment.NewWebhookHandler(paymentRepository, jioPayClient, easebuzzClient, mockPGClient, cfg.MockPG.Enabled, stateChangeRepository)
 	webhookGroup := processPaymentGroup.Group("/webhooks")
 	webhookGroup.POST("/payment_status", webhookHandler.HandlePaymentStatusWebhook)
 	webhookGroup.POST("/settlement_status", webhookHandler.HandleSettlementStatusWebhook)
 
-	// Payment callback page handler (user-facing HTML redirect pages)
+	// 2. Callbacks (redirects from payment gateways after payment completion)
+	callbackHandler := payment.NewCallbackHandler(paymentRepository, storedCardRepository, walletService, jioPayClient, easebuzzClient, mockPGClient, cfg.MockPG.Enabled, pendingVoucherRepository, voucherRepository, clients.txManager, stateChangeRepository)
+	processPaymentGroup.POST("/callback", callbackHandler.HandleCallback)
+
+	// 3. Mock 3DS page (simulates bank OTP/3DS page for testing)
+	mock3DSHandler := payment.NewMock3DSHandler(paymentRepository, cfg.Server.URL)
+	processPaymentGroup.GET("/mock_3ds", mock3DSHandler.HandleMock3DSPage)
+
+	// 4. Payment callback page (user-facing HTML redirect pages)
 	paymentCallbackHandler := payment.NewPaymentCallbackHandler(paymentRepository)
 	processPaymentGroup.GET("/callback_page", paymentCallbackHandler.HandlePaymentCallback)
+
+	// Register JWT-protected routes (authenticated user operations)
+	payment.RegisterPaymentRoutes(processPaymentGroup, paymentService, paymentSourceService, walletService, authSvc, voucherRepository, stateChangeRepository, businessPayeeRelationRepo, storedCardRepository, bankAccountRepository, logger.GetDefault())
+
+	walletGroup := group.Group("/wallet")
+	payment.RegisterWalletRoutes(walletGroup, paymentService, paymentSourceService, walletService, authSvc, storedCardRepository, businessUserRelRepo, clients.rcache, logger.GetDefault())
 }
 
 func registerV1BusinessRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
@@ -240,18 +243,9 @@ func registerV1VoucherRoutes(clients *externalClients, cfg *config.Config, group
 
 func registerV1PayoutRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
 	transferRepository := payoutRepo.NewPostgresPayoutTransferRepository(clients.db)
-	configRepository := payoutRepo.NewPostgresPayoutConfigurationRepository(clients.db)
-	voucherRepository := voucherRepo.NewPostgresVoucherRepository(clients.db, cfg.BankAccountEncryption.EncryptionKey)
-	bankAccountRepository := payeeRepo.NewPgPayeeBankAccountRepository(clients.db, cfg.BankAccountEncryption.EncryptionKey)
-	paymentRepository := paymentRepo.NewPgPaymentRepository(clients.db, cfg.BankAccountEncryption.EncryptionKey)
 	stateChangeRepository := paymentRepo.NewPostgresPaymentStateChangeRepository(clients.db)
 
-	providerFactory := factory.NewPayoutProviderFactory(cfg)
-	payoutService := payoutSvc.NewPayoutService(voucherRepository, transferRepository, bankAccountRepository, configRepository, providerFactory)
-	settlementService := settlementSvc.NewSettlementVerificationService(logger.GetDefault())
-
-	webhookHandler := payoutHandler.NewPayoutWebhookHandler(transferRepository, paymentRepository, stateChangeRepository, cfg.Castler.WebhookSecret)
-	payoutHandler := payoutHandler.NewPayoutHandler(payoutService, transferRepository, configRepository, voucherRepository, settlementService, providerFactory, stateChangeRepository, logger.GetDefault())
+	webhookHandler := payoutHandler.NewPayoutWebhookHandler(transferRepository, stateChangeRepository, cfg.Castler.WebhookSecret)
 
 	// Payout routes - separated by purpose
 	payoutGroup := group.Group("/payout")
@@ -259,19 +253,8 @@ func registerV1PayoutRoutes(clients *externalClients, cfg *config.Config, group 
 	// Webhook endpoints (external - called by Castler)
 	payoutGroup.POST("/webhooks/castler", webhookHandler.HandleCastlerWebhook)
 
-	// Dashboard/Operations endpoints (internal - admin/ops team)
-	dashboardGroup := payoutGroup.Group("/dashboard")
-	dashboardGroup.POST("/initiate", payoutHandler.InitiatePayoutManually)
-	dashboardGroup.GET("/pending-approvals", payoutHandler.GetPendingApprovals) // DEPRECATED
-	dashboardGroup.POST("/:transfer_id/approve", payoutHandler.ApproveTransfer) // DEPRECATED
-	dashboardGroup.POST("/:transfer_id/cancel", payoutHandler.CancelTransfer)
-	dashboardGroup.GET("/:transfer_id", payoutHandler.GetTransferDetails)
-	dashboardGroup.GET("/:transfer_id/webhooks", payoutHandler.GetWebhookHistory)
-	dashboardGroup.GET("/timeouts", payoutHandler.GetTimeoutTransfers)
-	dashboardGroup.POST("/:transfer_id/mark-completed", payoutHandler.MarkCompletedManually)
-	dashboardGroup.GET("/config", payoutHandler.GetConfig)
-	dashboardGroup.PUT("/config", payoutHandler.UpdateConfig)
-	dashboardGroup.POST("/config", payoutHandler.CreateConfig)
+	// NOTE: Dashboard/Operations endpoints have been moved to cmd/ops (ops dashboard service)
+	// See cmd/ops/routes.go -> registerOpsPayoutRoutes() for all payout operations endpoints
 }
 
 func registerV1BatchPaymentRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
@@ -296,8 +279,14 @@ func registerV1BatchPaymentRoutes(clients *externalClients, cfg *config.Config, 
 		voucherService,
 	)
 
+	// S3 client for sample CSV downloads
+	s3Client, err := fileupload.NewS3ClientFromConfig(cfg.S3)
+	if err != nil {
+		logger.GetDefault().Warnf("Failed to create S3 client for batch payments: %v (sample CSV download will be unavailable)", err)
+	}
+
 	// Handler
-	handler := batchPaymentHandler.NewBatchPaymentHandler(batchPaymentService)
+	handler := batchPaymentHandler.NewBatchPaymentHandler(batchPaymentService, s3Client)
 
 	// Routes
 	batchGroup := group.Group("/batch_payments")
@@ -307,6 +296,7 @@ func registerV1BatchPaymentRoutes(clients *externalClients, cfg *config.Config, 
 	batchGroup.GET("", handler.GetBatchList)
 	batchGroup.GET("/:batch_id", handler.GetBatchStatus)
 	batchGroup.POST("/:batch_id/process", handler.ProcessBatch)
+	batchGroup.GET("/sample_csv", handler.DownloadSampleCSV) // Download sample CSV template
 }
 
 func registerV1NotificationRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {

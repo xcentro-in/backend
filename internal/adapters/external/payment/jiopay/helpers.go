@@ -2,8 +2,11 @@ package jiopay
 
 import (
 	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
 	"encoding/base64"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 	"time"
@@ -209,84 +212,75 @@ func generateXTimestampID() string {
 }
 
 // generateXTraceID generates a UUID for request tracing
-// Returns uppercase UUID without hyphens
+// Returns lowercase UUID with hyphens (matches Java's UUID.randomUUID().toString())
 func generateXTraceID() string {
-	return strings.ReplaceAll(strings.ToUpper(uuid.Must(uuid.NewV7()).String()), "-", "")
+	return uuid.Must(uuid.NewV7()).String()
 }
 
-// generateXAppToken generates the x-app-token header using AES-128 encryption
-// Algorithm:
+// generateXAppToken generates the x-app-token header using AES-128-GCM encryption
+// Algorithm (matches JioPay Java implementation):
 // 1. Concatenate: x-app-id + "$" + x-trace-id + "$" + x-timestamp-id
-// 2. Encrypt using AES-128-ECB with shared key
-// 3. Base64 encode the encrypted value
+// 2. Encrypt using AES-128-GCM with random 12-byte IV
+// 3. Prepend IV to encrypted data (IV + encrypted + auth tag)
+// 4. Base64 encode the result
 func generateXAppToken(appID, traceID, timestampID, encryptionKey string) (string, error) {
 	// Step 1: Concatenate with "$" separator
 	rawData := fmt.Sprintf("%s$%s$%s", appID, traceID, timestampID)
 
-	fmt.Printf("🔐 x-app-token raw data: %s\n", rawData)
-
-	// Step 2: AES-128 encryption (ECB mode)
-	// Note: ECB mode doesn't use IV
-	encrypted, err := encryptAES128ECB([]byte(rawData), []byte(encryptionKey))
+	// Step 2: AES-128-GCM encryption with random IV
+	encrypted, err := encryptAES128GCM([]byte(rawData), []byte(encryptionKey))
 	if err != nil {
-		return "", fmt.Errorf("AES encryption failed: %w", err)
+		return "", fmt.Errorf("AES-GCM encryption failed: %w", err)
 	}
 
-	// Step 3: Base64 encode
+	// Step 3: Base64 encode (IV + encrypted + auth tag)
 	token := base64.StdEncoding.EncodeToString(encrypted)
 
 	return token, nil
 }
 
-// encryptAES128ECB encrypts data using AES-128 in ECB mode
-// Note: ECB mode is used here as per JioPay specification
+// encryptAES128GCM encrypts data using AES-128 in GCM mode
+// This matches JioPay's Java implementation using AES/GCM/NoPadding
+// GCM provides both confidentiality and authenticity with a 128-bit authentication tag
 // Key must be exactly 16 bytes (128 bits)
-func encryptAES128ECB(plaintext, key []byte) ([]byte, error) {
+//
+// Returns: IV (12 bytes) + Encrypted Data + Authentication Tag (16 bytes)
+func encryptAES128GCM(plaintext, key []byte) ([]byte, error) {
 	// Validate key size (must be 16 bytes for AES-128)
 	if len(key) != 16 {
 		return nil, fmt.Errorf("invalid key size: expected 16 bytes, got %d", len(key))
 	}
 
-	// Create AES cipher
+	// Create AES cipher block
 	block, err := aes.NewCipher(key)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create cipher: %w", err)
+		return nil, fmt.Errorf("failed to create AES cipher: %w", err)
 	}
 
-	// Pad plaintext to multiple of block size (PKCS7 padding)
-	blockSize := block.BlockSize()
-	paddedPlaintext := pkcs7Pad(plaintext, blockSize)
-
-	// Encrypt using ECB mode (encrypt each block independently)
-	ciphertext := make([]byte, len(paddedPlaintext))
-	for i := 0; i < len(paddedPlaintext); i += blockSize {
-		block.Encrypt(ciphertext[i:i+blockSize], paddedPlaintext[i:i+blockSize])
+	// Create GCM mode with standard 128-bit authentication tag
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create GCM: %w", err)
 	}
 
-	return ciphertext, nil
-}
+	// Generate random 12-byte IV (nonce) for this encryption
+	// IV must be unique for each encryption with the same key
+	iv := make([]byte, 12) // GCM standard nonce size
+	if _, err := io.ReadFull(rand.Reader, iv); err != nil {
+		return nil, fmt.Errorf("failed to generate IV: %w", err)
+	}
 
-// pkcs7Pad applies PKCS7 padding to data
-func pkcs7Pad(data []byte, blockSize int) []byte {
-	padding := blockSize - (len(data) % blockSize)
-	padText := make([]byte, padding)
-	for i := range padText {
-		padText[i] = byte(padding)
-	}
-	return append(data, padText...)
-}
+	// Encrypt and authenticate
+	// GCM.Seal appends the encrypted data + auth tag to the dst slice
+	ciphertext := gcm.Seal(nil, iv, plaintext, nil)
 
-// pkcs7Unpad removes PKCS7 padding from data (for future use)
-func pkcs7Unpad(data []byte) ([]byte, error) {
-	length := len(data)
-	if length == 0 {
-		return nil, fmt.Errorf("invalid padding: empty data")
-	}
-	padding := int(data[length-1])
-	if padding > length {
-		return nil, fmt.Errorf("invalid padding: padding size %d > data length %d", padding, length)
-	}
-	return data[:length-padding], nil
+	// Prepend IV to ciphertext (IV + encrypted data + auth tag)
+	// This matches Java implementation: System.arraycopy(iv, 0, encryptedWithIV, 0, iv.length)
+	result := make([]byte, len(iv)+len(ciphertext))
+	copy(result, iv)
+	copy(result[len(iv):], ciphertext)
+
+	return result, nil
 }
 
 // ============================================================================

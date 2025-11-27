@@ -168,6 +168,7 @@ func TestJioPayClientWithMock_TokenizedPayment(t *testing.T) {
 		"api-key",
 		"app-id",
 		"1234567890123456",
+		false, // isAggregatorModel
 		&MockBusinessService{},
 	)
 
@@ -246,6 +247,7 @@ func TestJioPayClientWithMock_PaymentError(t *testing.T) {
 		"api-key",
 		"app-id",
 		"1234567890123456",
+		false, // isAggregatorModel
 		&MockBusinessService{},
 	)
 

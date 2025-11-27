@@ -9,11 +9,14 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
-	payeeCore "xcentro.in/internal/core/payee"
-	voucherCore "xcentro.in/internal/core/voucher"
+	redis_client "xcentro.in/internal/adapters/cache/redis/client"
 	"xcentro.in/internal/core/auth"
+	"xcentro.in/internal/core/business"
 	"xcentro.in/internal/core/business_rules"
+	payeeCore "xcentro.in/internal/core/payee"
 	"xcentro.in/internal/core/payment"
+	"xcentro.in/internal/core/shared"
+	voucherCore "xcentro.in/internal/core/voucher"
 	"xcentro.in/internal/handlers/http/common"
 	"xcentro.in/internal/middleware"
 	"xcentro.in/internal/services/payments"
@@ -144,6 +147,36 @@ func (h *PaymentHandler) UpdateCardStatus(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, map[string]any{
 			"error":   "MISSING_BUSINESS_ID",
 			"message": "X-Business-ID header is required",
+		})
+	}
+
+	// Extract user roles from context (set by BusinessRolesMiddleware)
+	// Only owner role is allowed to update card status
+	userRoles, ok := c.Get("userRoles").([]*business.BusinessUserRelation)
+	if !ok {
+		h.logger.Warn("Missing userRoles in context")
+		return c.JSON(http.StatusForbidden, map[string]any{
+			"error":   "FORBIDDEN",
+			"message": "Access denied: insufficient permissions",
+		})
+	}
+
+	// Check if user has owner role for this business
+	hasOwnerRole := false
+	for _, relation := range userRoles {
+		if relation.BID == businessID && relation.Role == shared.Owner {
+			hasOwnerRole = true
+			break
+		}
+	}
+
+	if !hasOwnerRole {
+		h.logger.WarnWith("User does not have owner role for business",
+			"user_id", userID,
+			"business_id", businessID)
+		return c.JSON(http.StatusForbidden, map[string]any{
+			"error":   "FORBIDDEN",
+			"message": "Only business owners can update card status",
 		})
 	}
 
@@ -1310,7 +1343,7 @@ func RegisterPaymentRoutes(
 }
 
 // RegisterWalletRoutes registers all wallet management routes
-func RegisterWalletRoutes(group *echo.Group, paymentService *payments.PaymentService, paymentSourceService *payments.PaymentSourceService, walletService business_rules.WalletService, authService auth.AuthService, storedCardRepo payment.StoredCardRepository, log *logger.Logger) {
+func RegisterWalletRoutes(group *echo.Group, paymentService *payments.PaymentService, paymentSourceService *payments.PaymentSourceService, walletService business_rules.WalletService, authService auth.AuthService, storedCardRepo payment.StoredCardRepository, businessUserRelRepo business.BusinessUserRelationRepository, rclient *redis_client.RedisClient, log *logger.Logger) {
 	// Wallet routes need storedCardRepo for card status updates
 	handler := NewPaymentHandler(paymentService, paymentSourceService, walletService, nil, nil, nil, storedCardRepo, nil, log)
 
@@ -1320,7 +1353,7 @@ func RegisterWalletRoutes(group *echo.Group, paymentService *payments.PaymentSer
 	// Wallet operations
 	group.GET("", handler.FetchWallet)                            // GET /wallet - fetch wallet with inactive cards
 	group.POST("/add_source", handler.AddPaymentSource)           // POST /wallet/add_source - add new payment source
-	group.PATCH("/cards/:card_id/status", handler.UpdateCardStatus) // PATCH /wallet/cards/:card_id/status - toggle card active/inactive
+	group.PATCH("/cards/:card_id/status", handler.UpdateCardStatus, middleware.BusinessRolesMiddleware(businessUserRelRepo, rclient)) // PATCH /wallet/cards/:card_id/status - toggle card active/inactive (owner only)
 }
 
 // GetPaymentList handles GET /payments
