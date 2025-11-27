@@ -243,9 +243,10 @@ func registerV1VoucherRoutes(clients *externalClients, cfg *config.Config, group
 
 func registerV1PayoutRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
 	transferRepository := payoutRepo.NewPostgresPayoutTransferRepository(clients.db)
+	paymentRepository := paymentRepo.NewPgPaymentRepository(clients.db, cfg.BankAccountEncryption.EncryptionKey)
 	stateChangeRepository := paymentRepo.NewPostgresPaymentStateChangeRepository(clients.db)
 
-	webhookHandler := payoutHandler.NewPayoutWebhookHandler(transferRepository, stateChangeRepository, cfg.Castler.WebhookSecret)
+	webhookHandler := payoutHandler.NewPayoutWebhookHandler(transferRepository, paymentRepository, stateChangeRepository, cfg.Castler.WebhookSecret)
 
 	// Payout routes - separated by purpose
 	payoutGroup := group.Group("/payout")
