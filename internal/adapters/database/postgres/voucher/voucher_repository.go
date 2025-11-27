@@ -1678,7 +1678,7 @@ func (r *PostgresVoucherRepository) GetUnpaidBills(ctx context.Context, req *vou
 				WHEN v.invoice_due_date < CURRENT_DATE THEN 'overdue'
 				ELSE 'open'
 			END AS status,
-			pb.legal_name AS vendor_name,
+			bpr.display_name AS vendor_name,
 			pb.gstin AS vendor_gstin,
 			COUNT(*) OVER() AS total_count
 		FROM xcentro.payment_vouchers v
@@ -1696,7 +1696,9 @@ func (r *PostgresVoucherRepository) GetUnpaidBills(ctx context.Context, req *vou
 	}
 
 	query += `
-		ORDER BY v.invoice_due_date ASC NULLS LAST
+		ORDER BY
+			CASE WHEN v.invoice_due_date < CURRENT_DATE THEN 0 ELSE 1 END,
+			v.invoice_due_date ASC NULLS LAST
 		LIMIT $2 OFFSET $3
 	`
 

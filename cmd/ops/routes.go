@@ -4,9 +4,12 @@ import (
 	"github.com/labstack/echo/v4"
 	"xcentro.in/internal/adapters/database/postgres/business"
 	notificationRepo "xcentro.in/internal/adapters/database/postgres/notification"
+	payeeRepo "xcentro.in/internal/adapters/database/postgres/payee"
 	paymentRepo "xcentro.in/internal/adapters/database/postgres/payment"
 	payoutRepo "xcentro.in/internal/adapters/database/postgres/payout"
 	userRepo "xcentro.in/internal/adapters/database/postgres/user"
+	voucherRepo "xcentro.in/internal/adapters/database/postgres/voucher"
+	"xcentro.in/internal/adapters/external/payout/factory"
 	businessHandler "xcentro.in/internal/handlers/http/business"
 	notificationHandler "xcentro.in/internal/handlers/http/notification"
 	paymentHandler "xcentro.in/internal/handlers/http/payment"
@@ -114,14 +117,32 @@ func registerOpsCollectionRoutes(clients *externalClients, cfg *config.Config, g
 
 // registerOpsPayoutRoutes registers ops dashboard payout routes
 func registerOpsPayoutRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
-	// Create payout repository
+	// Create repositories
 	payoutRepository := payoutRepo.NewPostgresOpsPayoutRepository(clients.db)
+	paymentRepository := paymentRepo.NewPgPaymentRepository(clients.db, cfg.BankAccountEncryption.EncryptionKey)
+	transferRepository := payoutRepo.NewPostgresPayoutTransferRepository(clients.db)
+	configRepository := payoutRepo.NewPostgresPayoutConfigurationRepository(clients.db)
+	voucherRepository := voucherRepo.NewPostgresVoucherRepository(clients.db, cfg.BankAccountEncryption.EncryptionKey)
+	bankAccountRepository := payeeRepo.NewPgPayeeBankAccountRepository(clients.db, cfg.BankAccountEncryption.EncryptionKey)
+	stateChangeRepository := paymentRepo.NewPostgresPaymentStateChangeRepository(clients.db)
 
-	// Create ops payout service
-	payoutService := payoutSvc.NewOpsPayoutService(payoutRepository)
+	// Create ops payout service (for listing endpoints)
+	opsPayoutService := payoutSvc.NewOpsPayoutService(payoutRepository)
 
-	// Register routes
-	payoutHandler.RegisterOpsPayoutRoutes(group, payoutService)
+	// Create payout provider factory and full payout service (for operations)
+	providerFactory := factory.NewPayoutProviderFactory(cfg)
+	payoutService := payoutSvc.NewPayoutService(
+		paymentRepository,
+		voucherRepository,
+		transferRepository,
+		bankAccountRepository,
+		configRepository,
+		stateChangeRepository,
+		providerFactory,
+	)
+
+	// Register all payout routes (listing + operations)
+	payoutHandler.RegisterOpsPayoutRoutes(group, opsPayoutService, payoutService)
 }
 
 func registerOpsV1Routes(s *opsDashboardServer) {

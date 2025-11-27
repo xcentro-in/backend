@@ -12,28 +12,39 @@ import (
 
 // OpsPayoutHandler handles ops dashboard payout-related endpoints
 type OpsPayoutHandler struct {
-	payoutService *payoutSvc.OpsPayoutService
-	logger        *logger.Logger
+	payoutListService *payoutSvc.OpsPayoutService // For listing endpoints
+	payoutService     *payoutSvc.PayoutService    // For operations (initiate, etc.)
+	logger            *logger.Logger
 }
 
 // NewOpsPayoutHandler creates a new ops payout handler instance
-func NewOpsPayoutHandler(payoutService *payoutSvc.OpsPayoutService) *OpsPayoutHandler {
+func NewOpsPayoutHandler(
+	payoutListService *payoutSvc.OpsPayoutService,
+	payoutService *payoutSvc.PayoutService,
+) *OpsPayoutHandler {
 	return &OpsPayoutHandler{
-		payoutService: payoutService,
-		logger:        logger.GetDefault(),
+		payoutListService: payoutListService,
+		payoutService:     payoutService,
+		logger:            logger.GetDefault(),
 	}
 }
 
 // RegisterOpsPayoutRoutes registers all ops dashboard payout routes
-func RegisterOpsPayoutRoutes(e *echo.Group, payoutService *payoutSvc.OpsPayoutService) {
-	handler := NewOpsPayoutHandler(payoutService)
+func RegisterOpsPayoutRoutes(
+	e *echo.Group,
+	payoutListService *payoutSvc.OpsPayoutService,
+	payoutService *payoutSvc.PayoutService,
+) {
+	handler := NewOpsPayoutHandler(payoutListService, payoutService)
 
 	payoutGroup := e.Group("/payouts")
 
-	// Endpoint: Paginated list of payout transfers
+	// Listing endpoints
 	payoutGroup.GET("", handler.ListPayouts)
-	// Endpoint: Get payout transfer summary
 	payoutGroup.GET("/summary/:id", handler.GetPayoutSummary)
+
+	// Operations endpoints
+	payoutGroup.POST("/initiate_payout", handler.InitiatePayoutManually)
 }
 
 // ListPayouts handles GET /payouts?page=1&limit=20&status=in_progress|completed|failed
@@ -70,7 +81,7 @@ func (h *OpsPayoutHandler) ListPayouts(c echo.Context) error {
 	}
 
 	// Call service layer
-	response, err := h.payoutService.ListPayouts(c.Request().Context(), req.Page, req.Limit, string(req.Status))
+	response, err := h.payoutListService.ListPayouts(c.Request().Context(), req.Page, req.Limit, string(req.Status))
 	if err != nil {
 		h.logger.Errorf("Error listing payouts: %v", err)
 		return c.JSON(http.StatusInternalServerError, map[string]string{
@@ -92,7 +103,7 @@ func (h *OpsPayoutHandler) GetPayoutSummary(c echo.Context) error {
 	}
 
 	// Call service layer
-	summary, err := h.payoutService.GetPayoutSummary(c.Request().Context(), transferRequestID)
+	summary, err := h.payoutListService.GetPayoutSummary(c.Request().Context(), transferRequestID)
 	if err != nil {
 		h.logger.Errorf("Error getting payout summary: %v", err)
 		if err.Error() == "payout transfer not found: "+transferRequestID {
@@ -106,4 +117,61 @@ func (h *OpsPayoutHandler) GetPayoutSummary(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, summary)
+}
+
+// InitiatePayoutManually handles POST /payouts/initiate_payout
+// Manually triggers payout for a payment - processes all vouchers or specific ones
+func (h *OpsPayoutHandler) InitiatePayoutManually(c echo.Context) error {
+	ctx := c.Request().Context()
+
+	// Bind and validate request
+	var req struct {
+		PaymentID    string   `json:"payment_id" validate:"required,uuid"`
+		VoucherIDs   []string `json:"voucher_ids"` // Optional - empty means all unpaid vouchers
+		InitiatedBy  string   `json:"initiated_by" validate:"required,uuid"`
+		BypassChecks bool     `json:"bypass_checks"` // Admin override for emergency payouts
+		Remarks      string   `json:"remarks"`
+	}
+
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "Invalid request body",
+		})
+	}
+
+	validator.TrimStrings(&req)
+	if err := c.Validate(&req); err != nil {
+		if ve, ok := err.(*validator.ValidationError); ok {
+			return c.JSON(http.StatusBadRequest, map[string]interface{}{
+				"error":  "Validation failed",
+				"errors": ve.Errors,
+			})
+		}
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": err.Error(),
+		})
+	}
+
+	h.logger.InfoWith("Ops: Initiating manual payout",
+		"payment_id", req.PaymentID,
+		"voucher_count", len(req.VoucherIDs),
+		"initiated_by", req.InitiatedBy,
+		"bypass_checks", req.BypassChecks)
+
+	// Call service to initiate payout and process async
+	result, err := h.payoutService.InitiateAndProcessPayout(ctx, req.PaymentID, req.VoucherIDs, req.InitiatedBy, req.BypassChecks)
+	if err != nil {
+		h.logger.ErrorWith("Failed to initiate payout", "payment_id", req.PaymentID, "error", err)
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error":   "failed_to_initiate_payout",
+			"message": err.Error(),
+		})
+	}
+
+	h.logger.InfoWith("Payout initiated successfully",
+		"payment_id", result.PaymentID,
+		"transfer_count", result.TransferCount,
+		"total_amount", result.TotalAmount)
+
+	return c.JSON(http.StatusCreated, result)
 }

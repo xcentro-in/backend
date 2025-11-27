@@ -21,6 +21,7 @@ type PayoutService struct {
 	transferRepo    payout.PayoutTransferRepository
 	bankAccountRepo payee.PayeeBankAccountRepository
 	configRepo      payout.PayoutConfigurationRepository
+	stateChangeRepo payment.PaymentStateChangeRepository
 	providerFactory PayoutProviderFactory // Interface to get payout provider
 	logger          *logger.Logger
 }
@@ -37,6 +38,7 @@ func NewPayoutService(
 	transferRepo payout.PayoutTransferRepository,
 	bankAccountRepo payee.PayeeBankAccountRepository,
 	configRepo payout.PayoutConfigurationRepository,
+	stateChangeRepo payment.PaymentStateChangeRepository,
 	providerFactory PayoutProviderFactory,
 ) *PayoutService {
 	return &PayoutService{
@@ -45,6 +47,7 @@ func NewPayoutService(
 		transferRepo:    transferRepo,
 		bankAccountRepo: bankAccountRepo,
 		configRepo:      configRepo,
+		stateChangeRepo: stateChangeRepo,
 		providerFactory: providerFactory,
 		logger:          logger.GetDefault(),
 	}
@@ -346,4 +349,268 @@ func (s *PayoutService) MarkCompletedManually(ctx context.Context, transferReque
 		"completed_by", completedBy)
 	s.logger.DebugWith("TODO: Add audit logging for manual completions")
 	return nil
+}
+
+// PayoutInitiationResult represents the result of initiating a payout
+type PayoutInitiationResult struct {
+	PaymentID     string                    `json:"payment_id"`
+	TransferCount int                       `json:"transfer_count"`
+	Transfers     []PayoutTransferDetail    `json:"transfers"` // Detailed transfer info with voucher mapping
+	TotalAmount   int64                     `json:"total_amount"`
+	Currency      string                    `json:"currency"`
+	Status        string                    `json:"status"`
+	Message       string                    `json:"message"`
+}
+
+// PayoutTransferDetail represents details of a single transfer in the response
+type PayoutTransferDetail struct {
+	TransferID string `json:"transfer_id"`
+	VoucherID  string `json:"voucher_id"`
+	Amount     int64  `json:"amount"`
+	Status     string `json:"status"`
+}
+
+// InitiateAndProcessPayout creates transfer requests and immediately processes them async
+// This is the main entry point for manual payout initiation from ops dashboard
+func (s *PayoutService) InitiateAndProcessPayout(
+	ctx context.Context,
+	paymentID string,
+	voucherIDs []string,
+	initiatedBy string,
+	bypassChecks bool,
+) (*PayoutInitiationResult, error) {
+	s.logger.InfoWith("InitiateAndProcessPayout called",
+		"payment_id", paymentID,
+		"voucher_count", len(voucherIDs),
+		"initiated_by", initiatedBy,
+		"bypass_checks", bypassChecks)
+
+	// Step 1: Create transfer requests with status='initiated'
+	transfers, err := s.InitiateManualPayout(ctx, paymentID, voucherIDs, bypassChecks)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create transfer requests: %w", err)
+	}
+
+	s.logger.InfoWith("Transfer requests created", "count", len(transfers))
+
+	// Step 2: Spawn async processing for all transfers
+	go s.processTransfersAsync(context.Background(), transfers)
+
+	// Step 3: Build result with detailed transfer info
+	transferDetails := make([]PayoutTransferDetail, len(transfers))
+	totalAmount := int64(0)
+	for i, t := range transfers {
+		transferDetails[i] = PayoutTransferDetail{
+			TransferID: t.TransferRequestID,
+			VoucherID:  t.VoucherID,
+			Amount:     t.Amount,
+			Status:     string(t.Status), // "initiated"
+		}
+		totalAmount += t.Amount
+	}
+
+	return &PayoutInitiationResult{
+		PaymentID:     paymentID,
+		TransferCount: len(transfers),
+		Transfers:     transferDetails,
+		TotalAmount:   totalAmount,
+		Currency:      "INR",
+		Status:        "initiated",
+		Message:       "Payout initiated - processing in background",
+	}, nil
+}
+
+// processTransfersAsync processes multiple transfers in parallel (background goroutines)
+func (s *PayoutService) processTransfersAsync(ctx context.Context, transfers []*payout.PayoutTransferRequest) {
+	s.logger.InfoWith("processTransfersAsync started", "count", len(transfers))
+
+	// Launch goroutine for each transfer
+	for _, transfer := range transfers {
+		go s.processSingleTransfer(ctx, transfer)
+	}
+
+	s.logger.InfoWith("All transfer goroutines launched", "count", len(transfers))
+}
+
+// processSingleTransfer processes a single transfer: calls provider API, updates status, logs activity
+func (s *PayoutService) processSingleTransfer(ctx context.Context, transfer *payout.PayoutTransferRequest) {
+	s.logger.InfoWith("Processing transfer",
+		"transfer_id", transfer.TransferRequestID,
+		"voucher_id", transfer.VoucherID,
+		"amount", transfer.Amount)
+
+	// Parse UUIDs for activity tracking
+	transferUUID, err := uuid.Parse(transfer.TransferRequestID)
+	if err != nil {
+		s.logger.ErrorWith("Invalid transfer_request_id UUID", "error", err)
+		return
+	}
+
+	paymentUUID, err := uuid.Parse(transfer.PaymentID)
+	if err != nil {
+		s.logger.ErrorWith("Invalid payment_id UUID", "error", err)
+		return
+	}
+
+	// Log: Payout initiated
+	s.logPayoutInitiated(ctx, paymentUUID, transferUUID, transfer)
+
+	// Get provider
+	provider, err := s.providerFactory.GetProvider(transfer.Provider)
+	if err != nil {
+		s.logger.ErrorWith("Failed to get provider", "error", err)
+		s.markTransferFailed(ctx, transfer, transferUUID, paymentUUID, fmt.Sprintf("Failed to get provider: %v", err))
+		return
+	}
+
+	// Call provider API
+	createReq := &payout.CreateTransferRequest{
+		TransferRequestID:     transfer.TransferRequestID,
+		VoucherID:             transfer.VoucherID,
+		ProviderBeneficiaryID: transfer.ProviderBeneficiaryID,
+		EscrowID:              transfer.EscrowID,
+		Amount:                transfer.Amount,
+		Currency:              transfer.Currency,
+		Purpose:               transfer.Purpose,
+		Reference:             transfer.Reference,
+		Narration:             transfer.Narration,
+		TransferMode:          transfer.TransferMode,
+	}
+
+	resp, err := provider.CreateTransferRequest(ctx, createReq)
+	if err != nil {
+		s.logger.ErrorWith("Provider API error", "error", err)
+		s.markTransferFailed(ctx, transfer, transferUUID, paymentUUID, fmt.Sprintf("Provider API error: %v", err))
+		return
+	}
+
+	s.logger.InfoWith("Provider API success",
+		"transfer_id", transfer.TransferRequestID,
+		"provider_transfer_id", resp.ProviderTransferID)
+
+	// Update status to 'pending'
+	pendingTime := time.Now()
+	if err := s.transferRepo.UpdateStatus(ctx, transfer.TransferRequestID, payout.TransferStatusPending, pendingTime); err != nil {
+		s.logger.ErrorWith("Failed to update status to pending", "error", err)
+		return
+	}
+
+	// Store provider transfer ID
+	if err := s.transferRepo.UpdateProviderTransferID(ctx, transfer.TransferRequestID, resp.ProviderTransferID); err != nil {
+		s.logger.ErrorWith("Failed to update provider transfer ID", "error", err)
+		return
+	}
+
+	// Log: Payout pending
+	s.logPayoutPending(ctx, paymentUUID, transferUUID, transfer, resp.ProviderTransferID, pendingTime)
+
+	// Set webhook timeout
+	config, err := s.configRepo.GetConfig(ctx, nil)
+	if err == nil {
+		timeoutAt := pendingTime.Add(time.Duration(config.WebhookTimeoutMinutes) * time.Minute)
+		if err := s.transferRepo.SetWebhookTimeout(ctx, transfer.TransferRequestID, timeoutAt); err != nil {
+			s.logger.ErrorWith("Failed to set webhook timeout", "error", err)
+		}
+	}
+
+	s.logger.InfoWith("Transfer processed successfully",
+		"transfer_id", transfer.TransferRequestID,
+		"status", "pending")
+}
+
+// logPayoutInitiated logs payout_initiated activity
+func (s *PayoutService) logPayoutInitiated(ctx context.Context, paymentID, transferID uuid.UUID, transfer *payout.PayoutTransferRequest) {
+	_, err := s.stateChangeRepo.Create(ctx, &payment.CreatePaymentStateChangeRequest{
+		PaymentID:       paymentID,
+		TransferID:      &transferID,
+		Action:          payment.PayoutActionInitiated,
+		ActionTimestamp: time.Now(),
+		ActorType:       payment.ActorTypeSystem,
+		ActorName:       "payout_service",
+		NewState:        "initiated",
+		Amount:          transfer.Amount,
+		Currency:        transfer.Currency,
+		Provider:        string(transfer.Provider),
+		Metadata: map[string]any{
+			"transfer_mode": transfer.TransferMode,
+			"purpose":       transfer.Purpose,
+		},
+		Remarks: fmt.Sprintf("Manual payout initiated for transfer %s", transfer.TransferRequestID),
+	})
+	if err != nil {
+		s.logger.ErrorWith("Failed to log payout initiated", "error", err)
+	}
+}
+
+// logPayoutPending logs payout_processing activity when API succeeds
+func (s *PayoutService) logPayoutPending(
+	ctx context.Context,
+	paymentID, transferID uuid.UUID,
+	transfer *payout.PayoutTransferRequest,
+	providerTransferID string,
+	timestamp time.Time,
+) {
+	_, err := s.stateChangeRepo.Create(ctx, &payment.CreatePaymentStateChangeRequest{
+		PaymentID:       paymentID,
+		TransferID:      &transferID,
+		Action:          payment.PayoutActionProcessing,
+		ActionTimestamp: timestamp,
+		ActorType:       payment.ActorTypeSystem,
+		ActorName:       "payout_service",
+		PreviousState:   "initiated",
+		NewState:        "pending",
+		Amount:          transfer.Amount,
+		Currency:        transfer.Currency,
+		Provider:        string(transfer.Provider),
+		Metadata: map[string]any{
+			"provider_transfer_id": providerTransferID,
+			"transfer_mode":        transfer.TransferMode,
+		},
+		Remarks: fmt.Sprintf("Provider API success - now pending settlement (Provider transferId: %s)", providerTransferID),
+	})
+	if err != nil {
+		s.logger.ErrorWith("Failed to log payout pending", "error", err)
+	}
+}
+
+// markTransferFailed updates transfer status and logs failure activity
+func (s *PayoutService) markTransferFailed(
+	ctx context.Context,
+	transfer *payout.PayoutTransferRequest,
+	transferUUID, paymentUUID uuid.UUID,
+	reason string,
+) {
+	failedTime := time.Now()
+
+	// Update status
+	if err := s.transferRepo.MarkFailed(ctx, transfer.TransferRequestID, reason, failedTime); err != nil {
+		s.logger.ErrorWith("Failed to mark transfer as failed", "error", err)
+		return
+	}
+
+	// Log activity
+	_, err := s.stateChangeRepo.Create(ctx, &payment.CreatePaymentStateChangeRequest{
+		PaymentID:       paymentUUID,
+		TransferID:      &transferUUID,
+		Action:          payment.PayoutActionFailed,
+		ActionTimestamp: failedTime,
+		ActorType:       payment.ActorTypeSystem,
+		ActorName:       "payout_service",
+		PreviousState:   "initiated",
+		NewState:        "failed",
+		Amount:          transfer.Amount,
+		Currency:        transfer.Currency,
+		Provider:        string(transfer.Provider),
+		Metadata: map[string]any{
+			"failure_reason": reason,
+		},
+		Remarks: fmt.Sprintf("Payout failed: %s", reason),
+	})
+	if err != nil {
+		s.logger.ErrorWith("Failed to log payout failure", "error", err)
+	}
+
+	s.logger.ErrorWith("Transfer marked as failed",
+		"transfer_id", transfer.TransferRequestID,
+		"reason", reason)
 }
