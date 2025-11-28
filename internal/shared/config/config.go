@@ -25,6 +25,7 @@ type Config struct {
 	S3                    S3Config                    `json:"s3"`
 	SES                   SESConfig                   `json:"ses"`
 	Castler               CastlerConfig               `json:"castler"`
+	Payout                PayoutConfig                `json:"payout"`
 	JioPay                JioPayConfig                `json:"jiopay"`
 	Easebuzz              EasebuzzConfig              `json:"easebuzz"`
 	MockPG                MockPGConfig                `json:"mockpg"`
@@ -35,6 +36,7 @@ type Config struct {
 	AuthBridge            AuthBridgeConfig            `json:"authbridge"`
 	RateLimiter           RateLimiterConfig           `json:"rate_limiter"`
 	OpsAccess             OpsAccessConfig             `json:"ops_access"`
+	Logger                LoggerConfig                `json:"logger"`
 }
 
 // JWTSecretConfig holds JWT secret configuration.
@@ -101,7 +103,29 @@ type CastlerConfig struct {
 	WebhookSecret string `json:"-" env:"CASTLER_WEBHOOK_SECRET"`                              // Webhook signature verification (sensitive)
 	EncryptionKey string `json:"-" env:"CASTLER_ENCRYPTION_KEY"`                              // AES encryption key (optional, sensitive)
 	EncryptionIV  string `json:"-" env:"CASTLER_ENCRYPTION_IV"`                               // Fixed AES IV in base64 (optional, sensitive)
+	EscrowID      string `json:"-" env:"CASTLER_ESCROW_ID"`                                   // Escrow account ID (sensitive)
 	MockEnabled   bool   `json:"mock_enabled" env:"CASTLER_MOCK_ENABLED" env-default:"false"` // Enable mock mode for testing (no real API calls)
+}
+
+// PayoutConfig holds payout system configuration
+// All values hardcoded - no need for env variables until automated retry is implemented
+type PayoutConfig struct {
+	MaxRetryAttempts       int     // Hardcoded: 3 (not used until auto-retry implemented)
+	RetryDelayMinutes      int     // Hardcoded: 15 (not used until auto-retry implemented)
+	RetryBackoffMultiplier float64 // Hardcoded: 2.0 (not used until auto-retry implemented)
+	WebhookTimeoutMinutes  int     // Hardcoded: 60 minutes (flags transfer for manual review if no webhook)
+	RTGSThresholdAmount    int64   // Hardcoded: 20000000 paise (₹2,00,000) - NEFT below, RTGS above
+}
+
+// NewPayoutConfig returns hardcoded payout configuration
+func NewPayoutConfig() PayoutConfig {
+	return PayoutConfig{
+		MaxRetryAttempts:       3,
+		RetryDelayMinutes:      15,
+		RetryBackoffMultiplier: 2.0,
+		WebhookTimeoutMinutes:  60,        // 1 hour
+		RTGSThresholdAmount:    20000000,  // ₹2 lakh
+	}
 }
 
 // JioPayConfig holds JioPay payment gateway configuration.
@@ -245,6 +269,12 @@ type OpsAccessConfig struct {
 	RejectAccess bool `json:"reject_access" env:"OPS_REJECT_ACCESS" env-default:"true"` // Reject all ops dashboard requests by default
 }
 
+// LoggerConfig holds logger configuration.
+type LoggerConfig struct {
+	Level  string `json:"level" env:"LOG_LEVEL" env-default:"info"`   // Log level: debug, info, warn, error
+	Format string `json:"format" env:"LOG_FORMAT" env-default:"text"` // Log format: text, json
+}
+
 // RateLimiterConfig holds rate limiter configuration for token-bucket algorithm.
 type RateLimiterConfig struct {
 	Enabled                      bool          `json:"enabled" env:"RATE_LIMITER_ENABLED" env-default:"true"`
@@ -288,6 +318,9 @@ func Load(path string) (Config, error) {
 			return cfg, fmt.Errorf("read env: %w", err)
 		}
 	}
+
+	// Set hardcoded payout configuration (not configurable via env)
+	cfg.Payout = NewPayoutConfig()
 
 	return cfg, err
 }

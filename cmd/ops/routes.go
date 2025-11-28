@@ -136,7 +136,6 @@ func registerOpsPayoutRoutes(clients *externalClients, cfg *config.Config, group
 	payoutRepository := payoutRepo.NewPostgresOpsPayoutRepository(clients.db)
 	paymentRepository := paymentRepo.NewPgPaymentRepository(clients.db, cfg.BankAccountEncryption.EncryptionKey)
 	transferRepository := payoutRepo.NewPostgresPayoutTransferRepository(clients.db)
-	configRepository := payoutRepo.NewPostgresPayoutConfigurationRepository(clients.db)
 	voucherRepository := voucherRepo.NewPostgresVoucherRepository(clients.db, cfg.BankAccountEncryption.EncryptionKey)
 	bankAccountRepository := payeeRepo.NewPgPayeeBankAccountRepository(clients.db, cfg.BankAccountEncryption.EncryptionKey)
 	stateChangeRepository := paymentRepo.NewPostgresPaymentStateChangeRepository(clients.db)
@@ -151,9 +150,9 @@ func registerOpsPayoutRoutes(clients *externalClients, cfg *config.Config, group
 		voucherRepository,
 		transferRepository,
 		bankAccountRepository,
-		configRepository,
 		stateChangeRepository,
 		providerFactory,
+		cfg, // Pass config for retry/timeout settings and transfer mode logic
 	)
 
 	// Register all payout routes (listing + operations)

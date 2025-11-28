@@ -11,6 +11,7 @@ import (
 	"xcentro.in/internal/core/payment"
 	"xcentro.in/internal/core/payout"
 	"xcentro.in/internal/core/voucher"
+	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/logger"
 )
 
@@ -20,9 +21,9 @@ type PayoutService struct {
 	voucherRepo     voucher.VoucherRepository
 	transferRepo    payout.PayoutTransferRepository
 	bankAccountRepo payee.PayeeBankAccountRepository
-	configRepo      payout.PayoutConfigurationRepository
 	stateChangeRepo payment.PaymentStateChangeRepository
 	providerFactory PayoutProviderFactory // Interface to get payout provider
+	config          *config.Config        // Application config (for retry, timeout, RTGS threshold)
 	logger          *logger.Logger
 }
 
@@ -37,20 +38,31 @@ func NewPayoutService(
 	voucherRepo voucher.VoucherRepository,
 	transferRepo payout.PayoutTransferRepository,
 	bankAccountRepo payee.PayeeBankAccountRepository,
-	configRepo payout.PayoutConfigurationRepository,
 	stateChangeRepo payment.PaymentStateChangeRepository,
 	providerFactory PayoutProviderFactory,
+	cfg *config.Config,
 ) *PayoutService {
 	return &PayoutService{
 		paymentRepo:     paymentRepo,
 		voucherRepo:     voucherRepo,
 		transferRepo:    transferRepo,
 		bankAccountRepo: bankAccountRepo,
-		configRepo:      configRepo,
 		stateChangeRepo: stateChangeRepo,
 		providerFactory: providerFactory,
+		config:          cfg,
 		logger:          logger.GetDefault(),
 	}
+}
+
+// determineTransferMode selects transfer mode based on amount
+// NEFT: ≤ ₹2,00,000 (20000000 paise)
+// RTGS: > ₹2,00,000
+// IMPS: Future (on-demand payouts, post-MVP)
+func (s *PayoutService) determineTransferMode(amountInPaise int64) string {
+	if amountInPaise > s.config.Payout.RTGSThresholdAmount {
+		return "RTGS"
+	}
+	return "NEFT"
 }
 
 // InitiateManualPayout creates payout transfer requests for a payment
@@ -163,13 +175,7 @@ func (s *PayoutService) InitiateManualPayout(ctx context.Context, paymentID stri
 
 	s.logger.InfoWith("Target vouchers identified", "count", len(targetVouchers))
 
-	// Step 4: Get configuration
-	config, err := s.configRepo.GetConfig(ctx, nil) // Use global config for MVP
-	if err != nil {
-		return nil, fmt.Errorf("failed to get payout configuration: %w", err)
-	}
-
-	// Step 5: Create transfer requests for each voucher
+	// Step 4: Create transfer requests for each voucher
 	var transfers []*payout.PayoutTransferRequest
 
 	for _, vch := range targetVouchers {
@@ -179,6 +185,9 @@ func (s *PayoutService) InitiateManualPayout(ctx context.Context, paymentID stri
 			return nil, fmt.Errorf("failed to get Castler beneficiary ID for voucher %s: %w", vch.VoucherID.String(), err)
 		}
 
+		// Determine transfer mode based on amount
+		transferMode := s.determineTransferMode(vch.NetAmount)
+
 		// Create transfer request
 		transferReq := &payout.PayoutTransferRequest{
 			TransferRequestID:     uuid.Must(uuid.NewV7()).String(),
@@ -186,16 +195,16 @@ func (s *PayoutService) InitiateManualPayout(ctx context.Context, paymentID stri
 			VoucherID:             vch.VoucherID.String(),
 			Provider:              payout.ProviderCastler, // Always Castler for now
 			ProviderBeneficiaryID: castlerBeneficiaryID,
-			EscrowID:              "", // TODO: Get from config/environment
+			EscrowID:              "", // Populated from Castler client config (not needed here)
 			Amount:                vch.NetAmount,
 			Currency:              vch.Currency,
 			Purpose:               "vendor_payment",
-			Reference:             vch.VoucherNumber,
-			Narration:             fmt.Sprintf("Payment for %s", vch.VoucherNumber),
-			TransferMode:          config.PreferredTransferMode,
+			Reference:             vch.InvoiceNumber,     // Invoice number (used as customerRefId in Castler)
+			Narration:             fmt.Sprintf("Payment for %s", vch.InvoiceNumber),
+			TransferMode:          transferMode,          // NEFT (≤₹2L) or RTGS (>₹2L)
 			Status:                payout.TransferStatusInitiated,
 			RetryCount:            0,
-			MaxRetries:            config.MaxRetryAttempts,
+			MaxRetries:            s.config.Payout.MaxRetryAttempts,
 			CreatedAt:             time.Now(),
 		}
 
@@ -252,11 +261,8 @@ func (s *PayoutService) InitiatePayoutForVoucher(ctx context.Context, voucherID 
 		return nil, fmt.Errorf("failed to get Castler beneficiary ID: %w", err)
 	}
 
-	// Step 5: Get configuration
-	config, err := s.configRepo.GetConfig(ctx, nil) // Use global config for MVP
-	if err != nil {
-		return nil, fmt.Errorf("failed to get payout configuration: %w", err)
-	}
+	// Step 5: Determine transfer mode based on amount
+	transferMode := s.determineTransferMode(vch.NetAmount)
 
 	// Step 6: Create transfer request (simplified - no approval workflow)
 	transferReq := &payout.PayoutTransferRequest{
@@ -265,16 +271,16 @@ func (s *PayoutService) InitiatePayoutForVoucher(ctx context.Context, voucherID 
 		VoucherID:             voucherID,
 		Provider:              payout.ProviderCastler, // Always Castler for now
 		ProviderBeneficiaryID: castlerBeneficiaryID,
-		EscrowID:              "", // TODO: Get from config/environment
+		EscrowID:              "", // Populated from Castler client config (not needed here)
 		Amount:                vch.NetAmount,
 		Currency:              vch.Currency,
 		Purpose:               "vendor_payment",
-		Reference:             vch.VoucherNumber, // Will use transfer_request_id in new flow
-		Narration:             fmt.Sprintf("Payment for %s", vch.VoucherNumber),
-		TransferMode:          config.PreferredTransferMode,
+		Reference:             vch.InvoiceNumber,     // Invoice number (used as customerRefId in Castler)
+		Narration:             fmt.Sprintf("Payment for %s", vch.InvoiceNumber),
+		TransferMode:          transferMode,          // NEFT (≤₹2L) or RTGS (>₹2L)
 		Status:                payout.TransferStatusInitiated,
 		RetryCount:            0,
-		MaxRetries:            config.MaxRetryAttempts,
+		MaxRetries:            s.config.Payout.MaxRetryAttempts,
 		CreatedAt:             time.Now(),
 	}
 
@@ -505,12 +511,9 @@ func (s *PayoutService) processSingleTransfer(ctx context.Context, transfer *pay
 	s.logPayoutPending(ctx, paymentUUID, transferUUID, transfer, resp.ProviderTransferID, pendingTime)
 
 	// Set webhook timeout
-	config, err := s.configRepo.GetConfig(ctx, nil)
-	if err == nil {
-		timeoutAt := pendingTime.Add(time.Duration(config.WebhookTimeoutMinutes) * time.Minute)
-		if err := s.transferRepo.SetWebhookTimeout(ctx, transfer.TransferRequestID, timeoutAt); err != nil {
-			s.logger.ErrorWith("Failed to set webhook timeout", "error", err)
-		}
+	timeoutAt := pendingTime.Add(time.Duration(s.config.Payout.WebhookTimeoutMinutes) * time.Minute)
+	if err := s.transferRepo.SetWebhookTimeout(ctx, transfer.TransferRequestID, timeoutAt); err != nil {
+		s.logger.ErrorWith("Failed to set webhook timeout", "error", err)
 	}
 
 	s.logger.InfoWith("Transfer processed successfully",
