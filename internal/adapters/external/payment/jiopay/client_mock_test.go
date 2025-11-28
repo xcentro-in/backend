@@ -93,61 +93,51 @@ func TestJioPayClientWithMock_RegularPayment(t *testing.T) {
 	t.Logf("   Redirect URL: %s", response.RedirectURL)
 }
 
-// TestJioPayClientWithMock_TokenizedPayment tests tokenized payment flow (3-step: fetch card → cryptogram → payment)
+// TestJioPayClientWithMock_TokenizedPayment tests tokenized payment flow (2-step: cryptogram → payment)
+// NEW: No need to fetch-card anymore since vaultId is stored directly as token!
 func TestJioPayClientWithMock_TokenizedPayment(t *testing.T) {
 	mockTransport := jiopay.NewMockTransport()
 
-	// Step 1: Mock fetch card endpoint
-	mockTransport.AddRoute("POST", "/fetch-card", `{
-		"status": {
-			"status": "SUCCESS"
-		},
-		"card": [{
-			"vaultId": "vault-123",
-			"maskedNumber": "XXXXXXXXXXXX1234",
-			"type": 1,
-			"expiryMm": "12",
-			"expiryYy": "25",
-			"name": "Test Card",
-			"scheme": 104,
-			"bankId": "BANK123",
-			"remark": "test-remark",
-			"product": "CREDIT",
-			"countryCode": "IN",
-			"tokenReference": "token-ref-123",
-			"bankName": "Test Bank",
-			"authorizationState": "ACTIVE",
-			"status": "ACTIVE"
-		}]
-	}`, 200)
-
-	// Step 2: Mock getCryptogram endpoint
-	mockTransport.AddRoute("POST", "/getCryptogram/vault-123", `{
+	// Step 1: Mock getCryptogram endpoint (using vaultId from stored token)
+	// NEW: Network token is now a string, matching actual JioPay response
+	mockTransport.AddRoute("POST", "/getCryptogram/30518336", `{
 		"status": {
 			"status": "SUCCESS"
 		},
 		"card": {
-			"type": 1,
-			"expiryMm": "12",
-			"expiryYy": "25",
-			"name": "Test Card",
+			"type": 130,
+			"expiryMm": "XX",
+			"expiryYy": "XXXX",
+			"name": "XXXXXXXXXXXXXX",
 			"scheme": 104,
-			"remark": "test-remark",
-			"vaultId": "vault-123",
-			"maskedNumber": "XXXXXXXXXXXX1234",
-			"status": "ACTIVE",
+			"bankId": "NA",
+			"remark": "CustId1000010002174238412819692",
+			"vaultId": "30518336",
+			"maskedNumber": "XXXXXXXXXXXX0055",
+			"product": "MPL",
+			"countryCode": "91",
+			"tokenReference": "DNITHE3176415083784437844",
+			"bankName": "NA",
+			"par": "V20251126176415083784495166341",
+			"authorizationState": "98765432109876543212",
+			"cvvLess": 1,
+			"cardReference": "91",
+			"consent": {
+				"id": "123",
+				"timestamp": "2025-09-25T18:15:30.0002"
+			},
+			"productType": "Normal",
 			"isExpired": false,
-			"isDomestic": true,
-			"cvvLess": 0
+			"isDomestic": true
 		},
 		"secure": {
-			"token": 1234567890123456,
-			"tokenExpiry": "122025",
-			"cryptogram": "ABCDEF1234567890CRYPTOGRAM1234567890ABCDEF"
+			"token": "4489682380079084",
+			"tokenExpiry": "122027",
+			"cryptogram": "I6SCOIN6QhVdmqiuYRp2kQdeOr="
 		}
 	}`, 200)
 
-	// Step 3: Mock initiateSale endpoint
+	// Step 2: Mock initiateSale endpoint
 	mockTransport.AddRoute("POST", "/initiateSale", `{
 		"responseCode": "R1000",
 		"responseDescription": "Transaction initiated successfully",
@@ -183,13 +173,9 @@ func TestJioPayClientWithMock_TokenizedPayment(t *testing.T) {
 		Amount:        100000, // ₹1000
 		Currency:      payment.CurrencyINR,
 		PaymentMethod: payment.PaymentMethodCard,
-		Token:         "stored-token", // Token presence triggers tokenized flow
-		Metadata: map[string]any{
-			"stored_card": map[string]any{
-				"last_four_digits": "1234",
-				"card_type":        "credit",
-				"card_category":    "visa",
-			},
+		Token:         "30518336", // NEW: VaultId directly from stored_cards.token
+		Metadata:      map[string]any{
+			// No need for stored_card metadata - vaultId used directly!
 		},
 	}
 
@@ -216,11 +202,12 @@ func TestJioPayClientWithMock_TokenizedPayment(t *testing.T) {
 		t.Errorf("Expected RedirectURL 'https://jiopay.example.com/redirect?token=xyz', got '%s'", response.RedirectURL)
 	}
 
-	t.Logf("✅ Tokenized payment test passed (3-step flow complete)")
+	t.Logf("✅ Tokenized payment test passed (2-step flow: cryptogram → payment)")
 	t.Logf("   Transaction ID: %s", response.TransactionID)
 	t.Logf("   Gateway Payment ID: %s", response.GatewayPaymentID)
 	t.Logf("   Status: %s", response.Status)
 	t.Logf("   Redirect URL: %s", response.RedirectURL)
+	t.Logf("   ✅ No fetch-card needed - vaultId used directly as token!")
 }
 
 // TestJioPayClientWithMock_PaymentError tests error handling with mocked error responses
@@ -287,19 +274,19 @@ func TestJioPayClientWithMock_PaymentError(t *testing.T) {
 func TestJioPayClientWithMock_CardTokenization(t *testing.T) {
 	mockTransport := jiopay.NewMockTransport()
 
-	// Mock /tokenized-card endpoint with ACTUAL JioPay API response format
-	// IMPORTANT: This is the REAL format - flat structure, NO nested objects!
+	// Mock /tokenized-card endpoint with NEW JioPay API response format (2025)
+	// IMPORTANT: New format has nested structure with vaultId immediately available!
 	mockTransport.AddRoute("POST", "/tokenized-card", `{
-		"responseId": "a92004c2-6d6d-4a3f-aee2-59af50b4b806",
-		"responseHost": null,
-		"tokenReference": "token-ref-new-card-456",
-		"panLastFourDigits": "5678",
-		"cardReference": "V0010013019009357267382613440",
-		"bankName": "Test Bank Limited",
-		"bankId": "BANK123",
-		"par": "PAR123456789ABC",
-		"expiry": "122026",
-		"tokenRequestorId": "40000000082"
+		"headers": {},
+		"body": {
+			"status": {
+				"status": "SUCCESS"
+			},
+			"vaultId": 30518336,
+			"tokenReference": "DNITHE3176415083784437844"
+		},
+		"statusCode": "OK",
+		"statusCodeValue": 200
 	}`, 200)
 
 	// Create JioPay client with mock transport
@@ -346,13 +333,14 @@ func TestJioPayClientWithMock_CardTokenization(t *testing.T) {
 		t.Fatalf("Unexpected error: %v", err)
 	}
 
-	if response.Token != "token-ref-new-card-456" {
-		t.Errorf("Expected Token 'token-ref-new-card-456', got '%s'", response.Token)
+	// NEW: Token should be vaultId (as string), not tokenReference
+	if response.Token != "30518336" {
+		t.Errorf("Expected Token '30518336' (vaultId), got '%s'", response.Token)
 	}
 
-	// CardID now uses cardReference (vaultId not available from /tokenized-card)
-	if response.CardID != "V0010013019009357267382613440" {
-		t.Errorf("Expected CardID 'V0010013019009357267382613440', got '%s'", response.CardID)
+	// NEW: CardID should also be vaultId (same as token)
+	if response.CardID != "30518336" {
+		t.Errorf("Expected CardID '30518336' (vaultId), got '%s'", response.CardID)
 	}
 
 	if response.TransactionID != "tokenize-txn-001" {
@@ -363,7 +351,7 @@ func TestJioPayClientWithMock_CardTokenization(t *testing.T) {
 		t.Errorf("Expected Status 'success', got '%s'", response.Status)
 	}
 
-	// Verify metadata contains JioPay-specific fields (actual response format)
+	// Verify metadata contains JioPay-specific fields (new response format)
 	if response.Metadata == nil {
 		t.Fatal("Expected Metadata to be non-nil")
 	}
@@ -372,41 +360,41 @@ func TestJioPayClientWithMock_CardTokenization(t *testing.T) {
 		t.Errorf("Expected gateway 'jiopay', got '%v'", response.Metadata["gateway"])
 	}
 
-	// Check tokenReference
-	if tokenRef, ok := response.Metadata["token_reference"].(string); !ok || tokenRef != "token-ref-new-card-456" {
-		t.Errorf("Expected token_reference 'token-ref-new-card-456', got '%v'", response.Metadata["token_reference"])
+	// NEW: Check vaultId (as number)
+	if vaultID, ok := response.Metadata["vault_id"].(int64); !ok || vaultID != 30518336 {
+		t.Errorf("Expected vault_id 30518336, got '%v'", response.Metadata["vault_id"])
 	}
 
-	// Check cardReference (used as CardID placeholder)
-	if cardRef, ok := response.Metadata["card_reference"].(string); !ok || cardRef != "V0010013019009357267382613440" {
-		t.Errorf("Expected card_reference 'V0010013019009357267382613440', got '%v'", response.Metadata["card_reference"])
+	// NEW: Check vaultId (as string)
+	if vaultIDStr, ok := response.Metadata["vault_id_str"].(string); !ok || vaultIDStr != "30518336" {
+		t.Errorf("Expected vault_id_str '30518336', got '%v'", response.Metadata["vault_id_str"])
 	}
 
-	// Check panLastFourDigits
-	if panLast4, ok := response.Metadata["pan_last_4_digits"].(string); !ok || panLast4 != "5678" {
-		t.Errorf("Expected pan_last_4_digits '5678', got '%v'", response.Metadata["pan_last_4_digits"])
+	// NEW: Check tokenReference (now in metadata, not as primary token)
+	if tokenRef, ok := response.Metadata["token_reference"].(string); !ok || tokenRef != "DNITHE3176415083784437844" {
+		t.Errorf("Expected token_reference 'DNITHE3176415083784437844', got '%v'", response.Metadata["token_reference"])
 	}
 
-	if bankName, ok := response.Metadata["bank_name"].(string); !ok || bankName != "Test Bank Limited" {
-		t.Errorf("Expected bank_name 'Test Bank Limited', got '%v'", response.Metadata["bank_name"])
+	// NEW: Check vault_id_available flag (should be true - vaultId available immediately!)
+	if vaultAvailable, ok := response.Metadata["vault_id_available"].(bool); !ok || !vaultAvailable {
+		t.Errorf("Expected vault_id_available 'true', got '%v'", response.Metadata["vault_id_available"])
 	}
 
-	if par, ok := response.Metadata["par"].(string); !ok || par != "PAR123456789ABC" {
-		t.Errorf("Expected par 'PAR123456789ABC', got '%v'", response.Metadata["par"])
+	// NEW: Check status code fields
+	if statusCode, ok := response.Metadata["status_code"].(string); !ok || statusCode != "OK" {
+		t.Errorf("Expected status_code 'OK', got '%v'", response.Metadata["status_code"])
 	}
 
-	// Check vault_id_available flag (should be false - vaultId comes from /fetch-card later)
-	if vaultAvailable, ok := response.Metadata["vault_id_available"].(bool); !ok || vaultAvailable {
-		t.Errorf("Expected vault_id_available 'false', got '%v'", response.Metadata["vault_id_available"])
+	if statusCodeValue, ok := response.Metadata["status_code_value"].(int); !ok || statusCodeValue != 200 {
+		t.Errorf("Expected status_code_value 200, got '%v'", response.Metadata["status_code_value"])
 	}
 
 	t.Logf("✅ Card tokenization test passed")
 	t.Logf("   Transaction ID: %s", response.TransactionID)
-	t.Logf("   Token: %s", response.Token)
-	t.Logf("   Card ID (cardReference): %s", response.CardID)
+	t.Logf("   Token (vaultId): %s", response.Token)
+	t.Logf("   Card ID (vaultId): %s", response.CardID)
 	t.Logf("   Status: %s", response.Status)
-	t.Logf("   PAN Last 4 Digits: %s", response.Metadata["pan_last_4_digits"])
-	t.Logf("   Bank Name: %s", response.Metadata["bank_name"])
-	t.Logf("   PAR: %s", response.Metadata["par"])
-	t.Logf("   ⚠️  VaultId will be obtained later via /fetch-card")
+	t.Logf("   VaultId (int64): %v", response.Metadata["vault_id"])
+	t.Logf("   TokenReference: %s", response.Metadata["token_reference"])
+	t.Logf("   ✅ VaultId is now available immediately - no need to call /fetch-card!")
 }

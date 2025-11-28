@@ -87,3 +87,13 @@ type PayoutConfigurationRepository interface {
 	// Create creates a new business-specific configuration
 	Create(ctx context.Context, config *PayoutConfiguration) error
 }
+
+// OpsPayoutRepository defines the interface for ops dashboard payout queries
+type OpsPayoutRepository interface {
+	// ListPayoutsPaginated retrieves paginated list of payout transfers with recipient info
+	// status can be: "in_progress" (initiated/processing), "completed", "failed" (failed/timeout)
+	ListPayoutsPaginated(ctx context.Context, page int, limit int, status string) ([]*OpsPayoutListItem, int, error)
+
+	// GetPayoutSummary retrieves detailed summary for a single payout transfer
+	GetPayoutSummary(ctx context.Context, transferRequestID string) (*OpsPayoutSummary, error)
+}

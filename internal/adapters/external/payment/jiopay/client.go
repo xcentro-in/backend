@@ -210,46 +210,48 @@ func (c *JioPayClient) TokenizeCard(ctx context.Context, request payment.Gateway
 		return nil, fmt.Errorf("failed to parse tokenization response: %w", err)
 	}
 
-	// Validate response - check if tokenReference is present
-	if tokenResp.TokenReference == "" {
+	// Validate response - check status and presence of vaultId
+	if tokenResp.Body.Status.Status != "SUCCESS" {
+		return nil, fmt.Errorf("tokenization failed: status=%s", tokenResp.Body.Status.Status)
+	}
+	if tokenResp.Body.VaultID == 0 {
+		return nil, fmt.Errorf("tokenization failed: empty vaultId in response")
+	}
+	if tokenResp.Body.TokenReference == "" {
 		return nil, fmt.Errorf("tokenization failed: empty tokenReference in response")
 	}
 
-	fmt.Printf("✅ Token created: TokenReference %s\n", tokenResp.TokenReference)
-	fmt.Printf("📝 Card Reference: %s\n", tokenResp.CardReference)
-	fmt.Printf("🔢 Last 4 digits: %s\n", tokenResp.PanLastFourDigits)
-	fmt.Printf("📅 Expiry: %s\n", tokenResp.Expiry)
+	// Convert vaultId to string for storage
+	vaultIDStr := fmt.Sprintf("%d", tokenResp.Body.VaultID)
 
-	// IMPORTANT: JioPay tokenization does NOT return vaultId in this response
-	// vaultId is obtained later by calling /fetch-card endpoint
-	// For now, use cardReference as a placeholder CardID
+	fmt.Printf("✅ Token created successfully\n")
+	fmt.Printf("🔑 VaultID: %s (CRITICAL - used for cryptogram generation)\n", vaultIDStr)
+	fmt.Printf("📝 TokenReference: %s\n", tokenResp.Body.TokenReference)
+	fmt.Printf("📊 HTTP Status: %s (%d)\n", tokenResp.StatusCode, tokenResp.StatusCodeValue)
 
 	// Map to gateway response
+	// IMPORTANT: Save vaultId as the primary token since it's required for cryptogram generation
+	// TokenReference is kept in metadata for reference
 	response := &payment.GatewayTokenizeResponse{
-		Token:         tokenResp.TokenReference,    // PRIMARY: Token reference for future payments
-		CardID:        tokenResp.CardReference,     // Use cardReference as CardID (vaultId not available yet)
+		Token:         vaultIDStr,                     // PRIMARY: VaultID (needed for cryptogram)
+		CardID:        vaultIDStr,                     // Use vaultId as CardID
 		TransactionID: request.TransactionID,
 		Status:        "success",
 		Message:       "Card tokenized successfully",
 		Metadata: map[string]any{
 			"gateway":             "jiopay",
 			"tokenization_flow":   "vault_api",
-			"token_reference":     tokenResp.TokenReference,
-			"card_reference":      tokenResp.CardReference,
-			"pan_last_4_digits":   tokenResp.PanLastFourDigits,
-			"bank_name":           tokenResp.BankName,
-			"bank_id":             tokenResp.BankID,
-			"par":                 tokenResp.PAR,
-			"expiry":              tokenResp.Expiry, // MMYYYY format
-			"token_requestor_id":  tokenResp.TokenRequestorID,
-			"response_id":         tokenResp.ResponseID,
-			// NOTE: vaultId will be available only after calling /fetch-card later
-			"vault_id_available":  false,
+			"vault_id":            tokenResp.Body.VaultID,         // Store as number
+			"vault_id_str":        vaultIDStr,                     // Store as string
+			"token_reference":     tokenResp.Body.TokenReference,  // Keep for reference
+			"status_code":         tokenResp.StatusCode,
+			"status_code_value":   tokenResp.StatusCodeValue,
+			"vault_id_available":  true, // vaultId now available immediately!
 		},
 	}
 
 	fmt.Println("=== JIOPAY GATEWAY: Tokenization Complete ===")
-	fmt.Println("⚠️  Note: vaultId will be obtained when fetching card for payment")
+	fmt.Println("✅ VaultID is now available immediately - no need to call fetch-card!")
 
 	return response, nil
 }
@@ -359,6 +361,7 @@ func (c *JioPayClient) GenerateCryptogram(ctx context.Context, request payment.C
 	}
 
 	fmt.Printf("✅ Cryptogram generated: %s...\n", cryptoResp.Secure.Cryptogram[:20])
+	fmt.Printf("💳 Network token: %s\n", cryptoResp.Secure.Token)
 
 	// Parse token expiry (MMYYYY format)
 	expiresAt := time.Now().Add(10 * time.Minute) // Default 10 minutes
@@ -370,6 +373,7 @@ func (c *JioPayClient) GenerateCryptogram(ctx context.Context, request payment.C
 	}
 
 	// Map to gateway response
+	// IMPORTANT: Network token (secure.token) must be used as CardNo in initiateSale
 	response := &payment.CryptogramResponse{
 		Cryptogram:   cryptoResp.Secure.Cryptogram,
 		ExpiresAt:    expiresAt,
@@ -379,10 +383,11 @@ func (c *JioPayClient) GenerateCryptogram(ctx context.Context, request payment.C
 			"gateway":         "jiopay",
 			"cryptogram_flow": "vault_api",
 			"vault_id":        cryptoResp.Card.VaultID,
-			"token":           fmt.Sprintf("%d", cryptoResp.Secure.Token),
+			"network_token":   cryptoResp.Secure.Token,       // CRITICAL: Use this as CardNo in initiateSale
 			"token_expiry":    cryptoResp.Secure.TokenExpiry,
 			"card_scheme":     mapJioPayCardScheme(cryptoResp.Card.Scheme),
 			"masked_number":   cryptoResp.Card.MaskedNumber,
+			"token_reference": cryptoResp.Card.TokenReference, // For reference
 		},
 	}
 
@@ -425,7 +430,7 @@ func (c *JioPayClient) InitiatePayment(ctx context.Context, request payment.Gate
 		// JioPay-specific: Generate cryptogram if not provided by orchestrator
 		// This encapsulates JioPay's complex cryptogram generation flow
 		if request.Cryptogram == "" {
-			fmt.Println("🔐 Cryptogram not provided - generating internally (JioPay 3-step flow)")
+			fmt.Println("🔐 Cryptogram not provided - generating internally (JioPay 2-step flow)")
 
 			// Step 1: Get owner mobile using business service
 			if c.businessOwnerSvc == nil {
@@ -438,26 +443,13 @@ func (c *JioPayClient) InitiatePayment(ctx context.Context, request payment.Gate
 			}
 			fmt.Printf("📱 Owner mobile fetched: %d digits\n", len(ownerMobile))
 
-			// Step 2: Get stored card details from metadata
-			storedCard, ok := request.Metadata["stored_card"].(map[string]any)
-			if !ok {
-				return nil, fmt.Errorf("stored_card metadata required for token-based payment")
-			}
+			// Step 2: Use request.Token directly as vaultId (since tokenization now returns vaultId)
+			// Previously, we had to call FetchCardByLast4Digits to get vaultId
+			// Now, the vaultId is stored directly in stored_cards.token column
+			vaultID := request.Token
+			fmt.Printf("🔑 Using token as vaultId: %s\n", vaultID)
 
-			last4Digits, _ := storedCard["last_four_digits"].(string)
-			if last4Digits == "" {
-				return nil, fmt.Errorf("last_four_digits required in stored_card metadata")
-			}
-
-			// Step 3: Fetch vaultId by matching last 4 digits
-			fmt.Printf("🔍 Fetching vaultId for card ending in %s\n", last4Digits)
-			vaultID, err := c.FetchCardByLast4Digits(ctx, request.BusinessID, last4Digits, ownerMobile)
-			if err != nil {
-				return nil, fmt.Errorf("failed to fetch vaultId: %w", err)
-			}
-			fmt.Printf("✅ VaultID found: %s\n", vaultID)
-
-			// Step 4: Generate cryptogram internally
+			// Step 3: Generate cryptogram internally
 			cryptogramReq := payment.CryptogramRequest{
 				Token:         request.Token,
 				Amount:        request.Amount,
@@ -475,9 +467,23 @@ func (c *JioPayClient) InitiatePayment(ctx context.Context, request payment.Gate
 				return nil, fmt.Errorf("failed to generate cryptogram: %w", err)
 			}
 
-			// Use generated cryptogram
+			// Extract cryptogram and network token from response
 			request.Cryptogram = cryptogramResp.Cryptogram
+
+			// CRITICAL: Extract network token from metadata for use in initiateSale
+			networkToken, ok := cryptogramResp.Metadata["network_token"].(string)
+			if !ok || networkToken == "" {
+				return nil, fmt.Errorf("network_token not found in cryptogram response")
+			}
+
+			// Store network token in request metadata for use in sale request
+			if request.Metadata == nil {
+				request.Metadata = make(map[string]any)
+			}
+			request.Metadata["network_token"] = networkToken
+
 			fmt.Printf("✅ Cryptogram generated: %s...\n", request.Cryptogram[:20])
+			fmt.Printf("✅ Network token extracted: %s\n", networkToken)
 		} else {
 			fmt.Println("🔐 Using cryptogram provided by orchestrator")
 			fmt.Printf("🎫 Token: %s...\n", request.Token[:10])
@@ -563,12 +569,22 @@ func (c *JioPayClient) InitiatePayment(ctx context.Context, request payment.Gate
 	} else {
 		// TOKEN-BASED FLOW: Use network token + cryptogram
 		fmt.Println("💳 Building token-based payment request...")
-		saleReq.CardNo = request.Token               // Network token
+
+		// CRITICAL: Use network token (from cryptogram response) as CardNo, NOT vaultId
+		// vaultId is stored in request.Token, but we need the network token for payment
+		networkToken, ok := request.Metadata["network_token"].(string)
+		if !ok || networkToken == "" {
+			return nil, fmt.Errorf("network_token not found in request metadata - cryptogram may not have been generated")
+		}
+
+		saleReq.CardNo = networkToken                // Network token from cryptogram (NOT vaultId)
 		saleReq.CardExpiry = cardExpiry              // YYYYMM format
 		saleReq.NameOnCard = nameOnCard              // Name on card
 		saleReq.TokenCryptogram = request.Cryptogram // Cryptogram from getCryptogram
 		saleReq.TokenRefID = tokenRefID              // Token reference ID
-		fmt.Printf("💳 Token: %s..., Cryptogram: %s...\n", request.Token[:10], request.Cryptogram[:20])
+		fmt.Printf("💳 Network Token (CardNo): %s\n", networkToken)
+		fmt.Printf("💳 VaultID (stored token): %s\n", request.Token)
+		fmt.Printf("💳 Cryptogram: %s...\n", request.Cryptogram[:20])
 	}
 
 	// Generate secure hash for outgoing request

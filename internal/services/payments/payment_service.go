@@ -11,6 +11,7 @@ import (
 	"xcentro.in/internal/core/business"
 	"xcentro.in/internal/core/business_rules"
 	"xcentro.in/internal/core/payment"
+	paymentSvc "xcentro.in/internal/services/payment"
 	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/logger"
 )
@@ -24,11 +25,12 @@ type PaymentService struct {
 	walletService        business_rules.WalletService
 	feeCalculator        business_rules.FeeCalculator
 	txManager            client.TxManager
-	voucherService       interface{}                                 // voucher.VoucherService, using interface{} to avoid circular import (Phase 6)
-	voucherRepo          interface{}                                 // voucher.VoucherRepository, using interface{} to avoid circular import
-	pendingVoucherRepo   *paymentdb.PaymentVoucherPendingRepository // Concrete type for temporary voucher-payment linkage
+	voucherService       interface{}                                         // voucher.VoucherService, using interface{} to avoid circular import (Phase 6)
+	voucherRepo          interface{}                                         // voucher.VoucherRepository, using interface{} to avoid circular import
+	pendingVoucherRepo   *paymentdb.PaymentVoucherPendingRepository         // Concrete type for temporary voucher-payment linkage
 	businessService      business.BusinessService
-	config               *config.Config // Application configuration (server URL, etc.)
+	stateChangeRepo      *paymentdb.PostgresPaymentStateChangeRepository    // Concrete type for transaction support
+	config               *config.Config                                     // Application configuration (server URL, etc.)
 	logger               *logger.Logger
 }
 
@@ -45,6 +47,7 @@ func NewPaymentService(
 	voucherRepo interface{}, // voucher.VoucherRepository for transactional operations
 	pendingVoucherRepo interface{}, // PaymentVoucherPendingRepository for temporary voucher-payment linkage
 	businessService business.BusinessService,
+	stateChangeRepo payment.PaymentStateChangeRepository, // For logging payment state changes
 	cfg *config.Config, // Application configuration
 	logger *logger.Logger,
 ) *PaymentService {
@@ -60,6 +63,7 @@ func NewPaymentService(
 		voucherRepo:        voucherRepo,
 		pendingVoucherRepo: pendingVoucherRepo.(*paymentdb.PaymentVoucherPendingRepository),
 		businessService:    businessService,
+		stateChangeRepo:    stateChangeRepo.(*paymentdb.PostgresPaymentStateChangeRepository),
 		config:             cfg,
 		logger:             logger,
 	}
@@ -268,6 +272,31 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 			return fmt.Errorf("failed to update gateway used: %w", err)
 		}
 		s.logger.DebugWith("Payment updated with gateway details")
+
+		// Sub-step 3.6: Log payment initiation for audit trail
+		// Create transaction-aware state logger to ensure atomicity
+		paymentUUID, parseErr := uuid.Parse(paymentID)
+		if parseErr != nil {
+			s.logger.ErrorWith("Failed to parse payment ID for logging", "payment_id", paymentID, "error", parseErr)
+			// Non-fatal: continue without logging
+		} else {
+			userUUID, parseErr := uuid.Parse(req.UserID)
+			if parseErr != nil {
+				s.logger.ErrorWith("Failed to parse user ID for logging", "user_id", req.UserID, "error", parseErr)
+				// Non-fatal: continue without logging
+			} else {
+				// Create transaction-aware repository and logger
+				txStateChangeRepo := s.stateChangeRepo.WithTx(tx)
+				txStateLogger := paymentSvc.NewPaymentStateLogger(txStateChangeRepo)
+
+				if logErr := txStateLogger.LogPaymentInitiated(txCtx, paymentUUID, userUUID, req.Amount, string(resp.GatewayUsed)); logErr != nil {
+					s.logger.ErrorWith("Failed to log payment initiation (non-fatal)", "payment_id", paymentID, "error", logErr)
+					// Non-fatal: continue even if logging fails
+				} else {
+					s.logger.DebugWith("Payment initiation logged", "payment_id", paymentID, "user_id", req.UserID)
+				}
+			}
+		}
 
 		// Sub-step 3.5: For tokenization payments, store gateway metadata (contains card details for immature PGs)
 		if req.PaymentType == payment.PaymentTypeTokenization && resp.Metadata != nil {
