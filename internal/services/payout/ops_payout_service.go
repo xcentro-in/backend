@@ -78,3 +78,22 @@ func (s *OpsPayoutService) GetPayoutSummary(ctx context.Context, transferRequest
 	s.logger.Infof("Ops: Payout summary fetched - transfer_request_id=%s, status=%s", transferRequestID, summary.PayoutStatus)
 	return summary, nil
 }
+
+// GetPayoutDetail retrieves complete detailed information for a payout transfer
+func (s *OpsPayoutService) GetPayoutDetail(ctx context.Context, transferRequestID string) (*payout.OpsPayoutDetailResponse, error) {
+	s.logger.Infof("Ops: Fetching payout detail - transfer_request_id=%s", transferRequestID)
+
+	if transferRequestID == "" {
+		return nil, fmt.Errorf("transfer_request_id is required")
+	}
+
+	detail, err := s.repo.GetPayoutDetail(ctx, transferRequestID)
+	if err != nil {
+		s.logger.Errorf("Failed to get payout detail: %v", err)
+		return nil, err
+	}
+
+	s.logger.Infof("Ops: Payout detail fetched - transfer_request_id=%s, status=%s, attempts=%d/%d",
+		transferRequestID, detail.Status, detail.RetryHistory.TotalAttempts, detail.RetryHistory.MaxRetries)
+	return detail, nil
+}

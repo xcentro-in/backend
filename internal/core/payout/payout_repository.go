@@ -45,8 +45,11 @@ type PayoutTransferRepository interface {
 	// GetByID retrieves a transfer request by ID
 	GetByID(ctx context.Context, transferRequestID string) (*PayoutTransferRequest, error)
 
-	// GetByVoucherID retrieves transfer request for a voucher
+	// GetByVoucherID retrieves the latest active (non-deleted) transfer request for a voucher
 	GetByVoucherID(ctx context.Context, voucherID string) (*PayoutTransferRequest, error)
+
+	// GetTransferHistoryByVoucherID retrieves all transfer attempts (including soft deleted) for a voucher
+	GetTransferHistoryByVoucherID(ctx context.Context, voucherID string) ([]*PayoutTransferRequest, error)
 
 	// GetByProviderTransferID retrieves transfer by provider's transfer ID (for webhooks)
 	GetByProviderTransferID(ctx context.Context, providerTransferID string) (*PayoutTransferRequest, error)
@@ -74,6 +77,12 @@ type PayoutTransferRepository interface {
 
 	// GetWebhookTimeouts retrieves transfers that exceeded webhook timeout
 	GetWebhookTimeouts(ctx context.Context, limit int) ([]*PayoutTransferRequest, error)
+
+	// SoftDelete marks a transfer as deleted (for retry mechanism)
+	SoftDelete(ctx context.Context, transferRequestID string, reason string) error
+
+	// GetRetryCount counts total attempts (including soft deleted) for a voucher
+	GetRetryCount(ctx context.Context, voucherID string) (int, error)
 }
 
 // PayoutConfigurationRepository defines the interface for payout configuration persistence
@@ -96,4 +105,8 @@ type OpsPayoutRepository interface {
 
 	// GetPayoutSummary retrieves detailed summary for a single payout transfer
 	GetPayoutSummary(ctx context.Context, transferRequestID string) (*OpsPayoutSummary, error)
+
+	// GetPayoutDetail retrieves complete detailed information for a payout transfer
+	// Includes voucher, payee, collection, provider, and retry history
+	GetPayoutDetail(ctx context.Context, transferRequestID string) (*OpsPayoutDetailResponse, error)
 }
