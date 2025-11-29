@@ -17,7 +17,6 @@ type Business struct {
 	BusinessTurnover string              `json:"businessTurnover"`
 	CountryCode      string              `json:"countryCode"`
 	CurrencyCode     string              `json:"currencyCode"`
-	HasCompletedOnboarding bool 		 `json:"hasCompletedOnboarding"`
 	HasAddedPaymentMethod  bool 		 `json:"hasAddedPaymentMethod"`
 	HasAddedVendor   	   bool 		 `json:"hasAddedVendor"`
 	HasCreatedFirstPayment bool 		 `json:"hasCreatedFirstPayment"`
@@ -141,7 +140,6 @@ type BusinessDetailsResponse struct {
 
 // BusinessOnboardingStatusDTO represents the onboarding status flags for a business.
 type BusinessOnboardingStatusDTO struct {
-	HasCompletedOnboarding bool `json:"hasCompletedOnboarding"`
 	HasAddedPaymentMethod  bool `json:"hasAddedPaymentMethod"`
 	HasAddedVendor         bool `json:"hasAddedVendor"`
 	HasCreatedFirstPayment bool `json:"hasCreatedFirstPayment"`
@@ -181,7 +179,6 @@ type OpsBusinessListItem struct {
 	KybStatus              shared.KYBstatus    `json:"kybStatus"`
 	BusinessType           shared.BusinessType `json:"businessType"`
 	UpdatedAt              string              `json:"updatedAt"`
-	HasCompletedOnboarding bool                `json:"hasCompletedOnboarding"`
 	HasAddedPaymentMethod  bool                `json:"hasAddedPaymentMethod"`
 	HasAddedVendor         bool                `json:"hasAddedVendor"`
 	HasCreatedFirstPayment bool                `json:"hasCreatedFirstPayment"`
@@ -192,7 +189,6 @@ type OpsBusinessSearchResult struct {
 	BID                    string `json:"bid"`
 	Name                   string `json:"name"`
 	GSTIN                  string `json:"gstin"`
-	HasCompletedOnboarding bool   `json:"hasCompletedOnboarding"`
 	HasAddedPaymentMethod  bool   `json:"hasAddedPaymentMethod"`
 	HasAddedVendor         bool   `json:"hasAddedVendor"`
 	HasCreatedFirstPayment bool   `json:"hasCreatedFirstPayment"`
@@ -233,7 +229,6 @@ type OpsBusinessDetails struct {
 	UpdatedAt        string              `json:"updatedAt"`
 
 	// Onboarding tracking
-	HasCompletedOnboarding bool `json:"hasCompletedOnboarding"`
 	HasAddedPaymentMethod  bool `json:"hasAddedPaymentMethod"`
 	HasAddedVendor         bool `json:"hasAddedVendor"`
 	HasCreatedFirstPayment bool `json:"hasCreatedFirstPayment"`

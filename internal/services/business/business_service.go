@@ -941,7 +941,6 @@ func (s *BusinessServiceImpl) GetBusinessOnboardingFlags(ctx context.Context, bi
 
 	// Prepare response
 	status := &business.BusinessOnboardingStatusDTO{
-		HasCompletedOnboarding: bus.HasCompletedOnboarding,
 		HasAddedPaymentMethod:  bus.HasAddedPaymentMethod,
 		HasAddedVendor:         bus.HasAddedVendor,
 		HasCreatedFirstPayment: bus.HasCreatedFirstPayment,
