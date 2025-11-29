@@ -10,6 +10,7 @@ type DashboardMetrics struct {
 	UpcomingLargePayments   []UpcomingPaymentSummary  `json:"upcoming_large_payments"`
 	MonthlySpends           []MonthlySpendSummary     `json:"monthly_spends"`
 	PaymentSourceBreakdown  []PaymentSourceSummary    `json:"payment_source_breakdown"`
+	PendingApprovals        int                       `json:"pending_approvals"`
 }
 
 // OverdueBillsSummary represents overdue bills count and total value

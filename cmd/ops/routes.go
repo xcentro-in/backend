@@ -38,13 +38,15 @@ func registerOpsBusinessRoutes(clients *externalClients, cfg *config.Config, gro
 	businessRepo := business.NewPgBusinessRepository(clients.db)
 	businessUserRelRepo := business.NewPgBusinessUserRelationRepository(clients.db)
 	userRepository := userRepo.NewPgUserRepository(clients.db)
+	paymentRepository := paymentRepo.NewPgPaymentRepository(clients.db, cfg.BankAccountEncryption.EncryptionKey)
 
 	// Create business service (it initializes its own verification service internally)
 	businessService := businessSvc.NewBusinessService(
 		businessRepo,
 		businessUserRelRepo,
-		userRepository, // userRepository - needed for KYB verify endpoint
-		nil,            // userService - not needed for ops endpoints
+		userRepository,    // userRepository - needed for KYB verify endpoint
+		nil,               // userService - not needed for ops endpoints
+		paymentRepository, // paymentRepository - needed for showDashboard logic
 		clients,
 		cfg,
 	)

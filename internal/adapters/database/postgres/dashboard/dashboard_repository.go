@@ -324,6 +324,35 @@ func (r *PgDashboardRepository) GetPaymentSourceBreakdown(ctx context.Context, b
 	return breakdown, nil
 }
 
+// GetPendingApprovalsCount returns count of vouchers with latest approval status as 'pending'
+// Uses the same logic as /v1/vouchers/approval-inbox/counts endpoint
+func (r *PgDashboardRepository) GetPendingApprovalsCount(ctx context.Context, businessID string) (int, error) {
+	query := `
+		WITH latest_approvals AS (
+			SELECT DISTINCT ON (voucher_id)
+				voucher_id,
+				action
+			FROM xcentro.voucher_approvals
+			ORDER BY voucher_id, created_at DESC
+		)
+		SELECT COUNT(*)
+		FROM xcentro.payment_vouchers v
+		INNER JOIN latest_approvals la ON v.voucher_id = la.voucher_id
+		WHERE v.business_id = $1
+		  AND la.action = 'pending'
+	`
+
+	var count int
+	err := r.querier.QueryRow(ctx, query, businessID).Scan(&count)
+	if err != nil {
+		r.logger.Errorf("Failed to count pending approvals for business %s: %v", businessID, err)
+		return 0, fmt.Errorf("failed to count pending approvals: %w", err)
+	}
+
+	r.logger.Infof("Pending approvals for business %s: count=%d", businessID, count)
+	return count, nil
+}
+
 // capitalizeFirst capitalizes the first letter of a string
 func capitalizeFirst(s string) string {
 	if len(s) == 0 {

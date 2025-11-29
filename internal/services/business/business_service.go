@@ -14,6 +14,7 @@ import (
 	"xcentro.in/internal/adapters/providers/fileupload"
 	"xcentro.in/internal/core/business"
 	coreNotification "xcentro.in/internal/core/notification"
+	"xcentro.in/internal/core/payment"
 	"xcentro.in/internal/core/shared"
 	"xcentro.in/internal/core/user"
 	"xcentro.in/internal/services/notification"
@@ -30,6 +31,7 @@ type BusinessServiceImpl struct {
 	businessUserRelRepo business.BusinessUserRelationRepository
 	userRepo            user.UserRepository
 	userService         user.UserService
+	paymentRepo         payment.PaymentRepository
 	txManager           client.TxManager
 	rclient             *redisClient.RedisClient
 	verificationService *verification.DocumentVerificationService
@@ -44,6 +46,7 @@ func NewBusinessService(
 	businessUserRelRepo business.BusinessUserRelationRepository,
 	userRepo user.UserRepository,
 	userService user.UserService,
+	paymentRepo payment.PaymentRepository,
 	clients sharedClients.ExternalClients,
 	cfg *config.Config,
 ) business.BusinessService {
@@ -58,6 +61,7 @@ func NewBusinessService(
 		businessUserRelRepo: businessUserRelRepo,
 		userRepo:            userRepo,
 		userService:         userService,
+		paymentRepo:         paymentRepo,
 		txManager:           clients.GetTxManager(),   // Extract from clients
 		rclient:             clients.GetRedisClient(), // Extract from clients
 		verificationService: verificationSvc,
@@ -921,41 +925,40 @@ func (s *BusinessServiceImpl) GetBusinessKYBData(ctx context.Context, bid string
 	return kybData, nil
 }
 
-// GetBusinessOnboardingFlags retrieves the onboarding flags for a business (cached).
+// GetBusinessOnboardingFlags retrieves the onboarding flags for a business.
+// All data is fetched fresh from database - no caching.
+// showDashboard is determined solely by payment count (if >= 5 successful payments, flags are implicitly true).
 func (s *BusinessServiceImpl) GetBusinessOnboardingFlags(ctx context.Context, bid string) (*business.BusinessOnboardingStatusDTO, error) {
-	// Try cache first
-	cacheKey := keys.Business.OnboardingStatus(bid)
-	var cachedStatus business.BusinessOnboardingStatusDTO
-	err := s.rclient.GetJSON(ctx, cacheKey, &cachedStatus)
-
-	if err == nil {
-		s.logger.Infof("Business onboarding status cache hit for BID: %s", bid)
-		return &cachedStatus, nil
-	}
-
-	// Cache miss - fetch from database
+	// Fetch business flags from database
 	bus, err := s.businessRepo.FindByID(ctx, bid)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch business details: %w", err)
 	}
 
-	// Prepare response
-	status := &business.BusinessOnboardingStatusDTO{
-		HasCompletedOnboarding: bus.HasCompletedOnboarding,
+	// Count successful payments (real-time, always fresh)
+	// If there are >= 5 successful payments, showDashboard = true
+	// (No need to check flags first - if payments exist, flags must be true)
+	count, err := s.paymentRepo.CountSuccessfulPayments(ctx, bid)
+	if err != nil {
+		s.logger.Warnf("Failed to count successful payments for business %s: %v", bid, err)
+		// Don't fail the entire request, just keep showDashboard as false
+		count = 0
+	}
+
+	showDashboard := (count >= 5)
+
+	if showDashboard {
+		s.logger.Infof("Dashboard enabled for business %s (successful payments: %d)", bid, count)
+	} else {
+		s.logger.Debugf("Dashboard not enabled for business %s (successful payments: %d < 5)", bid, count)
+	}
+
+	return &business.BusinessOnboardingStatusDTO{
 		HasAddedPaymentMethod:  bus.HasAddedPaymentMethod,
 		HasAddedVendor:         bus.HasAddedVendor,
 		HasCreatedFirstPayment: bus.HasCreatedFirstPayment,
-	}
-
-	// Cache response asynchronously (with no TTL)
-	go func() {
-		bgCtx := context.Background()
-		if err := s.rclient.SetJSON(bgCtx, cacheKey, status, 0); err != nil {
-			s.logger.Warnf("Failed to cache business onboarding status: %v", err)
-		}
-	}()
-
-	return status, nil
+		ShowDashboard:          showDashboard,
+	}, nil
 }
 
 // UpdateOnboardingStatus updates a specific onboarding flag for a business and invalidates the cache.
