@@ -40,7 +40,7 @@ func (s *DashboardService) GetDashboardMetrics(ctx context.Context, businessID s
 	var wg sync.WaitGroup
 
 	// Channel to collect errors from goroutines
-	errChan := make(chan metricResult, 6)
+	errChan := make(chan metricResult, 7)
 
 	// Goroutine 1: Total Spend This Month
 	wg.Add(1)
@@ -112,6 +112,18 @@ func (s *DashboardService) GetDashboardMetrics(ctx context.Context, businessID s
 			return
 		}
 		metrics.PaymentSourceBreakdown = sourceBreakdown
+	}()
+
+	// Goroutine 7: Pending Approvals
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		pendingApprovals, err := s.repo.GetPendingApprovalsCount(ctx, businessID)
+		if err != nil {
+			errChan <- metricResult{name: "PendingApprovals", err: err}
+			return
+		}
+		metrics.PendingApprovals = pendingApprovals
 	}()
 
 	// Wait for all goroutines to complete

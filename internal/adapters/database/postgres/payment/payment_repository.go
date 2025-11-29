@@ -1797,12 +1797,14 @@ func (r *PgPaymentRepository) GetCollectionPayouts(ctx context.Context, paymentI
 
 // CountSuccessfulPayments returns the count of successful payments for a business
 // Used for determining if dashboard should be shown (requires >= 5 successful payments)
+// Excludes tokenization and refund transactions - only counts real payments
 func (r *PgPaymentRepository) CountSuccessfulPayments(ctx context.Context, businessID string) (int, error) {
 	query := `
 		SELECT COUNT(*)
 		FROM xcentro.payments
 		WHERE business_id = $1
 		  AND status = 'success'
+		  AND payment_type = 'payment'
 		LIMIT 5
 	`
 

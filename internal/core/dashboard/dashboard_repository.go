@@ -21,4 +21,7 @@ type DashboardRepository interface {
 
 	// GetPaymentSourceBreakdown returns spending distribution by payment method for current month
 	GetPaymentSourceBreakdown(ctx context.Context, businessID string) ([]PaymentSourceSummary, error)
+
+	// GetPendingApprovalsCount returns count of pending voucher approvals
+	GetPendingApprovalsCount(ctx context.Context, businessID string) (int, error)
 }
