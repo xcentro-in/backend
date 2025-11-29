@@ -389,6 +389,7 @@ AND ptr.transfer_request_id IS NULL;
 Phase 1: Quick Wins (Week 1)
 
 Add missing indexes:
+```sql
 CREATE INDEX idx_payments_business_created
 ON xcentro.payments(business_id, created_at DESC, status);
 
@@ -398,7 +399,7 @@ WHERE is_active = TRUE;
 
 CREATE INDEX idx_vouchers_business_status
 ON xcentro.payment_vouchers(business_id, status);
-
+```
 Phase 2: Caching Layer (Week 2)
 
 Implement Go-level caching with Redis:
