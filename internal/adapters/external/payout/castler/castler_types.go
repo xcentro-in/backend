@@ -25,13 +25,13 @@ type CastlerBeneficiaryResponse struct {
 
 // CastlerTransferRequest represents Castler's transfer request (payout API)
 type CastlerTransferRequest struct {
-	EscrowID      string                 `json:"escrowId"`      // Castler escrow account ID
-	PayeeID       string                 `json:"payeeId"`       // Castler payee/beneficiary ID
-	Mode          string                 `json:"mode"`          // neft, rtgs, imps
-	Amount        float64                `json:"amount"`        // In rupees (Castler uses rupees, not paise)
-	CustomerRefID string                 `json:"customerRefId"` // Our payout_id (transfer_request_id)
-	Purpose       string                 `json:"purpose"`       // Purpose of payment
-	Notes         map[string]interface{} `json:"notes"`         // Additional metadata (invoice number, etc.)
+	EscrowID      string                 `json:"escrowId"`                // Castler escrow account ID
+	PayeeID       string                 `json:"payeeId"`                 // Castler payee/beneficiary ID
+	Mode          string                 `json:"mode"`                    // neft, rtgs, imps
+	Amount        float64                `json:"amount"`                  // In rupees (Castler uses rupees, not paise)
+	CustomerRefID string                 `json:"customerRefId"`           // Our invoice_number for tracking
+	Purpose       string                 `json:"purpose"`                 // Purpose of payment
+	Notes         map[string]interface{} `json:"notes,omitempty"`         // Additional metadata (optional)
 }
 
 // CastlerTransferResult represents the nested result in Castler's transfer response

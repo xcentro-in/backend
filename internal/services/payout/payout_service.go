@@ -11,6 +11,7 @@ import (
 	"xcentro.in/internal/core/payment"
 	"xcentro.in/internal/core/payout"
 	"xcentro.in/internal/core/voucher"
+	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/logger"
 )
 
@@ -20,9 +21,9 @@ type PayoutService struct {
 	voucherRepo     voucher.VoucherRepository
 	transferRepo    payout.PayoutTransferRepository
 	bankAccountRepo payee.PayeeBankAccountRepository
-	configRepo      payout.PayoutConfigurationRepository
 	stateChangeRepo payment.PaymentStateChangeRepository
 	providerFactory PayoutProviderFactory // Interface to get payout provider
+	config          *config.Config        // Application config (for retry, timeout, RTGS threshold)
 	logger          *logger.Logger
 }
 
@@ -37,20 +38,31 @@ func NewPayoutService(
 	voucherRepo voucher.VoucherRepository,
 	transferRepo payout.PayoutTransferRepository,
 	bankAccountRepo payee.PayeeBankAccountRepository,
-	configRepo payout.PayoutConfigurationRepository,
 	stateChangeRepo payment.PaymentStateChangeRepository,
 	providerFactory PayoutProviderFactory,
+	cfg *config.Config,
 ) *PayoutService {
 	return &PayoutService{
 		paymentRepo:     paymentRepo,
 		voucherRepo:     voucherRepo,
 		transferRepo:    transferRepo,
 		bankAccountRepo: bankAccountRepo,
-		configRepo:      configRepo,
 		stateChangeRepo: stateChangeRepo,
 		providerFactory: providerFactory,
+		config:          cfg,
 		logger:          logger.GetDefault(),
 	}
+}
+
+// determineTransferMode selects transfer mode based on amount
+// NEFT: ≤ ₹2,00,000 (20000000 paise)
+// RTGS: > ₹2,00,000
+// IMPS: Future (on-demand payouts, post-MVP)
+func (s *PayoutService) determineTransferMode(amountInPaise int64) string {
+	if amountInPaise > s.config.Payout.RTGSThresholdAmount {
+		return "RTGS"
+	}
+	return "NEFT"
 }
 
 // InitiateManualPayout creates payout transfer requests for a payment
@@ -121,14 +133,24 @@ func (s *PayoutService) InitiateManualPayout(ctx context.Context, paymentID stri
 		// Empty list → process all unpaid vouchers
 		s.logger.DebugWith("No voucher_ids specified - processing all unpaid vouchers")
 		for _, v := range allVouchers {
-			// Check if already paid (has existing transfer)
+			// Check if already paid (has existing active transfer)
 			existing, err := s.transferRepo.GetByVoucherID(ctx, v.VoucherID.String())
 			if err == nil && existing != nil {
-				s.logger.DebugWith("Skipping voucher - already has transfer",
-					"voucher_id", v.VoucherID.String(),
-					"transfer_id", existing.TransferRequestID,
-					"status", existing.Status)
-				continue
+				// Check status
+				if existing.Status == payout.TransferStatusCompleted {
+					s.logger.DebugWith("Skipping voucher - already completed",
+						"voucher_id", v.VoucherID.String(),
+						"transfer_id", existing.TransferRequestID)
+					continue
+				}
+				if existing.Status == payout.TransferStatusInitiated || existing.Status == payout.TransferStatusProcessing {
+					s.logger.DebugWith("Skipping voucher - transfer already in progress",
+						"voucher_id", v.VoucherID.String(),
+						"transfer_id", existing.TransferRequestID,
+						"status", existing.Status)
+					continue
+				}
+				// If failed or timeout, allow retry (will be handled in create loop below)
 			}
 			targetVouchers = append(targetVouchers, v)
 		}
@@ -142,11 +164,18 @@ func (s *PayoutService) InitiateManualPayout(ctx context.Context, paymentID stri
 
 		for _, v := range allVouchers {
 			if voucherIDSet[v.VoucherID.String()] {
-				// Idempotency check
+				// Check existing transfer
 				existing, err := s.transferRepo.GetByVoucherID(ctx, v.VoucherID.String())
 				if err == nil && existing != nil {
-					return nil, fmt.Errorf("voucher %s already has transfer (transfer_id: %s, status: %s)",
-						v.VoucherID.String(), existing.TransferRequestID, existing.Status)
+					if existing.Status == payout.TransferStatusCompleted {
+						return nil, fmt.Errorf("voucher %s already completed (transfer_id: %s)",
+							v.VoucherID.String(), existing.TransferRequestID)
+					}
+					if existing.Status == payout.TransferStatusInitiated || existing.Status == payout.TransferStatusProcessing {
+						return nil, fmt.Errorf("voucher %s already in progress (transfer_id: %s, status: %s)",
+							v.VoucherID.String(), existing.TransferRequestID, existing.Status)
+					}
+					// If failed or timeout, allow retry (will be handled in create loop below)
 				}
 				targetVouchers = append(targetVouchers, v)
 			}
@@ -163,39 +192,65 @@ func (s *PayoutService) InitiateManualPayout(ctx context.Context, paymentID stri
 
 	s.logger.InfoWith("Target vouchers identified", "count", len(targetVouchers))
 
-	// Step 4: Get configuration
-	config, err := s.configRepo.GetConfig(ctx, nil) // Use global config for MVP
-	if err != nil {
-		return nil, fmt.Errorf("failed to get payout configuration: %w", err)
-	}
-
-	// Step 5: Create transfer requests for each voucher
+	// Step 4: Create transfer requests for each voucher
 	var transfers []*payout.PayoutTransferRequest
 
 	for _, vch := range targetVouchers {
+		// Check retry count (all attempts including soft deleted)
+		retryCount, err := s.transferRepo.GetRetryCount(ctx, vch.VoucherID.String())
+		if err != nil {
+			s.logger.WarnWith("Failed to get retry count, assuming 0", "voucher_id", vch.VoucherID, "error", err)
+			retryCount = 0
+		}
+
+		// Enforce max retry limit
+		if retryCount >= s.config.Payout.MaxRetryAttempts {
+			return nil, fmt.Errorf("max retries exceeded (%d/%d) for voucher %s",
+				retryCount, s.config.Payout.MaxRetryAttempts, vch.VoucherID)
+		}
+
+		// If this is a retry, soft delete the old failed/timeout transfer
+		if retryCount > 0 {
+			existing, _ := s.transferRepo.GetByVoucherID(ctx, vch.VoucherID.String())
+			if existing != nil && !existing.IsDeleted {
+				s.logger.InfoWith("Soft deleting old transfer for retry",
+					"old_transfer_id", existing.TransferRequestID,
+					"old_status", existing.Status,
+					"retry_attempt", retryCount+1)
+
+				if err := s.transferRepo.SoftDelete(ctx, existing.TransferRequestID, "retry"); err != nil {
+					return nil, fmt.Errorf("failed to soft delete old transfer: %w", err)
+				}
+			}
+		}
+
 		// Get Castler beneficiary ID (lightweight query - no decryption)
 		castlerBeneficiaryID, err := s.bankAccountRepo.GetCastlerBeneficiaryID(ctx, vch.AccountID.String())
 		if err != nil {
 			return nil, fmt.Errorf("failed to get Castler beneficiary ID for voucher %s: %w", vch.VoucherID.String(), err)
 		}
 
-		// Create transfer request
+		// Determine transfer mode based on amount
+		transferMode := s.determineTransferMode(vch.NetAmount)
+
+		// Create NEW transfer request (fresh UUID for retry)
 		transferReq := &payout.PayoutTransferRequest{
 			TransferRequestID:     uuid.Must(uuid.NewV7()).String(),
 			PaymentID:             paymentID,
 			VoucherID:             vch.VoucherID.String(),
 			Provider:              payout.ProviderCastler, // Always Castler for now
 			ProviderBeneficiaryID: castlerBeneficiaryID,
-			EscrowID:              "", // TODO: Get from config/environment
+			EscrowID:              "", // Populated from Castler client config (not needed here)
 			Amount:                vch.NetAmount,
 			Currency:              vch.Currency,
 			Purpose:               "vendor_payment",
-			Reference:             vch.VoucherNumber,
-			Narration:             fmt.Sprintf("Payment for %s", vch.VoucherNumber),
-			TransferMode:          config.PreferredTransferMode,
+			Reference:             vch.InvoiceNumber,     // Invoice number (used as customerRefId in Castler)
+			Narration:             fmt.Sprintf("Payment for %s (attempt %d)", vch.InvoiceNumber, retryCount+1),
+			TransferMode:          transferMode,          // NEFT (≤₹2L) or RTGS (>₹2L)
 			Status:                payout.TransferStatusInitiated,
-			RetryCount:            0,
-			MaxRetries:            config.MaxRetryAttempts,
+			RetryCount:            retryCount,  // Store current retry count
+			MaxRetries:            s.config.Payout.MaxRetryAttempts,
+			IsDeleted:             false,
 			CreatedAt:             time.Now(),
 		}
 
@@ -252,11 +307,8 @@ func (s *PayoutService) InitiatePayoutForVoucher(ctx context.Context, voucherID 
 		return nil, fmt.Errorf("failed to get Castler beneficiary ID: %w", err)
 	}
 
-	// Step 5: Get configuration
-	config, err := s.configRepo.GetConfig(ctx, nil) // Use global config for MVP
-	if err != nil {
-		return nil, fmt.Errorf("failed to get payout configuration: %w", err)
-	}
+	// Step 5: Determine transfer mode based on amount
+	transferMode := s.determineTransferMode(vch.NetAmount)
 
 	// Step 6: Create transfer request (simplified - no approval workflow)
 	transferReq := &payout.PayoutTransferRequest{
@@ -265,16 +317,16 @@ func (s *PayoutService) InitiatePayoutForVoucher(ctx context.Context, voucherID 
 		VoucherID:             voucherID,
 		Provider:              payout.ProviderCastler, // Always Castler for now
 		ProviderBeneficiaryID: castlerBeneficiaryID,
-		EscrowID:              "", // TODO: Get from config/environment
+		EscrowID:              "", // Populated from Castler client config (not needed here)
 		Amount:                vch.NetAmount,
 		Currency:              vch.Currency,
 		Purpose:               "vendor_payment",
-		Reference:             vch.VoucherNumber, // Will use transfer_request_id in new flow
-		Narration:             fmt.Sprintf("Payment for %s", vch.VoucherNumber),
-		TransferMode:          config.PreferredTransferMode,
+		Reference:             vch.InvoiceNumber,     // Invoice number (used as customerRefId in Castler)
+		Narration:             fmt.Sprintf("Payment for %s", vch.InvoiceNumber),
+		TransferMode:          transferMode,          // NEFT (≤₹2L) or RTGS (>₹2L)
 		Status:                payout.TransferStatusInitiated,
 		RetryCount:            0,
-		MaxRetries:            config.MaxRetryAttempts,
+		MaxRetries:            s.config.Payout.MaxRetryAttempts,
 		CreatedAt:             time.Now(),
 	}
 
@@ -505,12 +557,9 @@ func (s *PayoutService) processSingleTransfer(ctx context.Context, transfer *pay
 	s.logPayoutPending(ctx, paymentUUID, transferUUID, transfer, resp.ProviderTransferID, pendingTime)
 
 	// Set webhook timeout
-	config, err := s.configRepo.GetConfig(ctx, nil)
-	if err == nil {
-		timeoutAt := pendingTime.Add(time.Duration(config.WebhookTimeoutMinutes) * time.Minute)
-		if err := s.transferRepo.SetWebhookTimeout(ctx, transfer.TransferRequestID, timeoutAt); err != nil {
-			s.logger.ErrorWith("Failed to set webhook timeout", "error", err)
-		}
+	timeoutAt := pendingTime.Add(time.Duration(s.config.Payout.WebhookTimeoutMinutes) * time.Minute)
+	if err := s.transferRepo.SetWebhookTimeout(ctx, transfer.TransferRequestID, timeoutAt); err != nil {
+		s.logger.ErrorWith("Failed to set webhook timeout", "error", err)
 	}
 
 	s.logger.InfoWith("Transfer processed successfully",

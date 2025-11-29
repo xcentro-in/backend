@@ -96,6 +96,11 @@ type PayoutTransferRequest struct {
 	WebhookHistory   []map[string]interface{} // Array of webhook payloads
 	ProviderMetadata map[string]interface{}
 
+	// Soft delete (for retry mechanism)
+	IsDeleted     bool
+	DeletedAt     *time.Time
+	DeletedReason string
+
 	// Audit
 	CreatedAt time.Time
 	UpdatedAt *time.Time

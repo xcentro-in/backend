@@ -236,6 +236,8 @@ type OpsCollectionPayoutItem struct {
 	PayeeName     string  `json:"payee_name"`               // Payee display name
 	PayoutID      *string `json:"payout_id,omitempty"`      // Payout transfer ID (null if not yet paid)
 	PayoutStatus  *string `json:"payout_status,omitempty"`  // Payout status (null if not yet paid)
+	AttemptNumber *int    `json:"attempt_number,omitempty"` // Current attempt number (1 = first attempt, 2 = second, etc.)
+	MaxRetries    *int    `json:"max_retries,omitempty"`    // Maximum allowed retries from config
 }
 
 // OpsCollectionPayoutsResponse represents all vouchers and their payout status for a collection

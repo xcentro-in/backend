@@ -21,6 +21,7 @@ type CastlerClient struct {
 	baseURL       string
 	apiKey        string
 	secretKey     string
+	escrowID      string // Escrow account ID for payout transfers
 	httpClient    *http.Client
 	encryptionKey string // AES-256 encryption key (required)
 	fixedIV       []byte // Fixed IV for AES encryption (required)
@@ -32,9 +33,10 @@ type CastlerClient struct {
 //   - baseURL: Castler API base URL
 //   - apiKey: API authentication key
 //   - secretKey: API signing secret
+//   - escrowID: Escrow account ID for payout transfers
 //   - encryptionKey: AES-256 encryption key (32 bytes, required)
 //   - encryptionIVBase64: Fixed IV in base64 format (16 bytes, required, e.g., "TkMwVjAkMFQwTDAzMFJNRQ==")
-func NewCastlerClient(baseURL, apiKey, secretKey, encryptionKey, encryptionIVBase64 string) (*CastlerClient, error) {
+func NewCastlerClient(baseURL, apiKey, secretKey, escrowID, encryptionKey, encryptionIVBase64 string) (*CastlerClient, error) {
 	// Validate required parameters
 	if encryptionKey == "" {
 		return nil, fmt.Errorf("encryption key is required for Castler API")
@@ -56,6 +58,7 @@ func NewCastlerClient(baseURL, apiKey, secretKey, encryptionKey, encryptionIVBas
 		baseURL:       baseURL,
 		apiKey:        apiKey,
 		secretKey:     secretKey,
+		escrowID:      escrowID,
 		encryptionKey: encryptionKey,
 		fixedIV:       fixedIV,
 		httpClient: &http.Client{
@@ -91,7 +94,7 @@ func (c *CastlerClient) OnboardBeneficiary(ctx context.Context, req *payout.Onbo
 
 	// Call Castler API
 	var castlerResp CastlerBeneficiaryResponse
-	if err := c.post(ctx, "/v1/beneficiaries", castlerReq, &castlerResp); err != nil {
+	if err := c.post(ctx, "/v1/payee", castlerReq, &castlerResp); err != nil {
 		return nil, &payout.PayoutProviderError{
 			Provider:    payout.ProviderCastler,
 			ErrorCode:   payout.ErrCodeAPITimeout,
@@ -121,7 +124,7 @@ func (c *CastlerClient) OnboardBeneficiary(ctx context.Context, req *payout.Onbo
 
 // GetBeneficiaryStatus checks if beneficiary is active with Castler
 func (c *CastlerClient) GetBeneficiaryStatus(ctx context.Context, providerBeneficiaryID string) (*payout.BeneficiaryStatus, error) {
-	endpoint := fmt.Sprintf("/v1/beneficiaries/%s", providerBeneficiaryID)
+	endpoint := fmt.Sprintf("/v1/payee/%s", providerBeneficiaryID)
 
 	var castlerResp CastlerBeneficiaryResponse
 	if err := c.get(ctx, endpoint, &castlerResp); err != nil {
@@ -151,29 +154,28 @@ func (c *CastlerClient) GetBeneficiaryStatus(ctx context.Context, providerBenefi
 
 // CreateTransferRequest initiates a payout transfer with Castler
 func (c *CastlerClient) CreateTransferRequest(ctx context.Context, req *payout.CreateTransferRequest) (*payout.CreateTransferResponse, error) {
-	// Prepare notes with invoice number or other metadata
-	notes := make(map[string]interface{})
-	if req.Reference != "" {
-		notes["invoice_number"] = req.Reference
-	}
-	if req.Narration != "" {
-		notes["narration"] = req.Narration
-	}
-
 	// Build Castler transfer request with exact API format
 	castlerReq := CastlerTransferRequest{
-		EscrowID:      req.EscrowID,              // Escrow account ID (from config/env)
-		PayeeID:       req.ProviderBeneficiaryID, // Castler payee ID
-		Mode:          req.TransferMode,          // neft, rtgs, imps
-		Amount:        float64(req.Amount) / 100.0, // Convert paise to rupees
-		CustomerRefID: req.TransferRequestID,     // Our payout_id for tracking
-		Purpose:       req.Purpose,               // Purpose of payment
-		Notes:         notes,                     // Additional metadata
+		EscrowID:      c.escrowID,                          // Escrow account ID (from config)
+		PayeeID:       req.ProviderBeneficiaryID,           // Castler payee ID
+		Mode:          strings.ToLower(req.TransferMode),   // neft, rtgs, imps (Castler expects lowercase)
+		Amount:        float64(req.Amount) / 100.0,         // Convert paise to rupees
+		CustomerRefID: req.Reference,                       // Invoice number for tracking
+		Purpose:       req.Purpose,                         // Purpose of payment
 	}
+
+	// Debug: Show request body before encryption
+	fmt.Printf("📤 Castler Transfer Request Body (before encryption):\n")
+	fmt.Printf("   EscrowID: %s\n", castlerReq.EscrowID)
+	fmt.Printf("   PayeeID: %s\n", castlerReq.PayeeID)
+	fmt.Printf("   Mode: %s\n", castlerReq.Mode)
+	fmt.Printf("   Amount: %.2f\n", castlerReq.Amount)
+	fmt.Printf("   CustomerRefID: %s (invoice_number)\n", castlerReq.CustomerRefID)
+	fmt.Printf("   Purpose: %s\n", castlerReq.Purpose)
 
 	// Call Castler payout API
 	var castlerResp CastlerTransferResponse
-	if err := c.post(ctx, "/api/v1/payout", castlerReq, &castlerResp); err != nil {
+	if err := c.post(ctx, "/v1/transfer", castlerReq, &castlerResp); err != nil {
 		return nil, &payout.PayoutProviderError{
 			Provider:    payout.ProviderCastler,
 			ErrorCode:   payout.ErrCodeAPITimeout,
@@ -311,6 +313,27 @@ func (c *CastlerClient) setCommonHeaders(req *http.Request) {
 	// Set Castler authentication headers (required for all requests)
 	req.Header.Set("X-API-Key", c.apiKey)
 	req.Header.Set("X-Client-Key", c.secretKey)
+
+	// Debug: Show what headers we're sending (mask credentials)
+	fmt.Printf("🔐 Castler Auth Headers:\n")
+	fmt.Printf("   X-API-Key: %s...%s (len=%d)\n", maskCredential(c.apiKey, 4), maskCredentialEnd(c.apiKey, 4), len(c.apiKey))
+	fmt.Printf("   X-Client-Key: %s...%s (len=%d)\n", maskCredential(c.secretKey, 4), maskCredentialEnd(c.secretKey, 4), len(c.secretKey))
+}
+
+// maskCredential shows first N chars, rest as asterisks
+func maskCredential(s string, showFirst int) string {
+	if len(s) <= showFirst {
+		return s
+	}
+	return s[:showFirst] + "****"
+}
+
+// maskCredentialEnd shows last N chars
+func maskCredentialEnd(s string, showLast int) string {
+	if len(s) <= showLast {
+		return ""
+	}
+	return s[len(s)-showLast:]
 }
 
 func (c *CastlerClient) post(ctx context.Context, endpoint string, reqBody interface{}, respBody interface{}) error {
@@ -323,6 +346,9 @@ func (c *CastlerClient) post(ctx context.Context, endpoint string, reqBody inter
 		if err != nil {
 			return fmt.Errorf("failed to marshal request: %w", err)
 		}
+
+		// Debug: Show JSON before encryption
+		fmt.Printf("📋 JSON Request Body (before encryption):\n%s\n", string(jsonData))
 
 		// Encrypt request
 		encryptedData, err := crypto.EncryptForCastler(string(jsonData), c.encryptionKey, c.fixedIV)
@@ -352,9 +378,19 @@ func (c *CastlerClient) post(ctx context.Context, endpoint string, reqBody inter
 		return fmt.Errorf("failed to read response: %w", err)
 	}
 
+	// Log raw response for debugging (first 200 chars)
+	rawResponse := string(bodyBytes)
+	if len(rawResponse) > 200 {
+		fmt.Printf("🔍 Castler raw response (truncated): %s...\n", rawResponse[:200])
+	} else {
+		fmt.Printf("🔍 Castler raw response: %s\n", rawResponse)
+	}
+	fmt.Printf("📊 HTTP Status: %d\n", resp.StatusCode)
+
 	// Decrypt response (error responses are also encrypted)
 	decryptedData, err := crypto.DecryptFromCastler(string(bodyBytes), c.encryptionKey, c.fixedIV)
 	if err != nil {
+		fmt.Printf("❌ Decryption failed for response body: %s\n", rawResponse)
 		return fmt.Errorf("failed to decrypt response: %w", err)
 	}
 
@@ -394,9 +430,19 @@ func (c *CastlerClient) get(ctx context.Context, endpoint string, respBody inter
 		return fmt.Errorf("failed to read response: %w", err)
 	}
 
+	// Log raw response for debugging (first 200 chars)
+	rawResponse := string(bodyBytes)
+	if len(rawResponse) > 200 {
+		fmt.Printf("🔍 Castler raw response (truncated): %s...\n", rawResponse[:200])
+	} else {
+		fmt.Printf("🔍 Castler raw response: %s\n", rawResponse)
+	}
+	fmt.Printf("📊 HTTP Status: %d\n", resp.StatusCode)
+
 	// Decrypt response (error responses are also encrypted)
 	decryptedData, err := crypto.DecryptFromCastler(string(bodyBytes), c.encryptionKey, c.fixedIV)
 	if err != nil {
+		fmt.Printf("❌ Decryption failed for response body: %s\n", rawResponse)
 		return fmt.Errorf("failed to decrypt response: %w", err)
 	}
 

@@ -60,10 +60,11 @@ type coloredHandler struct {
 	writer    io.Writer
 	useColors bool
 	isJSON    bool
+	minLevel  slog.Level
 }
 
 func (h *coloredHandler) Enabled(ctx context.Context, level slog.Level) bool {
-	return true
+	return level >= h.minLevel
 }
 
 func (h *coloredHandler) Handle(ctx context.Context, record slog.Record) error {
@@ -127,6 +128,22 @@ func (h *coloredHandler) WithGroup(name string) slog.Handler {
 	return h
 }
 
+// logLevelToSlog converts our LogLevel to slog.Level
+func logLevelToSlog(level LogLevel) slog.Level {
+	switch level {
+	case DebugLevel:
+		return slog.LevelDebug
+	case InfoLevel:
+		return slog.LevelInfo
+	case WarnLevel:
+		return slog.LevelWarn
+	case ErrorLevel:
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
+}
+
 // New creates a new logger with the given configuration
 func New(config Config) *Logger {
 	var writer io.Writer
@@ -158,6 +175,9 @@ func New(config Config) *Logger {
 		writer = os.Stdout
 	}
 
+	// Convert log level to slog level
+	minLevel := logLevelToSlog(config.Level)
+
 	// Create handler
 	var handler slog.Handler
 	if config.Format == JSONFormat {
@@ -165,12 +185,14 @@ func New(config Config) *Logger {
 			writer:    writer,
 			useColors: false, // JSON doesn't use colors
 			isJSON:    true,
+			minLevel:  minLevel,
 		}
 	} else {
 		handler = &coloredHandler{
 			writer:    writer,
 			useColors: config.UseColors,
 			isJSON:    false,
+			minLevel:  minLevel,
 		}
 	}
 
@@ -379,4 +401,39 @@ func Warn(msg string, args ...interface{}) {
 // Error logs an error message using the default logger
 func Error(msg string, args ...interface{}) {
 	GetDefault().Error(msg, args...)
+}
+
+// ParseLogLevel converts a string log level to LogLevel type
+// Defaults to InfoLevel if invalid or empty
+func ParseLogLevel(level string, environment string) LogLevel {
+	// If level is empty, default based on environment
+	if level == "" {
+		if environment == "production" {
+			return InfoLevel // Production: info and above
+		}
+		return DebugLevel // Development: all logs
+	}
+
+	// Parse level string
+	switch strings.ToLower(level) {
+	case "debug":
+		return DebugLevel
+	case "info":
+		return InfoLevel
+	case "warn", "warning":
+		return WarnLevel
+	case "error":
+		return ErrorLevel
+	default:
+		return InfoLevel
+	}
+}
+
+// ParseLogFormat converts a string log format to OutputFormat type
+// Defaults to TextFormat if invalid
+func ParseLogFormat(format string) OutputFormat {
+	if strings.ToLower(format) == "json" {
+		return JSONFormat
+	}
+	return TextFormat
 }
