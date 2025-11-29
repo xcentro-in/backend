@@ -143,6 +143,7 @@ type BusinessOnboardingStatusDTO struct {
 	HasAddedPaymentMethod  bool `json:"hasAddedPaymentMethod"`
 	HasAddedVendor         bool `json:"hasAddedVendor"`
 	HasCreatedFirstPayment bool `json:"hasCreatedFirstPayment"`
+	ShowDashboard          bool `json:"showDashboard"` // Computed: true if all flags above are true AND >= 5 successful payments
 }
 
 // InitiateOnboardingRequest represents the request to initiate business onboarding

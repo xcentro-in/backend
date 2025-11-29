@@ -7,7 +7,7 @@
 
 -- Composite index for total spend, recent payments, payment method breakdown
 -- Covers queries filtering by business_id, status, and ordering by created_at
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_payments_business_status_created
+CREATE INDEX IF NOT EXISTS idx_payments_business_status_created
 ON xcentro.payments(business_id, status, created_at DESC)
 WHERE status IN ('success', 'pending', 'failed');
 
@@ -16,7 +16,7 @@ COMMENT ON INDEX xcentro.idx_payments_business_status_created IS
 
 -- Index for payment method breakdown (pie chart)
 -- Optimizes GROUP BY payment_method queries with date filtering
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_payments_business_month_method
+CREATE INDEX IF NOT EXISTS idx_payments_business_month_method
 ON xcentro.payments(business_id, payment_method, created_at)
 WHERE status = 'success';
 
@@ -29,7 +29,7 @@ COMMENT ON INDEX xcentro.idx_payments_business_month_method IS
 
 -- Index for overdue bills query
 -- Covers queries filtering by business_id, invoice_due_date, and status
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_vouchers_business_due_date_status
+CREATE INDEX IF NOT EXISTS idx_vouchers_business_due_date_status
 ON xcentro.payment_vouchers(business_id, invoice_due_date, status)
 WHERE status IN ('draft', 'finalized');
 
@@ -38,9 +38,10 @@ COMMENT ON INDEX xcentro.idx_vouchers_business_due_date_status IS
 
 -- Index for upcoming large payments (top 3 by amount)
 -- Uses DESC on net_amount for efficient sorting
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_vouchers_business_upcoming_large
-ON xcentro.payment_vouchers(business_id, invoice_due_date, net_amount DESC)
-WHERE status IN ('draft', 'finalized') AND invoice_due_date >= CURRENT_DATE;
+-- Note: Cannot filter by invoice_due_date >= CURRENT_DATE in index (CURRENT_DATE not immutable)
+CREATE INDEX IF NOT EXISTS idx_vouchers_business_upcoming_large
+ON xcentro.payment_vouchers(business_id, status, net_amount DESC)
+WHERE status IN ('draft', 'finalized');
 
 COMMENT ON INDEX xcentro.idx_vouchers_business_upcoming_large IS
 'Dashboard optimization: upcoming large payments (top 3 by amount)';
