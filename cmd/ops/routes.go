@@ -38,13 +38,15 @@ func registerOpsBusinessRoutes(clients *externalClients, cfg *config.Config, gro
 	businessRepo := business.NewPgBusinessRepository(clients.db)
 	businessUserRelRepo := business.NewPgBusinessUserRelationRepository(clients.db)
 	userRepository := userRepo.NewPgUserRepository(clients.db)
+	paymentRepository := paymentRepo.NewPgPaymentRepository(clients.db, cfg.BankAccountEncryption.EncryptionKey)
 
 	// Create business service (it initializes its own verification service internally)
 	businessService := businessSvc.NewBusinessService(
 		businessRepo,
 		businessUserRelRepo,
-		userRepository, // userRepository - needed for KYB verify endpoint
-		nil,            // userService - not needed for ops endpoints
+		userRepository,    // userRepository - needed for KYB verify endpoint
+		nil,               // userService - not needed for ops endpoints
+		paymentRepository, // paymentRepository - needed for showDashboard logic
 		clients,
 		cfg,
 	)
@@ -136,7 +138,6 @@ func registerOpsPayoutRoutes(clients *externalClients, cfg *config.Config, group
 	payoutRepository := payoutRepo.NewPostgresOpsPayoutRepository(clients.db)
 	paymentRepository := paymentRepo.NewPgPaymentRepository(clients.db, cfg.BankAccountEncryption.EncryptionKey)
 	transferRepository := payoutRepo.NewPostgresPayoutTransferRepository(clients.db)
-	configRepository := payoutRepo.NewPostgresPayoutConfigurationRepository(clients.db)
 	voucherRepository := voucherRepo.NewPostgresVoucherRepository(clients.db, cfg.BankAccountEncryption.EncryptionKey)
 	bankAccountRepository := payeeRepo.NewPgPayeeBankAccountRepository(clients.db, cfg.BankAccountEncryption.EncryptionKey)
 	stateChangeRepository := paymentRepo.NewPostgresPaymentStateChangeRepository(clients.db)
@@ -151,9 +152,9 @@ func registerOpsPayoutRoutes(clients *externalClients, cfg *config.Config, group
 		voucherRepository,
 		transferRepository,
 		bankAccountRepository,
-		configRepository,
 		stateChangeRepository,
 		providerFactory,
+		cfg, // Pass config for retry/timeout settings and transfer mode logic
 	)
 
 	// Register all payout routes (listing + operations)

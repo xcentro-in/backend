@@ -8,6 +8,7 @@ import (
 	batchPaymentRepo "xcentro.in/internal/adapters/database/postgres/batch_payment"
 	"xcentro.in/internal/adapters/database/postgres/business"
 	"xcentro.in/internal/adapters/database/postgres/client"
+	dashboardRepo "xcentro.in/internal/adapters/database/postgres/dashboard"
 	featureFlagsRepo "xcentro.in/internal/adapters/database/postgres/feature_flags"
 	notificationRepo "xcentro.in/internal/adapters/database/postgres/notification"
 	payeeRepo "xcentro.in/internal/adapters/database/postgres/payee"
@@ -28,6 +29,7 @@ import (
 	"xcentro.in/internal/handlers/http/auth"
 	batchPaymentHandler "xcentro.in/internal/handlers/http/batch_payment"
 	businessHandler "xcentro.in/internal/handlers/http/business"
+	dashboardHandler "xcentro.in/internal/handlers/http/dashboard"
 	featureFlagsHandler "xcentro.in/internal/handlers/http/feature_flags"
 	notificationHandler "xcentro.in/internal/handlers/http/notification"
 	"xcentro.in/internal/handlers/http/payee"
@@ -39,6 +41,7 @@ import (
 	authservice "xcentro.in/internal/services/auth"
 	batchPaymentSvc "xcentro.in/internal/services/batch_payment"
 	businessSvc "xcentro.in/internal/services/business"
+	dashboardSvc "xcentro.in/internal/services/dashboard"
 	featureFlagsSvc "xcentro.in/internal/services/feature_flags"
 	notificationService "xcentro.in/internal/services/notification"
 	payeeSvc "xcentro.in/internal/services/payee"
@@ -95,12 +98,13 @@ func (f *serviceFactory) createCoreServices(verificationSvc *verification.Docume
 	sessionRepo = authRepo.NewPgSessionRepository(f.clients.db)
 	businessRepo = business.NewPgBusinessRepository(f.clients.db).(*business.PgBusinessRepository)
 	businessUserRelRepo = business.NewPgBusinessUserRelationRepository(f.clients.db).(*business.PgBusinessUserRelationRepository)
+	paymentRepository := paymentRepo.NewPgPaymentRepository(f.clients.db, f.cfg.BankAccountEncryption.EncryptionKey)
 
 	// Create services with proper dependency injection order
 	// 1. User service (no circular dependencies)
 	userService = userSvc.NewUserService(userRepository, businessRepo, businessUserRelRepo, verificationSvc, f.clients, f.cfg)
 	// 2. Business service (depends on user service)
-	busSvc = businessSvc.NewBusinessService(businessRepo, businessUserRelRepo, userRepository, userService, f.clients, f.cfg)
+	busSvc = businessSvc.NewBusinessService(businessRepo, businessUserRelRepo, userRepository, userService, paymentRepository, f.clients, f.cfg)
 	// 3. Auth service (depends on user service and business service)
 	authSvc = authservice.NewAuthService(sessionRepo, userRepository, userService, busSvc, f.clients, f.cfg)
 	return
@@ -312,6 +316,25 @@ func registerV1NotificationRoutes(clients *externalClients, cfg *config.Config, 
 	notificationHandler.RegisterNotificationRoutes(group, notifService, authSvc)
 }
 
+func registerV1DashboardRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
+	factory := &serviceFactory{clients, cfg}
+
+	// Create dashboard repository
+	dashboardRepository := dashboardRepo.NewPgDashboardRepository(clients.db)
+
+	// Create dashboard service
+	dashboardService := dashboardSvc.NewDashboardService(dashboardRepository, logger.GetDefault())
+
+	// Create dashboard handler
+	handler := dashboardHandler.NewDashboardHandler(dashboardService, logger.GetDefault())
+
+	// Get auth service for JWT middleware
+	_, _, _, _, _, _, authSvc := factory.createCoreServices(nil)
+
+	// Register route with JWT middleware
+	group.GET("/dashboard", handler.GetDashboardMetrics, middleware.JWTMiddleware(authSvc))
+}
+
 func registerV1Routes(s *xcentroServer) {
 	v1 := s.echo.Group("/v1")
 
@@ -331,6 +354,7 @@ func registerV1Routes(s *xcentroServer) {
 	registerV1PayoutRoutes(clients, cfg, v1)
 	registerV1BatchPaymentRoutes(clients, cfg, v1)
 	registerV1NotificationRoutes(clients, cfg, v1)
+	registerV1DashboardRoutes(clients, cfg, v1)
 }
 
 func initializeNotificationTrigger(db client.DB) {

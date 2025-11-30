@@ -64,10 +64,11 @@ func (f *PayoutProviderFactory) getCastlerClient() payout.PayoutProvider {
 		baseURL := f.config.Castler.BaseURL
 		apiKey := f.config.Castler.APIKey
 		secretKey := f.config.Castler.SecretKey
+		escrowID := f.config.Castler.EscrowID
 		encryptionKey := f.config.Castler.EncryptionKey
 		encryptionIV := f.config.Castler.EncryptionIV
 
-		client, err := castler.NewCastlerClient(baseURL, apiKey, secretKey, encryptionKey, encryptionIV)
+		client, err := castler.NewCastlerClient(baseURL, apiKey, secretKey, escrowID, encryptionKey, encryptionIV)
 		if err != nil {
 			panic("Failed to create Castler client: " + err.Error())
 		}

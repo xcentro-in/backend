@@ -1706,8 +1706,9 @@ func (r *PgPaymentRepository) GetCollectionActivity(ctx context.Context, payment
 // GetCollectionPayouts retrieves all voucher-payout mappings for a payment/collection
 // A single payment can fund multiple vouchers, each with potential payouts to payees
 func (r *PgPaymentRepository) GetCollectionPayouts(ctx context.Context, paymentID string) (*payment.OpsCollectionPayoutsResponse, error) {
-	// Query to get all vouchers linked to this payment and their payout status
-	// Uses payment_vouchers.payment_id which is set when payment is finalized
+	// Query to get all vouchers linked to this payment and their latest payout status
+	// Uses LATERAL joins to get latest transfer per voucher (active or deleted)
+	// Shows latest attempt even if soft-deleted (for max retry cases)
 	query := `
 		SELECT
 			v.voucher_id::text,
@@ -1715,14 +1716,21 @@ func (r *PgPaymentRepository) GetCollectionPayouts(ctx context.Context, paymentI
 			v.net_amount,
 			v.payee_id::text,
 			bpr.display_name as payee_name,
-			COALESCE(pt.transfer_request_id::text, '') as payout_id,
-			COALESCE(pt.status::text, '') as payout_status
+			COALESCE(latest_pt.transfer_request_id::text, '') as payout_id,
+			COALESCE(latest_pt.status::text, '') as payout_status,
+			latest_pt.retry_count as retry_count,
+			latest_pt.max_retries as max_retries
 		FROM xcentro.payment_vouchers v
 		INNER JOIN xcentro.business_payee_relation bpr
 			ON v.payee_id = bpr.payee_id
 			AND v.business_id = bpr.business_id
-		LEFT JOIN xcentro.payout_transfer_requests pt
-			ON v.voucher_id = pt.voucher_id
+		LEFT JOIN LATERAL (
+			SELECT transfer_request_id, status, retry_count, max_retries
+			FROM xcentro.payout_transfer_requests
+			WHERE voucher_id = v.voucher_id
+			ORDER BY created_at DESC
+			LIMIT 1
+		) latest_pt ON true
 		WHERE v.payment_id = $1
 		ORDER BY v.created_at ASC
 	`
@@ -1739,6 +1747,7 @@ func (r *PgPaymentRepository) GetCollectionPayouts(ctx context.Context, paymentI
 	for rows.Next() {
 		var item payment.OpsCollectionPayoutItem
 		var payoutID, payoutStatus string
+		var retryCount, maxRetries sql.NullInt32
 
 		err := rows.Scan(
 			&item.VoucherID,
@@ -1748,6 +1757,8 @@ func (r *PgPaymentRepository) GetCollectionPayouts(ctx context.Context, paymentI
 			&item.PayeeName,
 			&payoutID,
 			&payoutStatus,
+			&retryCount,
+			&maxRetries,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan payout item: %w", err)
@@ -1759,6 +1770,15 @@ func (r *PgPaymentRepository) GetCollectionPayouts(ctx context.Context, paymentI
 		}
 		if payoutStatus != "" {
 			item.PayoutStatus = &payoutStatus
+		}
+		if retryCount.Valid {
+			// Convert 0-indexed retry_count to 1-indexed attempt_number for UI display
+			attemptNumber := int(retryCount.Int32) + 1
+			item.AttemptNumber = &attemptNumber
+		}
+		if maxRetries.Valid {
+			maxRetriesInt := int(maxRetries.Int32)
+			item.MaxRetries = &maxRetriesInt
 		}
 
 		payouts = append(payouts, &item)
@@ -1773,4 +1793,28 @@ func (r *PgPaymentRepository) GetCollectionPayouts(ctx context.Context, paymentI
 		Data:       payouts,
 		TotalCount: len(payouts),
 	}, nil
+}
+
+// CountSuccessfulPayments returns the count of successful payments for a business
+// Used for determining if dashboard should be shown (requires >= 5 successful payments)
+// Excludes tokenization and refund transactions - only counts real payments
+func (r *PgPaymentRepository) CountSuccessfulPayments(ctx context.Context, businessID string) (int, error) {
+	query := `
+		SELECT COUNT(*)
+		FROM xcentro.payments
+		WHERE business_id = $1
+		  AND status = 'success'
+		  AND payment_type = 'payment'
+		LIMIT 5
+	`
+
+	var count int
+	err := r.querier.QueryRow(ctx, query, businessID).Scan(&count)
+	if err != nil {
+		r.logger.Errorf("Failed to count successful payments for business %s: %v", businessID, err)
+		return 0, fmt.Errorf("failed to count successful payments: %w", err)
+	}
+
+	r.logger.Debugf("Successful payment count for business %s: %d", businessID, count)
+	return count, nil
 }

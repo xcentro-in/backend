@@ -42,6 +42,7 @@ func RegisterOpsPayoutRoutes(
 	// Listing endpoints
 	payoutGroup.GET("", handler.ListPayouts)
 	payoutGroup.GET("/summary/:id", handler.GetPayoutSummary)
+	payoutGroup.GET("/:id", handler.GetPayoutDetail)
 
 	// Operations endpoints
 	payoutGroup.POST("/initiate_payout", handler.InitiatePayoutManually)
@@ -117,6 +118,33 @@ func (h *OpsPayoutHandler) GetPayoutSummary(c echo.Context) error {
 	}
 
 	return c.JSON(http.StatusOK, summary)
+}
+
+// GetPayoutDetail handles GET /payouts/:id
+// Returns complete detailed information for a payout transfer including voucher, payee, collection, provider, and retry history
+func (h *OpsPayoutHandler) GetPayoutDetail(c echo.Context) error {
+	transferRequestID := c.Param("id")
+	if transferRequestID == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{
+			"error": "transfer_request_id is required",
+		})
+	}
+
+	// Call service layer
+	detail, err := h.payoutListService.GetPayoutDetail(c.Request().Context(), transferRequestID)
+	if err != nil {
+		h.logger.Errorf("Error getting payout detail: %v", err)
+		if err.Error() == "payout transfer not found: "+transferRequestID {
+			return c.JSON(http.StatusNotFound, map[string]string{
+				"error": "Payout transfer not found",
+			})
+		}
+		return c.JSON(http.StatusInternalServerError, map[string]string{
+			"error": "Failed to fetch payout detail",
+		})
+	}
+
+	return c.JSON(http.StatusOK, detail)
 }
 
 // InitiatePayoutManually handles POST /payouts/initiate_payout
