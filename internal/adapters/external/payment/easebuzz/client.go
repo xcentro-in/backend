@@ -25,6 +25,7 @@ type EasebuzzClient struct {
 	isAggregatorModel   bool   // Payment model: false = normal (merchant charges), true = aggregator (PG charges)
 	httpClient          *http.Client
 	hashGenerator       *SecureHashGenerator // Hash generator for request/response signatures
+	logger              *logger.Logger
 }
 
 // NewEasebuzzClient creates a new Easebuzz payment gateway client
@@ -46,6 +47,19 @@ type EasebuzzClient struct {
 //	    cfg.Easebuzz.IsAggregatorModel,
 //	)
 func NewEasebuzzClient(baseURL, merchantKey, salt, apiKey string, isAggregatorModel bool) payment.PaymentGateway {
+	log := logger.GetDefault()
+
+	paymentModel := "Normal"
+	if isAggregatorModel {
+		paymentModel = "Aggregator"
+	}
+
+	log.InfoWith("Payment Gateway Initialized: Easebuzz",
+		"merchant_key", merchantKey,
+		"base_url", baseURL,
+		"payment_model", paymentModel,
+		"timeout", "30s")
+
 	return &EasebuzzClient{
 		baseURL:             baseURL,
 		merchantKey:         merchantKey,
@@ -57,6 +71,7 @@ func NewEasebuzzClient(baseURL, merchantKey, salt, apiKey string, isAggregatorMo
 			Timeout: 30 * time.Second,
 		},
 		hashGenerator: NewSecureHashGenerator(merchantKey, salt),
+		logger:        log,
 	}
 }
 

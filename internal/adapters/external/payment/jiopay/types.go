@@ -233,8 +233,7 @@ type InitiateSaleRequest struct {
 	CustomerID   string `json:"customerID,omitempty"`   // Customer ID
 
 	// Tokenization fields
-	SaveCardIndicator  string `json:"saveCardIndicator,omitempty"`  // "Y" or "N" - for tokenization
-	PaymentOptionCodes string `json:"paymentOptionCodes,omitempty"` // "CC", "DC", etc.
+	PaymentOptionCodes string `json:"paymentOptionCodes,omitempty"` // "CC" for credit, "DC" for debit
 
 	// Security
 	SecureHash string `json:"secureHash"` // SHA-256 hash

@@ -352,17 +352,17 @@ func buildInitiateSaleFieldMap(req *InitiateSaleRequest) map[string]string {
 	if req.InvoiceNo != "" {
 		fieldMap["invoiceNo"] = req.InvoiceNo
 	}
-	if req.OrderDesc != "" {
-		fieldMap["orderDesc"] = req.OrderDesc
-	}
 	if req.AggregatorID != "" {
 		fieldMap["aggregatorID"] = req.AggregatorID
 	}
 	if req.CustomerID != "" {
 		fieldMap["customerID"] = req.CustomerID
 	}
+	if req.PaymentOptionCodes != "" {
+		fieldMap["paymentOptionCodes"] = req.PaymentOptionCodes
+	}
 
-	// Do NOT include secureHash field itself
+	// Do NOT include secureHash field (it's computed from these fields)
 	return fieldMap
 }
 

@@ -523,28 +523,15 @@ func getCardCategoryFromRequest(req *payment.PaymentRequest) payment.CardCategor
 	return ""
 }
 
-// generateCallbackURL generates the appropriate callback URL based on calling device
-// Returns user-facing HTML page URLs for web/POS and deep links for mobile
+// generateCallbackURL generates the callback URL for payment gateway
+// Returns base callback endpoint - gateway client will append ?type={gateway}
+// Payment ID comes from gateway's POST body (merchantTxnNo field)
 func (s *PaymentService) generateCallbackURL(device payment.CallingDevice, paymentID string) string {
 	serverURL := s.config.Server.URL
 
-	switch device {
-	case payment.CallingDeviceWeb:
-		// Web callback - HTML page showing payment status
-		return fmt.Sprintf("%s/v1/process_payment/callback_page?transaction_id=%s&source=web", serverURL, paymentID)
-
-	case payment.CallingDeviceMobile:
-		// Mobile callback - deep link to mobile app (handled separately by app)
-		return fmt.Sprintf("%s/v1/process_payment/callback?payment_id=%s&source=mobile", serverURL, paymentID)
-
-	case payment.CallingDevicePOS:
-		// POS callback - HTML page showing payment status
-		return fmt.Sprintf("%s/v1/process_payment/callback_page?transaction_id=%s&source=pos", serverURL, paymentID)
-
-	default:
-		// Default to web callback with HTML page
-		return fmt.Sprintf("%s/v1/process_payment/callback_page?transaction_id=%s&source=web", serverURL, paymentID)
-	}
+	// Simple callback URL - gateway client appends ?type=jiopay (or easebuzz)
+	// Payment details (including merchantTxnNo) come in the POST body from gateway
+	return fmt.Sprintf("%s/v1/process_payment/callback", serverURL)
 }
 
 // GetPaymentList retrieves paginated payment list for a business

@@ -231,9 +231,10 @@ func (r *PgPaymentRepository) GetPaymentByID(ctx context.Context, paymentID stri
 
 // GetPaymentByGatewayPaymentID retrieves payment by gateway's transaction ID or payment UUID
 // Searches both gateway_payment_id and payment_id columns for maximum flexibility
-// This enables webhook matching for:
-//   - Regular payments: where gateway_payment_id = gateway's txn ID
-//   - Tokenization payments: where txnid = our payment UUID
+// This enables callback matching for:
+//   - By gateway_payment_id: Gateway's transaction ID (e.g., JioPay txnID "7700216306136")
+//   - By payment_id: Our internal payment UUID (e.g., JioPay merchantTxnNo "019adf51-...")
+// Note: payment_id is cast to text for comparison with string parameter
 func (r *PgPaymentRepository) GetPaymentByGatewayPaymentID(ctx context.Context, gatewayPaymentID string) (*payment.Payment, error) {
 	r.logger.DebugWith("Getting payment by gateway payment ID", "gateway_payment_id", gatewayPaymentID)
 
@@ -246,7 +247,7 @@ func (r *PgPaymentRepository) GetPaymentByGatewayPaymentID(ctx context.Context, 
 		       settlement_amount, mdr_amount, net_settlement_amount,
 		       created_at, updated_at
 		FROM xcentro.payments
-		WHERE gateway_payment_id = $1 OR payment_id = $1
+		WHERE gateway_payment_id = $1 OR payment_id::text = $1
 	`
 
 	var p payment.Payment

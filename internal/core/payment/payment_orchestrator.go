@@ -69,6 +69,13 @@ func NewPaymentOrchestrator(
 	feeCalculator FeeCalculatorWithTax, // Fee calculator for database-driven fee rules
 	log *logger.Logger,
 ) PaymentOrchestrator {
+	// Log orchestrator initialization mode
+	if mockPGEnabled {
+		log.Warn("Payment Orchestrator: MockPG mode ENABLED - All payments will bypass real gateway routing")
+	} else {
+		log.Info("Payment Orchestrator: Initialized with real gateway routing")
+	}
+
 	return &paymentOrchestratorImpl{
 		jioPayGateway:   jioPayClient,
 		easebuzzGateway: easebuzzClient,
@@ -441,6 +448,7 @@ func (o *paymentOrchestratorImpl) ProcessTokenizedPayment(ctx context.Context, r
 				"card_category":    storedCard.CardCategory,
 				"expiry_month":     storedCard.ExpiryMonth,
 				"expiry_year":      storedCard.ExpiryYear,
+				"card_holder_name": storedCard.CardHolderName,
 			},
 			"original_metadata": request.Metadata,
 		},

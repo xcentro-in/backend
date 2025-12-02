@@ -34,6 +34,7 @@ func (r *PgDashboardRepository) GetTotalSpendThisMonth(ctx context.Context, busi
 		WHERE business_id = $1
 		  AND created_at >= date_trunc('month', CURRENT_DATE)
 		  AND status = 'success'
+		  AND payment_type != 'tokenization'
 	`
 
 	var totalSpend int64
@@ -82,6 +83,7 @@ func (r *PgDashboardRepository) GetRecentPayments(ctx context.Context, businessI
 		FROM xcentro.payments
 		WHERE business_id = $1
 		  AND status = 'success'
+		  AND payment_type != 'tokenization'
 		  AND created_at >= CURRENT_DATE - INTERVAL '14 days'
 		ORDER BY created_at DESC
 		LIMIT 6
@@ -200,6 +202,7 @@ func (r *PgDashboardRepository) GetMonthlySpends(ctx context.Context, businessID
 		FROM xcentro.payments
 		WHERE business_id = $1
 		  AND status = 'success'
+		  AND payment_type != 'tokenization'
 		  AND created_at >= date_trunc('month', CURRENT_DATE) - INTERVAL '5 months'
 		GROUP BY month
 		ORDER BY month
@@ -260,6 +263,7 @@ func (r *PgDashboardRepository) GetPaymentSourceBreakdown(ctx context.Context, b
 		WHERE p.business_id = $1
 		  AND p.created_at >= date_trunc('month', CURRENT_DATE)
 		  AND p.status = 'success'
+		  AND p.payment_type != 'tokenization'
 		GROUP BY
 		  p.payment_method,
 		  p.payment_source_type,

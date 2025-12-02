@@ -17,6 +17,7 @@ func RedactActorName(actorName string) string {
 	internalActors := map[string]bool{
 		// Payment gateway webhooks/callbacks
 		"mockpg_callback":   true,
+		"mockpg_webhook":    true,
 		"jiopay_callback":   true,
 		"jiopay_webhook":    true,
 		"easebuzz_callback": true,
@@ -27,10 +28,12 @@ func RedactActorName(actorName string) string {
 		"castler_api":     true,
 
 		// Internal handlers/workers
-		"payout_handler":  true,
-		"payout_worker":   true,
-		"payment_handler": true,
-		"webhook_handler": true,
+		"payout_handler":   true,
+		"payout_worker":    true,
+		"payout_service":   true,
+		"payment_handler":  true,
+		"webhook_handler":  true,
+		"settlement_webhook": true,
 
 		// Generic system actors
 		"system":  true,

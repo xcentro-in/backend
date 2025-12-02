@@ -37,9 +37,13 @@ const (
 // Note: Settlement actions are filtered out at the repository level to avoid duplicate "Payment Processing" entries
 func MapPaymentActionToUserFriendly(action PaymentAction) string {
 	switch action {
-	// Payment lifecycle: All success paths → "Payment Initiated"
-	case PaymentActionInitiated, PaymentActionProcessing, PaymentActionSuccess:
+	// Payment lifecycle: Each state has distinct label
+	case PaymentActionInitiated:
 		return "Payment Initiated"
+	case PaymentActionProcessing:
+		return "Payment Processing"
+	case PaymentActionSuccess:
+		return "Payment Successful"
 
 	// Payment failures → Show actual failure
 	case PaymentActionFailed:
