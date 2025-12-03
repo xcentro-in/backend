@@ -27,6 +27,7 @@ type PaymentRepository interface {
 	UpdateSettlementStatus(ctx context.Context, paymentID string, status SettlementStatus, settlementReferenceID, settlementUTR string, metadata map[string]any) error
 	UpdateSettlementAmounts(ctx context.Context, paymentID string, settlementAmount, mdrAmount, netSettlementAmount int64) error
 	GetPendingSettlements(ctx context.Context, businessID string) ([]*Payment, error)
+	GetSettledPaymentsReadyForPayout(ctx context.Context, limit int) ([]*Payment, error)
 
 	// Transaction support (follows user_repository.go pattern)
 	WithTx(tx interface{}) PaymentRepository

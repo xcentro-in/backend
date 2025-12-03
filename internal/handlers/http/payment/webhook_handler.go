@@ -2,6 +2,7 @@ package payment
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -17,6 +18,7 @@ import (
 	"xcentro.in/internal/adapters/external/payment/mockpg"
 	"xcentro.in/internal/core/payment"
 	paymentSvc "xcentro.in/internal/services/payment"
+	"xcentro.in/internal/shared/logger"
 )
 
 // WebhookHandler handles payment gateway webhooks
@@ -28,6 +30,7 @@ type WebhookHandler struct {
 	mockPGGateway   payment.PaymentGateway
 	mockPGEnabled   bool // Flag to check if mock PG is enabled
 	stateLogger     *paymentSvc.PaymentStateLogger
+	logger          *logger.Logger
 }
 
 // NewWebhookHandler creates a new webhook handler
@@ -38,6 +41,7 @@ func NewWebhookHandler(
 	mockPGGateway payment.PaymentGateway,
 	mockPGEnabled bool,
 	stateChangeRepo payment.PaymentStateChangeRepository,
+	log *logger.Logger,
 ) *WebhookHandler {
 	return &WebhookHandler{
 		paymentRepo:     paymentRepo,
@@ -46,6 +50,7 @@ func NewWebhookHandler(
 		mockPGGateway:   mockPGGateway,
 		mockPGEnabled:   mockPGEnabled,
 		stateLogger:     paymentSvc.NewPaymentStateLogger(stateChangeRepo),
+		logger:          log,
 	}
 }
 
@@ -678,42 +683,47 @@ func (h *WebhookHandler) HandleSettlementStatusWebhook(c echo.Context) error {
 
 // handleJioPaySettlementWebhook processes settlement notifications from JioPay
 // Sent when JioPay completes settlement to merchant account (T+1 to T+3 days)
+//
+// Webhook Processing Pattern:
+//  1. Validate signature (secureHash)
+//  2. Return 200 OK immediately to acknowledge receipt
+//  3. Process settlement asynchronously to prevent gateway timeout
 func (h *WebhookHandler) handleJioPaySettlementWebhook(c echo.Context) error {
-	ctx := c.Request().Context()
-
-	fmt.Println("=== JIOPAY SETTLEMENT WEBHOOK: Processing settlement notification ===")
+	h.logger.Info("JioPay settlement webhook received")
 
 	// Step 1: Read request body
 	bodyBytes, err := io.ReadAll(c.Request().Body)
 	if err != nil {
-		fmt.Printf("❌ Failed to read webhook body: %v\n", err)
+		h.logger.Errorf("Failed to read settlement webhook body: %v", err)
 		return c.JSON(http.StatusBadRequest, map[string]string{
 			"error": "invalid_request",
 		})
 	}
 
-	fmt.Printf("📥 Webhook payload size: %d bytes\n", len(bodyBytes))
+	h.logger.Debugf("Settlement webhook payload size: %d bytes", len(bodyBytes))
 
 	// Step 2: Parse settlement webhook payload
 	var webhook jiopay.SettlementWebhook
 	if err := json.Unmarshal(bodyBytes, &webhook); err != nil {
-		fmt.Printf("❌ Failed to parse webhook payload: %v\n", err)
+		h.logger.Errorf("Failed to parse settlement webhook payload: %v", err)
 		return c.JSON(http.StatusBadRequest, map[string]string{
 			"error": "invalid_payload",
 		})
 	}
 
-	fmt.Printf("📋 MerchantTxnNo: %s\n", webhook.MerchantTxnNo)
-	fmt.Printf("📋 SettlementID: %s\n", webhook.SettlementID)
-	fmt.Printf("📋 SettlementDate: %s\n", webhook.SettlementDate)
-	fmt.Printf("📋 TxnAmount: %s\n", webhook.TxnAmount)
-	fmt.Printf("📋 TxnCharges: %s\n", webhook.TxnCharges)
-	fmt.Printf("📋 ServiceTax: %s\n", webhook.ServiceTax)
-	fmt.Printf("📋 SettledAmount: %s\n", webhook.SettledAmount)
+	h.logger.InfoWith("Settlement webhook parsed",
+		"merchant_txn_no", webhook.MerchantTxnNo,
+		"settlement_id", webhook.SettlementID,
+		"settlement_date", webhook.SettlementDate,
+		"payment_mode", webhook.PaymentMode,
+		"card_network", webhook.CardNetwork,
+		"txn_amount", webhook.TxnAmount,
+		"settled_amount", webhook.SettledAmount,
+	)
 
-	// Step 3: Verify signature
+	// Step 3: Verify signature (secureHash validation)
 	if err := h.jioPayGateway.ValidateWebhook(bodyBytes, webhook.SecureHash); err != nil {
-		fmt.Printf("❌ Webhook signature verification failed: %v\n", err)
+		h.logger.Errorf("Settlement webhook signature verification failed: %v", err)
 		// Return 200 OK to avoid gateway retries, but log the failure
 		return c.JSON(http.StatusOK, map[string]string{
 			"status":  "error",
@@ -721,140 +731,134 @@ func (h *WebhookHandler) handleJioPaySettlementWebhook(c echo.Context) error {
 		})
 	}
 
-	fmt.Println("✅ Webhook signature verified")
+	h.logger.Info("Settlement webhook signature verified successfully")
 
-	// Step 4: Find payment by merchantTxnNo (our payment_id)
+	// Step 4: Return 200 OK immediately to acknowledge receipt
+	// This prevents gateway timeout while we process the settlement
+	// Important: Must respond before spawning goroutine
+	responseErr := c.JSON(http.StatusOK, map[string]string{
+		"status":  "success",
+		"message": "Webhook received and will be processed",
+	})
+
+	h.logger.Info("Returned 200 OK to JioPay gateway, starting async processing")
+
+	// Step 5: Process settlement asynchronously
+	// Use detached context to prevent cancellation when HTTP request completes
+	go h.processJioPaySettlement(context.Background(), webhook, bodyBytes)
+
+	return responseErr
+}
+
+// processJioPaySettlement processes JioPay settlement data asynchronously
+// This runs in a separate goroutine after the webhook has acknowledged receipt with 200 OK
+func (h *WebhookHandler) processJioPaySettlement(ctx context.Context, webhook jiopay.SettlementWebhook, bodyBytes []byte) {
+	h.logger.Info("Starting async settlement processing")
+
+	defer func() {
+		if r := recover(); r != nil {
+			h.logger.Errorf("Panic recovered in settlement processing: %v", r)
+		}
+	}()
+
+	// Step 1: Find payment by merchantTxnNo (our payment_id)
 	pmt, err := h.paymentRepo.GetPaymentByGatewayPaymentID(ctx, webhook.MerchantTxnNo)
 	if err != nil || pmt == nil {
-		fmt.Printf("❌ Payment not found: %s, error: %v\n", webhook.MerchantTxnNo, err)
-		// Return 200 OK to avoid gateway retries
-		return c.JSON(http.StatusOK, map[string]string{
-			"status":  "error",
-			"message": "Payment not found",
-		})
+		h.logger.Errorf("Payment not found for settlement: merchant_txn_no=%s, error=%v", webhook.MerchantTxnNo, err)
+		return
 	}
 
-	fmt.Printf("✅ Payment found: %s (status: %s, settlement_status: %s)\n",
-		pmt.ID, pmt.Status, pmt.SettlementStatus)
+	h.logger.InfoWith("Payment found for settlement",
+		"payment_id", pmt.ID,
+		"status", pmt.Status,
+		"settlement_status", pmt.SettlementStatus,
+	)
 
-	// Step 5: Validate payment state
+	// Step 2: Validate payment state
 	if pmt.Status != payment.PaymentStatusSuccess {
-		fmt.Printf("⚠️  Payment status is not 'success': %s (cannot settle)\n", pmt.Status)
-		return c.JSON(http.StatusOK, map[string]string{
-			"status":  "error",
-			"message": "Payment not in success state",
-		})
+		h.logger.Warnf("Cannot settle payment with status '%s', must be 'success': payment_id=%s", pmt.Status, pmt.ID)
+		return
 	}
 
-	// Step 6: Check idempotency - if already settled, verify amounts
+	// Step 3: Check idempotency - if already settled, verify amounts
 	if pmt.SettlementStatus == payment.SettlementStatusSettled {
-		fmt.Println("⚠️  Payment already settled - checking idempotency...")
+		h.logger.Warn("Payment already settled, performing idempotency check")
 
 		// Parse webhook amounts
 		webhookSettlementAmount, err := parseAmountToPaise(webhook.TxnAmount)
 		if err != nil {
-			fmt.Printf("❌ Failed to parse txnAmount: %v\n", err)
-			return c.JSON(http.StatusOK, map[string]string{
-				"status":  "error",
-				"message": "Invalid amount format",
-			})
+			h.logger.Errorf("Failed to parse txnAmount for idempotency check: %v", err)
+			return
 		}
 
 		webhookTxnCharges, err := parseAmountToPaise(webhook.TxnCharges)
 		if err != nil {
-			fmt.Printf("❌ Failed to parse txnCharges: %v\n", err)
-			return c.JSON(http.StatusOK, map[string]string{
-				"status":  "error",
-				"message": "Invalid charges format",
-			})
+			h.logger.Errorf("Failed to parse txnCharges for idempotency check: %v", err)
+			return
 		}
 
 		webhookServiceTax, err := parseAmountToPaise(webhook.ServiceTax)
 		if err != nil {
-			fmt.Printf("❌ Failed to parse serviceTax: %v\n", err)
-			return c.JSON(http.StatusOK, map[string]string{
-				"status":  "error",
-				"message": "Invalid service tax format",
-			})
+			h.logger.Errorf("Failed to parse serviceTax for idempotency check: %v", err)
+			return
 		}
 
 		webhookMDRAmount := webhookTxnCharges + webhookServiceTax
 		webhookNetAmount, err := parseAmountToPaise(webhook.SettledAmount)
 		if err != nil {
-			fmt.Printf("❌ Failed to parse settledAmount: %v\n", err)
-			return c.JSON(http.StatusOK, map[string]string{
-				"status":  "error",
-				"message": "Invalid settled amount format",
-			})
+			h.logger.Errorf("Failed to parse settledAmount for idempotency check: %v", err)
+			return
 		}
 
 		// Verify amounts match (idempotency check)
 		if pmt.SettlementAmount != nil && *pmt.SettlementAmount != webhookSettlementAmount {
-			fmt.Printf("⚠️  Settlement amount mismatch! DB: %d, Webhook: %d\n",
-				*pmt.SettlementAmount, webhookSettlementAmount)
+			h.logger.Warnf("Settlement amount mismatch (idempotency): DB=%d, Webhook=%d, payment_id=%s",
+				*pmt.SettlementAmount, webhookSettlementAmount, pmt.ID)
 		}
 
 		if pmt.MDRAmount != webhookMDRAmount {
-			fmt.Printf("⚠️  MDR amount mismatch! DB: %d, Webhook: %d\n",
-				pmt.MDRAmount, webhookMDRAmount)
+			h.logger.Warnf("MDR amount mismatch (idempotency): DB=%d, Webhook=%d, payment_id=%s",
+				pmt.MDRAmount, webhookMDRAmount, pmt.ID)
 		}
 
 		if pmt.NetSettlementAmount != nil && *pmt.NetSettlementAmount != webhookNetAmount {
-			fmt.Printf("⚠️  Net settlement amount mismatch! DB: %d, Webhook: %d\n",
-				*pmt.NetSettlementAmount, webhookNetAmount)
+			h.logger.Warnf("Net settlement amount mismatch (idempotency): DB=%d, Webhook=%d, payment_id=%s",
+				*pmt.NetSettlementAmount, webhookNetAmount, pmt.ID)
 		}
 
-		fmt.Println("✅ Payment already settled - idempotent request, returning success")
-		return c.JSON(http.StatusOK, map[string]string{
-			"status":  "success",
-			"message": "Settlement already processed (idempotent)",
-		})
+		h.logger.Info("Idempotent settlement webhook - payment already settled")
+		return
 	}
 
-	// Step 7: Validate settlement status is 'pending'
+	// Step 4: Validate settlement status is 'pending'
 	if pmt.SettlementStatus != payment.SettlementStatusPending {
-		fmt.Printf("⚠️  Settlement status is not 'pending': %s\n", pmt.SettlementStatus)
-		return c.JSON(http.StatusOK, map[string]string{
-			"status":  "error",
-			"message": "Invalid settlement status",
-		})
+		h.logger.Warnf("Invalid settlement status, expected 'pending' but got '%s': payment_id=%s", pmt.SettlementStatus, pmt.ID)
+		return
 	}
 
-	// Step 8: Parse and validate amounts
+	// Step 5: Parse and validate amounts
 	settlementAmount, err := parseAmountToPaise(webhook.TxnAmount)
 	if err != nil {
-		fmt.Printf("❌ Failed to parse txnAmount: %v\n", err)
-		return c.JSON(http.StatusOK, map[string]string{
-			"status":  "error",
-			"message": "Invalid txnAmount format",
-		})
+		h.logger.Errorf("Failed to parse txnAmount: %v", err)
+		return
 	}
 
 	txnCharges, err := parseAmountToPaise(webhook.TxnCharges)
 	if err != nil {
-		fmt.Printf("❌ Failed to parse txnCharges: %v\n", err)
-		return c.JSON(http.StatusOK, map[string]string{
-			"status":  "error",
-			"message": "Invalid txnCharges format",
-		})
+		h.logger.Errorf("Failed to parse txnCharges: %v", err)
+		return
 	}
 
 	serviceTax, err := parseAmountToPaise(webhook.ServiceTax)
 	if err != nil {
-		fmt.Printf("❌ Failed to parse serviceTax: %v\n", err)
-		return c.JSON(http.StatusOK, map[string]string{
-			"status":  "error",
-			"message": "Invalid serviceTax format",
-		})
+		h.logger.Errorf("Failed to parse serviceTax: %v", err)
+		return
 	}
 
 	netSettlementAmount, err := parseAmountToPaise(webhook.SettledAmount)
 	if err != nil {
-		fmt.Printf("❌ Failed to parse settledAmount: %v\n", err)
-		return c.JSON(http.StatusOK, map[string]string{
-			"status":  "error",
-			"message": "Invalid settledAmount format",
-		})
+		h.logger.Errorf("Failed to parse settledAmount: %v", err)
+		return
 	}
 
 	// Calculate total MDR (charges + GST)
@@ -863,32 +867,32 @@ func (h *WebhookHandler) handleJioPaySettlementWebhook(c echo.Context) error {
 	// Validate calculation: settledAmount = txnAmount - charges - tax
 	expectedNetAmount := settlementAmount - mdrAmount
 	if netSettlementAmount != expectedNetAmount {
-		fmt.Printf("⚠️  Settlement calculation mismatch! Expected: %d, Got: %d\n",
-			expectedNetAmount, netSettlementAmount)
+		h.logger.Warnf("Settlement calculation mismatch: expected=%d, got=%d, payment_id=%s",
+			expectedNetAmount, netSettlementAmount, pmt.ID)
 	}
 
-	fmt.Printf("💰 Settlement amounts (in paise):\n")
-	fmt.Printf("   - Settlement Amount: %d (₹%.2f)\n", settlementAmount, float64(settlementAmount)/100)
-	fmt.Printf("   - MDR Amount: %d (₹%.2f) [Charges: %d + Tax: %d]\n",
-		mdrAmount, float64(mdrAmount)/100, txnCharges, serviceTax)
-	fmt.Printf("   - Net Settlement: %d (₹%.2f)\n", netSettlementAmount, float64(netSettlementAmount)/100)
+	h.logger.InfoWith("Settlement amounts parsed",
+		"payment_id", pmt.ID,
+		"settlement_amount_paise", settlementAmount,
+		"mdr_amount_paise", mdrAmount,
+		"net_settlement_paise", netSettlementAmount,
+		"txn_charges", txnCharges,
+		"service_tax", serviceTax,
+	)
 
-	// Step 9: Parse settlement date
+	// Step 6: Parse settlement date
 	settlementDate, err := parseSettlementDate(webhook.SettlementDate)
 	if err != nil {
-		fmt.Printf("❌ Failed to parse settlement date: %v\n", err)
-		return c.JSON(http.StatusOK, map[string]string{
-			"status":  "error",
-			"message": "Invalid settlement date format",
-		})
+		h.logger.Errorf("Failed to parse settlement date: %v", err)
+		return
 	}
 
-	fmt.Printf("📅 Settlement date: %s\n", settlementDate.Format("2006-01-02"))
+	h.logger.Debugf("Settlement date parsed: %s", settlementDate.Format("2006-01-02"))
 
-	// Step 10: Prepare settlement metadata (store full webhook payload)
+	// Step 7: Prepare settlement metadata (store full webhook payload)
 	var webhookData map[string]any
 	if err := json.Unmarshal(bodyBytes, &webhookData); err != nil {
-		fmt.Printf("⚠️  Failed to parse webhook for metadata: %v\n", err)
+		h.logger.Warnf("Failed to parse webhook for metadata storage: %v", err)
 		webhookData = make(map[string]any)
 	}
 
@@ -901,61 +905,55 @@ func (h *WebhookHandler) handleJioPaySettlementWebhook(c echo.Context) error {
 		"payment_mode":                   webhook.PaymentMode,
 		"payment_sub_inst_type":          webhook.PaymentSubInstType,
 		"card_network":                   webhook.CardNetwork,
+		"txn_channel":                    webhook.TxnChannel,
+		"invoice_nos":                    webhook.InvoiceNos,
 		"webhook_payload":                webhookData, // Store full webhook
 	}
 
-	// Step 11: Update settlement status to 'settled'
-	fmt.Println("🔄 Updating settlement status to 'settled'...")
+	// Step 8: Update settlement status to 'settled'
+	h.logger.Info("Updating settlement status to 'settled'")
 	settlementReferenceID := webhook.SettlementID // Batch ID
 	settlementUTR := webhook.SettlementID         // JioPay uses same ID as UTR reference
 	if err := h.paymentRepo.UpdateSettlementStatus(ctx, pmt.ID, payment.SettlementStatusSettled, settlementReferenceID, settlementUTR, settlementMetadata); err != nil {
-		fmt.Printf("❌ Failed to update settlement status: %v\n", err)
-		return c.JSON(http.StatusOK, map[string]string{
-			"status":  "error",
-			"message": "Failed to update settlement status",
-		})
+		h.logger.Errorf("Failed to update settlement status: payment_id=%s, error=%v", pmt.ID, err)
+		return
 	}
 
-	fmt.Println("✅ Settlement status updated to 'settled'")
+	h.logger.Info("Settlement status updated successfully")
 
-	// Step 12: Update settlement amounts
-	fmt.Println("🔄 Updating settlement amounts...")
+	// Step 9: Update settlement amounts
+	h.logger.Info("Updating settlement amounts")
 	if err := h.paymentRepo.UpdateSettlementAmounts(ctx, pmt.ID, settlementAmount, mdrAmount, netSettlementAmount); err != nil {
-		fmt.Printf("❌ Failed to update settlement amounts: %v\n", err)
-		return c.JSON(http.StatusOK, map[string]string{
-			"status":  "error",
-			"message": "Failed to update settlement amounts",
-		})
+		h.logger.Errorf("Failed to update settlement amounts: payment_id=%s, error=%v", pmt.ID, err)
+		return
 	}
 
-	fmt.Println("✅ Settlement amounts updated successfully")
+	h.logger.Info("Settlement amounts updated successfully")
 
-	// Step 13: Log settlement received for audit trail
+	// Step 10: Log settlement received for audit trail
 	paymentUUID, parseErr := uuid.Parse(pmt.ID)
 	if parseErr != nil {
-		fmt.Printf("⚠️  Failed to parse payment ID for logging: %v\n", parseErr)
+		h.logger.Warnf("Failed to parse payment ID for audit logging: %v", parseErr)
 		// Non-fatal: continue without logging
 	} else {
 		// Use SettlementID as UTR reference for JioPay
 		settlementUTR := webhook.SettlementID
 		if logErr := h.stateLogger.LogSettlementReceived(ctx, paymentUUID, netSettlementAmount, settlementUTR, settlementMetadata); logErr != nil {
-			fmt.Printf("⚠️  Failed to log settlement received (non-fatal): %v\n", logErr)
+			h.logger.Warnf("Failed to log settlement to audit trail (non-fatal): %v", logErr)
 			// Non-fatal: continue even if logging fails
 		} else {
-			fmt.Println("✅ Settlement event logged to audit trail")
+			h.logger.Debug("Settlement event logged to audit trail")
 		}
 	}
 
 	// Note: settled_at is automatically set by UpdateSettlementStatus when status becomes 'settled'
 
-	fmt.Println("=== JIOPAY SETTLEMENT WEBHOOK: Processing complete ===")
-	fmt.Printf("✅ Settlement processed: Payment %s → ₹%.2f (after ₹%.2f MDR)\n",
-		pmt.ID, float64(netSettlementAmount)/100, float64(mdrAmount)/100)
-
-	return c.JSON(http.StatusOK, map[string]string{
-		"status":  "success",
-		"message": "Settlement processed successfully",
-	})
+	h.logger.InfoWith("JioPay settlement processing completed successfully",
+		"payment_id", pmt.ID,
+		"settlement_id", webhook.SettlementID,
+		"net_settlement_rupees", float64(netSettlementAmount)/100,
+		"mdr_rupees", float64(mdrAmount)/100,
+	)
 }
 
 // handleEasebuzzSettlementWebhook processes settlement notifications from Easebuzz

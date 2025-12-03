@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -10,6 +9,7 @@ import (
 	"time"
 
 	"xcentro.in/internal/adapters/database/postgres/client"
+	payeeRepo "xcentro.in/internal/adapters/database/postgres/payee"
 	paymentRepo "xcentro.in/internal/adapters/database/postgres/payment"
 	payoutRepo "xcentro.in/internal/adapters/database/postgres/payout"
 	voucherRepo "xcentro.in/internal/adapters/database/postgres/voucher"
@@ -20,15 +20,15 @@ import (
 )
 
 func main() {
-	fmt.Println("🚀 Starting Payout Worker...")
+	log.Println("Starting Payout Worker...")
 
 	// Load configuration
-	cfg, err := config.Load("")
+	cfg, err := config.Load(".env")
 	if err != nil {
 		log.Fatalf("Failed to load configuration: %v", err)
 	}
 
-	fmt.Printf("📝 Loaded configuration\n")
+	log.Println("Configuration loaded successfully")
 
 	// Initialize database connection
 	db, err := client.NewPgxDB(context.Background(), cfg.Database.ToDBConfig())
@@ -37,62 +37,66 @@ func main() {
 	}
 	defer db.Close()
 
-	fmt.Println("✅ Database connection established")
-
-	// Create transaction manager
-	txManager := client.NewTransactionManager(db)
+	log.Println("Database connection established")
 
 	// Create repositories
-	paymentRepository := paymentRepo.NewPostgresPaymentRepository(db, txManager)
+	paymentRepository := paymentRepo.NewPgPaymentRepository(db, cfg.BankAccountEncryption.EncryptionKey)
 	voucherRepository := voucherRepo.NewPostgresVoucherRepository(db, cfg.BankAccountEncryption.EncryptionKey)
 	transferRepository := payoutRepo.NewPostgresPayoutTransferRepository(db)
-	configRepository := payoutRepo.NewPostgresPayoutConfigurationRepository(db)
+	bankAccountRepository := payeeRepo.NewPgPayeeBankAccountRepository(db, cfg.BankAccountEncryption.EncryptionKey)
 	stateChangeRepository := paymentRepo.NewPostgresPaymentStateChangeRepository(db)
 
-	fmt.Println("✅ Repositories initialized")
+	log.Println("Repositories initialized")
 
 	// Create payout provider factory with Castler config from environment
 	providerFactory := factory.NewPayoutProviderFactory(&cfg)
 
-	fmt.Println("✅ Payout provider factory initialized (using config: Castler)")
+	log.Println("Payout provider factory initialized (Castler)")
 
 	// Initialize payout service (business logic layer)
-	// Note: Worker uses paymentRepository for settlement status checks
+	// Note: Worker needs bankAccountRepository to fetch Castler beneficiary IDs for payouts
 	payoutSvc := payout.NewPayoutService(
 		paymentRepository,
 		voucherRepository,
 		transferRepository,
-		nil, // bankAccountRepository - not used in worker, only in API handlers
-		configRepository,
+		bankAccountRepository,
+		stateChangeRepository,
 		providerFactory,
+		&cfg,
 	)
 
-	fmt.Println("✅ Payout service initialized")
+	log.Println("Payout service initialized")
 
 	// Initialize payout worker (orchestration/scheduling layer)
 	worker := workers.NewPayoutWorker(
+		paymentRepository,
 		voucherRepository,
 		transferRepository,
-		configRepository,
 		stateChangeRepository,
 		payoutSvc,
 		providerFactory,
+		&cfg,
 	)
 
-	fmt.Println("✅ Payout worker initialized")
+	log.Println("Payout worker initialized")
+	log.Printf("Auto-payout enabled: %v", cfg.Workers.AutoPayout.Enabled)
+	if cfg.Workers.AutoPayout.Enabled {
+		log.Printf("Auto-payout batch size: %d", cfg.Workers.AutoPayout.BatchSize)
+		log.Printf("Auto-payout poll interval: %d minutes", cfg.Workers.AutoPayout.PollIntervalMinutes)
+	}
 
-	fmt.Println("\n📦 Worker structure:")
-	fmt.Println("  ✅ Worker logic: internal/workers/payout_worker.go")
-	fmt.Println("  ✅ Entry point: cmd/payout_worker/main.go")
-	fmt.Println("  ✅ Service layer: internal/services/payout/payout_service.go")
-	fmt.Println("  ✅ Repositories: transfer, configuration, mapping, voucher")
-	fmt.Println("  ✅ Provider factory: Castler client initialized")
+	log.Println("Worker structure:")
+	log.Println("  - Worker logic: internal/workers/payout_worker.go")
+	log.Println("  - Entry point: cmd/payout_worker/main.go")
+	log.Println("  - Service layer: internal/services/payout/payout_service.go")
+	log.Println("  - Repositories: payment, transfer, configuration, mapping, voucher")
+	log.Println("  - Provider factory: Castler client initialized")
 
-	fmt.Println("\n💡 Worker tasks:")
-	fmt.Println("  1. Process ready vouchers (create transfer requests)")
-	fmt.Println("  2. Initiate approved transfers (call Castler API)")
-	fmt.Println("  3. Flag timeout transfers (no webhook after 60min)")
-	fmt.Println("  4. Handle failed transfers (placeholder for retry strategy)")
+	log.Println("Worker tasks:")
+	log.Println("  1. Auto-retry initiated transfers (recover from crashed async goroutines)")
+	log.Println("  2. Flag timeout transfers (no webhook after 60min)")
+	log.Println("  3. Retry failed transfers (placeholder for future)")
+	log.Println("  4. Auto-payout for settled payments (main functionality)")
 
 	// Setup graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
@@ -102,34 +106,36 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
-	// Start worker scheduler (simple ticker - runs every 1 minute)
-	ticker := time.NewTicker(1 * time.Minute)
+	// Start worker scheduler using configured poll interval
+	// Note: This controls ALL worker tasks (monitoring, timeout checks, auto-payout)
+	pollInterval := time.Duration(cfg.Workers.AutoPayout.PollIntervalMinutes) * time.Minute
+	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 
-	fmt.Println("\n🔄 Worker scheduler started (runs every 1 minute)")
-	fmt.Println("⏸️  Press Ctrl+C to stop gracefully")
+	log.Printf("Worker scheduler started (runs every %d minutes)", cfg.Workers.AutoPayout.PollIntervalMinutes)
+	log.Println("Press Ctrl+C to stop gracefully")
 
 	// Run worker immediately on startup
-	fmt.Println("🏃 Running initial worker cycle...")
+	log.Println("Running initial worker cycle...")
 	if err := worker.Run(ctx); err != nil {
-		log.Printf("⚠️  Initial worker run failed: %v", err)
+		log.Printf("Initial worker run failed: %v", err)
 	}
 
 	// Main event loop
 	for {
 		select {
 		case <-ticker.C:
-			// Execute worker tasks every minute
+			// Execute worker tasks based on poll interval
 			if err := worker.Run(ctx); err != nil {
-				log.Printf("⚠️  Worker run failed: %v", err)
+				log.Printf("Worker run failed: %v", err)
 			}
 
 		case sig := <-sigChan:
 			// Graceful shutdown
-			fmt.Printf("\n\n🛑 Received signal: %v\n", sig)
-			fmt.Println("🔄 Shutting down worker gracefully...")
+			log.Printf("Received signal: %v", sig)
+			log.Println("Shutting down worker gracefully...")
 			cancel()
-			fmt.Println("✅ Worker stopped")
+			log.Println("Worker stopped")
 			return
 		}
 	}

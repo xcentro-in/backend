@@ -311,10 +311,10 @@ func (r *PostgresPayoutTransferRepository) GetByStatus(ctx context.Context, stat
 	for rows.Next() {
 		var transfer payout.PayoutTransferRequest
 		var metadataJSON, historyJSON []byte
-		var escrowID sql.NullString
+		var escrowID, providerTransferID sql.NullString
 
 		err := rows.Scan(
-			&transfer.TransferRequestID, &transfer.PaymentID, &transfer.VoucherID, &transfer.Provider, &transfer.ProviderBeneficiaryID, &transfer.ProviderTransferID, &escrowID,
+			&transfer.TransferRequestID, &transfer.PaymentID, &transfer.VoucherID, &transfer.Provider, &transfer.ProviderBeneficiaryID, &providerTransferID, &escrowID,
 			&transfer.Amount, &transfer.Currency, &transfer.Purpose, &transfer.Reference, &transfer.Narration, &transfer.TransferMode,
 			&transfer.Status, &transfer.InitiatedAt, &transfer.ProcessingAt, &transfer.CompletedAt, &transfer.FailedAt, &transfer.FailureReason, &transfer.UTR,
 			&transfer.RetryCount, &transfer.MaxRetries, &transfer.NextRetryAt, &transfer.LastRetryAt,
@@ -326,9 +326,12 @@ func (r *PostgresPayoutTransferRepository) GetByStatus(ctx context.Context, stat
 			return nil, fmt.Errorf("failed to scan transfer: %w", err)
 		}
 
-		// Handle nullable escrow_id
+		// Handle nullable fields
 		if escrowID.Valid {
 			transfer.EscrowID = escrowID.String
+		}
+		if providerTransferID.Valid {
+			transfer.ProviderTransferID = providerTransferID.String
 		}
 
 		// Unmarshal JSONB fields
