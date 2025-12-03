@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"xcentro.in/internal/core/payment"
+	"xcentro.in/internal/shared/logger"
 )
 
 // MockPGClient implements the PaymentGateway interface for testing purposes
@@ -22,6 +23,7 @@ type MockPGClient struct {
 	simulateSuccess bool          // If true, always return success; if false, simulate failures
 	delayMs         int           // Artificial delay in milliseconds to simulate network latency
 	webhookDelay    time.Duration // Delay before sending webhook (default: 2 minutes)
+	logger          *logger.Logger
 }
 
 // NewMockPGClient creates a new mock payment gateway client
@@ -41,6 +43,19 @@ type MockPGClient struct {
 //	    cfg.MockPG.IsAggregatorModel,
 //	)
 func NewMockPGClient(merchantID, apiKey string, simulateSuccess bool, isAggregatorModel bool) payment.PaymentGateway {
+	log := logger.GetDefault()
+
+	paymentModel := "Normal"
+	if isAggregatorModel {
+		paymentModel = "Aggregator"
+	}
+
+	log.WarnWith("Payment Gateway Initialized: MockPG (TEST MODE)",
+		"merchant_id", merchantID,
+		"simulate_success", simulateSuccess,
+		"payment_model", paymentModel,
+		"webhook_delay", "2m")
+
 	return &MockPGClient{
 		merchantID:        merchantID,
 		apiKey:            apiKey,
@@ -48,6 +63,7 @@ func NewMockPGClient(merchantID, apiKey string, simulateSuccess bool, isAggregat
 		simulateSuccess:   simulateSuccess,
 		delayMs:           100,             // Simulate 100ms network delay
 		webhookDelay:      2 * time.Minute, // Send webhook after 2 minutes
+		logger:            log,
 	}
 }
 

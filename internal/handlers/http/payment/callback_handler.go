@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/google/uuid"
@@ -105,25 +106,52 @@ func (h *CallbackHandler) HandleCallback(c echo.Context) error {
 }
 
 // handleJioPayCallback processes JioPay callback (SURL/FURL)
+//
+// Data Flow:
+//   - merchantTxnNo in callback = OUR payment_id (use this to find the payment)
+//   - txnID in callback = JioPay's transaction ID (store as gateway_payment_id)
+//
+// Payment Lookup:
+//   - Use merchantTxnNo to find payment by payment_id
+//   - Then update with JioPay's txnID as gateway_payment_id
 func (h *CallbackHandler) handleJioPayCallback(c echo.Context) error {
 	ctx := c.Request().Context()
 
 	h.logger.Info("JioPay callback processing started")
 
-	// Step 1: Read request body
+	// Step 1: Read request body for signature verification
 	bodyBytes, err := io.ReadAll(c.Request().Body)
 	if err != nil {
 		h.logger.ErrorWith("Failed to read JioPay callback body", "error", err)
 		return c.HTML(http.StatusBadRequest, generateErrorHTML("Invalid request"))
 	}
 
-	h.logger.DebugWith("JioPay callback payload received", "payload_size", len(bodyBytes))
+	h.logger.DebugWith("JioPay callback payload received", "payload_size", len(bodyBytes), "content_type", c.Request().Header.Get("Content-Type"))
 
-	// Step 2: Parse callback payload
-	var callback jiopay.CallbackPayload
-	if err := json.Unmarshal(bodyBytes, &callback); err != nil {
-		h.logger.ErrorWith("Failed to parse JioPay callback payload", "error", err)
-		return c.HTML(http.StatusBadRequest, generateErrorHTML("Invalid payload format"))
+	// Step 2: Parse callback payload from form data
+	// JioPay sends application/x-www-form-urlencoded, not JSON
+	formData, err := url.ParseQuery(string(bodyBytes))
+	if err != nil {
+		h.logger.ErrorWith("Failed to parse JioPay form data", "error", err)
+		return c.HTML(http.StatusBadRequest, generateErrorHTML("Invalid form data"))
+	}
+
+	h.logger.DebugWith("JioPay callback form data parsed", "fields_count", len(formData))
+
+	// Map form fields to CallbackPayload struct
+	callback := jiopay.CallbackPayload{
+		ResponseCode:     formData.Get("responseCode"),
+		RespDescription:  formData.Get("respDescription"),
+		MerchantID:       formData.Get("merchantId"),
+		AggregatorID:     formData.Get("aggregatorID"),
+		MerchantTxnNo:    formData.Get("merchantTxnNo"),
+		SettlementStatus: formData.Get("settlementStatus"),
+		TxnStatus:        formData.Get("txnStatus"),
+		TxnResponseCode:  formData.Get("txnResponseCode"),
+		TxnID:            formData.Get("txnID"),
+		SettlementID:     formData.Get("settlementID"),
+		SettlementDate:   formData.Get("settlementDate"),
+		SecureHash:       formData.Get("secureHash"),
 	}
 
 	h.logger.DebugWith("JioPay callback parsed",
@@ -133,7 +161,25 @@ func (h *CallbackHandler) handleJioPayCallback(c echo.Context) error {
 		"jiopay_txn_id", callback.TxnID)
 
 	// Step 3: Verify signature (security validation)
-	if err := h.jioPayGateway.ValidateWebhook(bodyBytes, callback.SecureHash); err != nil {
+	// Build field map from form data (excluding secureHash) for signature verification
+	fieldMap := make(map[string]string)
+	for key, values := range formData {
+		if key != "secureHash" && len(values) > 0 {
+			fieldMap[key] = values[0]
+		}
+	}
+
+	// Validate signature using field map
+	// Note: We can't use ValidateWebhook directly because it expects JSON, but we have form data
+	// So we'll need to create a JSON representation or validate the hash directly
+	// For now, convert field map to JSON for validation
+	jsonPayload, err := json.Marshal(fieldMap)
+	if err != nil {
+		h.logger.ErrorWith("Failed to marshal callback data for validation", "error", err)
+		return c.HTML(http.StatusBadRequest, generateErrorHTML("Invalid callback data"))
+	}
+
+	if err := h.jioPayGateway.ValidateWebhook(jsonPayload, callback.SecureHash); err != nil {
 		h.logger.ErrorWith("JioPay signature verification failed", "error", err, "merchant_txn_no", callback.MerchantTxnNo)
 		return c.HTML(http.StatusUnauthorized, generateErrorHTML("Security verification failed"))
 	}
@@ -183,6 +229,17 @@ func (h *CallbackHandler) handleJioPayCallback(c echo.Context) error {
 			// Don't fail callback - still show page to user
 		} else {
 			h.logger.InfoWith("JioPay payment status updated", "payment_id", pmt.ID, "new_status", newStatus)
+
+			// Step 6.0: Update gateway payment ID with JioPay's txnID
+			// This is JioPay's transaction ID (different from our merchantTxnNo)
+			if callback.TxnID != "" {
+				if err := h.paymentRepo.UpdateGatewayPaymentID(ctx, pmt.ID, callback.TxnID, pmt.RedirectURL); err != nil {
+					h.logger.ErrorWith("Failed to update gateway payment ID", "payment_id", pmt.ID, "jiopay_txn_id", callback.TxnID, "error", err)
+					// Don't fail - this is not critical for callback success
+				} else {
+					h.logger.DebugWith("Gateway payment ID updated", "payment_id", pmt.ID, "gateway_payment_id", callback.TxnID)
+				}
+			}
 
 			// Step 6.1: Launch tokenization in background if this is a tokenization payment
 			if pmt.PaymentType == payment.PaymentTypeTokenization && newStatus == payment.PaymentStatusSuccess {
@@ -1038,7 +1095,7 @@ func generateSuccessHTML(pmt *payment.Payment, txnRef, message string) string {
 </html>`,
 		escapeHTML(message),
 		escapeHTML(txnRef),
-		float64(pmt.Amount)/100.0,
+		float64(pmt.TotalAmount)/100.0,
 	)
 }
 
@@ -1216,7 +1273,7 @@ func generateFailureHTML(pmt *payment.Payment, txnRef, message string) string {
 </html>`,
 		escapeHTML(message),
 		escapeHTML(txnRef),
-		float64(pmt.Amount)/100.0,
+		float64(pmt.TotalAmount)/100.0,
 	)
 }
 
@@ -1371,7 +1428,7 @@ func generatePendingHTML(pmt *payment.Payment, txnRef, message string) string {
 </html>`,
 		escapeHTML(message),
 		escapeHTML(txnRef),
-		float64(pmt.Amount)/100.0,
+		float64(pmt.TotalAmount)/100.0,
 	)
 }
 
