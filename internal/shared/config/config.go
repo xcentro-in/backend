@@ -146,6 +146,7 @@ type EasebuzzConfig struct {
 	MerchantKey       string `json:"-" env:"EASEBUZZ_MERCHANT_KEY"`                                                      // Merchant key (sensitive)
 	Salt              string `json:"-" env:"EASEBUZZ_SALT"`                                                              // Hash salt (sensitive)
 	APIKey            string `json:"-" env:"EASEBUZZ_API_KEY"`                                                           // API key for tokenization (EBZ-KEY header, sensitive)
+	MerchantTokenID   string `json:"-" env:"EASEBUZZ_MERCHANT_TOKEN_ID"`                                                 // Merchant token ID provided by Easebuzz (sensitive)
 	EncryptionKey     string `json:"-" env:"EASEBUZZ_ENCRYPTION_KEY"`                                                    // AES encryption key (sensitive, optional)
 	EncryptionIV      string `json:"-" env:"EASEBUZZ_ENCRYPTION_IV"`                                                     // Fixed AES IV in base64 (sensitive, optional)
 	WebhookSecret     string `json:"-" env:"EASEBUZZ_WEBHOOK_SECRET"`                                                    // Webhook signature verification (sensitive)
@@ -404,6 +405,7 @@ func (c Config) Safe() Config {
 	c.Easebuzz.MerchantKey = "***REDACTED***"
 	c.Easebuzz.Salt = "***REDACTED***"
 	c.Easebuzz.APIKey = "***REDACTED***"
+	c.Easebuzz.MerchantTokenID = "***REDACTED***"
 	c.Easebuzz.EncryptionKey = "***REDACTED***"
 	c.Easebuzz.EncryptionIV = "***REDACTED***"
 	c.Easebuzz.WebhookSecret = "***REDACTED***"

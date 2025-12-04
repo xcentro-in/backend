@@ -394,61 +394,57 @@ func (c *JioPayClient) InitiatePayment(ctx context.Context, request payment.Gate
 			return nil, fmt.Errorf("card details are required for tokenization payments")
 		}
 	} else if isTokenBased {
-
-		// JioPay-specific: Generate cryptogram if not provided by orchestrator
+		// JioPay-specific: Always generate cryptogram internally
 		// This encapsulates JioPay's complex cryptogram generation flow
-		if request.Cryptogram == "" {
+		// Cryptogram is a PG-specific implementation detail, not exposed to service layer
 
-			// Step 1: Get owner mobile using business service
-			if c.businessOwnerSvc == nil {
-				return nil, fmt.Errorf("business service not configured for JioPay")
-			}
-
-			ownerMobile, err := c.businessOwnerSvc.GetOwnerMobile(ctx, request.BusinessID)
-			if err != nil {
-				return nil, fmt.Errorf("failed to get owner mobile: %w", err)
-			}
-
-			// Step 2: Use request.Token directly as vaultId (since tokenization now returns vaultId)
-			// Previously, we had to call FetchCardByLast4Digits to get vaultId
-			// Now, the vaultId is stored directly in stored_cards.token column
-			vaultID := request.Token
-
-			// Step 3: Generate cryptogram internally
-			cryptogramReq := payment.CryptogramRequest{
-				Token:         request.Token,
-				Amount:        request.Amount,
-				Currency:      request.Currency,
-				TransactionID: request.TransactionID,
-				BusinessID:    request.BusinessID,
-				Metadata: map[string]any{
-					"vault_id":     vaultID,
-					"owner_mobile": ownerMobile,
-				},
-			}
-
-			cryptogramResp, err := c.GenerateCryptogram(ctx, cryptogramReq)
-			if err != nil {
-				return nil, fmt.Errorf("failed to generate cryptogram: %w", err)
-			}
-
-			// Extract cryptogram and network token from response
-			request.Cryptogram = cryptogramResp.Cryptogram
-
-			// CRITICAL: Extract network token from metadata for use in initiateSale
-			networkToken, ok := cryptogramResp.Metadata["network_token"].(string)
-			if !ok || networkToken == "" {
-				return nil, fmt.Errorf("network_token not found in cryptogram response")
-			}
-
-			// Store network token in request metadata for use in sale request
-			if request.Metadata == nil {
-				request.Metadata = make(map[string]any)
-			}
-			request.Metadata["network_token"] = networkToken
-
-		} else {
+		// Step 1: Get owner mobile using business service
+		if c.businessOwnerSvc == nil {
+			return nil, fmt.Errorf("business service not configured for JioPay")
 		}
+
+		ownerMobile, err := c.businessOwnerSvc.GetOwnerMobile(ctx, request.BusinessID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get owner mobile: %w", err)
+		}
+
+		// Step 2: Use request.Token directly as vaultId (since tokenization now returns vaultId)
+		// Previously, we had to call FetchCardByLast4Digits to get vaultId
+		// Now, the vaultId is stored directly in stored_cards.token column
+		vaultID := request.Token
+
+		// Step 3: Generate cryptogram internally
+		cryptogramReq := payment.CryptogramRequest{
+			Token:         request.Token,
+			Amount:        request.Amount,
+			Currency:      request.Currency,
+			TransactionID: request.TransactionID,
+			BusinessID:    request.BusinessID,
+			Metadata: map[string]any{
+				"vault_id":     vaultID,
+				"owner_mobile": ownerMobile,
+			},
+		}
+
+		cryptogramResp, err := c.GenerateCryptogram(ctx, cryptogramReq)
+		if err != nil {
+			return nil, fmt.Errorf("failed to generate cryptogram: %w", err)
+		}
+
+		// Extract cryptogram and network token from response
+		request.Cryptogram = cryptogramResp.Cryptogram
+
+		// CRITICAL: Extract network token from metadata for use in initiateSale
+		networkToken, ok := cryptogramResp.Metadata["network_token"].(string)
+		if !ok || networkToken == "" {
+			return nil, fmt.Errorf("network_token not found in cryptogram response")
+		}
+
+		// Store network token in request metadata for use in sale request
+		if request.Metadata == nil {
+			request.Metadata = make(map[string]any)
+		}
+		request.Metadata["network_token"] = networkToken
 	}
 
 	// Extract customer details from metadata

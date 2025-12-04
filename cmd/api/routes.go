@@ -138,7 +138,7 @@ func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group
 	pendingVoucherRepository := paymentRepo.NewPaymentVoucherPendingRepository(clients.db)
 	stateChangeRepository := paymentRepo.NewPostgresPaymentStateChangeRepository(clients.db)
 
-	_, _, _, businessUserRelRepo, _, busSvc, authSvc := factory.createCoreServices(nil)
+	_, _, _, businessUserRelRepo, userService, busSvc, authSvc := factory.createCoreServices(nil)
 
 	// Initialize payment gateway clients conditionally based on MockPG setting
 	var easebuzzClient, jioPayClient, mockPGClient corePayment.PaymentGateway
@@ -149,7 +149,7 @@ func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group
 		// Real gateways will be nil (never called when MockPG is enabled)
 	} else {
 		// Production mode: Only initialize real payment gateways
-		easebuzzClient = easebuzz.NewEasebuzzClient(cfg.Easebuzz.BaseURL, cfg.Easebuzz.MerchantKey, cfg.Easebuzz.Salt, cfg.Easebuzz.APIKey, cfg.Easebuzz.IsAggregatorModel)
+		easebuzzClient = easebuzz.NewEasebuzzClient(cfg.Easebuzz.BaseURL, cfg.Easebuzz.MerchantKey, cfg.Easebuzz.Salt, cfg.Easebuzz.APIKey, cfg.Easebuzz.MerchantTokenID, cfg.Easebuzz.IsAggregatorModel, userService)
 		jioPayClient = jiopay.NewJioPayClient(cfg.JioPay.BaseURL, cfg.JioPay.TokenizationBaseURL, cfg.JioPay.MerchantID, cfg.JioPay.APIKey, cfg.JioPay.AppID, cfg.JioPay.EncryptionKey, cfg.JioPay.IsAggregatorModel, busSvc)
 		// MockPG will be nil (not used in production)
 	}

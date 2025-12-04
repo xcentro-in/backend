@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"xcentro.in/internal/core/payment"
+	"xcentro.in/internal/core/user"
 	"xcentro.in/internal/shared/logger"
 )
 
@@ -20,11 +21,13 @@ type EasebuzzClient struct {
 	baseURL             string
 	merchantKey         string
 	salt                string
-	apiKey              string // EBZ-KEY for tokenization API
-	tokenizationBaseURL string // TMS base URL for tokenization
-	isAggregatorModel   bool   // Payment model: false = normal (merchant charges), true = aggregator (PG charges)
+	apiKey              string                 // EBZ-KEY for tokenization API
+	merchantTokenID     string                 // Merchant token ID provided by Easebuzz
+	tokenizationBaseURL string                 // TMS base URL for tokenization
+	isAggregatorModel   bool                   // Payment model: false = normal (merchant charges), true = aggregator (PG charges)
 	httpClient          *http.Client
-	hashGenerator       *SecureHashGenerator // Hash generator for request/response signatures
+	hashGenerator       *SecureHashGenerator   // Hash generator for request/response signatures
+	userService         user.UserService       // User service for fetching customer details (required for tokenization)
 	logger              *logger.Logger
 }
 
@@ -35,7 +38,9 @@ type EasebuzzClient struct {
 //   - merchantKey: EASEBUZZ_MERCHANT_KEY from environment
 //   - salt: EASEBUZZ_SALT from environment
 //   - apiKey: EASEBUZZ_API_KEY for tokenization (EBZ-KEY header)
+//   - merchantTokenID: EASEBUZZ_MERCHANT_TOKEN_ID from environment (provided by Easebuzz)
 //   - isAggregatorModel: EASEBUZZ_IS_AGGREGATOR_MODEL from environment (payment model)
+//   - userService: UserService for fetching customer details (required for tokenization)
 //
 // Usage:
 //
@@ -44,9 +49,11 @@ type EasebuzzClient struct {
 //	    cfg.Easebuzz.MerchantKey,
 //	    cfg.Easebuzz.Salt,
 //	    cfg.Easebuzz.APIKey,
+//	    cfg.Easebuzz.MerchantTokenID,
 //	    cfg.Easebuzz.IsAggregatorModel,
+//	    userService,
 //	)
-func NewEasebuzzClient(baseURL, merchantKey, salt, apiKey string, isAggregatorModel bool) payment.PaymentGateway {
+func NewEasebuzzClient(baseURL, merchantKey, salt, apiKey, merchantTokenID string, isAggregatorModel bool, userService user.UserService) payment.PaymentGateway {
 	log := logger.GetDefault()
 
 	paymentModel := "Normal"
@@ -65,12 +72,14 @@ func NewEasebuzzClient(baseURL, merchantKey, salt, apiKey string, isAggregatorMo
 		merchantKey:         merchantKey,
 		salt:                salt,
 		apiKey:              apiKey,
+		merchantTokenID:     merchantTokenID,
 		isAggregatorModel:   isAggregatorModel,
 		tokenizationBaseURL: "https://tms.easebuzz.in", // Tokenization Management System
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
 		hashGenerator: NewSecureHashGenerator(merchantKey, salt),
+		userService:   userService,
 		logger:        log,
 	}
 }
@@ -98,23 +107,44 @@ func (c *EasebuzzClient) TokenizeCard(ctx context.Context, request payment.Gatew
 	fmt.Printf("💳 Card: %s %s ending in %s\n",
 		request.CardDetails.CardCategory, request.CardDetails.CardType, request.CardDetails.LastFourDigits)
 
-	// Extract customer details from metadata
-	customerName := "Customer" // Default
-	if name, ok := request.Metadata["customer_name"].(string); ok {
-		customerName = name
-	}
-	email := "customer@example.com"
-	if e, ok := request.Metadata["customer_email"].(string); ok {
-		email = e
-	}
-	mobile := "9999999999"
-	if m, ok := request.Metadata["customer_phone"].(string); ok {
-		mobile = sanitizePhone(m)
+	// Fetch customer details from database (REQUIRED for Easebuzz tokenization)
+	// UserID must be provided in metadata
+	userID, ok := request.Metadata["user_id"].(string)
+	if !ok || userID == "" {
+		return nil, fmt.Errorf("user_id is required in metadata for Easebuzz tokenization")
 	}
 
-	// Generate unique IDs
+	// Fetch user from database
+	if c.userService == nil {
+		return nil, fmt.Errorf("user service not configured for Easebuzz")
+	}
+
+	userObj, err := c.userService.GetUserByID(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch user details: %w", err)
+	}
+
+	// Validate required fields
+	if userObj.Email == "" {
+		return nil, fmt.Errorf("user email is required for Easebuzz tokenization")
+	}
+	if userObj.Mobile == "" {
+		return nil, fmt.Errorf("user mobile is required for Easebuzz tokenization")
+	}
+
+	// Extract customer details from user object
+	customerName := userObj.Name
+	if customerName == "" {
+		customerName = "Customer" // Fallback only if name is not set
+	}
+	email := userObj.Email
+	mobile := sanitizePhone(userObj.Mobile)
+
+	// Use business ID as customer unique ID (for business-scoped tokenization)
 	customerUniqueID := request.BusinessID
-	merchantTokenID := fmt.Sprintf("mtoken_%s_%d", request.BusinessID[:8], time.Now().Unix())
+
+	// Use merchant token ID from Easebuzz configuration (provided by Easebuzz)
+	merchantTokenID := c.merchantTokenID
 
 	// Determine card type (dc/cc) and brand
 	cardType := "cc" // Default credit
@@ -262,9 +292,40 @@ func (c *EasebuzzClient) InitiatePayment(ctx context.Context, req payment.Gatewa
 	// STEP 2: Process based on payment method
 	switch req.PaymentMethod {
 	case payment.PaymentMethodCard:
-		if req.Token != "" && req.Cryptogram != "" {
+		if req.Token != "" {
 			// Token-based payment with ENCRYPTION
+			// Easebuzz-specific: Always generate cryptogram internally
+			// Cryptogram is a PG-specific implementation detail, not exposed to service layer
 			fmt.Println("💳 Processing token-based card payment with encryption...")
+
+			// Generate cryptogram internally
+			cryptogramReq := payment.CryptogramRequest{
+				Token:         req.Token,
+				Amount:        req.Amount,
+				Currency:      req.Currency,
+				TransactionID: req.TransactionID,
+				BusinessID:    req.BusinessID,
+				Metadata:      req.Metadata,
+			}
+
+			cryptogramResp, err := c.GenerateCryptogram(ctx, cryptogramReq)
+			if err != nil {
+				return nil, fmt.Errorf("failed to generate cryptogram: %w", err)
+			}
+
+			// Set cryptogram in request
+			req.Cryptogram = cryptogramResp.Cryptogram
+
+			// Chain ALL cryptogram metadata to request for processTokenPayment
+			// These values are REQUIRED by initiate_seamless_payment API
+			if req.Metadata == nil {
+				req.Metadata = make(map[string]any)
+			}
+			req.Metadata["network_token"] = cryptogramResp.Metadata["network_token"]
+			req.Metadata["token_expiry"] = cryptogramResp.Metadata["token_expiry"]
+			req.Metadata["token_requester_id"] = cryptogramResp.Metadata["token_requester_id"]
+			req.Metadata["easebuzz_token_id"] = cryptogramResp.Metadata["easebuzz_token_id"]
+
 			return c.processTokenPayment(ctx, accessKey, req)
 		} else {
 			// Direct card payment (not implemented yet)
@@ -368,32 +429,36 @@ func (c *EasebuzzClient) GenerateCryptogram(ctx context.Context, request payment
 		return nil, fmt.Errorf("failed to parse cryptogram response: %w", err)
 	}
 
-	if cryptoResp.Status != 1 {
+	if !cryptoResp.Status {
 		return nil, fmt.Errorf("cryptogram generation failed: %s", cryptoResp.Error)
 	}
 
-	fmt.Printf("✅ Cryptogram generated: %s...\n", cryptoResp.Data.Cryptogram[:20])
+	fmt.Printf("✅ Cryptogram generated: %s...\n", cryptoResp.Data.TokenDetails.Cryptogram[:20])
 
-	// Parse expiry time (format may vary, handle gracefully)
-	expiresAt := time.Now().Add(15 * time.Minute) // Default 15 minutes
-	if cryptoResp.Data.ExpiresAt != "" {
-		// Try parsing timestamp (adjust format as needed based on Easebuzz response)
-		if t, err := time.Parse(time.RFC3339, cryptoResp.Data.ExpiresAt); err == nil {
-			expiresAt = t
-		}
-	}
+	// Format token expiry as MM/YYYY (required by initiate_seamless_payment API)
+	tokenExpiry := fmt.Sprintf("%s/%s",
+		cryptoResp.Data.TokenDetails.ExpirationMonth,
+		cryptoResp.Data.TokenDetails.ExpirationYear)
 
-	// Map to gateway response
+	// Cryptogram validity: 15 minutes (Easebuzz standard)
+	expiresAt := time.Now().Add(15 * time.Minute)
+
+	// Map to gateway response with ALL required fields for payment
 	response := &payment.CryptogramResponse{
-		Cryptogram:   cryptoResp.Data.Cryptogram,
+		Cryptogram:   cryptoResp.Data.TokenDetails.Cryptogram,
 		ExpiresAt:    expiresAt,
 		ValidityMins: 15,
 		Algorithm:    "Easebuzz-AES256-CBC",
 		Metadata: map[string]any{
-			"gateway":           "easebuzz",
-			"cryptogram_flow":   "tms_api",
-			"token_id":          cryptoResp.Data.TokenID,
-			"merchant_token_id": merchantTokenID,
+			"gateway":             "easebuzz",
+			"cryptogram_flow":     "tms_api",
+			"easebuzz_token_id":   cryptoResp.Data.EasebuzzTokenID,
+			"merchant_token_id":   cryptoResp.Data.MerchantTokenID,
+			"network_token":       cryptoResp.Data.TokenDetails.Number,       // CRITICAL: Use this as card_token in payment
+			"token_expiry":        tokenExpiry,                               // CRITICAL: MM/YYYY format for token_expiry_date
+			"token_requester_id":  cryptoResp.Data.TokenDetails.RequestorID, // CRITICAL: TRID for payment
+			"expiration_month":    cryptoResp.Data.TokenDetails.ExpirationMonth,
+			"expiration_year":     cryptoResp.Data.TokenDetails.ExpirationYear,
 		},
 	}
 
@@ -564,12 +629,20 @@ func (c *EasebuzzClient) processTokenPayment(
 ) (*payment.GatewayPaymentResponse, error) {
 	fmt.Println("=== EASEBUZZ: Processing Token Payment with Encryption ===")
 
-	// ENCRYPT sensitive fields using Easebuzz-specific encryption
-	encryptedToken, err := EncryptCardField(req.Token, c.merchantKey, c.salt)
-	if err != nil {
-		return nil, fmt.Errorf("failed to encrypt token: %w", err)
+	// Extract network token from metadata (from cryptogram response)
+	// This is the token_details.number field from getCryptogram API
+	networkToken, ok := req.Metadata["network_token"].(string)
+	if !ok || networkToken == "" {
+		return nil, fmt.Errorf("network_token not found in metadata - ensure GenerateCryptogram was called")
 	}
-	fmt.Printf("✅ Token encrypted: %s...\n", encryptedToken[:20])
+
+	// ENCRYPT network token (NOT the stored vault token!)
+	// The API requires the network token from cryptogram response as card_token
+	encryptedToken, err := EncryptCardField(networkToken, c.merchantKey, c.salt)
+	if err != nil {
+		return nil, fmt.Errorf("failed to encrypt network token: %w", err)
+	}
+	fmt.Printf("✅ Network token encrypted: %s...\n", encryptedToken[:20])
 
 	encryptedCrypto, err := EncryptCardField(req.Cryptogram, c.merchantKey, c.salt)
 	if err != nil {
