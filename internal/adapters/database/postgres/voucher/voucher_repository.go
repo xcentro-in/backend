@@ -1678,7 +1678,7 @@ func (r *PostgresVoucherRepository) GetUnpaidBills(ctx context.Context, req *vou
 				WHEN v.invoice_due_date < CURRENT_DATE THEN 'overdue'
 				ELSE 'open'
 			END AS status,
-			pb.legal_name AS vendor_name,
+			bpr.display_name AS vendor_name,
 			pb.gstin AS vendor_gstin,
 			COUNT(*) OVER() AS total_count
 		FROM xcentro.payment_vouchers v
@@ -1696,7 +1696,9 @@ func (r *PostgresVoucherRepository) GetUnpaidBills(ctx context.Context, req *vou
 	}
 
 	query += `
-		ORDER BY v.invoice_due_date ASC NULLS LAST
+		ORDER BY
+			CASE WHEN v.invoice_due_date < CURRENT_DATE THEN 0 ELSE 1 END,
+			v.invoice_due_date ASC NULLS LAST
 		LIMIT $2 OFFSET $3
 	`
 
@@ -1792,13 +1794,10 @@ func (r *PostgresVoucherRepository) GetVoucherActivity(ctx context.Context, vouc
 		WITH voucher_creation AS (
 			SELECT
 				v.voucher_id::text as activity_id,
-				'voucher_created' as activity_type,
 				v.created_by_user_id::text as user_id,
 				COALESCE(u.name, '') as user_name,
-				'created' as action,
-				'' as remarks,
-				v.created_at as timestamp,
-				'' as metadata
+				'Voucher Created' as action,
+				v.created_at as timestamp
 			FROM xcentro.payment_vouchers v
 			LEFT JOIN xcentro.user_table u ON v.created_by_user_id = u.id
 			WHERE v.voucher_id = $1
@@ -1807,11 +1806,6 @@ func (r *PostgresVoucherRepository) GetVoucherActivity(ctx context.Context, vouc
 			SELECT
 				va.approval_id::text as activity_id,
 				CASE
-					WHEN va.action = 'pending' THEN 'approval_requested'
-					WHEN va.action = 'edited' THEN 'voucher_edited'
-					ELSE 'approval_action'
-				END as activity_type,
-				CASE
 					WHEN va.action = 'pending' THEN va.requester_user_id::text
 					ELSE va.approver_user_id::text
 				END as user_id,
@@ -1819,18 +1813,15 @@ func (r *PostgresVoucherRepository) GetVoucherActivity(ctx context.Context, vouc
 					WHEN va.action = 'pending' THEN COALESCE(req_user.name, '')
 					ELSE COALESCE(app_user.name, '')
 				END as user_name,
-				va.action::text as action,
-				COALESCE(va.remarks, '') as remarks,
-				va.created_at as timestamp,
 				CASE
-					WHEN va.action = 'pending' THEN
-						'Requested approval from ' || COALESCE(app_user.name, 'Unknown')
-					WHEN va.action = 'approved' THEN 'Approved the voucher'
-					WHEN va.action = 'rejected' THEN 'Rejected the voucher'
-					WHEN va.action = 'request_changes' THEN 'Requested changes'
-					WHEN va.action = 'edited' THEN 'Edited the voucher'
-					ELSE ''
-				END as metadata
+					WHEN va.action = 'pending' THEN 'Approval Requested'
+					WHEN va.action = 'approved' THEN 'Approved'
+					WHEN va.action = 'rejected' THEN 'Rejected'
+					WHEN va.action = 'request_changes' THEN 'Changes Requested'
+					WHEN va.action = 'edited' THEN 'Voucher Edited'
+					ELSE va.action::text
+				END as action,
+				va.created_at as timestamp
 			FROM xcentro.voucher_approvals va
 			LEFT JOIN xcentro.user_table req_user ON va.requester_user_id = req_user.id
 			LEFT JOIN xcentro.user_table app_user ON va.approver_user_id = app_user.id
@@ -1839,17 +1830,18 @@ func (r *PostgresVoucherRepository) GetVoucherActivity(ctx context.Context, vouc
 		payment_activities AS (
 			SELECT
 				psc.state_change_id::text as activity_id,
-				'payment_activity' as activity_type,
 				COALESCE(psc.actor_user_id::text, '') as user_id,
+				-- Only show user name for actual users (payment_initiated), hide internal actor names (webhooks, system)
 				CASE
 					WHEN psc.actor_type = 'user' AND psc.actor_user_id IS NOT NULL THEN COALESCE(u.name, '')
-					WHEN psc.actor_name IS NOT NULL AND psc.actor_name != '' THEN psc.actor_name
-					ELSE psc.actor_type::text
+					ELSE ''
 				END as user_name,
 				-- Map internal payment actions to user-friendly strings
 				CASE
-					-- Payment lifecycle: Success paths → "Payment Initiated"
-					WHEN psc.action IN ('payment_initiated', 'payment_processing', 'payment_success') THEN 'Payment Initiated'
+					-- Payment lifecycle: Each state has distinct label
+					WHEN psc.action = 'payment_initiated' THEN 'Payment Initiated'
+					WHEN psc.action = 'payment_processing' THEN 'Payment Processing'
+					WHEN psc.action = 'payment_success' THEN 'Payment Successful'
 					-- Payment failures
 					WHEN psc.action = 'payment_failed' THEN 'Payment Failed'
 					WHEN psc.action = 'payment_refunded' THEN 'Payment Refunded'
@@ -1863,16 +1855,7 @@ func (r *PostgresVoucherRepository) GetVoucherActivity(ctx context.Context, vouc
 					WHEN psc.action = 'payout_cancelled' THEN 'Payout Cancelled'
 					ELSE psc.action::text
 				END as action,
-				COALESCE(psc.remarks, '') as remarks,
-				psc.action_timestamp as timestamp,
-				COALESCE(
-					CASE
-						WHEN psc.utr IS NOT NULL AND psc.utr != '' THEN 'UTR: ' || psc.utr
-						WHEN psc.provider IS NOT NULL AND psc.provider != '' THEN 'Provider: ' || psc.provider
-						ELSE ''
-					END,
-					''
-				) as metadata
+				psc.action_timestamp as timestamp
 			FROM xcentro.payment_vouchers v
 			INNER JOIN xcentro.payment_state_changes psc ON psc.payment_id = v.payment_id
 			LEFT JOIN xcentro.user_table u ON psc.actor_user_id = u.id
@@ -1886,13 +1869,10 @@ func (r *PostgresVoucherRepository) GetVoucherActivity(ctx context.Context, vouc
 		)
 		SELECT
 			activity_id,
-			activity_type,
 			user_id,
 			user_name,
 			action,
-			remarks,
-			timestamp,
-			metadata
+			timestamp
 		FROM (
 			SELECT * FROM voucher_creation
 			UNION ALL
@@ -1914,13 +1894,10 @@ func (r *PostgresVoucherRepository) GetVoucherActivity(ctx context.Context, vouc
 		var activity voucher.VoucherActivityItem
 		err := rows.Scan(
 			&activity.ActivityID,
-			&activity.ActivityType,
 			&activity.UserID,
 			&activity.UserName,
 			&activity.Action,
-			&activity.Remarks,
 			&activity.Timestamp,
-			&activity.Metadata,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan voucher activity: %w", err)

@@ -7,6 +7,26 @@ import (
 	"xcentro.in/internal/shared/logger"
 )
 
+// FeeCalculatorWithTax defines the interface for fee calculation with GST breakdown
+// This interface allows dependency injection without circular imports
+type FeeCalculatorWithTax interface {
+	CalculateWithTax(ctx context.Context, amount int64, method PaymentMethod, cardType *CardType, cardCategory *CardCategory) (*FeeCalculationWithTax, error)
+}
+
+// FeeCalculationWithTax represents fee calculation with GST breakdown
+type FeeCalculationWithTax struct {
+	// Amounts in paise
+	BaseAmount        int64   `json:"base_amount"`
+	ConvenienceFee    int64   `json:"convenience_fee"`
+	ConvenienceFeeGST int64   `json:"convenience_fee_gst"`
+	TotalFee          int64   `json:"total_fee"`
+	TotalAmount       int64   `json:"total_amount"`
+
+	// Percentages for display
+	ConvenienceFeePercent float64 `json:"convenience_fee_percent"` // e.g., 1.9
+	GSTPercent            float64 `json:"gst_percent"`             // e.g., 18.0
+}
+
 // PaymentOrchestrator defines the interface for payment orchestration
 // The orchestrator is responsible for gateway selection and communication only.
 // All database persistence operations are handled by the service layer within transactions.
@@ -29,6 +49,8 @@ type paymentOrchestratorImpl struct {
 	// NOTE: All database writes are handled by service layer within transactions
 	paymentRepo    PaymentRepository
 	storedCardRepo StoredCardRepository
+	// Fee calculation with database rules
+	feeCalculator FeeCalculatorWithTax
 	// Logger for structured logging
 	logger *logger.Logger
 }
@@ -44,8 +66,16 @@ func NewPaymentOrchestrator(
 	easebuzzClient PaymentGateway, // Easebuzz gateway client
 	mockPGClient PaymentGateway, // Mock PG client for testing
 	mockPGEnabled bool, // Enable mock PG bypass
+	feeCalculator FeeCalculatorWithTax, // Fee calculator for database-driven fee rules
 	log *logger.Logger,
 ) PaymentOrchestrator {
+	// Log orchestrator initialization mode
+	if mockPGEnabled {
+		log.Warn("Payment Orchestrator: MockPG mode ENABLED - All payments will bypass real gateway routing")
+	} else {
+		log.Info("Payment Orchestrator: Initialized with real gateway routing")
+	}
+
 	return &paymentOrchestratorImpl{
 		jioPayGateway:   jioPayClient,
 		easebuzzGateway: easebuzzClient,
@@ -53,6 +83,7 @@ func NewPaymentOrchestrator(
 		mockPGEnabled:   mockPGEnabled,
 		paymentRepo:     paymentRepo,
 		storedCardRepo:  storedCardRepo,
+		feeCalculator:   feeCalculator,
 		logger:          log,
 	}
 }
@@ -94,17 +125,47 @@ func (o *paymentOrchestratorImpl) ProcessPayment(ctx context.Context, request Pa
 	}
 	o.logger.DebugWith("Using payment ID from service", "payment_id", paymentID)
 
-	// Mock fee calculation
-	feeAmount := o.calculateMockFee(request.Amount, request.PaymentMethod)
-	o.logger.DebugWith("Fee calculated", "fee_amount", feeAmount, "currency", request.Currency)
+	// Get selected gateway instance (need it for fee calculation to check aggregator model)
+	selectedGateway := o.getGatewayInstance(gateway)
+	if selectedGateway == nil {
+		return nil, fmt.Errorf("gateway instance not found: %s", gateway)
+	}
+
+	// Calculate fees using database-driven fee calculator
+	var cardTypePtr *CardType
+	var cardCategoryPtr *CardCategory
+	if request.PaymentMethod == PaymentMethodCard && request.CardDetails != nil {
+		cardTypePtr = &request.CardDetails.CardType
+		cardCategoryPtr = &request.CardDetails.CardCategory
+	}
+
+	feeBreakdown, err := o.feeCalculator.CalculateWithTax(ctx, request.Amount, request.PaymentMethod, cardTypePtr, cardCategoryPtr)
+	if err != nil {
+		o.logger.ErrorWith("Fee calculation failed", "error", err)
+		return nil, fmt.Errorf("fee calculation failed: %w", err)
+	}
+
+	o.logger.DebugWith("Fee calculated",
+		"convenience_fee", feeBreakdown.ConvenienceFee,
+		"gst", feeBreakdown.ConvenienceFeeGST,
+		"total_fee", feeBreakdown.TotalFee,
+		"total_amount", feeBreakdown.TotalAmount)
 
 	// NOTE: Fee calculation and gateway selection info will be returned in response
 	// Service layer will persist this information within a transaction
 
-	// Get selected gateway instance
-	selectedGateway := o.getGatewayInstance(gateway)
-	if selectedGateway == nil {
-		return nil, fmt.Errorf("gateway instance not found: %s", gateway)
+	// Determine amount to send to gateway based on payment model
+	var amountToGateway int64
+	if selectedGateway.IsAggregatorModel() {
+		// Aggregator model: PG charges convenience fee from customer
+		// Send only base amount to gateway
+		amountToGateway = request.Amount
+		o.logger.DebugWith("Aggregator model: sending base amount only", "amount", amountToGateway)
+	} else {
+		// Normal model: merchant charges total (base + convenience fee)
+		// Send total amount to gateway
+		amountToGateway = feeBreakdown.TotalAmount
+		o.logger.DebugWith("Normal model: sending total amount", "amount", amountToGateway)
 	}
 
 	// Prepare gateway payment request
@@ -113,9 +174,10 @@ func (o *paymentOrchestratorImpl) ProcessPayment(ctx context.Context, request Pa
 	gatewayRequest := GatewayPaymentRequest{
 		BusinessID:        request.BusinessID,
 		TransactionID:     paymentID, // Use payment UUID as gateway transaction ID
-		Amount:            request.Amount + feeAmount, // Include fee in total
+		Amount:            amountToGateway,
 		Currency:          request.Currency,
 		PaymentMethod:     request.PaymentMethod,
+		PaymentType:       request.PaymentType, // Pass payment type (payment/tokenization/refund)
 		Description:       request.Description,
 		CallbackURL:       request.CallbackURL, // From request, not DB
 		CardDetails:       request.CardDetails,
@@ -144,8 +206,8 @@ func (o *paymentOrchestratorImpl) ProcessPayment(ctx context.Context, request Pa
 		PaymentID:        paymentID,
 		Status:           gatewayResponse.Status,
 		Amount:           request.Amount,
-		FeeAmount:        feeAmount,
-		TotalAmount:      request.Amount + feeAmount,
+		FeeAmount:        feeBreakdown.TotalFee, // Convenience fee + GST
+		TotalAmount:      feeBreakdown.TotalAmount,
 		Currency:         request.Currency,
 		PaymentMethod:    request.PaymentMethod,
 		GatewayUsed:      gateway,
@@ -205,15 +267,23 @@ func (o *paymentOrchestratorImpl) TokenizeCard(ctx context.Context, request Toke
 	}
 
 	// Prepare gateway tokenization request
+	gatewayMetadata := map[string]any{
+		"tokenization_request": true,
+		"business_id":          request.BusinessID,
+	}
+	// Merge request metadata (e.g., owner_mobile for JioPay)
+	if request.Metadata != nil {
+		for key, value := range request.Metadata {
+			gatewayMetadata[key] = value
+		}
+	}
+
 	gatewayRequest := GatewayTokenizeRequest{
 		BusinessID:    request.BusinessID,
 		TransactionID: request.TransactionID, // Payment UUID from service layer
 		CardDetails:   request.CardDetails,
 		CallbackURL:   "https://mock-callback.com/tokenize", // TODO: Make configurable
-		Metadata: map[string]any{
-			"tokenization_request": true,
-			"business_id":          request.BusinessID,
-		},
+		Metadata:      gatewayMetadata,
 	}
 
 	// For Easebuzz, amount is implicit (₹1 built into tokenization API)
@@ -324,55 +394,67 @@ func (o *paymentOrchestratorImpl) ProcessTokenizedPayment(ctx context.Context, r
 		return nil, fmt.Errorf("gateway instance not found: %s", selectedGatewayType)
 	}
 
-	// Step 3: Generate fresh cryptogram for this payment
-	o.logger.DebugWith("Generating cryptogram from gateway", "gateway", storedCard.GatewayUsed)
-	cryptogramRequest := CryptogramRequest{
-		Token:         storedCard.Token,
-		Amount:        request.Amount,
-		Currency:      request.Currency,
-		TransactionID: paymentID, // Use payment UUID as transaction ID
-		BusinessID:    request.BusinessID,
-		Metadata: map[string]any{
-			"payment_type": "tokenized",
-			"card_id":      storedCard.CardID,
-		},
-	}
+	// Step 3: Calculate fees using database-driven fee calculator
+	cardTypePtr := &storedCard.CardType
+	cardCategoryPtr := &storedCard.CardCategory
 
-	cryptogramResponse, err := selectedGateway.GenerateCryptogram(ctx, cryptogramRequest)
+	feeBreakdown, err := o.feeCalculator.CalculateWithTax(ctx, request.Amount, PaymentMethodCard, cardTypePtr, cardCategoryPtr)
 	if err != nil {
-		o.logger.ErrorWith("Cryptogram generation failed", "gateway", storedCard.GatewayUsed, "error", err)
-		return nil, fmt.Errorf("failed to generate cryptogram: %w", err)
+		o.logger.ErrorWith("Fee calculation failed", "error", err)
+		return nil, fmt.Errorf("fee calculation failed: %w", err)
 	}
 
-	o.logger.InfoWith("Cryptogram generated successfully",
-		"cryptogram_prefix", cryptogramResponse.Cryptogram[:10],
-		"expires_at", cryptogramResponse.ExpiresAt.Format("15:04:05"))
+	o.logger.DebugWith("Fee calculated for tokenized payment",
+		"convenience_fee", feeBreakdown.ConvenienceFee,
+		"gst", feeBreakdown.ConvenienceFeeGST,
+		"total_fee", feeBreakdown.TotalFee,
+		"total_amount", feeBreakdown.TotalAmount)
 
-	// Step 4: Calculate fees (same as regular payments)
-	feeAmount := o.calculateMockFee(request.Amount, PaymentMethodCard) // Use card method for fee calc
-	o.logger.DebugWith("Fee calculated for tokenized payment", "fee_amount", feeAmount, "currency", request.Currency)
+	// Determine amount to send to gateway based on payment model
+	var amountToGateway int64
+	if selectedGateway.IsAggregatorModel() {
+		// Aggregator model: PG charges convenience fee from customer
+		// Send only base amount to gateway
+		amountToGateway = request.Amount
+		o.logger.DebugWith("Aggregator model: sending base amount only", "amount", amountToGateway)
+	} else {
+		// Normal model: merchant charges total (base + convenience fee)
+		// Send total amount to gateway
+		amountToGateway = feeBreakdown.TotalAmount
+		o.logger.DebugWith("Normal model: sending total amount", "amount", amountToGateway)
+	}
 
-	// Step 5: Prepare gateway payment request with token + cryptogram
+	// Step 4: Prepare gateway payment request
+	// Gateway will handle cryptogram generation internally if needed (e.g., JioPay)
 	// Note: CallbackURL comes from request (set by payment service based on calling device)
 	// We don't fetch from DB because payment is in uncommitted transaction
 	gatewayRequest := GatewayPaymentRequest{
 		BusinessID:    request.BusinessID,
-		TransactionID: cryptogramRequest.TransactionID,
-		Amount:        request.Amount + feeAmount,
+		TransactionID: paymentID,
+		Amount:        amountToGateway,
 		Currency:      request.Currency,
 		PaymentMethod: PaymentMethodCard, // Gateway sees this as card payment
 		Description:   request.Description,
 		CallbackURL:   request.CallbackURL, // From request, not DB
 		Token:         storedCard.Token,
-		Cryptogram:    cryptogramResponse.Cryptogram,
+		Cryptogram:    "", // Empty - gateway will generate if needed
 		Metadata: map[string]any{
-			"payment_type":      "tokenized",
-			"card_id":           storedCard.CardID,
+			"payment_type": "tokenized",
+			"card_id":      storedCard.CardID,
+			// Pass stored_card details for gateway to use
+			"stored_card": map[string]any{
+				"last_four_digits": storedCard.LastFourDigits,
+				"card_type":        storedCard.CardType,
+				"card_category":    storedCard.CardCategory,
+				"expiry_month":     storedCard.ExpiryMonth,
+				"expiry_year":      storedCard.ExpiryYear,
+				"card_holder_name": storedCard.CardHolderName,
+			},
 			"original_metadata": request.Metadata,
 		},
 	}
 
-	// Step 7: Process payment with specific gateway
+	// Step 5: Process payment with specific gateway
 	o.logger.InfoWith("Processing tokenized payment with gateway", "gateway", selectedGatewayType)
 	gatewayResponse, err := selectedGateway.InitiatePayment(ctx, gatewayRequest)
 
@@ -404,8 +486,8 @@ func (o *paymentOrchestratorImpl) ProcessTokenizedPayment(ctx context.Context, r
 		PaymentID:        paymentID,
 		Status:           gatewayResponse.Status,
 		Amount:           request.Amount,
-		FeeAmount:        feeAmount,
-		TotalAmount:      request.Amount + feeAmount,
+		FeeAmount:        feeBreakdown.TotalFee, // Convenience fee + GST
+		TotalAmount:      feeBreakdown.TotalAmount,
 		Currency:         request.Currency,
 		PaymentMethod:    PaymentMethodTokenCard, // Return the original method
 		GatewayUsed:      selectedGatewayType,
@@ -645,33 +727,10 @@ func (o *paymentOrchestratorImpl) selectGatewayForCard(card *Card, amount int64)
 		}
 	}
 
-	// Prepaid cards (if any) - fallback to JioPay
-	if card.CardCategory == CardCategoryCredit { // Assuming prepaid would be similar category
-		o.logger.InfoWith("Gateway selected: Prepaid Card → JioPay (fallback)",
-			"rule", "prepaid_jiopay_fallback")
-		return GatewayJioPay, nil
-	}
-
 	o.logger.ErrorWith("Unsupported card combination",
 		"card_category", card.CardCategory,
 		"card_type", card.CardType)
 	return "", fmt.Errorf("unsupported card combination: %s %s", card.CardCategory, card.CardType)
-}
-
-// calculateMockFee calculates a mock fee based on payment method
-func (o *paymentOrchestratorImpl) calculateMockFee(amount int64, method PaymentMethod) int64 {
-	switch method {
-	case PaymentMethodCard:
-		return amount * 25 / 1000 // 2.5%
-	case PaymentMethodNetBanking:
-		return amount * 15 / 1000 // 1.5%
-	case PaymentMethodUPI:
-		return 0 // 0% fee
-	case PaymentMethodWallet:
-		return amount * 10 / 1000 // 1.0%
-	default:
-		return amount * 20 / 1000 // 2.0% default
-	}
 }
 
 // getGatewayInstance returns the appropriate gateway instance

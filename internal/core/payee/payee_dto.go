@@ -120,6 +120,13 @@ type UpdateRelationRequest struct {
 	Tags         []string `json:"tags,omitempty"`
 }
 
+// UpdatePayeeStatusRequest represents a request to toggle payee active status
+type UpdatePayeeStatusRequest struct {
+	BusinessID string `json:"-"` // Our customer (extracted from X-Business-ID header)
+	RelationID string `json:"-"` // Extracted from URL path parameter
+	IsActive   bool   `json:"is_active"`
+}
+
 // PayeeDetailsResponse represents detailed information about a payee (polymorphic)
 // Combines data from payee_master, type-specific tables, and business_payee_relation
 type PayeeDetailsResponse struct {
@@ -334,4 +341,35 @@ type PayeeBankDetails struct {
 	AccountType       string `json:"account_type"` // savings, current, cc, od
 	AccountHolderName string `json:"account_holder_name"`
 	IsVerified        bool   `json:"is_verified"`
+}
+
+// ############################################################################
+// # Payee List Item (For GET /payees endpoint)
+// ############################################################################
+
+// PayeeListItem represents a single payee in the list response
+// Excludes internal IDs (business_id, payee_id, account_id, added_by)
+type PayeeListItem struct {
+	RelationID   string     `json:"relation_id"`
+	PayeeType    PayeeType  `json:"payee_type"`
+	DisplayName  string     `json:"display_name"`
+	ContactEmail string     `json:"contact_email,omitempty"`
+	ContactPhone string     `json:"contact_phone,omitempty"`
+	IsActive     bool       `json:"is_active"`
+	IsFavorite   bool       `json:"is_favorite"`
+	Tags         []string   `json:"tags,omitempty"`
+	AddedAt      time.Time  `json:"added_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
+}
+
+// ############################################################################
+// # Lightweight Account Details (For GET /payees/:relation_id/acc_details)
+// ############################################################################
+
+// PayeeAccountDetails represents minimal account information for a payee
+// Returns only last 4 digits of account number, bank name, and IFSC code
+type PayeeAccountDetails struct {
+	AccountNumberLast4 string `json:"account_number_last_4"`
+	BankName           string `json:"bank_name"`
+	IFSCCode           string `json:"ifsc_code"`
 }

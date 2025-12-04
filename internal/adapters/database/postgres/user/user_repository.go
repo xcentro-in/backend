@@ -101,6 +101,24 @@ func (r *PgUserRepository) GetUserByID(ctx context.Context, userID string) (*use
 	return &u, nil
 }
 
+// GetUserMobileByID retrieves only the mobile number for a user
+// Returns the mobile number, or empty string if not set
+func (r *PgUserRepository) GetUserMobileByID(ctx context.Context, userID string) (string, error) {
+	query := `
+		SELECT mobile
+		FROM xcentro.user_table
+		WHERE id = $1
+	`
+
+	var mobile sql.NullString
+	err := r.querier.QueryRow(ctx, query, userID).Scan(&mobile)
+	if err != nil {
+		return "", fmt.Errorf("failed to get user mobile: %w", err)
+	}
+
+	return mobile.String, nil
+}
+
 // parseKYCStatus converts string enum to KYCStatus
 func parseKYCStatus(status string) shared.KYCStatus {
 	switch status {

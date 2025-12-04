@@ -16,10 +16,11 @@ import (
 
 // WalletService defines the interface for business wallet operations
 type WalletService interface {
-	GetBusinessWallet(ctx context.Context, businessID string) (*payment.BusinessWallet, error)
+	GetBusinessWallet(ctx context.Context, businessID string, showInactive bool) (*payment.BusinessWallet, error)
 	AddPaymentSource(ctx context.Context, businessID string, source payment.PaymentSource) error
 	RemovePaymentSource(ctx context.Context, businessID string, sourceID string, sourceType payment.PaymentSourceType) error
 	GetPaymentSource(ctx context.Context, businessID string, sourceID string, sourceType payment.PaymentSourceType) (payment.PaymentSource, error)
+	CompleteCardTokenization(ctx context.Context, businessID, cardID, token string, gatewayUsed payment.GatewayType, gatewayCardID string) error
 }
 
 // WalletServiceImpl provides the implementation for business wallet operations
@@ -52,11 +53,12 @@ func NewWalletService(storedCardRepo payment.StoredCardRepository, bankAccountRe
 
 // GetBusinessWallet retrieves the complete business wallet with all payment sources
 // All data is fetched from database repositories
-func (ws *WalletServiceImpl) GetBusinessWallet(ctx context.Context, businessID string) (*payment.BusinessWallet, error) {
-	ws.logger.InfoWith("Fetching business wallet", "business_id", businessID)
+// showInactive: false (default) = only active cards, true = active + failed cards from last 7 days
+func (ws *WalletServiceImpl) GetBusinessWallet(ctx context.Context, businessID string, showInactive bool) (*payment.BusinessWallet, error) {
+	ws.logger.InfoWith("Fetching business wallet", "business_id", businessID, "show_inactive", showInactive)
 
 	// Fetch stored cards from database
-	storedCards, err := ws.storedCardRepo.GetStoredCardsByBusinessID(ctx, businessID)
+	storedCards, err := ws.storedCardRepo.GetStoredCardsByBusinessID(ctx, businessID, showInactive)
 	if err != nil {
 		ws.logger.ErrorWith("Failed to fetch stored cards", "error", err, "business_id", businessID)
 		storedCards = make([]*payment.StoredCard, 0) // Return empty slice on error
@@ -274,6 +276,85 @@ func (ws *WalletServiceImpl) RemovePaymentSource(ctx context.Context, businessID
 	fmt.Printf("✅ Payment source removed successfully\n")
 
 	fmt.Println("=== WALLET SERVICE: RemovePaymentSource Complete ===")
+	return nil
+}
+
+// CompleteCardTokenization finalizes card tokenization after successful payment
+// Updates the stored card with token, sets it as active, and updates onboarding flag
+// This centralizes card completion logic in WalletService (same layer as AddPaymentSource)
+func (ws *WalletServiceImpl) CompleteCardTokenization(
+	ctx context.Context,
+	businessID string,
+	cardID string,
+	token string,
+	gatewayUsed payment.GatewayType,
+	gatewayCardID string,
+) error {
+	ws.logger.InfoWith("Completing card tokenization",
+		"business_id", businessID,
+		"card_id", cardID,
+		"gateway", gatewayUsed)
+
+	// Step 1: Load existing stored_card record (created in Phase 1)
+	storedCard, err := ws.storedCardRepo.GetStoredCardByID(ctx, cardID)
+	if err != nil {
+		ws.logger.ErrorWith("Failed to load stored card",
+			"card_id", cardID,
+			"error", err)
+		return fmt.Errorf("failed to load stored card: %w", err)
+	}
+	if storedCard == nil {
+		ws.logger.ErrorWith("Stored card not found",
+			"card_id", cardID)
+		return fmt.Errorf("stored card not found: %s", cardID)
+	}
+
+	ws.logger.DebugWith("Loaded stored card for tokenization completion",
+		"card_id", cardID,
+		"card_type", storedCard.CardType,
+		"last_four", storedCard.LastFourDigits)
+
+	// Step 2: Update card with tokenization data
+	storedCard.Token = token
+	storedCard.GatewayUsed = gatewayUsed
+	storedCard.IsActive = true
+	storedCard.IssuerBank = "Unknown" // TODO: Extract from metadata or separate API call if needed
+
+	// Update metadata to reflect Phase 2 completion
+	if storedCard.Metadata == nil {
+		storedCard.Metadata = make(map[string]any)
+	}
+	storedCard.Metadata["status"] = "active"
+	storedCard.Metadata["phase"] = "2_tokenization_complete"
+	storedCard.Metadata["tokenization_date"] = time.Now().Format("2006-01-02")
+	storedCard.Metadata["gateway_card_id"] = gatewayCardID
+
+	// Step 3: Update the stored_card record in database
+	if err := ws.storedCardRepo.UpdateStoredCard(ctx, storedCard); err != nil {
+		ws.logger.ErrorWith("Failed to update stored card after tokenization",
+			"card_id", cardID,
+			"error", err)
+		return fmt.Errorf("failed to update stored card: %w", err)
+	}
+
+	ws.logger.InfoWith("Stored card updated successfully with tokenization data",
+		"card_id", cardID,
+		"gateway", gatewayUsed,
+		"is_active", true)
+
+	// Step 4: Update onboarding flag (non-blocking, first-time only)
+	// SAME LOGIC as AddPaymentSource - ensures consistency across all payment method additions
+	if ws.businessService != nil {
+		flags, err := ws.businessService.GetBusinessOnboardingFlags(ctx, businessID)
+		if err == nil && !flags.HasAddedPaymentMethod {
+			_ = ws.businessService.UpdateOnboardingStatus(ctx, businessID, "has_added_payment_method", true)
+			ws.logger.InfoWith("Onboarding flag updated",
+				"business_id", businessID,
+				"flag", "has_added_payment_method",
+				"trigger", "card_tokenization")
+		}
+	}
+
 	return nil
 }
 

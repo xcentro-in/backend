@@ -74,10 +74,17 @@ func (s *PaymentSourceService) GetPaymentSourcesWithFees(
 		return nil, fmt.Errorf("invalid payment context: %s", paymentContext)
 	}
 
-	// Fetch business wallet
-	wallet, err := s.walletService.GetBusinessWallet(ctx, businessID)
+	// Fetch business wallet (showInactive = false - only active payment sources)
+	wallet, err := s.walletService.GetBusinessWallet(ctx, businessID, false)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get business wallet: %w", err)
+	}
+
+	// OPTIMIZATION: Fetch all active fee rules once (single DB call)
+	// Instead of calling DB for each payment source, we load all rules and match in-memory
+	allFeeRules, err := s.feeCalculator.GetActiveFeeRules(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get fee rules: %w", err)
 	}
 
 	// Process all payment sources
@@ -89,7 +96,7 @@ func (s *PaymentSourceService) GetPaymentSourcesWithFees(
 			continue
 		}
 
-		sourceWithFees := s.processCardSource(ctx, card, paymentContext, baseAmount)
+		sourceWithFees := s.processCardSource(card, paymentContext, baseAmount, allFeeRules)
 		sources = append(sources, sourceWithFees)
 	}
 
@@ -99,7 +106,7 @@ func (s *PaymentSourceService) GetPaymentSourcesWithFees(
 			continue
 		}
 
-		sourceWithFees := s.processBankAccountSource(ctx, account, paymentContext, baseAmount)
+		sourceWithFees := s.processBankAccountSource(account, paymentContext, baseAmount, allFeeRules)
 		sources = append(sources, sourceWithFees)
 	}
 
@@ -109,7 +116,7 @@ func (s *PaymentSourceService) GetPaymentSourcesWithFees(
 			continue
 		}
 
-		sourceWithFees := s.processUPISource(ctx, upi, paymentContext, baseAmount)
+		sourceWithFees := s.processUPISource(upi, paymentContext, baseAmount, allFeeRules)
 		sources = append(sources, sourceWithFees)
 	}
 
@@ -123,10 +130,10 @@ func (s *PaymentSourceService) GetPaymentSourcesWithFees(
 
 // processCardSource processes a stored card and calculates fees
 func (s *PaymentSourceService) processCardSource(
-	ctx context.Context,
 	card *payment.StoredCard,
 	paymentContext payment.PaymentContext,
 	baseAmount int64,
+	allFeeRules []*business_rules.FeeRule,
 ) *PaymentSourceWithFees {
 	source := &PaymentSourceWithFees{
 		SourceID:       card.CardID,
@@ -150,9 +157,9 @@ func (s *PaymentSourceService) processCardSource(
 
 	// Calculate fees only if allowed
 	if isAllowed {
-		feeBreakdown, err := s.feeCalculator.CalculateWithTax(
-			ctx,
-			baseAmount,
+		// OPTIMIZATION: Find matching rule in-memory (no DB call)
+		rule, err := business_rules.FindMatchingFeeRule(
+			allFeeRules,
 			payment.PaymentMethodCard,
 			&card.CardType,
 			&card.CardCategory,
@@ -160,9 +167,16 @@ func (s *PaymentSourceService) processCardSource(
 		if err != nil {
 			// Log error but don't fail - just don't include fee breakdown
 			source.IsAllowed = false
-			source.RestrictionReason = "Fee calculation failed"
+			source.RestrictionReason = "Fee rule not found"
 		} else {
-			source.FeeBreakdown = feeBreakdown
+			// Calculate fee using the found rule
+			feeBreakdown, err := business_rules.CalculateFeeWithRule(baseAmount, rule)
+			if err != nil {
+				source.IsAllowed = false
+				source.RestrictionReason = "Fee calculation failed"
+			} else {
+				source.FeeBreakdown = feeBreakdown
+			}
 		}
 	}
 
@@ -171,10 +185,10 @@ func (s *PaymentSourceService) processCardSource(
 
 // processBankAccountSource processes a bank account (net banking) and calculates fees
 func (s *PaymentSourceService) processBankAccountSource(
-	ctx context.Context,
 	account *payment.BankAccount,
 	paymentContext payment.PaymentContext,
 	baseAmount int64,
+	allFeeRules []*business_rules.FeeRule,
 ) *PaymentSourceWithFees {
 	source := &PaymentSourceWithFees{
 		SourceID:       account.AccountID,
@@ -198,18 +212,25 @@ func (s *PaymentSourceService) processBankAccountSource(
 
 	// Calculate fees only if allowed
 	if isAllowed {
-		feeBreakdown, err := s.feeCalculator.CalculateWithTax(
-			ctx,
-			baseAmount,
+		// OPTIMIZATION: Find matching rule in-memory (no DB call)
+		rule, err := business_rules.FindMatchingFeeRule(
+			allFeeRules,
 			payment.PaymentMethodNetBanking,
 			nil,
 			nil,
 		)
 		if err != nil {
 			source.IsAllowed = false
-			source.RestrictionReason = "Fee calculation failed"
+			source.RestrictionReason = "Fee rule not found"
 		} else {
-			source.FeeBreakdown = feeBreakdown
+			// Calculate fee using the found rule
+			feeBreakdown, err := business_rules.CalculateFeeWithRule(baseAmount, rule)
+			if err != nil {
+				source.IsAllowed = false
+				source.RestrictionReason = "Fee calculation failed"
+			} else {
+				source.FeeBreakdown = feeBreakdown
+			}
 		}
 	}
 
@@ -218,10 +239,10 @@ func (s *PaymentSourceService) processBankAccountSource(
 
 // processUPISource processes a UPI detail and calculates fees
 func (s *PaymentSourceService) processUPISource(
-	ctx context.Context,
 	upi *payment.UPIDetail,
 	paymentContext payment.PaymentContext,
 	baseAmount int64,
+	allFeeRules []*business_rules.FeeRule,
 ) *PaymentSourceWithFees {
 	source := &PaymentSourceWithFees{
 		SourceID:      upi.UPIID,
@@ -243,18 +264,25 @@ func (s *PaymentSourceService) processUPISource(
 
 	// Calculate fees only if allowed
 	if isAllowed {
-		feeBreakdown, err := s.feeCalculator.CalculateWithTax(
-			ctx,
-			baseAmount,
+		// OPTIMIZATION: Find matching rule in-memory (no DB call)
+		rule, err := business_rules.FindMatchingFeeRule(
+			allFeeRules,
 			payment.PaymentMethodUPI,
 			nil,
 			nil,
 		)
 		if err != nil {
 			source.IsAllowed = false
-			source.RestrictionReason = "Fee calculation failed"
+			source.RestrictionReason = "Fee rule not found"
 		} else {
-			source.FeeBreakdown = feeBreakdown
+			// Calculate fee using the found rule
+			feeBreakdown, err := business_rules.CalculateFeeWithRule(baseAmount, rule)
+			if err != nil {
+				source.IsAllowed = false
+				source.RestrictionReason = "Fee calculation failed"
+			} else {
+				source.FeeBreakdown = feeBreakdown
+			}
 		}
 	}
 

@@ -26,6 +26,11 @@ type PaymentGateway interface {
 
 	// ValidateWebhook validates incoming webhook signatures
 	ValidateWebhook(payload []byte, signature string) error
+
+	// IsAggregatorModel returns the payment model for this gateway
+	// false = Normal model: merchant passes total amount (base + convenience fee) to PG
+	// true = Aggregator model: merchant passes base amount, PG charges convenience fee from customer
+	IsAggregatorModel() bool
 }
 
 // === GATEWAY REQUEST/RESPONSE STRUCTURES ===
@@ -61,6 +66,7 @@ type GatewayPaymentRequest struct {
 	Amount        int64         `json:"amount"`
 	Currency      Currency      `json:"currency"`
 	PaymentMethod PaymentMethod `json:"payment_method"`
+	PaymentType   PaymentType   `json:"payment_type"` // Type: payment, tokenization, refund
 	Description   string        `json:"description"`
 	CallbackURL   string        `json:"callback_url"`
 

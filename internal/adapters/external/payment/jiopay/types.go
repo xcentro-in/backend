@@ -58,36 +58,79 @@ type AuditObject struct {
 	AuthorizationCode string `json:"authorizationCode"` // Mandatory: Authorization code
 }
 
-// TokenizationResponse represents the response from JioPay tokenization API
+// TokenizationResponse represents the NEW response from JioPay /tokenized-card API (as of 2025)
+// Response structure has changed to include vaultId immediately
+// Outer structure with headers, body, statusCode
 type TokenizationResponse struct {
-	Status StatusObject `json:"status"`
-	Card   struct {
-		Type           int    `json:"type"`           // Card type code
-		ExpiryMm       string `json:"expiryMm"`       // Expiry month
-		ExpiryYy       string `json:"expiryYy"`       // Expiry year
-		Name           string `json:"name"`           // Cardholder name
-		Scheme         int    `json:"scheme"`         // Card scheme code
-		Remark         string `json:"remark"`         // Response remark
-		VaultID        string `json:"vaultId"`        // Vault ID (use as CardID)
-		MaskedNumber   string `json:"maskedNumber"`   // Masked card number
-		PAR            string `json:"par"`            // Payment Account Reference
-		TokenReference string `json:"tokenReference"` // Token reference
-		BankName       string `json:"bankName"`       // Issuing bank name
-		Status         string `json:"status"`         // Card status (e.g., "ACTIVE")
-		IsExpired      bool   `json:"isExpired"`      // Expiry status
-		IsDomestic     bool   `json:"isDomestic"`     // Domestic/international
-		CVVLess        int    `json:"cvvLess"`        // CVV-less transaction support
-		Consent        struct {
-			ID        string `json:"id"`        // Consent ID
-			Timestamp string `json:"timestamp"` // Consent timestamp
-		} `json:"consent"`
-	} `json:"card"`
-	Secure *SecureObject `json:"secure,omitempty"` // May be present in some responses
+	Headers         map[string]any       `json:"headers"`         // Response headers
+	Body            TokenizationBodyData `json:"body"`            // Actual response body
+	StatusCode      string               `json:"statusCode"`      // HTTP status code text (e.g., "OK")
+	StatusCodeValue int                  `json:"statusCodeValue"` // HTTP status code number (e.g., 200)
+}
+
+// TokenizationBodyData represents the body content of tokenization response
+// Contains status, vaultId, and tokenReference
+type TokenizationBodyData struct {
+	Status         StatusObject `json:"status"`         // API status
+	VaultID        int64        `json:"vaultId"`        // CRITICAL: Vault ID (needed for cryptogram) - now available immediately!
+	TokenReference string       `json:"tokenReference"` // Token reference (for payments)
+}
+
+// ============================================================================
+// FETCH CARD API TYPES
+// API: POST https://uat.jiopay.co.in/qatsp/api/vault/fetch-card
+// Used to retrieve all cards for a customer (to match and get vaultId)
+// ============================================================================
+
+// FetchCardRequest represents the request to fetch all cards for a customer
+type FetchCardRequest struct {
+	Entity EntityObject `json:"entity"` // Mandatory: Entity (merchant) details
+	User   UserObject   `json:"user"`   // Mandatory: User details (with externalId)
+}
+
+// FetchCardResponse represents the response from fetch-card API
+type FetchCardResponse struct {
+	Status StatusObject `json:"status"` // API status
+	Card   []CardInfo   `json:"card"`   // List of cards for this customer
+	// Other payment instruments (not needed for our use case)
+	FoodCard          []interface{} `json:"foodCard,omitempty"`
+	UPIVPA            []interface{} `json:"upiVpa,omitempty"`
+	BankAccount       []interface{} `json:"bankAccount,omitempty"`
+	PrePaidInstrument []interface{} `json:"prePaidInstrument,omitempty"`
+	PreferredBank     []interface{} `json:"preferredBank,omitempty"`
+}
+
+// CardInfo represents a single card in the fetch-card response
+type CardInfo struct {
+	Type               int    `json:"type"`               // Card type code
+	ExpiryMm           string `json:"expiryMm"`           // Expiry month (may be masked)
+	ExpiryYy           string `json:"expiryYy"`           // Expiry year (may be masked)
+	Name               string `json:"name"`               // Cardholder name (may be masked)
+	Scheme             int    `json:"scheme"`             // Card scheme code (104=Visa, etc.)
+	BankID             string `json:"bankId"`             // Bank ID
+	Remark             string `json:"remark"`             // Remark (often contains customer ID)
+	VaultID            string `json:"vaultId"`            // CRITICAL: Vault ID (needed for cryptogram)
+	MaskedNumber       string `json:"maskedNumber"`       // CRITICAL: Masked number (e.g., "XXXXXXXXXXXX0055")
+	Product            string `json:"product"`            // Product type
+	CountryCode        string `json:"countryCode"`        // Country code
+	TokenReference     string `json:"tokenReference"`     // Token reference
+	BankName           string `json:"bankName"`           // Bank name
+	PAR                string `json:"par"`                // Payment Account Reference
+	AuthorizationState string `json:"authorizationState"` // Authorization state
+	CVVLess            int    `json:"cvvLess"`            // CVV-less transaction support (0/1)
+	Secure             struct {
+		TokenExpiry string `json:"tokenExpiry"` // Token expiry (MMYYYY)
+	} `json:"secure"`
+	Status          string `json:"status"`          // Card status (e.g., "ACTIVE")
+	CardReference   string `json:"cardReference"`   // Card reference
+	ProductType     string `json:"productType"`     // Product type (e.g., "Normal")
+	IsExpired       bool   `json:"isExpired"`       // Expiry status
+	IsDomestic      bool   `json:"isDomestic"`      // Domestic/international
 }
 
 // ============================================================================
 // CRYPTOGRAM API TYPES
-// API: POST https://uat.jiopay.co.in/qatsp/api/vault/getCryptogram
+// API: POST https://uat.jiopay.co.in/qatsp/api/vault/getCryptogram/{vaultId}
 // ============================================================================
 
 // CryptogramRequest represents the get cryptogram request structure
@@ -107,32 +150,38 @@ type AmountObject struct {
 type CryptogramResponse struct {
 	Status StatusObject `json:"status"`
 	Card   struct {
-		Type           int    `json:"type"`
-		ExpiryMm       string `json:"expiryMm"`
-		ExpiryYy       string `json:"expiryYy"`
-		Name           string `json:"name"`
-		Scheme         int    `json:"scheme"`
-		Remark         string `json:"remark"`
-		VaultID        string `json:"vaultId"`
-		MaskedNumber   string `json:"maskedNumber"`
-		PAR            string `json:"par"`
-		TokenReference string `json:"tokenReference"`
-		BankName       string `json:"bankName"`
-		Status         string `json:"status"`
-		IsExpired      bool   `json:"isExpired"`
-		IsDomestic     bool   `json:"isDomestic"`
-		CVVLess        int    `json:"cvvLess"`
-		Consent        struct {
+		Type               int    `json:"type"`
+		ExpiryMm           string `json:"expiryMm"`
+		ExpiryYy           string `json:"expiryYy"`
+		Name               string `json:"name"`
+		Scheme             int    `json:"scheme"`
+		BankID             string `json:"bankId"`
+		Remark             string `json:"remark"`
+		VaultID            string `json:"vaultId"`
+		MaskedNumber       string `json:"maskedNumber"`
+		Product            string `json:"product"`
+		CountryCode        string `json:"countryCode"`
+		TokenReference     string `json:"tokenReference"`
+		BankName           string `json:"bankName"`
+		PAR                string `json:"par"`
+		AuthorizationState string `json:"authorizationState"`
+		CVVLess            int    `json:"cvvLess"`
+		CardReference      string `json:"cardReference"`
+		Consent            struct {
 			ID        string `json:"id"`
 			Timestamp string `json:"timestamp"`
 		} `json:"consent"`
+		ProductType string `json:"productType"`
+		Status      string `json:"status"`
+		IsExpired   bool   `json:"isExpired"`
+		IsDomestic  bool   `json:"isDomestic"`
 	} `json:"card"`
 	Secure SecureObject `json:"secure"`
 }
 
 // SecureObject represents secure payment credentials
 type SecureObject struct {
-	Token       int64  `json:"token"`       // Network token (numeric)
+	Token       string `json:"token"`       // Network token (string representation of card number for payment)
 	TokenExpiry string `json:"tokenExpiry"` // Token expiry (MMYYYY format)
 	Cryptogram  string `json:"cryptogram"`  // Generated cryptogram
 }
@@ -182,6 +231,9 @@ type InitiateSaleRequest struct {
 	// Additional optional fields
 	AggregatorID string `json:"aggregatorID,omitempty"` // Aggregator ID
 	CustomerID   string `json:"customerID,omitempty"`   // Customer ID
+
+	// Tokenization fields
+	PaymentOptionCodes string `json:"paymentOptionCodes,omitempty"` // "CC" for credit, "DC" for debit
 
 	// Security
 	SecureHash string `json:"secureHash"` // SHA-256 hash

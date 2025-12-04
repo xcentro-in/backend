@@ -66,10 +66,11 @@ type xcentroServer struct {
 func NewXcentroServer() *xcentroServer {
 	server := &xcentroServer{
 		echo: echo.New(),
-		log:  logger.GetDefault(),
+		log:  logger.GetDefault(), // Temporary default, will be replaced after config load
 	}
 
 	server.loadConfig()
+	server.initializeLogger() // Initialize logger with config values
 	server.registerValidator()
 	server.registerGlobalMiddleware()
 	server.registerClients()
@@ -155,6 +156,22 @@ func (s *xcentroServer) loadConfig() {
 	}
 	s.log.Info("Config loaded successfully")
 	s.meta.config = cfg
+}
+
+func (s *xcentroServer) initializeLogger() {
+	// Parse log level and format from config
+	logLevel := logger.ParseLogLevel(s.meta.config.Logger.Level, s.meta.config.Environment)
+	logFormat := logger.ParseLogFormat(s.meta.config.Logger.Format)
+
+	// Create new logger with config (stdout only for docker)
+	log := logger.NewConsole(logLevel, logFormat)
+	logger.SetDefault(log)
+	s.log = log
+
+	s.log.InfoWith("Logger initialized",
+		"level", s.meta.config.Logger.Level,
+		"format", s.meta.config.Logger.Format,
+		"environment", s.meta.config.Environment)
 }
 
 func (s *xcentroServer) registerValidator() {

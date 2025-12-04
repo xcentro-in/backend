@@ -37,7 +37,7 @@ func (r *PgBusinessRepository) FindByID(ctx context.Context, bid string) (*busin
 		SELECT
 			bid, name, gstin, gst_data, income_tax_id, kyb_status,
 			business_type, business_model, business_turnover, country_code, currency_code,
-			has_completed_onboarding, has_added_payment_method, has_added_vendor, has_created_first_payment
+			has_added_payment_method, has_added_vendor, has_created_first_payment
 		FROM xcentro.business
 		WHERE bid = $1
 	`
@@ -48,12 +48,12 @@ func (r *PgBusinessRepository) FindByID(ctx context.Context, bid string) (*busin
 	var kybStatusStr string // NOT NULL with DEFAULT
 	var businessType, businessModel, businessTurnover sql.NullString
 	var countryCode, currencyCode sql.NullString
-	var hasCompletedOnboarding, hasAddedPaymentMethod, hasAddedVendor, hasCreatedFirstPayment sql.NullBool
+	var hasAddedPaymentMethod, hasAddedVendor, hasCreatedFirstPayment sql.NullBool
 
 	err := r.querier.QueryRow(ctx, query, bid).Scan(
 		&b.BID, &b.Name, &b.GSTIN, &gstData, &incomeTexID, &kybStatusStr,
 		&businessType, &businessModel, &businessTurnover, &countryCode, &currencyCode,
-		&hasCompletedOnboarding, &hasAddedPaymentMethod, &hasAddedVendor, &hasCreatedFirstPayment,
+		&hasAddedPaymentMethod, &hasAddedVendor, &hasCreatedFirstPayment,
 	)
 
 	if err != nil {
@@ -71,7 +71,6 @@ func (r *PgBusinessRepository) FindByID(ctx context.Context, bid string) (*busin
 	b.BusinessTurnover = businessTurnover.String
 	b.CountryCode = countryCode.String
 	b.CurrencyCode = currencyCode.String
-	b.HasCompletedOnboarding = hasCompletedOnboarding.Bool
 	b.HasAddedPaymentMethod = hasAddedPaymentMethod.Bool
 	b.HasAddedVendor = hasAddedVendor.Bool
 	b.HasCreatedFirstPayment = hasCreatedFirstPayment.Bool
@@ -352,7 +351,6 @@ func (r *PgBusinessRepository) UpdateOnboardingFlag(ctx context.Context, bid str
 	query := `
 		UPDATE xcentro.business
 		SET
-			has_completed_onboarding = CASE WHEN $2 = 'has_completed_onboarding' THEN $3 ELSE has_completed_onboarding END,
 			has_added_payment_method = CASE WHEN $2 = 'has_added_payment_method' THEN $3 ELSE has_added_payment_method END,
 			has_added_vendor = CASE WHEN $2 = 'has_added_vendor' THEN $3 ELSE has_added_vendor END,
 			has_created_first_payment = CASE WHEN $2 = 'has_created_first_payment' THEN $3 ELSE has_created_first_payment END
@@ -403,7 +401,6 @@ func (r *PgBusinessRepository) ListBusinessesPaginated(ctx context.Context, page
 			kyb_status,
 			business_type,
 			COALESCE(updated_at::text, '') as updated_at,
-			has_completed_onboarding,
 			has_added_payment_method,
 			has_added_vendor,
 			has_created_first_payment
@@ -434,7 +431,7 @@ func (r *PgBusinessRepository) ListBusinessesPaginated(ctx context.Context, page
 		var item business.OpsBusinessListItem
 		var kybStatusStr string
 		var businessType sql.NullString
-		var hasCompletedOnboarding, hasAddedPaymentMethod, hasAddedVendor, hasCreatedFirstPayment sql.NullBool
+		var hasAddedPaymentMethod, hasAddedVendor, hasCreatedFirstPayment sql.NullBool
 
 		err := rows.Scan(
 			&item.BID,
@@ -443,7 +440,6 @@ func (r *PgBusinessRepository) ListBusinessesPaginated(ctx context.Context, page
 			&kybStatusStr,
 			&businessType,
 			&item.UpdatedAt,
-			&hasCompletedOnboarding,
 			&hasAddedPaymentMethod,
 			&hasAddedVendor,
 			&hasCreatedFirstPayment,
@@ -454,7 +450,6 @@ func (r *PgBusinessRepository) ListBusinessesPaginated(ctx context.Context, page
 
 		item.KybStatus = shared.KYBstatus(kybStatusStr)
 		item.BusinessType = shared.BusinessType(businessType.String)
-		item.HasCompletedOnboarding = hasCompletedOnboarding.Bool
 		item.HasAddedPaymentMethod = hasAddedPaymentMethod.Bool
 		item.HasAddedVendor = hasAddedVendor.Bool
 		item.HasCreatedFirstPayment = hasCreatedFirstPayment.Bool
@@ -476,7 +471,6 @@ func (r *PgBusinessRepository) SearchBusinesses(ctx context.Context, searchTerm 
 			bid,
 			name,
 			gstin,
-			has_completed_onboarding,
 			has_added_payment_method,
 			has_added_vendor,
 			has_created_first_payment
@@ -511,7 +505,6 @@ func (r *PgBusinessRepository) SearchBusinesses(ctx context.Context, searchTerm 
 			&result.BID,
 			&result.Name,
 			&result.GSTIN,
-			&result.HasCompletedOnboarding,
 			&result.HasAddedPaymentMethod,
 			&result.HasAddedVendor,
 			&result.HasCreatedFirstPayment,
@@ -536,7 +529,7 @@ func (r *PgBusinessRepository) GetBusinessDetailsForOps(ctx context.Context, bid
 			b.bid, b.name, b.gstin, COALESCE(b.gst_data::text, ''), b.income_tax_id,
 			b.kyb_status, b.business_type, b.business_model, b.business_turnover,
 			b.country_code, b.currency_code, COALESCE(b.updated_at::text, ''),
-			b.has_completed_onboarding, b.has_added_payment_method,
+			b.has_added_payment_method,
 			b.has_added_vendor, b.has_created_first_payment,
 			COALESCE(k.income_tax_id_data::text, ''), COALESCE(k.company_id, ''),
 			COALESCE(k.company_id_data::text, ''), COALESCE(k.business_deed, '')
@@ -553,7 +546,7 @@ func (r *PgBusinessRepository) GetBusinessDetailsForOps(ctx context.Context, bid
 		&details.BID, &details.Name, &details.GSTIN, &details.GSTData, &details.ITID,
 		&kybStatusStr, &businessType, &businessModel, &businessTurnover,
 		&countryCode, &currencyCode, &details.UpdatedAt,
-		&details.HasCompletedOnboarding, &details.HasAddedPaymentMethod,
+		&details.HasAddedPaymentMethod,
 		&details.HasAddedVendor, &details.HasCreatedFirstPayment,
 		&details.ITIDData, &details.CID, &details.CIDData, &details.DocPath,
 	)

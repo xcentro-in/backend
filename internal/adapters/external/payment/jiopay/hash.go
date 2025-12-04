@@ -54,14 +54,8 @@ func NewSecureHashGenerator(apiKey string) *SecureHashGenerator {
 //	hash := hashGen.GenerateForRequest(fieldMap)
 //	request.SecureHash = hash
 func (h *SecureHashGenerator) GenerateForRequest(fieldMap map[string]string) string {
-	fmt.Printf("🔐 [Hash Generator] Generating hash for outgoing request\n")
-	fmt.Printf("📊 [Hash Generator] Fields count: %d\n", len(fieldMap))
-
 	// Compute HMAC-SHA256 hash
 	hash := h.computeHash(fieldMap)
-
-	fmt.Printf("✅ [Hash Generator] Generated hash: %s...\n", hash[:20])
-
 	return hash
 }
 
@@ -92,32 +86,20 @@ func (h *SecureHashGenerator) GenerateForRequest(fieldMap map[string]string) str
 //	    return fmt.Errorf("invalid signature: %w", err)
 //	}
 func (h *SecureHashGenerator) ValidateFromResponse(payload []byte, signature string) error {
-	fmt.Printf("🔐 [Hash Generator] Validating hash from incoming response\n")
-	fmt.Printf("📝 [Hash Generator] Payload length: %d bytes\n", len(payload))
-	fmt.Printf("🔏 [Hash Generator] Provided signature: %s...\n", signature[:min(20, len(signature))])
-
 	// Step 1: Parse JSON payload and build field map (exclude secureHash)
 	fieldMap, err := h.buildFieldMapFromJSON(payload, []string{"secureHash"})
 	if err != nil {
 		return fmt.Errorf("failed to parse payload: %w", err)
 	}
 
-	fmt.Printf("📊 [Hash Generator] Fields for verification: %d (excluding secureHash)\n", len(fieldMap))
-
 	// Step 2: Generate expected hash
 	expectedHash := h.computeHash(fieldMap)
 
-	fmt.Printf("🔐 [Hash Generator] Expected signature: %s...\n", expectedHash[:20])
-
 	// Step 3: Constant-time comparison to prevent timing attacks
 	if !hmac.Equal([]byte(expectedHash), []byte(signature)) {
-		fmt.Printf("❌ [Hash Generator] Signature mismatch!\n")
-		fmt.Printf("   Expected: %s\n", expectedHash)
-		fmt.Printf("   Received: %s\n", signature)
-		return fmt.Errorf("invalid signature: hash mismatch")
+		return fmt.Errorf("invalid signature: hash mismatch (expected: %s, received: %s)", expectedHash, signature)
 	}
 
-	fmt.Println("✅ [Hash Generator] Signature verified successfully")
 	return nil
 }
 
@@ -145,7 +127,6 @@ func (h *SecureHashGenerator) computeHash(fieldMap map[string]string) string {
 	}
 
 	message := concatenated.String()
-	fmt.Printf("🔐 [Hash Generator] HMAC message: %s\n", message)
 
 	// Calculate HMAC-SHA256
 	h256 := hmac.New(sha256.New, []byte(h.apiKey))

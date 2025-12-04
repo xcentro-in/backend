@@ -32,6 +32,7 @@ type FeeCalculator interface {
 type DatabaseFeeCalculator interface {
 	CalculateWithTax(ctx context.Context, amount int64, method payment.PaymentMethod, cardType *payment.CardType, cardCategory *payment.CardCategory) (*FeeCalculationWithTax, error)
 	GetFeeRule(ctx context.Context, method payment.PaymentMethod, cardType *payment.CardType, cardCategory *payment.CardCategory) (*FeeRule, error)
+	GetActiveFeeRules(ctx context.Context) ([]*FeeRule, error)
 }
 
 // FeeRulesRepository defines the interface for fee rules persistence
@@ -317,6 +318,116 @@ func (calc *PostgresDatabaseFeeCalculator) GetFeeRule(
 	cardCategory *payment.CardCategory,
 ) (*FeeRule, error) {
 	return calc.repo.GetFeeRule(ctx, method, cardType, cardCategory)
+}
+
+// GetActiveFeeRules retrieves all active fee rules from the database
+func (calc *PostgresDatabaseFeeCalculator) GetActiveFeeRules(ctx context.Context) ([]*FeeRule, error) {
+	return calc.repo.GetActiveFeeRules(ctx)
+}
+
+// FindMatchingFeeRule finds the applicable fee rule from a list of rules (in-memory matching)
+// This is a public helper function that can be used by services to avoid multiple DB calls
+func FindMatchingFeeRule(
+	rules []*FeeRule,
+	method payment.PaymentMethod,
+	cardType *payment.CardType,
+	cardCategory *payment.CardCategory,
+) (*FeeRule, error) {
+	for _, rule := range rules {
+		// Match payment method
+		if rule.PaymentMethod != method {
+			continue
+		}
+
+		// Match card type (IS NOT DISTINCT FROM logic)
+		// Both NULL or both equal
+		if !matchesCardType(rule.CardType, cardType) {
+			continue
+		}
+
+		// Match card category (IS NOT DISTINCT FROM logic)
+		if !matchesCardCategory(rule.CardCategory, cardCategory) {
+			continue
+		}
+
+		// Found exact match
+		return rule, nil
+	}
+
+	return nil, fmt.Errorf("no fee rule found for method=%s, card_type=%v, card_category=%v", method, cardType, cardCategory)
+}
+
+// matchesCardType checks if rule's card type matches the request (IS NOT DISTINCT FROM logic)
+func matchesCardType(ruleCardType payment.CardType, requestCardType *payment.CardType) bool {
+	// Both are empty/null
+	if ruleCardType == "" && requestCardType == nil {
+		return true
+	}
+	// One is null, other is not
+	if ruleCardType == "" || requestCardType == nil {
+		return false
+	}
+	// Both have values - compare
+	return ruleCardType == *requestCardType
+}
+
+// matchesCardCategory checks if rule's card category matches the request (IS NOT DISTINCT FROM logic)
+func matchesCardCategory(ruleCardCategory payment.CardCategory, requestCardCategory *payment.CardCategory) bool {
+	// Both are empty/null
+	if ruleCardCategory == "" && requestCardCategory == nil {
+		return true
+	}
+	// One is null, other is not
+	if ruleCardCategory == "" || requestCardCategory == nil {
+		return false
+	}
+	// Both have values - compare
+	return ruleCardCategory == *requestCardCategory
+}
+
+// CalculateFeeWithRule calculates fee with GST breakdown using a given rule
+// This is a public helper function that can be used by services after finding the matching rule
+func CalculateFeeWithRule(amount int64, rule *FeeRule) (*FeeCalculationWithTax, error) {
+	if rule == nil {
+		return nil, fmt.Errorf("rule cannot be nil")
+	}
+
+	// Calculate base convenience fee
+	var convenienceFee int64
+	switch rule.FeeType {
+	case payment.FeeTypePercentage:
+		convenienceFee = int64(float64(amount) * rule.PercentageFee / 100)
+
+	case payment.FeeTypeFixed:
+		convenienceFee = rule.FixedFee
+
+	case payment.FeeTypePercentagePlus:
+		percentagePart := int64(float64(amount) * rule.PercentageFee / 100)
+		convenienceFee = percentagePart + rule.FixedFee
+
+	default:
+		return nil, fmt.Errorf("unsupported fee type: %s", rule.FeeType)
+	}
+
+	// Calculate GST on convenience fee
+	var convenienceFeeGST int64
+	if rule.GSTApplicable {
+		convenienceFeeGST = int64(float64(convenienceFee) * rule.GSTPercentage / 100)
+	}
+
+	totalFee := convenienceFee + convenienceFeeGST
+	totalAmount := amount + totalFee
+
+	return &FeeCalculationWithTax{
+		BaseAmount:            amount,
+		ConvenienceFee:        convenienceFee,
+		ConvenienceFeeGST:     convenienceFeeGST,
+		TotalFee:              totalFee,
+		TotalAmount:           totalAmount,
+		ConvenienceFeePercent: rule.PercentageFee,
+		GSTPercent:            rule.GSTPercentage,
+		AppliedRule:           rule,
+	}, nil
 }
 
 // CalculateWithTax calculates fee with GST breakdown for Phase 10

@@ -10,17 +10,20 @@ import (
 
 	"github.com/google/uuid"
 	"xcentro.in/internal/core/payment"
+	"xcentro.in/internal/shared/logger"
 )
 
 // MockPGClient implements the PaymentGateway interface for testing purposes
 // This gateway simulates real payment gateway behavior without making external API calls
 type MockPGClient struct {
-	merchantID string
-	apiKey     string
+	merchantID        string
+	apiKey            string
+	isAggregatorModel bool // Payment model: false = normal (merchant charges), true = aggregator (PG charges)
 	// Configuration for simulating different scenarios
 	simulateSuccess bool          // If true, always return success; if false, simulate failures
 	delayMs         int           // Artificial delay in milliseconds to simulate network latency
 	webhookDelay    time.Duration // Delay before sending webhook (default: 2 minutes)
+	logger          *logger.Logger
 }
 
 // NewMockPGClient creates a new mock payment gateway client
@@ -29,6 +32,7 @@ type MockPGClient struct {
 //   - merchantID: Mock merchant identifier (from env)
 //   - apiKey: Mock API key (from env)
 //   - simulateSuccess: If true, all operations succeed; if false, simulate realistic failures
+//   - isAggregatorModel: MOCKPG_IS_AGGREGATOR_MODEL from environment (payment model)
 //
 // Usage:
 //
@@ -36,20 +40,41 @@ type MockPGClient struct {
 //	    cfg.MockPG.MerchantID,
 //	    cfg.MockPG.APIKey,
 //	    true, // Always succeed for testing
+//	    cfg.MockPG.IsAggregatorModel,
 //	)
-func NewMockPGClient(merchantID, apiKey string, simulateSuccess bool) payment.PaymentGateway {
+func NewMockPGClient(merchantID, apiKey string, simulateSuccess bool, isAggregatorModel bool) payment.PaymentGateway {
+	log := logger.GetDefault()
+
+	paymentModel := "Normal"
+	if isAggregatorModel {
+		paymentModel = "Aggregator"
+	}
+
+	log.WarnWith("Payment Gateway Initialized: MockPG (TEST MODE)",
+		"merchant_id", merchantID,
+		"simulate_success", simulateSuccess,
+		"payment_model", paymentModel,
+		"webhook_delay", "2m")
+
 	return &MockPGClient{
-		merchantID:      merchantID,
-		apiKey:          apiKey,
-		simulateSuccess: simulateSuccess,
-		delayMs:         100,           // Simulate 100ms network delay
-		webhookDelay:    2 * time.Minute, // Send webhook after 2 minutes
+		merchantID:        merchantID,
+		apiKey:            apiKey,
+		isAggregatorModel: isAggregatorModel,
+		simulateSuccess:   simulateSuccess,
+		delayMs:           100,             // Simulate 100ms network delay
+		webhookDelay:      2 * time.Minute, // Send webhook after 2 minutes
+		logger:            log,
 	}
 }
 
 // GetGatewayType returns the gateway type identifier
 func (c *MockPGClient) GetGatewayType() payment.GatewayType {
 	return payment.GatewayMockPG
+}
+
+// IsAggregatorModel returns the payment model for this gateway
+func (c *MockPGClient) IsAggregatorModel() bool {
+	return c.isAggregatorModel
 }
 
 // TokenizeCard implements mock card tokenization flow
@@ -162,12 +187,20 @@ func (c *MockPGClient) GenerateCryptogram(ctx context.Context, request payment.C
 
 // InitiatePayment implements mock payment initiation
 // Supports all payment methods: card (tokenized & direct), net banking, UPI, wallet
+// Also handles tokenization payments (payment_type="tokenization")
 func (c *MockPGClient) InitiatePayment(ctx context.Context, request payment.GatewayPaymentRequest) (*payment.GatewayPaymentResponse, error) {
 	fmt.Println("=== MOCK PG GATEWAY: InitiatePayment Called ===")
 	fmt.Printf("📥 Business ID: %s\n", request.BusinessID)
 	fmt.Printf("📥 Transaction ID: %s\n", request.TransactionID)
 	fmt.Printf("💰 Amount: %d %s\n", request.Amount, request.Currency)
 	fmt.Printf("🔀 Payment Method: %s\n", request.PaymentMethod)
+	fmt.Printf("🔀 Payment Type: %s\n", request.PaymentType)
+
+	// Check if this is a tokenization payment
+	isTokenization := request.PaymentType == payment.PaymentTypeTokenization
+	if isTokenization {
+		fmt.Println("🔑 TOKENIZATION PAYMENT: Will store card details for post-payment tokenization")
+	}
 
 	// Simulate network delay
 	c.simulateDelay(ctx)
@@ -257,6 +290,15 @@ func (c *MockPGClient) InitiatePayment(ctx context.Context, request payment.Gate
 			"simulate_success": c.simulateSuccess,
 			"mock_3ds_url":     redirectURL,
 		},
+	}
+
+	// For tokenization payments, mark that tokenization is required after payment success
+	// Mock PG is an "immature" gateway - needs to call tokenize API after payment success
+	// PCI DSS: We do NOT store card_number anywhere - gateway already has it from the payment transaction
+	if isTokenization {
+		fmt.Println("🔑 Tokenization payment marked - will tokenize after payment success")
+		response.Metadata["_requires_tokenization"] = true
+		fmt.Println("✅ Gateway will tokenize based on transaction_id (PCI compliant - no card storage)")
 	}
 
 	fmt.Printf("📌 Note: User should open the redirect URL to complete authentication\n")
@@ -376,6 +418,36 @@ type MockPGWebhookPayload struct {
 	PaymentMethod    string `json:"payment_method"`     // Payment method used
 	ProcessedAt      string `json:"processed_at"`       // ISO 8601 timestamp
 	Signature        string `json:"signature"`          // Mock signature
+}
+
+// MockPGSettlementWebhook represents settlement notification from Mock PG
+// Sent when Mock PG completes settlement to merchant account (simulated T+1 to T+3 days)
+//
+// Key Characteristics:
+//   - Format: JSON (single transaction per webhook)
+//   - Amount Format: Int64 in paise (e.g., 100000 = ₹1000.00)
+//   - Security: Mock signature validation
+//
+// Financial Flow:
+//   - settlement_amount: Original payment amount (in paise)
+//   - mdr_amount: Mock MDR fee (0 for testing)
+//   - service_tax: Mock GST on MDR (0 for testing)
+//   - net_settlement_amount: Net amount = settlement_amount - mdr_amount - service_tax
+type MockPGSettlementWebhook struct {
+	MerchantID           string `json:"merchant_id"`            // Mock merchant ID
+	TransactionID        string `json:"transaction_id"`         // KEY: Our payment_id for lookup
+	GatewayPaymentID     string `json:"gateway_payment_id"`     // Mock gateway payment ID
+	SettlementID         string `json:"settlement_id"`          // Mock settlement batch ID
+	SettlementUTR        string `json:"settlement_utr"`         // Bank UTR for the settlement transfer (unique per payment)
+	SettlementDate       string `json:"settlement_date"`        // Settlement date (YYYY-MM-DD format)
+	SettlementAmount     int64  `json:"settlement_amount"`      // Original payment amount (in paise)
+	MDRAmount            int64  `json:"mdr_amount"`             // MDR charges (in paise, 0 for testing)
+	ServiceTax           int64  `json:"service_tax"`            // GST on MDR (in paise, 0 for testing)
+	NetSettlementAmount  int64  `json:"net_settlement_amount"`  // Net amount received (in paise)
+	PaymentMethod        string `json:"payment_method"`         // Payment method: "card", "netbanking", "upi", "wallet"
+	SettlementAccount    string `json:"settlement_account"`     // Mock bank account number
+	SettlementAccountIFSC string `json:"settlement_account_ifsc"` // Mock IFSC code
+	Signature            string `json:"signature"`              // Mock signature for verification
 }
 
 // sendWebhookAfterDelay simulates the async webhook sent by payment gateways

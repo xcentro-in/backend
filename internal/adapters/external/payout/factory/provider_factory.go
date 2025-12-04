@@ -44,13 +44,19 @@ func (f *PayoutProviderFactory) GetProvider(providerType payout.ProviderType) (p
 // If CASTLER_MOCK_ENABLED=true, returns mock client instead
 func (f *PayoutProviderFactory) getCastlerClient() payout.PayoutProvider {
 	// Check if mock mode is enabled
+	logger.GetDefault().InfoWith("🔍 Castler Provider Factory Check",
+		"mock_enabled", f.config.Castler.MockEnabled,
+		"base_url", f.config.Castler.BaseURL)
+
 	if f.config.Castler.MockEnabled {
-		logger.Info("🎭 Castler Mock Mode ENABLED - Using mock client")
+		logger.GetDefault().Info("🎭 Castler Mock Mode ENABLED - Using mock client")
 		if f.mockCastlerClient == nil {
 			f.mockCastlerClient = castler.NewMockCastlerClient()
 		}
 		return f.mockCastlerClient
 	}
+
+	logger.GetDefault().Warn("⚠️  Castler Mock Mode DISABLED - Using REAL Castler API client")
 
 	// Use real Castler client
 	if f.castlerClient == nil {
@@ -58,10 +64,11 @@ func (f *PayoutProviderFactory) getCastlerClient() payout.PayoutProvider {
 		baseURL := f.config.Castler.BaseURL
 		apiKey := f.config.Castler.APIKey
 		secretKey := f.config.Castler.SecretKey
+		escrowID := f.config.Castler.EscrowID
 		encryptionKey := f.config.Castler.EncryptionKey
 		encryptionIV := f.config.Castler.EncryptionIV
 
-		client, err := castler.NewCastlerClient(baseURL, apiKey, secretKey, encryptionKey, encryptionIV)
+		client, err := castler.NewCastlerClient(baseURL, apiKey, secretKey, escrowID, encryptionKey, encryptionIV)
 		if err != nil {
 			panic("Failed to create Castler client: " + err.Error())
 		}

@@ -22,8 +22,10 @@ type EasebuzzClient struct {
 	salt                string
 	apiKey              string // EBZ-KEY for tokenization API
 	tokenizationBaseURL string // TMS base URL for tokenization
+	isAggregatorModel   bool   // Payment model: false = normal (merchant charges), true = aggregator (PG charges)
 	httpClient          *http.Client
 	hashGenerator       *SecureHashGenerator // Hash generator for request/response signatures
+	logger              *logger.Logger
 }
 
 // NewEasebuzzClient creates a new Easebuzz payment gateway client
@@ -33,6 +35,7 @@ type EasebuzzClient struct {
 //   - merchantKey: EASEBUZZ_MERCHANT_KEY from environment
 //   - salt: EASEBUZZ_SALT from environment
 //   - apiKey: EASEBUZZ_API_KEY for tokenization (EBZ-KEY header)
+//   - isAggregatorModel: EASEBUZZ_IS_AGGREGATOR_MODEL from environment (payment model)
 //
 // Usage:
 //
@@ -41,24 +44,45 @@ type EasebuzzClient struct {
 //	    cfg.Easebuzz.MerchantKey,
 //	    cfg.Easebuzz.Salt,
 //	    cfg.Easebuzz.APIKey,
+//	    cfg.Easebuzz.IsAggregatorModel,
 //	)
-func NewEasebuzzClient(baseURL, merchantKey, salt, apiKey string) payment.PaymentGateway {
+func NewEasebuzzClient(baseURL, merchantKey, salt, apiKey string, isAggregatorModel bool) payment.PaymentGateway {
+	log := logger.GetDefault()
+
+	paymentModel := "Normal"
+	if isAggregatorModel {
+		paymentModel = "Aggregator"
+	}
+
+	log.InfoWith("Payment Gateway Initialized: Easebuzz",
+		"merchant_key", merchantKey,
+		"base_url", baseURL,
+		"payment_model", paymentModel,
+		"timeout", "30s")
+
 	return &EasebuzzClient{
 		baseURL:             baseURL,
 		merchantKey:         merchantKey,
 		salt:                salt,
 		apiKey:              apiKey,
+		isAggregatorModel:   isAggregatorModel,
 		tokenizationBaseURL: "https://tms.easebuzz.in", // Tokenization Management System
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
 		hashGenerator: NewSecureHashGenerator(merchantKey, salt),
+		logger:        log,
 	}
 }
 
 // GetGatewayType returns the gateway type identifier
 func (c *EasebuzzClient) GetGatewayType() payment.GatewayType {
 	return payment.GatewayEasebuzz
+}
+
+// IsAggregatorModel returns the payment model for this gateway
+func (c *EasebuzzClient) IsAggregatorModel() bool {
+	return c.isAggregatorModel
 }
 
 // TokenizeCard implements Easebuzz-specific tokenization flow

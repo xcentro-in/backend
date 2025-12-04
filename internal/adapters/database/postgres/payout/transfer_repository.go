@@ -37,12 +37,12 @@ func (r *PostgresPayoutTransferRepository) Create(ctx context.Context, transfer 
 			transfer_request_id, payment_id, voucher_id, provider, provider_beneficiary_id, escrow_id,
 			amount, currency, purpose, reference, narration, transfer_mode,
 			status, retry_count, max_retries,
-			provider_metadata, created_at
+			provider_metadata, is_deleted, created_at
 		) VALUES (
 			$1, $2, $3, $4, $5, $6,
 			$7, $8, $9, $10, $11, $12,
 			$13, $14, $15,
-			$16, $17
+			$16, $17, $18
 		)
 	`
 
@@ -56,7 +56,7 @@ func (r *PostgresPayoutTransferRepository) Create(ctx context.Context, transfer 
 		transfer.TransferRequestID, transfer.PaymentID, transfer.VoucherID, transfer.Provider, transfer.ProviderBeneficiaryID, transfer.EscrowID,
 		transfer.Amount, transfer.Currency, transfer.Purpose, transfer.Reference, transfer.Narration, transfer.TransferMode,
 		transfer.Status, transfer.RetryCount, transfer.MaxRetries,
-		metadataJSON, time.Now(),
+		metadataJSON, transfer.IsDeleted, time.Now(),
 	)
 
 	if err != nil {
@@ -121,7 +121,7 @@ func (r *PostgresPayoutTransferRepository) GetByID(ctx context.Context, transfer
 	return &transfer, nil
 }
 
-// GetByVoucherID retrieves transfer request for a voucher
+// GetByVoucherID retrieves the latest active (non-deleted) transfer request for a voucher
 func (r *PostgresPayoutTransferRepository) GetByVoucherID(ctx context.Context, voucherID string) (*payout.PayoutTransferRequest, error) {
 	query := `
 		SELECT
@@ -130,14 +130,18 @@ func (r *PostgresPayoutTransferRepository) GetByVoucherID(ctx context.Context, v
 			status, initiated_at, processing_at, completed_at, failed_at, failure_reason, utr,
 			retry_count, max_retries, next_retry_at, last_retry_at,
 			last_webhook_at, webhook_timeout_at, webhook_history, provider_metadata,
+			is_deleted, deleted_at, deleted_reason,
 			created_at, updated_at
 		FROM xcentro.payout_transfer_requests
-		WHERE voucher_id = $1
+		WHERE voucher_id = $1 AND is_deleted = false
+		ORDER BY created_at DESC
+		LIMIT 1
 	`
 
 	var transfer payout.PayoutTransferRequest
 	var metadataJSON, historyJSON []byte
-	var escrowID sql.NullString
+	var escrowID, deletedReason sql.NullString
+	var deletedAt sql.NullTime
 
 	err := r.querier.QueryRow(ctx, query, voucherID).Scan(
 		&transfer.TransferRequestID, &transfer.PaymentID, &transfer.VoucherID, &transfer.Provider, &transfer.ProviderBeneficiaryID, &transfer.ProviderTransferID, &escrowID,
@@ -145,6 +149,7 @@ func (r *PostgresPayoutTransferRepository) GetByVoucherID(ctx context.Context, v
 		&transfer.Status, &transfer.InitiatedAt, &transfer.ProcessingAt, &transfer.CompletedAt, &transfer.FailedAt, &transfer.FailureReason, &transfer.UTR,
 		&transfer.RetryCount, &transfer.MaxRetries, &transfer.NextRetryAt, &transfer.LastRetryAt,
 		&transfer.LastWebhookAt, &transfer.WebhookTimeoutAt, &historyJSON, &metadataJSON,
+		&transfer.IsDeleted, &deletedAt, &deletedReason,
 		&transfer.CreatedAt, &transfer.UpdatedAt,
 	)
 
@@ -155,9 +160,15 @@ func (r *PostgresPayoutTransferRepository) GetByVoucherID(ctx context.Context, v
 		return nil, fmt.Errorf("failed to get transfer request: %w", err)
 	}
 
-	// Handle nullable escrow_id
+	// Handle nullable fields
 	if escrowID.Valid {
 		transfer.EscrowID = escrowID.String
+	}
+	if deletedAt.Valid {
+		transfer.DeletedAt = &deletedAt.Time
+	}
+	if deletedReason.Valid {
+		transfer.DeletedReason = deletedReason.String
 	}
 
 	// Unmarshal JSONB fields
@@ -553,4 +564,105 @@ func (r *PostgresPayoutTransferRepository) GetWebhookTimeouts(ctx context.Contex
 	}
 
 	return transfers, nil
+}
+
+// GetTransferHistoryByVoucherID retrieves all transfer attempts (including soft deleted) for a voucher in chronological order
+func (r *PostgresPayoutTransferRepository) GetTransferHistoryByVoucherID(ctx context.Context, voucherID string) ([]*payout.PayoutTransferRequest, error) {
+	query := `
+		SELECT
+			transfer_request_id, payment_id, voucher_id, status, created_at,
+			failed_at, failure_reason, is_deleted, deleted_at, deleted_reason,
+			provider_transfer_id, retry_count
+		FROM xcentro.payout_transfer_requests
+		WHERE voucher_id = $1
+		ORDER BY created_at ASC
+	`
+
+	rows, err := r.querier.Query(ctx, query, voucherID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get transfer history: %w", err)
+	}
+	defer rows.Close()
+
+	var transfers []*payout.PayoutTransferRequest
+
+	for rows.Next() {
+		var transfer payout.PayoutTransferRequest
+		var providerTransferID, failureReason, deletedReason sql.NullString
+		var failedAt, deletedAt sql.NullTime
+
+		err := rows.Scan(
+			&transfer.TransferRequestID, &transfer.PaymentID, &transfer.VoucherID,
+			&transfer.Status, &transfer.CreatedAt, &failedAt, &failureReason,
+			&transfer.IsDeleted, &deletedAt, &deletedReason, &providerTransferID, &transfer.RetryCount,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan transfer history: %w", err)
+		}
+
+		// Handle nullable fields
+		if failedAt.Valid {
+			transfer.FailedAt = &failedAt.Time
+		}
+		if failureReason.Valid {
+			transfer.FailureReason = failureReason.String
+		}
+		if deletedAt.Valid {
+			transfer.DeletedAt = &deletedAt.Time
+		}
+		if deletedReason.Valid {
+			transfer.DeletedReason = deletedReason.String
+		}
+		if providerTransferID.Valid {
+			transfer.ProviderTransferID = providerTransferID.String
+		}
+
+		transfers = append(transfers, &transfer)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating transfer history: %w", err)
+	}
+
+	return transfers, nil
+}
+
+// SoftDelete marks a transfer as deleted (for retry mechanism)
+func (r *PostgresPayoutTransferRepository) SoftDelete(ctx context.Context, transferRequestID string, reason string) error {
+	query := `
+		UPDATE xcentro.payout_transfer_requests
+		SET is_deleted = true,
+		    deleted_at = NOW(),
+		    deleted_reason = $2,
+		    updated_at = NOW()
+		WHERE transfer_request_id = $1
+	`
+
+	result, err := r.querier.Exec(ctx, query, transferRequestID, reason)
+	if err != nil {
+		return fmt.Errorf("failed to soft delete transfer: %w", err)
+	}
+
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("transfer request not found: %s", transferRequestID)
+	}
+
+	return nil
+}
+
+// GetRetryCount counts total attempts (including soft deleted) for a voucher
+func (r *PostgresPayoutTransferRepository) GetRetryCount(ctx context.Context, voucherID string) (int, error) {
+	query := `
+		SELECT COUNT(*)
+		FROM xcentro.payout_transfer_requests
+		WHERE voucher_id = $1
+	`
+
+	var count int
+	err := r.querier.QueryRow(ctx, query, voucherID).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get retry count: %w", err)
+	}
+
+	return count, nil
 }

@@ -11,6 +11,7 @@ import (
 	"xcentro.in/internal/core/business"
 	"xcentro.in/internal/core/business_rules"
 	"xcentro.in/internal/core/payment"
+	paymentSvc "xcentro.in/internal/services/payment"
 	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/logger"
 )
@@ -24,11 +25,12 @@ type PaymentService struct {
 	walletService        business_rules.WalletService
 	feeCalculator        business_rules.FeeCalculator
 	txManager            client.TxManager
-	voucherService       interface{}                                 // voucher.VoucherService, using interface{} to avoid circular import (Phase 6)
-	voucherRepo          interface{}                                 // voucher.VoucherRepository, using interface{} to avoid circular import
-	pendingVoucherRepo   *paymentdb.PaymentVoucherPendingRepository // Concrete type for temporary voucher-payment linkage
+	voucherService       interface{}                                         // voucher.VoucherService, using interface{} to avoid circular import (Phase 6)
+	voucherRepo          interface{}                                         // voucher.VoucherRepository, using interface{} to avoid circular import
+	pendingVoucherRepo   *paymentdb.PaymentVoucherPendingRepository         // Concrete type for temporary voucher-payment linkage
 	businessService      business.BusinessService
-	config               *config.Config // Application configuration (server URL, etc.)
+	stateChangeRepo      *paymentdb.PostgresPaymentStateChangeRepository    // Concrete type for transaction support
+	config               *config.Config                                     // Application configuration (server URL, etc.)
 	logger               *logger.Logger
 }
 
@@ -45,6 +47,7 @@ func NewPaymentService(
 	voucherRepo interface{}, // voucher.VoucherRepository for transactional operations
 	pendingVoucherRepo interface{}, // PaymentVoucherPendingRepository for temporary voucher-payment linkage
 	businessService business.BusinessService,
+	stateChangeRepo payment.PaymentStateChangeRepository, // For logging payment state changes
 	cfg *config.Config, // Application configuration
 	logger *logger.Logger,
 ) *PaymentService {
@@ -60,6 +63,7 @@ func NewPaymentService(
 		voucherRepo:        voucherRepo,
 		pendingVoucherRepo: pendingVoucherRepo.(*paymentdb.PaymentVoucherPendingRepository),
 		businessService:    businessService,
+		stateChangeRepo:    stateChangeRepo.(*paymentdb.PostgresPaymentStateChangeRepository),
 		config:             cfg,
 		logger:             logger,
 	}
@@ -117,6 +121,50 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 
 		// Create transactional repository instances
 		txPaymentRepo := s.paymentRepo.WithTx(tx)
+		txStoredCardRepo := s.storedCardRepo.WithTx(tx)
+
+		// Sub-step 0.5: For tokenization payments, create stored_card record with partial data (Phase 1)
+		// This allows us to track the card even before tokenization completes
+		var storedCardID *string
+		if req.PaymentType == payment.PaymentTypeTokenization && req.CardDetails != nil {
+			s.logger.InfoWith("TOKENIZATION: Creating stored_card record with partial data (Phase 1)")
+
+			// Generate card ID
+			cardID := uuid.Must(uuid.NewV7()).String()
+
+			// Create stored_card with partial data (no token yet)
+			storedCard := &payment.StoredCard{
+				CardID:         cardID,
+				BusinessID:     req.BusinessID,
+				LastFourDigits: req.CardDetails.LastFourDigits,
+				CardType:       req.CardDetails.CardType,
+				CardCategory:   req.CardDetails.CardCategory,
+				ExpiryMonth:    req.CardDetails.ExpiryMonth,
+				ExpiryYear:     req.CardDetails.ExpiryYear,
+				CardHolderName: req.CardDetails.HolderName,
+				Token:          "", // Will be filled in Phase 2 (after tokenization)
+				IssuerBank:     "", // Will be filled in Phase 2
+				IsActive:       false, // Not active until tokenization succeeds
+				GatewayUsed:    "", // Will be updated in Phase 2 after gateway selection
+				AddedAt:        time.Now(),
+				Metadata: map[string]any{
+					"status": "pending_tokenization",
+					"phase":  "1_partial_data",
+				},
+			}
+
+			if err := txStoredCardRepo.CreateStoredCard(txCtx, storedCard); err != nil {
+				s.logger.ErrorWith("Failed to create stored_card record", "error", err)
+				return fmt.Errorf("failed to create stored_card record: %w", err)
+			}
+
+			storedCardID = &cardID
+			s.logger.InfoWith("TOKENIZATION: Stored card created with partial data",
+				"card_id", cardID,
+				"last_four", storedCard.LastFourDigits,
+				"card_type", storedCard.CardType,
+				"card_category", storedCard.CardCategory)
+		}
 
 		// Sub-step 1: Create payment record within transaction
 		s.logger.DebugWith("Creating payment record within transaction")
@@ -126,6 +174,12 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 		convenienceFeeGST := int64(float64(convenienceFee) * 0.18)
 		totalFee := convenienceFee + convenienceFeeGST
 
+		// Default payment type to 'payment' if not specified
+		paymentType := req.PaymentType
+		if paymentType == "" {
+			paymentType = payment.PaymentTypePayment
+		}
+
 		p := &payment.Payment{
 			ID:               paymentID,
 			UserID:           req.UserID,
@@ -133,7 +187,7 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 			Amount:           req.Amount,
 			Currency:         req.Currency,
 			PaymentMethod:    req.PaymentMethod,
-			PaymentType:      payment.PaymentTypePayment,
+			PaymentType:      paymentType, // Use payment type from request (payment/tokenization/refund), default to 'payment'
 			Status:           payment.PaymentStatusPending,
 			Description:      req.Description,
 			CallbackURL:      callbackURL,
@@ -144,9 +198,18 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 			Metadata:         req.Metadata,
 		}
 
-		// Set payment source details for tokenized payments
+		// Set payment source details for different payment methods
 		// CRITICAL: These fields must be set for payment_source tracking to work
-		if req.PaymentMethod == payment.PaymentMethodTokenCard {
+		if req.PaymentType == payment.PaymentTypeTokenization && storedCardID != nil {
+			// For tokenization payments, link to the stored_card we just created
+			cardSourceType := payment.PaymentSourceCard
+			p.PaymentSourceID = storedCardID
+			p.PaymentSourceType = &cardSourceType
+			s.logger.InfoWith("TOKENIZATION: Payment linked to stored_card",
+				"payment_id", paymentID,
+				"stored_card_id", *storedCardID,
+				"source_type", "card")
+		} else if req.PaymentMethod == payment.PaymentMethodTokenCard {
 			if req.TokenCardDetails != nil && req.TokenCardDetails.CardID != "" {
 				cardSourceType := payment.PaymentSourceCard
 				p.PaymentSourceID = &req.TokenCardDetails.CardID
@@ -204,7 +267,48 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 			s.logger.ErrorWith("Failed to update gateway payment ID", "error", err)
 			return fmt.Errorf("failed to update gateway payment ID: %w", err)
 		}
+		if err := txPaymentRepo.UpdatePaymentGateway(txCtx, paymentID, resp.GatewayUsed); err != nil {
+			s.logger.ErrorWith("Failed to update gateway used", "error", err)
+			return fmt.Errorf("failed to update gateway used: %w", err)
+		}
 		s.logger.DebugWith("Payment updated with gateway details")
+
+		// Sub-step 3.6: Log payment initiation for audit trail
+		// Create transaction-aware state logger to ensure atomicity
+		paymentUUID, parseErr := uuid.Parse(paymentID)
+		if parseErr != nil {
+			s.logger.ErrorWith("Failed to parse payment ID for logging", "payment_id", paymentID, "error", parseErr)
+			// Non-fatal: continue without logging
+		} else {
+			userUUID, parseErr := uuid.Parse(req.UserID)
+			if parseErr != nil {
+				s.logger.ErrorWith("Failed to parse user ID for logging", "user_id", req.UserID, "error", parseErr)
+				// Non-fatal: continue without logging
+			} else {
+				// Create transaction-aware repository and logger
+				txStateChangeRepo := s.stateChangeRepo.WithTx(tx)
+				txStateLogger := paymentSvc.NewPaymentStateLogger(txStateChangeRepo)
+
+				if logErr := txStateLogger.LogPaymentInitiated(txCtx, paymentUUID, userUUID, req.Amount, string(resp.GatewayUsed)); logErr != nil {
+					s.logger.ErrorWith("Failed to log payment initiation (non-fatal)", "payment_id", paymentID, "error", logErr)
+					// Non-fatal: continue even if logging fails
+				} else {
+					s.logger.DebugWith("Payment initiation logged", "payment_id", paymentID, "user_id", req.UserID)
+				}
+			}
+		}
+
+		// Sub-step 3.5: For tokenization payments, store gateway metadata (contains card details for immature PGs)
+		if req.PaymentType == payment.PaymentTypeTokenization && resp.Metadata != nil {
+			// Merge gateway metadata into payment metadata
+			if p.Metadata == nil {
+				p.Metadata = make(map[string]any)
+			}
+			for k, v := range resp.Metadata {
+				p.Metadata[k] = v
+			}
+			s.logger.DebugWith("Stored gateway metadata for tokenization", "keys", len(resp.Metadata))
+		}
 
 		// Sub-step 4: Store pending voucher relationships (within same transaction)
 		// Vouchers will be finalized later in callback handler when payment succeeds
@@ -261,13 +365,15 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 	s.logger.DebugWith("Redirect URL generated", "redirect_url", response.RedirectURL)
 
 	// Update onboarding flag (non-blocking, first-time only, outside transaction)
-	if s.businessService != nil {
+	// Skip for tokenization payments (₹1 card verification) - only count actual voucher payments
+	if s.businessService != nil && req.PaymentType != payment.PaymentTypeTokenization {
 		flags, err := s.businessService.GetBusinessOnboardingFlags(ctx, req.BusinessID)
 		if err == nil && !flags.HasCreatedFirstPayment {
 			_ = s.businessService.UpdateOnboardingStatus(ctx, req.BusinessID, "has_created_first_payment", true)
 			s.logger.DebugWith("Onboarding flag updated",
 				"business_id", req.BusinessID,
-				"flag", "has_created_first_payment")
+				"flag", "has_created_first_payment",
+				"payment_type", req.PaymentType)
 		}
 	}
 
@@ -279,7 +385,7 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 // GetBusinessWallet retrieves wallet for a business
 func (s *PaymentService) GetBusinessWallet(ctx context.Context, businessID string) (*payment.BusinessWallet, error) {
 	s.logger.DebugWith("Fetching business wallet", "business_id", businessID)
-	return s.walletService.GetBusinessWallet(ctx, businessID)
+	return s.walletService.GetBusinessWallet(ctx, businessID, false)
 }
 
 // AddPaymentSource adds a payment source to business wallet
@@ -330,6 +436,25 @@ func (s *PaymentService) TokenizeCard(ctx context.Context, req payment.TokenizeR
 
 	// Step 3: Pass payment ID to orchestrator as transaction ID
 	req.TransactionID = paymentID
+
+	// Step 3.5: Fetch business owner mobile for JioPay tokenization (required for externalId)
+	// JioPay requires owner_mobile in metadata to construct externalId = entityId + ownerMobile
+	s.logger.DebugWith("Fetching business owner mobile for tokenization")
+	ownerMobile, mobileErr := s.businessService.GetOwnerMobile(ctx, req.BusinessID)
+	if mobileErr != nil {
+		s.logger.ErrorWith("Failed to get owner mobile", "error", mobileErr)
+		// Update payment status to failed
+		failureMetadata := map[string]any{"error": mobileErr.Error()}
+		_ = s.paymentRepo.UpdatePaymentStatus(ctx, paymentID, payment.PaymentStatusFailed, failureMetadata)
+		return nil, fmt.Errorf("failed to get owner mobile: %w", mobileErr)
+	}
+	s.logger.DebugWith("Owner mobile fetched", "mobile_length", len(ownerMobile))
+
+	// Add owner_mobile to request metadata for gateway to use
+	if req.Metadata == nil {
+		req.Metadata = make(map[string]any)
+	}
+	req.Metadata["owner_mobile"] = ownerMobile
 
 	// Step 4: Call orchestrator for tokenization
 	s.logger.DebugWith("Calling payment orchestrator for tokenization")
@@ -398,28 +523,15 @@ func getCardCategoryFromRequest(req *payment.PaymentRequest) payment.CardCategor
 	return ""
 }
 
-// generateCallbackURL generates the appropriate callback URL based on calling device
-// Returns user-facing HTML page URLs for web/POS and deep links for mobile
+// generateCallbackURL generates the callback URL for payment gateway
+// Returns base callback endpoint - gateway client will append ?type={gateway}
+// Payment ID comes from gateway's POST body (merchantTxnNo field)
 func (s *PaymentService) generateCallbackURL(device payment.CallingDevice, paymentID string) string {
 	serverURL := s.config.Server.URL
 
-	switch device {
-	case payment.CallingDeviceWeb:
-		// Web callback - HTML page showing payment status
-		return fmt.Sprintf("%s/v1/process_payment/callback_page?transaction_id=%s&source=web", serverURL, paymentID)
-
-	case payment.CallingDeviceMobile:
-		// Mobile callback - deep link to mobile app (handled separately by app)
-		return fmt.Sprintf("%s/v1/process_payment/callback?payment_id=%s&source=mobile", serverURL, paymentID)
-
-	case payment.CallingDevicePOS:
-		// POS callback - HTML page showing payment status
-		return fmt.Sprintf("%s/v1/process_payment/callback_page?transaction_id=%s&source=pos", serverURL, paymentID)
-
-	default:
-		// Default to web callback with HTML page
-		return fmt.Sprintf("%s/v1/process_payment/callback_page?transaction_id=%s&source=web", serverURL, paymentID)
-	}
+	// Simple callback URL - gateway client appends ?type=jiopay (or easebuzz)
+	// Payment details (including merchantTxnNo) come in the POST body from gateway
+	return fmt.Sprintf("%s/v1/process_payment/callback", serverURL)
 }
 
 // GetPaymentList retrieves paginated payment list for a business
@@ -714,4 +826,62 @@ func (s *PaymentService) validateVouchersAreInDraft(ctx context.Context, voucher
 
 	s.logger.DebugWith("All vouchers validated for retry", "count", len(voucherIDs))
 	return nil
+}
+
+// ============================================================================
+// Ops Dashboard Methods for Collections
+// ============================================================================
+
+// OpsListCollections retrieves paginated list of collections for ops dashboard
+func (s *PaymentService) OpsListCollections(ctx context.Context, page int, limit int, status string) (*payment.OpsListCollectionsResponse, error) {
+	s.logger.InfoWith("Ops: Fetching collections list",
+		"page", page,
+		"limit", limit,
+		"status", status)
+
+	// Set defaults
+	if page <= 0 {
+		page = 1
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 100 {
+		limit = 100
+	}
+
+	// Type assert to access the ops method
+	type opsCollectionLister interface {
+		ListCollectionsPaginated(ctx context.Context, page int, limit int, status string) ([]*payment.OpsCollectionListItem, int, error)
+	}
+
+	repo, ok := s.paymentRepo.(opsCollectionLister)
+	if !ok {
+		s.logger.ErrorWith("Payment repository doesn't implement ListCollectionsPaginated")
+		return nil, fmt.Errorf("collection listing not supported")
+	}
+
+	// Fetch from repository
+	collections, totalCount, err := repo.ListCollectionsPaginated(ctx, page, limit, status)
+	if err != nil {
+		s.logger.ErrorWith("Failed to list collections", "error", err)
+		return nil, fmt.Errorf("failed to list collections: %w", err)
+	}
+
+	// Calculate total pages
+	totalPages := (totalCount + limit - 1) / limit
+
+	s.logger.InfoWith("Ops: Collections list fetched successfully",
+		"count", len(collections),
+		"total_count", totalCount)
+
+	return &payment.OpsListCollectionsResponse{
+		Data: collections,
+		Pagination: payment.PaginationResponse{
+			CurrentPage: page,
+			PageSize:    limit,
+			TotalItems:  totalCount,
+			TotalPages:  totalPages,
+		},
+	}, nil
 }
