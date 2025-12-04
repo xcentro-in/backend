@@ -14,6 +14,7 @@ import (
 
 	"xcentro.in/internal/core/payout"
 	"xcentro.in/internal/shared/crypto"
+	"xcentro.in/internal/shared/logger"
 )
 
 // CastlerClient implements the PayoutProvider interface for Castler
@@ -25,6 +26,7 @@ type CastlerClient struct {
 	httpClient    *http.Client
 	encryptionKey string // AES-256 encryption key (required)
 	fixedIV       []byte // Fixed IV for AES encryption (required)
+	logger        *logger.Logger
 }
 
 // NewCastlerClient creates a new Castler payout client
@@ -36,7 +38,8 @@ type CastlerClient struct {
 //   - escrowID: Escrow account ID for payout transfers
 //   - encryptionKey: AES-256 encryption key (32 bytes, required)
 //   - encryptionIVBase64: Fixed IV in base64 format (16 bytes, required, e.g., "TkMwVjAkMFQwTDAzMFJNRQ==")
-func NewCastlerClient(baseURL, apiKey, secretKey, escrowID, encryptionKey, encryptionIVBase64 string) (*CastlerClient, error) {
+//   - log: Logger instance for structured logging
+func NewCastlerClient(baseURL, apiKey, secretKey, escrowID, encryptionKey, encryptionIVBase64 string, log *logger.Logger) (*CastlerClient, error) {
 	// Validate required parameters
 	if encryptionKey == "" {
 		return nil, fmt.Errorf("encryption key is required for Castler API")
@@ -64,6 +67,7 @@ func NewCastlerClient(baseURL, apiKey, secretKey, escrowID, encryptionKey, encry
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
+		logger: log,
 	}, nil
 }
 
@@ -164,14 +168,14 @@ func (c *CastlerClient) CreateTransferRequest(ctx context.Context, req *payout.C
 		Purpose:       req.Purpose,                         // Purpose of payment
 	}
 
-	// Debug: Show request body before encryption
-	fmt.Printf("📤 Castler Transfer Request Body (before encryption):\n")
-	fmt.Printf("   EscrowID: %s\n", castlerReq.EscrowID)
-	fmt.Printf("   PayeeID: %s\n", castlerReq.PayeeID)
-	fmt.Printf("   Mode: %s\n", castlerReq.Mode)
-	fmt.Printf("   Amount: %.2f\n", castlerReq.Amount)
-	fmt.Printf("   CustomerRefID: %s (invoice_number)\n", castlerReq.CustomerRefID)
-	fmt.Printf("   Purpose: %s\n", castlerReq.Purpose)
+	// Log Castler API request details
+	c.logger.InfoWith("Castler API: Creating transfer request",
+		"escrow_id", castlerReq.EscrowID,
+		"payee_id", castlerReq.PayeeID,
+		"mode", castlerReq.Mode,
+		"amount_inr", castlerReq.Amount,
+		"customer_ref_id", castlerReq.CustomerRefID,
+		"purpose", castlerReq.Purpose)
 
 	// Call Castler payout API
 	var castlerResp CastlerTransferResponse
@@ -347,8 +351,8 @@ func (c *CastlerClient) post(ctx context.Context, endpoint string, reqBody inter
 			return fmt.Errorf("failed to marshal request: %w", err)
 		}
 
-		// Debug: Show JSON before encryption
-		fmt.Printf("📋 JSON Request Body (before encryption):\n%s\n", string(jsonData))
+		// Log request JSON before encryption
+		c.logger.InfoWith("Castler API: Request body (before encryption)", "json", string(jsonData))
 
 		// Encrypt request
 		encryptedData, err := crypto.EncryptForCastler(string(jsonData), c.encryptionKey, c.fixedIV)
@@ -378,19 +382,22 @@ func (c *CastlerClient) post(ctx context.Context, endpoint string, reqBody inter
 		return fmt.Errorf("failed to read response: %w", err)
 	}
 
-	// Log raw response for debugging (first 200 chars)
+	// Log raw response for debugging
 	rawResponse := string(bodyBytes)
 	if len(rawResponse) > 200 {
-		fmt.Printf("🔍 Castler raw response (truncated): %s...\n", rawResponse[:200])
+		c.logger.InfoWith("Castler API: Raw response (encrypted)",
+			"response_truncated", rawResponse[:200],
+			"http_status", resp.StatusCode)
 	} else {
-		fmt.Printf("🔍 Castler raw response: %s\n", rawResponse)
+		c.logger.InfoWith("Castler API: Raw response (encrypted)",
+			"response", rawResponse,
+			"http_status", resp.StatusCode)
 	}
-	fmt.Printf("📊 HTTP Status: %d\n", resp.StatusCode)
 
 	// Decrypt response (error responses are also encrypted)
 	decryptedData, err := crypto.DecryptFromCastler(string(bodyBytes), c.encryptionKey, c.fixedIV)
 	if err != nil {
-		fmt.Printf("❌ Decryption failed for response body: %s\n", rawResponse)
+		c.logger.ErrorWith("Castler API: Decryption failed", "error", err, "response_body", rawResponse)
 		return fmt.Errorf("failed to decrypt response: %w", err)
 	}
 
@@ -430,19 +437,22 @@ func (c *CastlerClient) get(ctx context.Context, endpoint string, respBody inter
 		return fmt.Errorf("failed to read response: %w", err)
 	}
 
-	// Log raw response for debugging (first 200 chars)
+	// Log raw response for debugging
 	rawResponse := string(bodyBytes)
 	if len(rawResponse) > 200 {
-		fmt.Printf("🔍 Castler raw response (truncated): %s...\n", rawResponse[:200])
+		c.logger.InfoWith("Castler API: Raw response (encrypted)",
+			"response_truncated", rawResponse[:200],
+			"http_status", resp.StatusCode)
 	} else {
-		fmt.Printf("🔍 Castler raw response: %s\n", rawResponse)
+		c.logger.InfoWith("Castler API: Raw response (encrypted)",
+			"response", rawResponse,
+			"http_status", resp.StatusCode)
 	}
-	fmt.Printf("📊 HTTP Status: %d\n", resp.StatusCode)
 
 	// Decrypt response (error responses are also encrypted)
 	decryptedData, err := crypto.DecryptFromCastler(string(bodyBytes), c.encryptionKey, c.fixedIV)
 	if err != nil {
-		fmt.Printf("❌ Decryption failed for response body: %s\n", rawResponse)
+		c.logger.ErrorWith("Castler API: Decryption failed", "error", err, "response_body", rawResponse)
 		return fmt.Errorf("failed to decrypt response: %w", err)
 	}
 
