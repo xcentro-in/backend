@@ -2,7 +2,6 @@ package payee
 
 import (
 	"time"
-
 	"xcentro.in/internal/core/payment"
 )
 
@@ -19,7 +18,7 @@ type OnboardPayeeRequest struct {
 
 	// Customer-specific metadata (common to all types)
 	DisplayName  string `json:"display_name"`            // How customer refers to this payee
-	ContactEmail string `json:"contact_email,omitempty"` // Customer's contact point
+	ContactEmail string `json:"contact_email,omitempty" validate:"required,phone_in"` // Customer's contact point
 	ContactPhone string `json:"contact_phone,omitempty"` // Customer's contact point
 	Notes        string `json:"notes,omitempty"`         // Private notes
 
@@ -32,11 +31,11 @@ type OnboardPayeeRequest struct {
 
 // OnboardVendorData contains vendor-specific onboarding data (GSTIN + bank account)
 type OnboardVendorData struct {
-	GSTIN string `json:"gstin"` // 15-character GST identification number
+	GSTIN string `json:"gstin" validate:"required,gstin"` // 15-character GST identification number
 
 	// Bank account details
 	AccountNumber     string                  `json:"account_number"`
-	IFSCCode          string                  `json:"ifsc_code"`
+	IFSCCode          string                  `json:"ifsc_code" validate:"required,ifsc"`
 	AccountHolderName string                  `json:"account_holder_name"`
 	BankName          string                  `json:"bank_name"`        // Required - fetched from IFSC check at frontend
 	BranchName        string                  `json:"branch_name"`      // Required - fetched from IFSC check at frontend
@@ -78,7 +77,7 @@ type OnboardEmployeeData struct {
 
 	// Bank account details
 	AccountNumber     string                  `json:"account_number"`
-	IFSCCode          string                  `json:"ifsc_code"`
+	IFSCCode          string                  `json:"ifsc_code" validate:"required,ifsc"`
 	AccountHolderName string                  `json:"account_holder_name"`
 	BankName          string                  `json:"bank_name"`        // Required - fetched from IFSC check at frontend
 	BranchName        string                  `json:"branch_name"`      // Required - fetched from IFSC check at frontend

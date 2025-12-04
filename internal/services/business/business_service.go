@@ -181,11 +181,6 @@ func (s *BusinessServiceImpl) InitiateOnboarding(ctx context.Context, uid string
 		return nil, types.NewInvalidInputError("name or gstin", "both name and GSTIN are required")
 	}
 
-	// Step 2: Validate GSTIN format (must be exactly 15 characters)
-	if len(gstin) != 15 {
-		return nil, types.NewInvalidInputError("gstin", "GSTIN must be exactly 15 characters")
-	}
-
 	// Step 3: Extract PAN from GSTIN (characters 3-12, positions 2-11 in 0-indexed)
 	pan := gstin[2:12]
 	s.logger.Infof("Extracted PAN %s from GSTIN %s", pan, gstin)
