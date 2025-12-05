@@ -2,7 +2,18 @@
 
 ## Overview
 
-This guide documents the metrics implemented in the XCentro backend for monitoring payment processing, gateway health, and system performance. All metrics are sent to AWS CloudWatch (configurable for other providers like Prometheus).
+This guide documents the **cost-optimized** metrics implementation for XCentro backend. We use a hybrid approach:
+
+- **CloudWatch**: Essential performance metrics (API latency, gateway response times, infrastructure errors)
+- **PostgreSQL**: Business metrics (payment counts, success rates, amounts, trends)
+
+**Why this approach?**
+- ✅ **70% cost reduction**: From ~$15/month to ~$5/month per environment
+- ✅ **Better analytics**: PostgreSQL provides more powerful queries for business metrics
+- ✅ **Real-time monitoring**: CloudWatch tracks what PostgreSQL cannot (API latency, external gateway performance)
+- ✅ **Zero compromise**: All essential observability retained
+
+**See also**: `/docs/POSTGRES_METRICS_QUERIES.md` for comprehensive PostgreSQL alternatives
 
 ## Metrics Infrastructure
 
@@ -113,83 +124,83 @@ Use AWS SDK to fetch metrics programmatically in your code.
 
 **Location**: `/internal/services/payments/payment_service.go`
 
-#### Payment Processing
+#### Payment Processing (Performance Metrics Only)
+
+**⚠️ Cost-Optimized Approach**: Business metrics (payment counts, amounts, success rates) should be queried from PostgreSQL instead of CloudWatch. See `/docs/POSTGRES_METRICS_QUERIES.md` for SQL examples.
 
 | Metric Name | Type | Labels | Description |
 |------------|------|--------|-------------|
-| `payment.initiated` | Counter | payment_method, card_type, card_category, business_id | Payment attempts |
-| `payment.success` | Counter | payment_method, gateway, card_type, card_category, business_id | Successful payments |
-| `payment.failed` | Counter | payment_method, card_type, card_category, business_id, reason | Failed payments |
-| `payment.amount.value` | Counter (value) | payment_method, currency | Payment amounts (in paise) |
-| `payment.duration` | Timer | payment_method, gateway, status | Payment processing time |
-
-#### Card Tokenization
-
-| Metric Name | Type | Labels | Description |
-|------------|------|--------|-------------|
-| `payment.tokenization.initiated` | Counter | card_type, card_category, business_id | Tokenization attempts |
-| `payment.tokenization.success` | Counter | card_type, card_category, gateway, business_id | Successful tokenizations |
-| `payment.tokenization.failed` | Counter | card_type, card_category, business_id | Failed tokenizations |
+| `payment.duration` | Timer | payment_method, gateway, status | Payment processing time (API-level latency) |
 | `payment.tokenization.duration` | Timer | gateway, status | Tokenization processing time |
+
+**Why only duration metrics?**
+- **Performance monitoring**: Measures actual API processing time within the application
+- **SLA compliance**: Track if payments complete within acceptable time limits
+- **Cannot be measured from PostgreSQL**: Database timestamps show when records were created/updated, not actual processing time
+- **Essential for alerting**: Detect performance degradation in real-time
+
+**Business metrics moved to PostgreSQL** (payment counts, success rates, amounts):
+- **Reason**: Data already stored in database, querying PostgreSQL is free
+- **Cost savings**: ~$2.40/month per business (~$240/month for 100 businesses)
+- **Better analytics**: More powerful queries, joins, historical analysis
+- **See**: `/docs/POSTGRES_METRICS_QUERIES.md` for comprehensive SQL examples
 
 **How to Query in CloudWatch Console**:
 
-1. **Payment Success Rate**:
-   - Metric m1: `payment.success` (Statistic: Sum)
-   - Metric m2: `payment.initiated` (Statistic: Sum)
-   - Math expression: `(m1/m2)*100`
-   - Label: "Success Rate (%)"
-
-2. **Average Payment Amount** (in rupees):
-   - Metric: `payment.amount.value` (Statistic: Average)
-   - Dimensions: payment_method=card
-   - Math expression: `m1/100` (convert paise to rupees)
-   - Label: "Avg Amount (₹)"
-
-3. **P95 Payment Processing Time**:
+1. **P95 Payment Processing Time**:
    - Metric: `payment.duration`
-   - Dimensions: status=success
+   - Dimensions: status=success, payment_method=card
    - Statistic: p95
    - Period: 5 minutes
+   - **Alert Threshold**: p95 > 5000ms (5 seconds)
 
-4. **Failures by Reason**:
-   - Metric: `payment.failed` (Statistic: Sum)
-   - Group by: reason dimension
-   - View as: Pie chart or Stacked bar
+2. **P99 Tokenization Time**:
+   - Metric: `payment.tokenization.duration`
+   - Dimensions: gateway=jiopay, status=success
+   - Statistic: p99
+   - Period: 5 minutes
+   - **Alert Threshold**: p99 > 10000ms (10 seconds)
+
+3. **Average Processing Time by Gateway**:
+   - Metric: `payment.duration`
+   - Group by: gateway dimension
+   - Statistic: Average
+   - Compare: JioPay vs Easebuzz performance
 
 ---
 
-### 3. Gateway Health Metrics
+### 3. Gateway Health Metrics (Essential Only)
 
 **Locations**:
 - `/internal/adapters/external/payment/jiopay/client.go`
 - `/internal/adapters/external/payment/easebuzz/client.go`
 
+**⚠️ Cost-Optimized**: Removed `gateway.request` counter (can query from payment_table in PostgreSQL). Keeping only metrics that measure real-time performance.
+
 | Metric Name | Type | Labels | Description |
 |------------|------|--------|-------------|
-| `gateway.request` | Counter | gateway, operation | Gateway API calls |
-| `gateway.response_time` | Timer | gateway, operation, status_code | Gateway response time |
-| `gateway.error` | Counter | gateway, operation, error_type, [status_code] | Gateway errors |
+| `gateway.response_time` | Timer | gateway, operation, status_code | Gateway API response time |
+| `gateway.error` | Counter | gateway, operation, error_type, [status_code] | Gateway errors (network/timeout only) |
 
 **Operations**:
 - `tokenize` - Card tokenization
 - `cryptogram` - Cryptogram generation (JioPay)
 - `payment` - Payment initiation
 
-**Error Types**:
-- `network_error` - Network/timeout errors
+**Error Types** (Infrastructure errors only):
+- `network_error` - Network/timeout errors (cannot reach gateway)
 - `read_error` - Response reading errors
-- `http_error` - HTTP 4xx/5xx errors
+- `http_error` - HTTP 4xx/5xx errors from gateway
+
+**Why these metrics are essential:**
+- **gateway.response_time**: Measures external API latency, cannot be measured from PostgreSQL
+- **gateway.error**: Real-time alerting on infrastructure failures (different from business logic failures)
+- **SLA monitoring**: Track if gateways meet their response time SLAs
+- **Vendor comparison**: Compare JioPay vs Easebuzz performance objectively
 
 **How to Query in CloudWatch Console**:
 
-1. **Gateway Success Rate**:
-   - Metric m1: `gateway.request` (Statistic: Sum, Dimension: gateway=jiopay)
-   - Metric m2: `gateway.error` (Statistic: Sum, Dimension: gateway=jiopay)
-   - Math expression: `((m1-m2)/m1)*100`
-   - Label: "Success Rate (%)"
-
-2. **Gateway P95 Response Time**:
+1. **Gateway P95 Response Time** (SLA Monitoring):
    - Metric: `gateway.response_time`
    - Dimensions: gateway=jiopay, operation=tokenize
    - Statistic: p95
@@ -450,22 +461,43 @@ Action: Notify engineering team
 **Metrics**: $0.30 per metric/month
 **API Calls**: $0.01 per 1,000 PutMetricData requests
 
-### Current Implementation Cost
+### Optimized Implementation Cost
 
-**Estimated Metrics**: ~50 unique metric/label combinations
-**Batching**: 20 metrics/batch, flush every 30s
-**API Calls**: ~100 requests/day = 3,000/month
+**Before Optimization**: ~50 unique metric/label combinations = **$15/month**
+**After Optimization**: ~15-20 unique metric/label combinations = **$5/month**
 
-**Monthly Cost**:
-- Metrics: 50 × $0.30 = **$15.00**
-- API calls: 3,000 × $0.01 / 1,000 = **$0.03**
-- **Total**: ~**$15-20/month**
+**Cost Breakdown**:
+```
+Essential CloudWatch Metrics (Kept):
+- http.request.duration          ~3 metrics (GET/POST/PUT × multiple paths)
+- http.errors.5xx                ~2 metrics
+- payment.duration               ~4 metrics (card/netbanking/UPI × success/failed)
+- payment.tokenization.duration  ~2 metrics (success/failed)
+- gateway.response_time          ~4 metrics (jiopay/easebuzz × tokenize/payment)
+- gateway.error                  ~3 metrics (network/http/read errors)
+- webhook.* metrics              ~3 metrics (received, failed, duplicate)
+----------------------------------------
+Total: ~15-20 metrics × $0.30 = $4.50-6.00/month
+API calls: ~100 requests/day = $0.03/month
+----------------------------------------
+TOTAL: ~$5/month per environment
+```
 
-**Cost Optimization**:
-1. ✅ Batching enabled (reduces API calls by ~95%)
-2. ✅ 30s flush interval (balances freshness vs cost)
-3. ⚠️ Limit high-cardinality labels (avoid business_id in some metrics)
-4. ⚠️ Use metric filters for derived metrics instead of raw events
+**Business Metrics (Moved to PostgreSQL - $0 cost)**:
+- ❌ payment.initiated, payment.success, payment.failed
+- ❌ payment.amount.value
+- ❌ payment.tokenization.initiated, payment.tokenization.success, payment.tokenization.failed
+- ❌ gateway.request
+
+**Savings**: $10/month per environment (~70% reduction)
+
+**What Changed:**
+1. ✅ **Removed business counters**: Payment counts, amounts, success rates now queried from PostgreSQL
+2. ✅ **Kept performance timers**: API latency, gateway response times (cannot measure from DB)
+3. ✅ **Kept infrastructure errors**: Real-time alerting on network/timeout failures
+4. ✅ **Zero compromise**: All essential observability retained
+
+**See**: `/docs/POSTGRES_METRICS_QUERIES.md` for PostgreSQL alternatives to removed metrics
 
 ---
 
@@ -473,12 +505,13 @@ Action: Notify engineering team
 
 ### DO ✅
 
-1. **Use descriptive metric names**: `payment.success` not `p.s`
+1. **Use descriptive metric names**: `payment.duration` not `p.d`
 2. **Use consistent naming**: `payment.duration`, `gateway.response_time` (not `payment_duration`, `gatewayResponseTime`)
-3. **Use dot notation**: `payment.tokenization.success`
+3. **Use dot notation**: `payment.tokenization.duration`
 4. **Send values, not pre-aggregated data**: Let CloudWatch calculate percentiles
 5. **Use low-cardinality labels**: `gateway`, `payment_method`, `status`
-6. **Track both counts and durations**: Success count + duration give full picture
+6. **Prefer PostgreSQL for business metrics**: Payment counts, amounts, success rates → SQL queries (free)
+7. **Use CloudWatch for performance metrics**: API latency, external service response times (cannot measure from DB)
 
 ### DON'T ❌
 
@@ -487,6 +520,8 @@ Action: Notify engineering team
 3. **❌ Pre-aggregate**: Don't calculate averages yourself, send raw values
 4. **❌ Use histogram buckets**: CloudWatch doesn't support Prometheus-style histograms
 5. **❌ Ignore errors**: Always track error metrics, even for "shouldn't happen" cases
+6. **❌ Duplicate PostgreSQL data**: Don't track business metrics in CloudWatch that can be queried from database
+7. **❌ Track counts of database operations**: Payment counts, user signups, etc. → Use SQL queries instead
 
 ### Label Guidelines
 

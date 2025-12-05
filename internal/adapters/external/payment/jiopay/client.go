@@ -189,12 +189,6 @@ func (c *JioPayClient) TokenizeCard(ctx context.Context, request payment.Gateway
 	req.Header.Set("x-app-token", xAppToken)
 
 
-	// Track gateway request
-	_ = c.metrics.Counter(ctx, "gateway.request", 1, metrics.MetricLabels{
-		"gateway":   "jiopay",
-		"operation": "tokenize",
-	})
-
 	startTime := time.Now()
 	resp, err := c.httpClient.Do(req)
 	duration := time.Since(startTime)
@@ -358,12 +352,6 @@ func (c *JioPayClient) GenerateCryptogram(ctx context.Context, request payment.C
 	req.Header.Set("x-trace-id", xTraceID)
 	req.Header.Set("x-app-token", xAppToken)
 
-
-	// Track gateway request
-	_ = c.metrics.Counter(ctx, "gateway.request", 1, metrics.MetricLabels{
-		"gateway":   "jiopay",
-		"operation": "cryptogram",
-	})
 
 	startTime := time.Now()
 	resp, err := c.httpClient.Do(req)

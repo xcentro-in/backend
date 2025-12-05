@@ -227,12 +227,6 @@ func (c *EasebuzzClient) TokenizeCard(ctx context.Context, request payment.Gatew
 
 	fmt.Println("🚀 Calling Easebuzz TMS API...")
 
-	// Track gateway request
-	_ = c.metrics.Counter(ctx, "gateway.request", 1, metrics.MetricLabels{
-		"gateway":   "easebuzz",
-		"operation": "tokenize",
-	})
-
 	startTime := time.Now()
 	resp, err := c.httpClient.Do(req)
 	duration := time.Since(startTime)
