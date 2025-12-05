@@ -130,14 +130,45 @@ Use AWS SDK to fetch metrics programmatically in your code.
 
 | Metric Name | Type | Labels | Description |
 |------------|------|--------|-------------|
-| `payment.duration` | Timer | payment_method, gateway, status | Payment processing time (API-level latency) |
-| `payment.tokenization.duration` | Timer | gateway, status | Tokenization processing time |
+| `payment.duration` | Timer | payment_method, gateway, status | **API orchestration latency** (initiation to redirect URL) |
+| `payment.tokenization.duration` | Timer | gateway, status | **Tokenization API latency** |
+
+**⚠️ IMPORTANT: What `payment.duration` Measures**
+
+This metric measures **ONLY the API orchestration layer** (~2-5 seconds):
+```
+START: ProcessPayment() called
+  ↓
+  Calculate fees
+  Create payment record
+  Call gateway API
+  Receive redirect URL
+  ↓
+END: Return redirect URL to frontend
+```
+
+**This does NOT include:**
+- ❌ User redirecting to payment page
+- ❌ User completing 3DS challenge
+- ❌ Bank processing payment
+- ❌ Gateway sending callback
+- ❌ Callback handler receiving result
+
+**For end-to-end payment duration (full lifecycle)**, use PostgreSQL query:
+```sql
+-- Full payment lifecycle: initiation to callback
+SELECT AVG(EXTRACT(EPOCH FROM (updated_at - created_at))) as avg_duration_seconds
+FROM payment_table
+WHERE status IN ('success', 'failed');
+```
+
+See Query #10 in `/docs/POSTGRES_METRICS_QUERIES.md` for complete end-to-end duration tracking.
 
 **Why only duration metrics?**
-- **Performance monitoring**: Measures actual API processing time within the application
-- **SLA compliance**: Track if payments complete within acceptable time limits
-- **Cannot be measured from PostgreSQL**: Database timestamps show when records were created/updated, not actual processing time
-- **Essential for alerting**: Detect performance degradation in real-time
+- **API performance monitoring**: Detect if our backend is slowing down
+- **Gateway API latency**: Measure external API response times
+- **Cannot be measured from PostgreSQL**: Database timestamps don't capture in-memory processing time
+- **Essential for alerting**: Detect infrastructure/code performance issues
 
 **Business metrics moved to PostgreSQL** (payment counts, success rates, amounts):
 - **Reason**: Data already stored in database, querying PostgreSQL is free

@@ -224,26 +224,176 @@ GROUP BY status
 ORDER BY voucher_count DESC;
 ```
 
-### 10. Average Payment Processing Time
+### 10. End-to-End Payment Duration (Full Lifecycle)
 
-Calculate how long payments take from initiation to completion:
+**IMPORTANT**: This measures the **actual payment lifecycle** from user's perspective:
+- **Start**: Payment initiated (`created_at`)
+- **End**: Callback received from gateway (`updated_at`)
+
+This includes: API call → Redirect → 3DS challenge → Bank processing → Gateway callback
 
 ```sql
 SELECT
     payment_method,
     status,
     COUNT(*) as payment_count,
-    ROUND(AVG(EXTRACT(EPOCH FROM (updated_at - created_at))), 2) as avg_processing_seconds,
-    ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (updated_at - created_at))), 2) as median_processing_seconds,
-    ROUND(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (updated_at - created_at))), 2) as p95_processing_seconds
+
+    -- Average time from initiation to callback
+    ROUND(AVG(EXTRACT(EPOCH FROM (updated_at - created_at))), 2) as avg_duration_seconds,
+
+    -- Median (p50) - more representative than average
+    ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (updated_at - created_at))), 2) as median_duration_seconds,
+
+    -- p95 - 95% of payments complete within this time
+    ROUND(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (updated_at - created_at))), 2) as p95_duration_seconds,
+
+    -- p99 - slowest 1% (potential issues)
+    ROUND(PERCENTILE_CONT(0.99) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (updated_at - created_at))), 2) as p99_duration_seconds,
+
+    -- Min/Max for outlier detection
+    ROUND(MIN(EXTRACT(EPOCH FROM (updated_at - created_at))), 2) as min_duration_seconds,
+    ROUND(MAX(EXTRACT(EPOCH FROM (updated_at - created_at))), 2) as max_duration_seconds
+
 FROM payment_table
 WHERE created_at >= NOW() - INTERVAL '7 days'
     AND updated_at IS NOT NULL
+    AND status IN ('success', 'failed')  -- Only completed payments
 GROUP BY payment_method, status
 ORDER BY payment_method, status;
 ```
 
-**Note**: This is **different** from CloudWatch's `payment.duration` metric. This measures database timestamp differences (when records were created/updated), while CloudWatch measures actual API processing time within the application.
+**Example Output**:
+```
+payment_method | status  | avg_duration | median | p95    | p99    | min  | max
+--------------+---------+-------------+--------+--------+--------+------+------
+card           | success |       45.30 |  42.10 |  89.50 | 125.00 | 15.2 | 180.0
+card           | failed  |       38.20 |  35.50 |  78.30 | 110.00 | 12.5 | 150.0
+netbanking     | success |       62.40 |  58.30 | 120.00 | 180.00 | 20.0 | 300.0
+```
+
+**Use Cases**:
+- **User experience monitoring**: How long do users wait?
+- **Gateway SLA tracking**: Which gateway is faster?
+- **Business hours analysis**: Do payments take longer during peak hours?
+- **Anomaly detection**: Payments taking > 5 minutes might indicate issues
+
+**⚠️ This is DIFFERENT from CloudWatch `payment.duration`**:
+- **CloudWatch `payment.duration`**: Measures only API request-response time (~2-5 seconds)
+  - Start: `ProcessPayment()` called
+  - End: Redirect URL returned
+  - Does NOT include user interaction, 3DS, bank processing, callback
+
+- **PostgreSQL end-to-end duration**: Measures actual payment lifecycle (~30s-5min)
+  - Start: Payment initiated
+  - End: Gateway callback received
+  - Includes entire user journey
+
+### 11. Gateway Performance Comparison (End-to-End)
+
+Compare actual gateway performance including all user interactions:
+
+```sql
+SELECT
+    metadata->>'gateway_used' as gateway,
+    payment_method,
+    COUNT(*) as total_payments,
+
+    -- Success rate
+    SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) as successful_payments,
+    ROUND(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) as success_rate_percent,
+
+    -- Duration statistics (only for completed payments)
+    ROUND(AVG(EXTRACT(EPOCH FROM (updated_at - created_at))), 2) as avg_duration_seconds,
+    ROUND(PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (updated_at - created_at))), 2) as median_duration_seconds,
+    ROUND(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (updated_at - created_at))), 2) as p95_duration_seconds
+
+FROM payment_table
+WHERE created_at >= NOW() - INTERVAL '7 days'
+    AND updated_at IS NOT NULL
+    AND metadata ? 'gateway_used'
+    AND status IN ('success', 'failed')
+GROUP BY metadata->>'gateway_used', payment_method
+ORDER BY total_payments DESC;
+```
+
+**Example Output**:
+```
+gateway  | payment_method | total | successful | success_rate | avg_duration | median | p95
+---------+---------------+-------+-----------+-------------+-------------+--------+------
+jiopay   | card          |  1200 |       960 |       80.00 |       42.30 |  38.50 | 85.0
+easebuzz | card          |   800 |       640 |       80.00 |       48.20 |  45.10 | 95.0
+jiopay   | netbanking    |   500 |       425 |       85.00 |       58.40 |  55.20 | 110.0
+```
+
+**Insights**:
+- JioPay is faster for card payments (42s avg vs 48s for Easebuzz)
+- But both have similar success rates (~80%)
+- Netbanking takes longer regardless of gateway (bank-side processing)
+
+### 12. Payment Duration Over Time (Hourly Trend)
+
+Identify peak hours where payments take longer:
+
+```sql
+SELECT
+    DATE_TRUNC('hour', created_at) as hour,
+    payment_method,
+    COUNT(*) as payment_count,
+
+    -- Duration statistics
+    ROUND(AVG(EXTRACT(EPOCH FROM (updated_at - created_at))), 2) as avg_duration_seconds,
+    ROUND(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (updated_at - created_at))), 2) as p95_duration_seconds,
+
+    -- Success rate during that hour
+    ROUND(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) * 100.0 / COUNT(*), 2) as success_rate_percent
+
+FROM payment_table
+WHERE created_at >= NOW() - INTERVAL '24 hours'
+    AND updated_at IS NOT NULL
+    AND status IN ('success', 'failed')
+GROUP BY DATE_TRUNC('hour', created_at), payment_method
+ORDER BY hour DESC, payment_method;
+```
+
+**Use Case**: Detect if payment processing slows down during peak hours (gateway overload, bank issues)
+
+### 13. Slow Payment Detection (Potential Issues)
+
+Find payments that took unusually long (potential failures, user abandonment):
+
+```sql
+SELECT
+    id as payment_id,
+    business_id,
+    payment_method,
+    metadata->>'gateway_used' as gateway,
+    status,
+    amount,
+    created_at,
+    updated_at,
+    ROUND(EXTRACT(EPOCH FROM (updated_at - created_at)), 2) as duration_seconds,
+
+    -- Categorize slowness
+    CASE
+        WHEN EXTRACT(EPOCH FROM (updated_at - created_at)) > 300 THEN 'Very Slow (>5min)'
+        WHEN EXTRACT(EPOCH FROM (updated_at - created_at)) > 120 THEN 'Slow (>2min)'
+        WHEN EXTRACT(EPOCH FROM (updated_at - created_at)) > 60 THEN 'Moderate (>1min)'
+        ELSE 'Normal'
+    END as speed_category
+
+FROM payment_table
+WHERE created_at >= NOW() - INTERVAL '24 hours'
+    AND updated_at IS NOT NULL
+    AND status IN ('success', 'failed')
+    AND EXTRACT(EPOCH FROM (updated_at - created_at)) > 120  -- Show only >2 minutes
+ORDER BY duration_seconds DESC
+LIMIT 50;
+```
+
+**Action Items**:
+- Payments >5min: Investigate gateway issues, contact support
+- Payments >2min: Check if specific card types/banks are slow
+- Pattern detection: If many slow payments at same time → gateway downtime
 
 ---
 
