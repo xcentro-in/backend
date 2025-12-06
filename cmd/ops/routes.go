@@ -4,6 +4,7 @@ import (
 	"github.com/labstack/echo/v4"
 	"xcentro.in/internal/adapters/database/postgres/business"
 	notificationRepo "xcentro.in/internal/adapters/database/postgres/notification"
+	opsAuthRepo "xcentro.in/internal/adapters/database/postgres/opsauth"
 	payeeRepo "xcentro.in/internal/adapters/database/postgres/payee"
 	paymentRepo "xcentro.in/internal/adapters/database/postgres/payment"
 	payoutRepo "xcentro.in/internal/adapters/database/postgres/payout"
@@ -12,14 +13,16 @@ import (
 	"xcentro.in/internal/adapters/external/payout/factory"
 	businessHandler "xcentro.in/internal/handlers/http/business"
 	notificationHandler "xcentro.in/internal/handlers/http/notification"
+	opsAuthHandler "xcentro.in/internal/handlers/http/opsauth"
 	paymentHandler "xcentro.in/internal/handlers/http/payment"
 	payoutHandler "xcentro.in/internal/handlers/http/payout"
 	userHandler "xcentro.in/internal/handlers/http/user"
 	"xcentro.in/internal/middleware"
 	businessSvc "xcentro.in/internal/services/business"
 	notificationSvc "xcentro.in/internal/services/notification"
-	payoutSvc "xcentro.in/internal/services/payout"
+	opsAuthSvc "xcentro.in/internal/services/opsauth"
 	"xcentro.in/internal/services/payments"
+	payoutSvc "xcentro.in/internal/services/payout"
 	userSvc "xcentro.in/internal/services/user"
 	"xcentro.in/internal/services/verification"
 	"xcentro.in/internal/shared/config"
@@ -76,6 +79,32 @@ func registerOpsNotificationRoutes(clients *externalClients, cfg *config.Config,
 	notificationHandler.RegisterOpsNotificationRoutes(group, notificationService, nil)
 }
 
+// registerOpsAuthRoutes registers ops dashboard authentication routes and returns the auth service
+func registerOpsAuthRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) *opsAuthSvc.OpsAuthService {
+	// Create ops auth repositories
+	opsUserRepo := opsAuthRepo.NewPgOpsUserRepository(clients.db)
+	opsSessionRepo := opsAuthRepo.NewPgOpsSessionRepository(clients.db)
+
+	// Create ops auth service
+	opsAuthService, err := opsAuthSvc.NewOpsAuthService(
+		opsUserRepo,
+		opsSessionRepo,
+		clients.rcache,
+		clients.txManager,
+		cfg,
+	)
+	if err != nil {
+		logger.GetDefault().Errorf("Failed to create ops auth service: %v", err)
+		// Fatal error - ops dashboard won't work without auth
+		panic(err)
+	}
+
+	// Register auth routes (public - login, callback, refresh)
+	opsAuthHandler.RegisterOpsAuthRoutes(group, opsAuthService, cfg)
+
+	return opsAuthService
+}
+
 // registerOpsUserRoutes registers ops dashboard user routes
 func registerOpsUserRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
 	// Create user repository
@@ -94,9 +123,9 @@ func registerOpsUserRoutes(clients *externalClients, cfg *config.Config, group *
 	// Create user service
 	userService := userSvc.NewUserService(
 		userRepository,
-		nil,                    // businessRepository - not needed for ops endpoints
-		businessUserRelRepo,    // businessUserRelRepository - needed for KYC rejection
-		verificationSvc,        // verificationService - needed for reload-pan endpoint
+		nil,                 // businessRepository - not needed for ops endpoints
+		businessUserRelRepo, // businessUserRelRepository - needed for KYC rejection
+		verificationSvc,     // verificationService - needed for reload-pan endpoint
 		clients,
 		cfg,
 	)
@@ -174,13 +203,21 @@ func registerOpsV1Routes(s *opsDashboardServer) {
 	clients := &s.meta.clients
 	cfg := &s.meta.config
 
-	// Register route groups
-	registerOpsBusinessRoutes(clients, cfg, v1)
-	registerOpsNotificationRoutes(clients, cfg, v1)
-	registerOpsUserRoutes(clients, cfg, v1)
-	registerOpsPayoutRoutes(clients, cfg, v1)
-	registerOpsCollectionRoutes(clients, cfg, v1)
-	registerOpsFeeRulesRoutes(clients, cfg, v1)
+	// Register auth routes (public - login, callback, refresh) and get auth service
+	opsAuthService := registerOpsAuthRoutes(clients, cfg, v1)
+
+	// Create protected group with JWT middleware for all ops routes
+	protectedGroup := v1.Group("")
+	protectedGroup.Use(middleware.OpsJWTMiddleware(opsAuthService, cfg))
+
+	// Register all protected route groups with JWT middleware
+	opsAuthHandler.RegisterOpsUserRoutes(protectedGroup, opsAuthService) // User profile endpoint
+	registerOpsBusinessRoutes(clients, cfg, protectedGroup)              // Business management
+	registerOpsNotificationRoutes(clients, cfg, protectedGroup)          // Notifications
+	registerOpsUserRoutes(clients, cfg, protectedGroup)                  // User management
+	registerOpsPayoutRoutes(clients, cfg, protectedGroup)                // Payouts
+	registerOpsCollectionRoutes(clients, cfg, protectedGroup)            // Collections/Payments
+	registerOpsFeeRulesRoutes(clients, cfg, protectedGroup)              // Fee rules
 }
 
 func initializeNotificationTrigger(clients *externalClients) {
