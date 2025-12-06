@@ -5,8 +5,9 @@ import "context"
 // OpsUserRepository defines database operations for ops dashboard users
 type OpsUserRepository interface {
 	// CreateOrUpdateUser creates a new ops user or updates existing one
-	// Returns the user ID and whether it was created (true) or updated (false)
-	CreateOrUpdateUser(ctx context.Context, email, name string, roles []string) (string, bool, error)
+	// oid: The OID from Entra ID access token (used as primary key)
+	// Returns the user ID (OID) and whether it was created (true) or updated (false)
+	CreateOrUpdateUser(ctx context.Context, oid, email, name string, roles []string) (string, bool, error)
 
 	// GetUserByID retrieves an ops user by ID
 	GetUserByID(ctx context.Context, userID string) (*OpsUser, error)

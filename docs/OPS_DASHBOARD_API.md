@@ -10,15 +10,152 @@ http://localhost:8080/ops/v1
 
 ## Authentication
 
-All endpoints except login/callback/refresh require JWT authentication via cookies.
+All endpoints except login/callback/refresh/health require JWT authentication via **HttpOnly cookies**.
 
 ### Cookies Used
-- `access_token`: JWT access token (1 hour expiry)
-- `refresh_token`: JWT refresh token (30 days expiry)
+- `access_token`: JWT access token (1 hour expiry, HttpOnly, Secure in production)
+- `refresh_token`: JWT refresh token (30 days expiry, HttpOnly, Secure in production)
 - `oauth_state`: Temporary state for CSRF protection during OAuth flow
+
+### Authentication Middleware
+
+All protected ops routes are protected by `OpsJWTMiddleware` which:
+1. Reads `access_token` from HttpOnly cookie (JavaScript **cannot** access this cookie)
+2. Validates the JWT token
+3. Returns structured error responses for different scenarios
+4. Sets `opsUserId`, `opsUserEmail`, `opsUserRoles` in request context
+
+**Protected Routes:**
+- `/ops/v1/user/profile` - User profile
+- `/ops/v1/business/*` - Business management
+- `/ops/v1/user/*` - User management
+- `/ops/v1/notification/*` - Notifications
+- `/ops/v1/payout/*` - Payouts
+- `/ops/v1/collection/*` - Collections/Payments
+- `/ops/v1/fee-rules/*` - Fee rules management
+
+**Public Routes (no JWT required):**
+- `/ops/v1/auth/login` - Initiate OAuth login
+- `/ops/v1/auth/callback` - OAuth callback
+- `/ops/v1/auth/refresh` - Refresh access token
+- `/ops/v1/health` - Health check
+
+### Authentication Error Responses
+
+#### Protected Endpoint Errors (From Middleware)
+
+When calling any protected endpoint (e.g., `/ops/v1/user/profile`, `/ops/v1/business`, etc.):
+
+**1. MISSING_TOKEN (401)** - No access token cookie present
+```json
+{
+  "error": "MISSING_TOKEN",
+  "message": "Access token cookie required"
+}
+```
+**Causes:**
+- User never logged in
+- Cookies were cleared
+- Cookie expired and browser deleted it
+- Wrong domain/path for cookie
+
+**Frontend Action:** → Redirect to `/login` page
+
+---
+
+**2. TOKEN_EXPIRED (401)** - Access token is expired (> 1 hour old)
+```json
+{
+  "error": "TOKEN_EXPIRED",
+  "message": "Access token has expired, please refresh."
+}
+```
+**Causes:**
+- Access token is older than 1 hour (configured via `JWT_ACCESS_TOKEN_EXPIRY`)
+- This is **normal behavior** - access tokens expire frequently for security
+
+**Frontend Action:** → Call `/ops/v1/auth/refresh` to get new access token, then retry original request
+
+---
+
+**3. INVALID_TOKEN (401)** - Access token is malformed or invalid
+```json
+{
+  "error": "INVALID_TOKEN",
+  "message": "Invalid token"
+}
+```
+**Causes:**
+- Token signature verification failed
+- Token was tampered with
+- Token was issued by different server (JWT secret changed)
+- Token structure is corrupted
+
+**Frontend Action:** → Redirect to `/login` page (cannot recover)
+
+---
+
+#### Refresh Endpoint Errors
+
+When calling `/ops/v1/auth/refresh`:
+
+**4. MISSING_REFRESH_TOKEN (401)** - No refresh token cookie present
+```json
+{
+  "error": "MISSING_REFRESH_TOKEN",
+  "message": "Refresh token cookie required"
+}
+```
+**Causes:**
+- User never logged in
+- Refresh token cookie was cleared
+- Cookie expired (> 30 days old) and browser deleted it
+
+**Frontend Action:** → Redirect to `/login` page
+
+---
+
+**5. REFRESH_TOKEN_EXPIRED (401)** - Refresh token is expired or invalid
+```json
+{
+  "error": "REFRESH_TOKEN_EXPIRED",
+  "message": "Refresh token has expired or is invalid. Please login again."
+}
+```
+**Causes:**
+- Refresh token is older than 30 days (configured via `JWT_REFRESH_TOKEN_EXPIRY`)
+- Refresh token was revoked (user logged out)
+- Session was deleted from database
+- OIDC refresh token expired with Microsoft Entra ID
+- User was deactivated in database
+
+**Frontend Action:** → Redirect to `/login` page (session completely expired, requires re-authentication)
+
+---
+
+#### Complete Error Flow Decision Tree
+
+```
+User makes API request to protected endpoint
+    ↓
+[Middleware validates access_token cookie]
+    ↓
+├─ No cookie → MISSING_TOKEN → Redirect to /login
+├─ Empty cookie → MISSING_TOKEN → Redirect to /login
+├─ Expired token → TOKEN_EXPIRED → Call /ops/v1/auth/refresh
+│                                        ↓
+│                                   [Validate refresh_token]
+│                                        ↓
+│                                   ├─ No cookie → MISSING_REFRESH_TOKEN → Redirect to /login
+│                                   ├─ Expired/Invalid → REFRESH_TOKEN_EXPIRED → Redirect to /login
+│                                   └─ Valid → New access_token set → Retry original request
+│
+└─ Invalid token → INVALID_TOKEN → Redirect to /login
+```
 
 ### Dev Mode
 Set `OPS_OAUTH_SKIP_VALIDATION=true` in `.env` to bypass authentication (dev/testing only).
+**⚠️ NEVER enable in production!**
 
 ---
 
@@ -52,33 +189,35 @@ Redirect user to the `authUrl` to complete authentication with Microsoft.
 
 **Endpoint:** `GET /ops/v1/auth/callback?code=xxx&state=xxx`
 **Authentication:** None (Public)
-**Description:** Handles OAuth2 callback from Microsoft Entra ID
+**Description:** Handles OAuth2 callback from Microsoft Entra ID, sets auth cookies, and redirects to ops dashboard
 
 **Query Parameters:**
 - `code` (string, required) - Authorization code from OAuth provider
 - `state` (string, required) - CSRF protection state
 
-**Success Response (200):**
-```json
-{
-  "message": "Login successful",
-  "data": {
-    "accessToken": "eyJhbGci...",
-    "refreshToken": "eyJhbGci..."
-  }
-}
-```
+**Success Response (302):**
+- **Redirect Location:** `FRONTEND_URL` (configured via environment variable)
+- Default development: `http://localhost:3000` (set to `http://localhost:3001` for ops dashboard)
+- Production example: `https://ops.yourdomain.com`
 
 **Cookies Set:**
-- `access_token` - JWT access token
-- `refresh_token` - JWT refresh token
+- `access_token` - JWT access token (1 hour expiry)
+- `refresh_token` - JWT refresh token (30 days expiry)
 
 **Error Responses:**
-- `400` - Missing/invalid code or state
-- `500` - Authentication failed
+- `400` - Missing/invalid code or state (JSON response)
+- `500` - Authentication failed (JSON response)
 
-**Frontend Action:**
-After redirect back from Microsoft, the callback will automatically set auth cookies. Redirect user to dashboard.
+**Flow:**
+1. User completes authentication with Microsoft Entra ID
+2. Microsoft redirects to this callback endpoint with `code` and `state`
+3. Backend validates state for CSRF protection
+4. Backend exchanges authorization code for OAuth tokens
+5. Backend creates/updates ops user in database
+6. Backend generates internal JWT access and refresh tokens
+7. Backend sets authentication cookies (`access_token`, `refresh_token`)
+8. **Backend redirects user to ops dashboard root page** (configured via `FRONTEND_URL`)
+9. Frontend receives authenticated user with cookies already set
 
 ---
 
@@ -659,59 +798,207 @@ When refresh token is invalid:
 
 ## 6. Frontend Integration Guide
 
-### 6.1 Initial Setup
+### 6.1 Initial Setup & Authentication Flow
 
-1. **Check if user is authenticated:**
-   - Check for `access_token` cookie
-   - If exists, try calling `/ops/v1/user/profile`
-   - If fails with 401, attempt refresh
+**Important:** Since cookies are HttpOnly, JavaScript **cannot** read them. Instead, rely on middleware error responses.
 
-2. **Login Flow:**
+1. **Login Flow:**
    ```javascript
-   // Step 1: Get auth URL
-   const response = await fetch('/ops/v1/auth/login');
+   // Step 1: Get auth URL from backend
+   const response = await fetch('/ops/v1/auth/login', {
+     credentials: 'include' // Important: include cookies in request
+   });
    const { data } = await response.json();
 
-   // Step 2: Redirect user to Microsoft
+   // Step 2: Redirect user to Microsoft for authentication
    window.location.href = data.authUrl;
 
-   // Step 3: After redirect back to /callback
-   // Cookies are automatically set, redirect to dashboard
-   window.location.href = '/dashboard';
+   // Step 3: After user authenticates with Microsoft
+   // Microsoft redirects to backend: /ops/v1/auth/callback?code=xxx&state=xxx
+
+   // Step 4: Backend automatically:
+   // - Validates the OAuth callback
+   // - Creates/updates ops user
+   // - Sets HttpOnly authentication cookies (access_token, refresh_token)
+   // - Redirects user BACK to ops dashboard root (/)
+
+   // Step 5: Your ops dashboard root page (/) loads
    ```
+
+2. **Ops Dashboard Root Page (`/`) Handler:**
+   ```javascript
+   // In your root page component (e.g., App.js, index.js)
+   useEffect(() => {
+     // Try to fetch user profile - middleware will validate token
+     fetch('/ops/v1/user/profile', {
+       credentials: 'include' // Important: include cookies
+     })
+       .then(async (res) => {
+         if (res.ok) {
+           // Valid token, user is authenticated
+           const profile = await res.json();
+           setUser(profile.data);
+           setUserAuthenticated(true);
+         } else {
+           // Check error type
+           const error = await res.json();
+
+           if (error.error === 'TOKEN_EXPIRED') {
+             // Token expired, try refresh
+             return handleTokenRefresh();
+           } else {
+             // MISSING_TOKEN or INVALID_TOKEN - redirect to login
+             router.push('/login');
+           }
+         }
+       })
+       .catch(() => {
+         // Network error or other issue - redirect to login
+         router.push('/login');
+       });
+   }, []);
+
+   async function handleTokenRefresh() {
+     try {
+       const res = await fetch('/ops/v1/auth/refresh', {
+         method: 'POST',
+         credentials: 'include'
+       });
+
+       if (res.ok) {
+         // New access token set, retry fetching profile
+         window.location.reload(); // Or re-fetch profile
+       } else {
+         // Check refresh error type
+         const error = await res.json();
+
+         // All refresh errors require re-login:
+         // - MISSING_REFRESH_TOKEN: User needs to login
+         // - REFRESH_TOKEN_EXPIRED: Session expired, need fresh login
+         console.log('Refresh failed:', error.error);
+         router.push('/login');
+       }
+     } catch (err) {
+       router.push('/login');
+     }
+   }
+   ```
+
+3. **Key Points:**
+   - Always use `credentials: 'include'` in fetch requests to include cookies
+   - Don't try to read cookies via JavaScript (they're HttpOnly)
+   - Handle `TOKEN_EXPIRED` by calling refresh endpoint
+   - Handle `MISSING_TOKEN` or `INVALID_TOKEN` by redirecting to login
+   - Middleware validates every protected request automatically
 
 ### 6.2 Token Refresh Strategy
 
-Use an Axios/Fetch interceptor:
+Use an Axios/Fetch interceptor to automatically handle token expiration:
 
+**Axios Setup:**
 ```javascript
+// Configure Axios to include credentials
+axios.defaults.withCredentials = true;
+
 // Response interceptor
 axios.interceptors.response.use(
   (response) => response,
   async (error) => {
     if (error.response?.status === 401) {
+      const errorCode = error.response?.data?.error;
       const originalRequest = error.config;
 
-      // Try refresh
-      try {
-        await axios.post('/ops/v1/auth/refresh');
-        // Retry original request
-        return axios(originalRequest);
-      } catch (refreshError) {
-        // Refresh failed, redirect to login
-        window.location.href = '/login';
+      // Only retry on TOKEN_EXPIRED, not MISSING_TOKEN or INVALID_TOKEN
+      if (errorCode === 'TOKEN_EXPIRED' && !originalRequest._retry) {
+        originalRequest._retry = true; // Prevent infinite retry loop
+
+        try {
+          // Try to refresh the access token
+          await axios.post('/ops/v1/auth/refresh');
+
+          // Retry the original request with new token
+          return axios(originalRequest);
+        } catch (refreshError) {
+          // Refresh failed, redirect to login
+          window.location.href = '/login';
+          return Promise.reject(refreshError);
+        }
       }
+
+      // MISSING_TOKEN or INVALID_TOKEN - redirect to login immediately
+      // Also handles refresh errors: MISSING_REFRESH_TOKEN, REFRESH_TOKEN_EXPIRED
+      window.location.href = '/login';
+      return Promise.reject(error);
     }
+
     return Promise.reject(error);
   }
 );
+
+// Example: All possible error codes the interceptor handles
+// From protected endpoints:
+//   - MISSING_TOKEN → redirect to login
+//   - TOKEN_EXPIRED → try refresh, then retry request
+//   - INVALID_TOKEN → redirect to login
+// From refresh endpoint:
+//   - MISSING_REFRESH_TOKEN → redirect to login
+//   - REFRESH_TOKEN_EXPIRED → redirect to login
+```
+
+**Fetch Setup:**
+```javascript
+// Create a custom fetch wrapper
+async function authenticatedFetch(url, options = {}) {
+  const defaultOptions = {
+    credentials: 'include', // Always include cookies
+    ...options
+  };
+
+  let response = await fetch(url, defaultOptions);
+
+  // Handle 401 errors
+  if (response.status === 401) {
+    const error = await response.json();
+
+    // Only retry on TOKEN_EXPIRED
+    if (error.error === 'TOKEN_EXPIRED') {
+      // Try refresh
+      const refreshResponse = await fetch('/ops/v1/auth/refresh', {
+        method: 'POST',
+        credentials: 'include'
+      });
+
+      if (refreshResponse.ok) {
+        // Retry original request with new token
+        response = await fetch(url, defaultOptions);
+      } else {
+        // Refresh failed, redirect to login
+        window.location.href = '/login';
+        throw new Error('Authentication failed');
+      }
+    } else {
+      // MISSING_TOKEN or INVALID_TOKEN - redirect to login
+      window.location.href = '/login';
+      throw new Error('Authentication required');
+    }
+  }
+
+  return response;
+}
+
+// Usage
+const profile = await authenticatedFetch('/ops/v1/user/profile')
+  .then(res => res.json());
 ```
 
 ### 6.3 Logout
 
 ```javascript
 async function logout() {
-  await fetch('/ops/v1/auth/logout', { method: 'POST' });
+  await fetch('/ops/v1/auth/logout', {
+    method: 'POST',
+    credentials: 'include' // Include cookies to identify session
+  });
   window.location.href = '/login';
 }
 ```
@@ -897,11 +1184,15 @@ OPS_OAUTH_SKIP_VALIDATION=false  # Dev only!
 # Token Encryption
 OPS_TOKEN_ENCRYPTION_KEY=your_32_byte_encryption_key
 
+# Frontend Configuration
+# For ops dashboard, set this to your ops frontend URL
+FRONTEND_URL=http://localhost:3001  # Dev: http://localhost:3001, Prod: https://ops.yourdomain.com
+
 # Access Control
 OPS_REJECT_ACCESS=false  # Allow ops dashboard access
 ```
 
 ---
 
-**Last Updated:** 2025-01-19
+**Last Updated:** 2025-12-05
 **API Version:** v1

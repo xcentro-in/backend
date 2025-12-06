@@ -21,15 +21,15 @@ import (
 
 // OpsAuthService implements OAuth2/OIDC authentication for ops dashboard users
 type OpsAuthService struct {
-	oauth2Config      *oauth2.Config
-	oidcVerifier      *oidc.IDTokenVerifier
-	jwtConfig         *config.JWTSecretConfig
-	oauthConfig       *config.OpsOAuthConfig
-	encryptionKey     string
-	opsUserRepo       opsauth.OpsUserRepository
-	opsSessionRepo    opsauth.OpsSessionRepository
-	rclient           *redis.RedisClient
-	txManager         client.TxManager
+	oauth2Config   *oauth2.Config
+	oidcVerifier   *oidc.IDTokenVerifier
+	jwtConfig      *config.JWTSecretConfig
+	oauthConfig    *config.OpsOAuthConfig
+	encryptionKey  string
+	opsUserRepo    opsauth.OpsUserRepository
+	opsSessionRepo opsauth.OpsSessionRepository
+	rclient        *redis.RedisClient
+	txManager      client.TxManager
 }
 
 // NewOpsAuthService creates a new ops authentication service with OAuth2/OIDC support
@@ -55,12 +55,17 @@ func NewOpsAuthService(
 	}
 
 	// Configure OAuth2 using discovered endpoints from OIDC provider
+	// Scopes:
+	// - openid: Required for OIDC, provides ID token with sub claim
+	// - profile: Required for name and email in ID token
+	// - offline_access: Required for refresh tokens
+	// - api://6244537c-2e10-44b7-af9e-be5fe297ed11/access_as_user: Custom API scope for accessing backend
 	oauth2Config := &oauth2.Config{
 		ClientID:     cfg.OpsOAuth.ClientID,
 		ClientSecret: cfg.OpsOAuth.ClientSecret,
 		RedirectURL:  cfg.OpsOAuth.RedirectURL,
 		Endpoint:     provider.Endpoint(), // Use discovered endpoints instead of hardcoded
-		Scopes:       []string{oidc.ScopeOpenID, "profile", "email", "offline_access"},
+		Scopes:       []string{oidc.ScopeOpenID, "profile", "email", "offline_access", "api://6244537c-2e10-44b7-af9e-be5fe297ed11/access_as_user"},
 	}
 
 	// Create OIDC ID token verifier
@@ -69,15 +74,15 @@ func NewOpsAuthService(
 	})
 
 	return &OpsAuthService{
-		oauth2Config:      oauth2Config,
-		oidcVerifier:      oidcVerifier,
-		jwtConfig:         &cfg.JWT,
-		oauthConfig:       &cfg.OpsOAuth,
-		encryptionKey:     cfg.OpsTokenEncryption.EncryptionKey,
-		opsUserRepo:       opsUserRepo,
-		opsSessionRepo:    opsSessionRepo,
-		rclient:           rclient,
-		txManager:         txManager,
+		oauth2Config:   oauth2Config,
+		oidcVerifier:   oidcVerifier,
+		jwtConfig:      &cfg.JWT,
+		oauthConfig:    &cfg.OpsOAuth,
+		encryptionKey:  cfg.OpsTokenEncryption.EncryptionKey,
+		opsUserRepo:    opsUserRepo,
+		opsSessionRepo: opsSessionRepo,
+		rclient:        rclient,
+		txManager:      txManager,
 	}, nil
 }
 
@@ -114,29 +119,67 @@ func (s *OpsAuthService) HandleCallback(
 		return nil, fmt.Errorf("failed to verify ID token: %w", err)
 	}
 
-	// Extract claims from ID token
+	// Extract all claims from ID token for logging
+	var allIDTokenClaims map[string]interface{}
+	if err := idToken.Claims(&allIDTokenClaims); err != nil {
+		return nil, fmt.Errorf("failed to parse ID token claims: %w", err)
+	}
+
+	// Log all ID token claims for debugging
+	logger.Infof("==== Entra ID ID Token Claims ====")
+	for key, value := range allIDTokenClaims {
+		logger.Infof("  %s: %v (type: %T)", key, value, value)
+	}
+	logger.Infof("==================================")
+
+	// Extract specific claims we need
 	var claims struct {
-		Email string `json:"email"`
-		Name  string `json:"name"`
+		Sub            string `json:"sub"` // Subject - unique Entra user ID (logged but not stored)
+		Email          string `json:"email"`
+		PreferredEmail string `json:"preferred_username"` // Fallback for email
+		UPN            string `json:"upn"`                // Another fallback
+		Name           string `json:"name"`
+		OID            string `json:"oid"` // Object ID from Entra
 	}
 	if err := idToken.Claims(&claims); err != nil {
 		return nil, fmt.Errorf("failed to parse ID token claims: %w", err)
 	}
 
+	// Determine email with fallbacks (profile scope provides email in ID token)
+	email := claims.Email
+	if email == "" {
+		email = claims.PreferredEmail
+	}
+	if email == "" {
+		email = claims.UPN
+	}
+
 	// Validate email and name
-	if err := validateEmail(claims.Email); err != nil {
+	if err := validateEmail(email); err != nil {
 		return nil, fmt.Errorf("invalid email from ID token: %w", err)
 	}
 	if strings.TrimSpace(claims.Name) == "" {
 		return nil, fmt.Errorf("name cannot be empty")
 	}
 
-	// Extract roles from access token (if available)
-	roles, err := s.extractRolesFromAccessToken(oauth2Token.AccessToken)
+	// Log user info from ID token
+	logger.Infof("ID Token - Sub: %s, Email: %s, Name: %s, OID: %s", claims.Sub, email, claims.Name, claims.OID)
+
+	// Extract OID, email, name, and roles from access token (single source of truth)
+	oid, accessEmail, accessName, roles, err := s.extractUserDataFromAccessToken(oauth2Token.AccessToken)
 	if err != nil {
-		logger.Warnf("Failed to extract roles from access token: %v, using empty roles", err)
-		roles = []string{} // Default to empty roles if extraction fails
+		return nil, fmt.Errorf("failed to extract user data from access token: %w", err)
 	}
+
+	// Use access token data as source of truth, fallback to ID token if needed
+	if accessEmail == "" {
+		accessEmail = email
+	}
+	if accessName == "" {
+		accessName = claims.Name
+	}
+
+	logger.Infof("Access Token - OID: %s, Email: %s, Name: %s, Roles: %v", oid, accessEmail, accessName, roles)
 
 	// Encrypt OIDC refresh token before storing
 	encryptedOIDCRefreshToken, err := crypto.EncryptBankAccountNumber(oauth2Token.RefreshToken, s.encryptionKey)
@@ -144,32 +187,43 @@ func (s *OpsAuthService) HandleCallback(
 		return nil, fmt.Errorf("failed to encrypt OIDC refresh token: %w", err)
 	}
 
+	// Calculate internal access token expiry
+	// Use the MINIMUM of: config value OR Microsoft's access token expiry
+	// This ensures our internal token never outlives Microsoft's access token
+	microsoftTokenExpiry := time.Until(oauth2Token.Expiry)
+	configuredExpiry := s.jwtConfig.AccessTokenExpiry
+	accessTokenExpiry := configuredExpiry
+	if microsoftTokenExpiry < configuredExpiry {
+		accessTokenExpiry = microsoftTokenExpiry
+		logger.Infof("Using Microsoft token expiry (%v) instead of config (%v)", microsoftTokenExpiry, configuredExpiry)
+	}
+
 	// Use configured refresh token expiry for internal refresh tokens
 	// Note: oauth2Token.Expiry refers to OIDC access token expiry (~1 hour),
-	// NOT the OIDC refresh token expiry (which is typically much longer)
-	// We control our internal refresh token lifetime independently
+	// NOT the OIDC refresh token expiry (which is typically much longer - 90 days)
 	refreshTokenExpiry := s.jwtConfig.RefreshTokenExpiry
 
 	// Use transaction to ensure atomicity of user creation + session creation
-	var opsUserID string
 	var internalAccessToken, internalRefreshToken string
 
 	err = s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
-		// Create or update ops user within transaction
+		// Create or update ops user within transaction using OID as primary key
 		txOpsUserRepo := s.opsUserRepo.WithTx(tx)
 		var createErr error
-		opsUserID, _, createErr = txOpsUserRepo.CreateOrUpdateUser(ctx, claims.Email, claims.Name, roles)
+		_, _, createErr = txOpsUserRepo.CreateOrUpdateUser(ctx, oid, accessEmail, accessName, roles)
 		if createErr != nil {
 			return fmt.Errorf("failed to create/update ops user: %w", createErr)
 		}
 
-		// Generate our internal tokens
-		internalAccessToken, createErr = s.generateToken(opsUserID, claims.Email, roles, s.jwtConfig.AccessTokenExpiry)
+		// Generate our internal tokens (use OID as subject)
+		// Access token: includes roles for authorization
+		internalAccessToken, createErr = s.generateToken(oid, roles, accessTokenExpiry)
 		if createErr != nil {
 			return fmt.Errorf("failed to generate internal access token: %w", createErr)
 		}
 
-		internalRefreshToken, createErr = s.generateToken(opsUserID, "", nil, refreshTokenExpiry)
+		// Refresh token: minimal claims (just OID)
+		internalRefreshToken, createErr = s.generateToken(oid, nil, refreshTokenExpiry)
 		if createErr != nil {
 			return fmt.Errorf("failed to generate internal refresh token: %w", createErr)
 		}
@@ -182,7 +236,7 @@ func (s *OpsAuthService) HandleCallback(
 		txOpsSessionRepo := s.opsSessionRepo.WithTx(tx)
 		_, createErr = txOpsSessionRepo.CreateSession(
 			ctx,
-			opsUserID,
+			oid,
 			refreshTokenHash,
 			encryptedOIDCRefreshToken,
 			expiresAt,
@@ -199,7 +253,7 @@ func (s *OpsAuthService) HandleCallback(
 		return nil, err
 	}
 
-	logger.Infof("OAuth callback processed successfully for user: %s", opsUserID)
+	logger.Infof("OAuth callback processed successfully for user OID: %s", oid)
 
 	return &opsauth.OAuthCallbackResponse{
 		AccessToken:  internalAccessToken,
@@ -257,26 +311,47 @@ func (s *OpsAuthService) RefreshAccessToken(ctx context.Context, refreshToken st
 
 	newOAuth2Token, err := tokenSource.Token()
 	if err != nil {
+		// Check if error is "invalid_grant" (refresh token expired/revoked)
+		if strings.Contains(err.Error(), "invalid_grant") || strings.Contains(err.Error(), "AADSTS") {
+			logger.Warnf("OIDC refresh token is invalid/expired (invalid_grant): %v", err)
+			// Delete the session from database
+			if deleteErr := s.opsSessionRepo.DeleteSession(ctx, opsUserID, refreshTokenHash); deleteErr != nil {
+				logger.Errorf("Failed to delete expired session: %v", deleteErr)
+			}
+			// Return specific error for frontend to redirect to login
+			return "", fmt.Errorf("REFRESH_TOKEN_EXPIRED")
+		}
+		logger.Errorf("Failed to refresh OIDC token: %v", err)
 		return "", fmt.Errorf("authentication failed")
 	}
 
-	// Extract new roles from refreshed access token
-	newRoles, err := s.extractRolesFromAccessToken(newOAuth2Token.AccessToken)
+	// Extract user data from refreshed access token (OID, email, name, roles)
+	oid, newEmail, newName, newRoles, err := s.extractUserDataFromAccessToken(newOAuth2Token.AccessToken)
 	if err != nil {
-		logger.Warnf("Failed to extract roles from refreshed token: %v", err)
-		// Get existing roles from user record as fallback
+		logger.Warnf("Failed to extract user data from refreshed token: %v", err)
+		// Get existing data from user record as fallback
 		user, getUserErr := s.opsUserRepo.GetUserByID(ctx, opsUserID)
 		if getUserErr == nil && user != nil {
 			newRoles = user.Roles
+			newEmail = user.Email
+			newName = user.Name
 		} else {
 			newRoles = []string{}
 		}
 	}
 
-	// Update user roles if changed
-	err = s.opsUserRepo.UpdateUserRoles(ctx, opsUserID, newRoles)
-	if err != nil {
-		logger.Warnf("Failed to update user roles: %v", err)
+	// Verify OID matches (security check)
+	if oid != opsUserID {
+		logger.Errorf("OID mismatch: token OID=%s, session user=%s", oid, opsUserID)
+		return "", fmt.Errorf("authentication failed")
+	}
+
+	// Update user email, name, and roles (email can change in Entra)
+	if newEmail != "" && newName != "" {
+		_, _, err = s.opsUserRepo.CreateOrUpdateUser(ctx, oid, newEmail, newName, newRoles)
+		if err != nil {
+			logger.Warnf("Failed to update user data: %v", err)
+		}
 	}
 
 	// If we got a new OIDC refresh token, encrypt and update it
@@ -298,19 +373,21 @@ func (s *OpsAuthService) RefreshAccessToken(ctx context.Context, refreshToken st
 		logger.Warnf("Failed to update last used: %v", err)
 	}
 
-	// Get user email for new access token
-	user, err := s.opsUserRepo.GetUserByID(ctx, opsUserID)
-	if err != nil || user == nil {
-		return "", fmt.Errorf("authentication failed")
+	// Calculate internal access token expiry (min of config vs Microsoft's token expiry)
+	microsoftTokenExpiry := time.Until(newOAuth2Token.Expiry)
+	configuredExpiry := s.jwtConfig.AccessTokenExpiry
+	accessTokenExpiry := configuredExpiry
+	if microsoftTokenExpiry < configuredExpiry {
+		accessTokenExpiry = microsoftTokenExpiry
 	}
 
 	// Generate new internal access token with updated roles
-	newAccessToken, err := s.generateToken(opsUserID, user.Email, newRoles, s.jwtConfig.AccessTokenExpiry)
+	newAccessToken, err := s.generateToken(oid, newRoles, accessTokenExpiry)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate new access token: %w", err)
 	}
 
-	logger.Infof("Access token refreshed successfully for user: %s", opsUserID)
+	logger.Infof("Access token refreshed successfully for user OID: %s", oid)
 	return newAccessToken, nil
 }
 
@@ -346,10 +423,9 @@ func (s *OpsAuthService) ValidateAccessToken(tokenString string) (*opsauth.OpsJW
 		return nil, err
 	}
 
-	// Convert to OpsJWTClaims
+	// Convert to OpsJWTClaims (only OID and roles)
 	opsClaims := &opsauth.OpsJWTClaims{
-		Subject:   claims.Subject,
-		Email:     claims.Email,
+		Subject:   claims.Subject, // OID from Entra
 		Roles:     claims.Roles,
 		IssuedAt:  claims.IssuedAt.Unix(),
 		ExpiresAt: claims.ExpiresAt.Unix(),
@@ -381,23 +457,23 @@ func (s *OpsAuthService) GetUserProfile(ctx context.Context, opsUserID string) (
 // Helper Methods
 // ============================================================================
 
-// customClaims extends JWT registered claims with email and roles
+// customClaims extends JWT registered claims with roles only
+// For security, only include minimum required data: user ID (sub) and roles
 type customClaims struct {
 	jwt.RegisteredClaims
-	Email string   `json:"email,omitempty"`
 	Roles []string `json:"roles,omitempty"`
 }
 
 // generateToken creates an internal JWT token (access or refresh)
-// Combines the logic for both access and refresh token generation
-func (s *OpsAuthService) generateToken(opsUserID, email string, roles []string, expiry time.Duration) (string, error) {
+// Only includes: sub (OID), roles, exp, iat
+// Email/name can be fetched from database if needed
+func (s *OpsAuthService) generateToken(opsUserID string, roles []string, expiry time.Duration) (string, error) {
 	claims := customClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
-			Subject:   opsUserID,
+			Subject:   opsUserID, // OID from Entra
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(expiry)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 		},
-		Email: email,
 		Roles: roles,
 	}
 
@@ -435,42 +511,67 @@ func (s *OpsAuthService) parseAndValidateToken(tokenString string) (*customClaim
 	return claims, nil
 }
 
-// extractRolesFromAccessToken extracts roles from the OIDC access token
-// For Microsoft Entra ID, roles are typically in the "roles" claim of the access token
-func (s *OpsAuthService) extractRolesFromAccessToken(accessToken string) ([]string, error) {
+// extractUserDataFromAccessToken extracts OID, email, name, and roles from the OIDC access token
+// For Microsoft Entra ID, this is the single source of truth for user data
+func (s *OpsAuthService) extractUserDataFromAccessToken(accessToken string) (oid, email, name string, roles []string, err error) {
 	// Parse the access token (it's a JWT)
 	token, _, err := new(jwt.Parser).ParseUnverified(accessToken, jwt.MapClaims{})
 	if err != nil {
-		return nil, fmt.Errorf("failed to parse access token: %w", err)
+		return "", "", "", nil, fmt.Errorf("failed to parse access token: %w", err)
 	}
 
 	claims, ok := token.Claims.(jwt.MapClaims)
 	if !ok {
-		return nil, fmt.Errorf("invalid claims format")
+		return "", "", "", nil, fmt.Errorf("invalid claims format")
+	}
+
+	// Log all claims from the access token for debugging
+	logger.Infof("==== Entra ID Access Token Claims ====")
+	for key, value := range claims {
+		logger.Infof("  %s: %v (type: %T)", key, value, value)
+	}
+	logger.Infof("=====================================")
+
+	// Extract OID (Object ID - unique user identifier in Entra)
+	if oidVal, ok := claims["oid"].(string); ok {
+		oid = oidVal
+	}
+	if oid == "" {
+		return "", "", "", nil, fmt.Errorf("oid claim not found in access token")
+	}
+
+	// Extract email (provided by email scope)
+	if emailVal, ok := claims["email"].(string); ok {
+		email = emailVal
+	}
+	if email == "" {
+		return "", "", "", nil, fmt.Errorf("email claim not found in access token")
+	}
+
+	// Extract name
+	if nameVal, ok := claims["name"].(string); ok {
+		name = nameVal
 	}
 
 	// Extract roles from "roles" claim
-	rolesInterface, ok := claims["roles"]
-	if !ok {
-		// No roles claim, return empty array
-		return []string{}, nil
-	}
-
-	// Convert to string slice
-	rolesArray, ok := rolesInterface.([]interface{})
-	if !ok {
-		return nil, fmt.Errorf("roles claim is not an array")
-	}
-
-	roles := make([]string, 0, len(rolesArray))
-	for _, role := range rolesArray {
-		roleStr, ok := role.(string)
-		if ok {
-			roles = append(roles, roleStr)
+	if rolesInterface, ok := claims["roles"]; ok {
+		if rolesArray, ok := rolesInterface.([]interface{}); ok {
+			roles = make([]string, 0, len(rolesArray))
+			for _, role := range rolesArray {
+				if roleStr, ok := role.(string); ok {
+					roles = append(roles, roleStr)
+				}
+			}
 		}
 	}
 
-	return roles, nil
+	// If no roles found, use empty array
+	if roles == nil {
+		roles = []string{}
+		logger.Infof("No 'roles' claim found in access token")
+	}
+
+	return oid, email, name, roles, nil
 }
 
 // validateEmail validates email format

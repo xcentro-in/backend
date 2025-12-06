@@ -25,8 +25,8 @@ func (r *PgOpsUserRepository) WithTx(tx interface{}) opsauth.OpsUserRepository {
 	return &PgOpsUserRepository{querier: tx.(client.Tx)}
 }
 
-func (r *PgOpsUserRepository) CreateOrUpdateUser(ctx context.Context, email, name string, roles []string) (string, bool, error) {
-	logger.Infof("Creating or updating ops user: email=%s, name=%s", email, name)
+func (r *PgOpsUserRepository) CreateOrUpdateUser(ctx context.Context, oid, email, name string, roles []string) (string, bool, error) {
+	logger.Infof("Creating or updating ops user: oid=%s, email=%s, name=%s", oid, email, name)
 
 	// Convert roles to JSONB
 	rolesJSON, err := json.Marshal(roles)
@@ -34,11 +34,14 @@ func (r *PgOpsUserRepository) CreateOrUpdateUser(ctx context.Context, email, nam
 		return "", false, fmt.Errorf("failed to marshal roles: %w", err)
 	}
 
+	// Use OID as the primary key - if it exists, update email/name/roles
+	// This allows email changes for the same user (identified by OID)
 	query := `
-		INSERT INTO xcentro.ops_user_table (email, name, roles, status)
-		VALUES ($1, $2, $3, 'active')
-		ON CONFLICT (email)
+		INSERT INTO xcentro.ops_user_table (id, email, name, roles, status)
+		VALUES ($1, $2, $3, $4, 'active')
+		ON CONFLICT (id)
 		DO UPDATE SET
+			email = EXCLUDED.email,
 			name = EXCLUDED.name,
 			roles = EXCLUDED.roles,
 			updated_at = NOW()
@@ -48,7 +51,7 @@ func (r *PgOpsUserRepository) CreateOrUpdateUser(ctx context.Context, email, nam
 	var userID string
 	var inserted bool
 
-	err = r.querier.QueryRow(ctx, query, email, name, rolesJSON).Scan(&userID, &inserted)
+	err = r.querier.QueryRow(ctx, query, oid, email, name, rolesJSON).Scan(&userID, &inserted)
 	if err != nil {
 		logger.Errorf("Failed to create or update ops user: %v", err)
 		return "", false, fmt.Errorf("failed to create or update ops user: %w", err)

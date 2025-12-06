@@ -15,15 +15,17 @@ import (
 
 // OpsAuthHandler handles OAuth2/OIDC authentication requests for ops dashboard
 type OpsAuthHandler struct {
-	authService   opsauth.OpsAuthService
-	cookieManager *httputil.CookieManager
+	authService    opsauth.OpsAuthService
+	cookieManager  *httputil.CookieManager
+	frontendURL    string
 }
 
 // NewOpsAuthHandler creates a new ops authentication handler
 func NewOpsAuthHandler(authService opsauth.OpsAuthService, cfg *config.Config) *OpsAuthHandler {
 	return &OpsAuthHandler{
-		authService:   authService,
-		cookieManager: httputil.NewCookieManager(cfg),
+		authService:    authService,
+		cookieManager:  httputil.NewOpsCookieManager(cfg),
+		frontendURL:    cfg.Frontend.URL,
 	}
 }
 
@@ -109,13 +111,9 @@ func (h *OpsAuthHandler) HandleCallback(c echo.Context) error {
 	h.cookieManager.SetAccessTokenCookie(c, response.AccessToken)
 	h.cookieManager.SetRefreshTokenCookie(c, response.RefreshToken)
 
-	return c.JSON(200, map[string]any{
-		"message": "Login successful",
-		"data": map[string]any{
-			"accessToken":  response.AccessToken,
-			"refreshToken": response.RefreshToken,
-		},
-	})
+	// Redirect to ops dashboard root page
+	logger.Info("OAuth callback successful, redirecting to ops dashboard")
+	return c.Redirect(http.StatusFound, h.frontendURL)
 }
 
 // HandleRefresh refreshes the access token using the internal refresh token
@@ -127,19 +125,36 @@ func (h *OpsAuthHandler) HandleRefresh(c echo.Context) error {
 	cookie, err := c.Cookie("refresh_token")
 	if err != nil {
 		logger.Errorf("Refresh token cookie not found: %v", err)
-		return c.JSON(401, map[string]any{"message": "Refresh token cookie required", "data": nil})
+		return c.JSON(401, map[string]any{
+			"error":   "MISSING_REFRESH_TOKEN",
+			"message": "Refresh token cookie required",
+		})
 	}
 
 	refreshToken := strings.TrimSpace(cookie.Value)
 	if refreshToken == "" {
-		return c.JSON(401, map[string]any{"message": "Refresh token is empty", "data": nil})
+		return c.JSON(401, map[string]any{
+			"error":   "MISSING_REFRESH_TOKEN",
+			"message": "Refresh token is empty",
+		})
 	}
 
 	// Refresh access token
 	newAccessToken, err := h.authService.RefreshAccessToken(c.Request().Context(), refreshToken)
 	if err != nil {
 		logger.Errorf("Token refresh failed: %v", err)
-		return c.JSON(401, map[string]any{"message": "Failed to refresh token", "data": nil})
+		// Check if it's the specific REFRESH_TOKEN_EXPIRED error
+		if err.Error() == "REFRESH_TOKEN_EXPIRED" {
+			return c.JSON(401, map[string]any{
+				"error":   "REFRESH_TOKEN_EXPIRED",
+				"message": "Refresh token has expired or is invalid. Please login again.",
+			})
+		}
+		// Generic auth failure
+		return c.JSON(401, map[string]any{
+			"error":   "AUTHENTICATION_FAILED",
+			"message": "Failed to refresh access token. Please login again.",
+		})
 	}
 
 	// Set new access token cookie

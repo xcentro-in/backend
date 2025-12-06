@@ -79,8 +79,8 @@ func registerOpsNotificationRoutes(clients *externalClients, cfg *config.Config,
 	notificationHandler.RegisterOpsNotificationRoutes(group, notificationService, nil)
 }
 
-// registerOpsAuthRoutes registers ops dashboard authentication routes
-func registerOpsAuthRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
+// registerOpsAuthRoutes registers ops dashboard authentication routes and returns the auth service
+func registerOpsAuthRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) *opsAuthSvc.OpsAuthService {
 	// Create ops auth repositories
 	opsUserRepo := opsAuthRepo.NewPgOpsUserRepository(clients.db)
 	opsSessionRepo := opsAuthRepo.NewPgOpsSessionRepository(clients.db)
@@ -99,13 +99,10 @@ func registerOpsAuthRoutes(clients *externalClients, cfg *config.Config, group *
 		panic(err)
 	}
 
-	// Register auth routes (public)
+	// Register auth routes (public - login, callback, refresh)
 	opsAuthHandler.RegisterOpsAuthRoutes(group, opsAuthService, cfg)
 
-	// Register user routes (protected with JWT middleware)
-	userGroup := group.Group("")
-	userGroup.Use(middleware.OpsJWTMiddleware(opsAuthService, cfg))
-	opsAuthHandler.RegisterOpsUserRoutes(userGroup, opsAuthService)
+	return opsAuthService
 }
 
 // registerOpsUserRoutes registers ops dashboard user routes
@@ -206,14 +203,21 @@ func registerOpsV1Routes(s *opsDashboardServer) {
 	clients := &s.meta.clients
 	cfg := &s.meta.config
 
-	// Register route groups
-	registerOpsAuthRoutes(clients, cfg, v1) // OAuth2/OIDC authentication
-	registerOpsBusinessRoutes(clients, cfg, v1)
-	registerOpsNotificationRoutes(clients, cfg, v1)
-	registerOpsUserRoutes(clients, cfg, v1)
-	registerOpsPayoutRoutes(clients, cfg, v1)
-	registerOpsCollectionRoutes(clients, cfg, v1)
-	registerOpsFeeRulesRoutes(clients, cfg, v1)
+	// Register auth routes (public - login, callback, refresh) and get auth service
+	opsAuthService := registerOpsAuthRoutes(clients, cfg, v1)
+
+	// Create protected group with JWT middleware for all ops routes
+	protectedGroup := v1.Group("")
+	protectedGroup.Use(middleware.OpsJWTMiddleware(opsAuthService, cfg))
+
+	// Register all protected route groups with JWT middleware
+	opsAuthHandler.RegisterOpsUserRoutes(protectedGroup, opsAuthService) // User profile endpoint
+	registerOpsBusinessRoutes(clients, cfg, protectedGroup)              // Business management
+	registerOpsNotificationRoutes(clients, cfg, protectedGroup)          // Notifications
+	registerOpsUserRoutes(clients, cfg, protectedGroup)                  // User management
+	registerOpsPayoutRoutes(clients, cfg, protectedGroup)                // Payouts
+	registerOpsCollectionRoutes(clients, cfg, protectedGroup)            // Collections/Payments
+	registerOpsFeeRulesRoutes(clients, cfg, protectedGroup)              // Fee rules
 }
 
 func initializeNotificationTrigger(clients *externalClients) {

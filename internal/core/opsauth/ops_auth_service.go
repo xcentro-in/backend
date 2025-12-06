@@ -26,10 +26,11 @@ type OpsAuthService interface {
 }
 
 // OpsJWTClaims represents the claims in our internal JWT access token
+// For security, only includes: subject (OID) and roles
+// Email/name should be fetched from database if needed
 type OpsJWTClaims struct {
-	Subject string   `json:"sub"` // Ops user ID
-	Email   string   `json:"email"`
-	Roles   []string `json:"roles"`
-	IssuedAt  int64  `json:"iat"`
-	ExpiresAt int64  `json:"exp"`
+	Subject   string   `json:"sub"` // Ops user ID (OID from Entra)
+	Roles     []string `json:"roles"`
+	IssuedAt  int64    `json:"iat"`
+	ExpiresAt int64    `json:"exp"`
 }

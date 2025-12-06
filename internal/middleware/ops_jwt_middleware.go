@@ -16,7 +16,6 @@ func OpsJWTMiddleware(authService opsauth.OpsAuthService, cfg *config.Config) ec
 			// Skip validation if configured (dev/testing only)
 			if cfg.OpsOAuth.SkipValidation {
 				c.Set("opsUserId", "dev-user")
-				c.Set("opsUserEmail", "dev@xcentro.in")
 				c.Set("opsUserRoles", []string{})
 				return next(c)
 			}
@@ -56,13 +55,33 @@ func OpsJWTMiddleware(authService opsauth.OpsAuthService, cfg *config.Config) ec
 				})
 			}
 
+			// Enforce role-based access control
+			// Only users with "access.all" role can access ops dashboard
+			if !hasRole(claims.Roles, "access.all") {
+				return c.JSON(403, map[string]any{
+					"error":   "UNAUTHORIZED",
+					"message": "Insufficient permissions to access ops dashboard",
+				})
+			}
+
 			// Set ops user context for downstream handlers
+			// Only OID and roles are in the token (for security)
+			// Email/name should be fetched from database if needed
 			c.Set("opsUserId", claims.Subject)
-			c.Set("opsUserEmail", claims.Email)
 			c.Set("opsUserRoles", claims.Roles)
 
 			// Continue to next handler
 			return next(c)
 		}
 	}
+}
+
+// hasRole checks if a role exists in the roles slice
+func hasRole(roles []string, role string) bool {
+	for _, r := range roles {
+		if r == role {
+			return true
+		}
+	}
+	return false
 }
