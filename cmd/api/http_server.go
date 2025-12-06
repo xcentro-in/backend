@@ -237,7 +237,7 @@ func (s *xcentroServer) registerClients() {
 	s.meta.clients.metrics = metricsClient
 
 	// AuthBridge client (singleton)
-	if err := authbridge.Initialize(&s.meta.config); err != nil {
+	if err := authbridge.Initialize(&s.meta.config, metricsClient); err != nil {
 		s.log.Errorf("Failed to initialize AuthBridge client: %v", err)
 		panic(err)
 	}

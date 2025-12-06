@@ -233,7 +233,7 @@ func registerV1PayeeRoutes(clients *externalClients, cfg *config.Config, group *
 	factory := &serviceFactory{clients, cfg}
 	_, _, _, _, _, busSvc, authSvc := factory.createCoreServices(nil)
 
-	payeeFactory := payeeSvc.NewPayeeServiceFactory(clients.db, clients.txManager, busSvc, cfg)
+	payeeFactory := payeeSvc.NewPayeeServiceFactory(clients.db, clients.txManager, busSvc, cfg, clients.metrics)
 	payeeService := payeeFactory.NewPayeeService()
 
 	payeeGroup := group.Group("/payees")

@@ -49,7 +49,8 @@ func main() {
 	log.Println("Repositories initialized")
 
 	// Create payout provider factory with Castler config from environment
-	providerFactory := factory.NewPayoutProviderFactory(&cfg)
+	// Note: Worker uses no-op metrics (nil) - metrics are tracked in API server
+	providerFactory := factory.NewPayoutProviderFactory(&cfg, nil)
 
 	log.Println("Payout provider factory initialized (Castler)")
 

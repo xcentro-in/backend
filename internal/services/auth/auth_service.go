@@ -456,8 +456,6 @@ func (s *AuthService) Login(ctx context.Context, email, password, userAgent stri
 		return nil, fmt.Errorf("failed to create authentication tokens")
 	}
 
-	s.metrics.Counter(ctx, "auth.loginsucess", 1, metrics.MetricLabels{"Test": "Check"})
-
 	return &auth.LoginResponse{
 		AccessToken:  accessToken,
 		RefreshToken: refreshToken,

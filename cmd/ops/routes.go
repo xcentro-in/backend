@@ -146,7 +146,7 @@ func registerOpsPayoutRoutes(clients *externalClients, cfg *config.Config, group
 	opsPayoutService := payoutSvc.NewOpsPayoutService(payoutRepository)
 
 	// Create payout provider factory and full payout service (for operations)
-	providerFactory := factory.NewPayoutProviderFactory(cfg)
+	providerFactory := factory.NewPayoutProviderFactory(cfg, clients.metrics)
 	payoutService := payoutSvc.NewPayoutService(
 		paymentRepository,
 		voucherRepository,

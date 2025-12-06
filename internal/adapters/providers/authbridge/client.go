@@ -2,13 +2,16 @@ package authbridge
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
+	"xcentro.in/internal/core/metrics"
 	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/crypto"
 )
@@ -75,12 +78,17 @@ type AuthBridgeClient struct {
 	config     *Config
 	httpClient *HTTPClient
 	useMock    bool
+	metrics    metrics.MetricsProvider
 }
 
 // Initialize initializes the singleton AuthBridgeClient instance.
 // Must be called once at application startup before any usage.
-func Initialize(cfg *config.Config) error {
+func Initialize(cfg *config.Config, metricsProvider metrics.MetricsProvider) error {
 	once.Do(func() {
+		// Use no-op metrics if not provided
+		if metricsProvider == nil {
+			metricsProvider = metrics.NewNoOpMetricsProvider()
+		}
 		instance = &AuthBridgeClient{
 			config: &Config{
 				Username: cfg.AuthBridge.Username,
@@ -88,6 +96,7 @@ func Initialize(cfg *config.Config) error {
 			},
 			httpClient: getHTTPClient(),
 			useMock:    cfg.AuthBridge.UseMock,
+			metrics:    metricsProvider,
 		}
 	})
 	return initErr
@@ -139,11 +148,22 @@ func (c *AuthBridgeClient) SearchDocument(req DocumentRequest) (map[string]inter
 
 // callRealAPI makes actual API call to AuthBridge
 func (c *AuthBridgeClient) callRealAPI(req DocumentRequest, docType DocumentType) (map[string]interface{}, error) {
+	startTime := time.Now()
+	ctx := context.Background()
+
+	// Determine operation from document type
+	operation := getOperationName(docType)
+
 	endpoint := GetEndpoint(docType)
 
 	// Convert to JSON using the request's ToJSON method
 	inputJSON, err := req.ToJSON()
 	if err != nil {
+		_ = c.metrics.Counter(ctx, "third_party.error", 1, metrics.MetricLabels{
+			"provider":   "authbridge",
+			"operation":  operation,
+			"error_type": "marshal_error",
+		})
 		return nil, fmt.Errorf("failed to convert request to JSON: %v", err)
 	}
 
@@ -152,6 +172,11 @@ func (c *AuthBridgeClient) callRealAPI(req DocumentRequest, docType DocumentType
 	// Encrypt the input (nil IV = random generation for AuthBridge)
 	encryptedInput, err := crypto.EncryptAES256CBC(inputJSON, c.config.Password, nil)
 	if err != nil {
+		_ = c.metrics.Counter(ctx, "third_party.error", 1, metrics.MetricLabels{
+			"provider":   "authbridge",
+			"operation":  operation,
+			"error_type": "encryption_error",
+		})
 		return nil, fmt.Errorf("encryption failed: %v", err)
 	}
 
@@ -162,6 +187,11 @@ func (c *AuthBridgeClient) callRealAPI(req DocumentRequest, docType DocumentType
 
 	requestBody, err := json.Marshal(apiReq)
 	if err != nil {
+		_ = c.metrics.Counter(ctx, "third_party.error", 1, metrics.MetricLabels{
+			"provider":   "authbridge",
+			"operation":  operation,
+			"error_type": "marshal_error",
+		})
 		return nil, fmt.Errorf("failed to marshal API request: %v", err)
 	}
 
@@ -177,9 +207,28 @@ func (c *AuthBridgeClient) callRealAPI(req DocumentRequest, docType DocumentType
 
 	// Make HTTP request
 	statusCode, responseBody, err := c.httpClient.Post(endpoint, headers, requestBody)
+	duration := time.Since(startTime)
+
 	if err != nil {
+		_ = c.metrics.Counter(ctx, "third_party.error", 1, metrics.MetricLabels{
+			"provider":   "authbridge",
+			"operation":  operation,
+			"error_type": "network_error",
+		})
+		_ = c.metrics.Timer(ctx, "third_party.response_time", duration, metrics.MetricLabels{
+			"provider":  "authbridge",
+			"operation": operation,
+			"status":    "error",
+		})
 		return nil, fmt.Errorf("HTTP request failed: %v", err)
 	}
+
+	// Track successful response time
+	_ = c.metrics.Timer(ctx, "third_party.response_time", duration, metrics.MetricLabels{
+		"provider":    "authbridge",
+		"operation":   operation,
+		"status_code": strconv.Itoa(statusCode),
+	})
 
 	// Log encrypted response
 	fmt.Printf("[AuthBridge] HTTP Status: %d\n", statusCode)
@@ -187,6 +236,13 @@ func (c *AuthBridgeClient) callRealAPI(req DocumentRequest, docType DocumentType
 
 	// Handle non-2xx status codes
 	if statusCode < 200 || statusCode >= 300 {
+		_ = c.metrics.Counter(ctx, "third_party.error", 1, metrics.MetricLabels{
+			"provider":    "authbridge",
+			"operation":   operation,
+			"error_type":  "http_error",
+			"status_code": strconv.Itoa(statusCode),
+		})
+
 		// Try to parse and decrypt error response
 		var apiResp APIResponse
 		if err := json.Unmarshal(responseBody, &apiResp); err != nil {
@@ -198,6 +254,11 @@ func (c *AuthBridgeClient) callRealAPI(req DocumentRequest, docType DocumentType
 		if apiResp.ResponseData != "" {
 			decryptedError, err := crypto.DecryptAES256CBC(apiResp.ResponseData, c.config.Password)
 			if err != nil {
+				_ = c.metrics.Counter(ctx, "third_party.error", 1, metrics.MetricLabels{
+					"provider":   "authbridge",
+					"operation":  operation,
+					"error_type": "decryption_error",
+				})
 				// If decryption fails, return encrypted error
 				return nil, fmt.Errorf("HTTP %d: failed to decrypt error response: %v (encrypted: %s)", statusCode, err, apiResp.ResponseData)
 			}
@@ -213,12 +274,22 @@ func (c *AuthBridgeClient) callRealAPI(req DocumentRequest, docType DocumentType
 	// Parse success response
 	var apiResp APIResponse
 	if err := json.Unmarshal(responseBody, &apiResp); err != nil {
+		_ = c.metrics.Counter(ctx, "third_party.error", 1, metrics.MetricLabels{
+			"provider":   "authbridge",
+			"operation":  operation,
+			"error_type": "parse_error",
+		})
 		return nil, fmt.Errorf("failed to unmarshal API response: %v", err)
 	}
 
 	// Decrypt response
 	decryptedResponse, err := crypto.DecryptAES256CBC(apiResp.ResponseData, c.config.Password)
 	if err != nil {
+		_ = c.metrics.Counter(ctx, "third_party.error", 1, metrics.MetricLabels{
+			"provider":   "authbridge",
+			"operation":  operation,
+			"error_type": "decryption_error",
+		})
 		return nil, fmt.Errorf("decryption failed: %v", err)
 	}
 
@@ -227,10 +298,37 @@ func (c *AuthBridgeClient) callRealAPI(req DocumentRequest, docType DocumentType
 	// Parse decrypted response
 	var result map[string]interface{}
 	if err := json.Unmarshal([]byte(decryptedResponse), &result); err != nil {
+		_ = c.metrics.Counter(ctx, "third_party.error", 1, metrics.MetricLabels{
+			"provider":   "authbridge",
+			"operation":  operation,
+			"error_type": "parse_error",
+		})
 		return nil, fmt.Errorf("failed to unmarshal decrypted response: %v", err)
 	}
 
 	return result, nil
+}
+
+// getOperationName returns a human-readable operation name for metrics tracking
+func getOperationName(docType DocumentType) string {
+	switch docType {
+	case AADHAAR:
+		return "verify_aadhaar"
+	case PAN_COM:
+		return "verify_pan_comprehensive"
+	case PAN_AADHAAR:
+		return "verify_pan_aadhaar_link"
+	case GSTIN:
+		return "verify_gstin"
+	case CIN:
+		return "verify_cin"
+	case PAN:
+		return "verify_pan"
+	case BANK_VERIFY:
+		return "verify_bank"
+	default:
+		return "verify_document"
+	}
 }
 
 // getMockResponse returns mock responses for different document types
