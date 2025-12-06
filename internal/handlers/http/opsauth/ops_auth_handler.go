@@ -122,7 +122,7 @@ func (h *OpsAuthHandler) HandleRefresh(c echo.Context) error {
 	logger.Info("Refreshing access token")
 
 	// Read refresh token from cookie
-	cookie, err := c.Cookie("refresh_token")
+	cookie, err := c.Cookie("ops_refresh_token")
 	if err != nil {
 		logger.Errorf("Refresh token cookie not found: %v", err)
 		return c.JSON(401, map[string]any{
@@ -185,7 +185,7 @@ func (h *OpsAuthHandler) HandleLogout(c echo.Context) error {
 	}
 
 	// Try to read refresh token from cookie
-	cookie, err := c.Cookie("refresh_token")
+	cookie, err := c.Cookie("ops_refresh_token")
 	if err == nil && cookie != nil && cookie.Value != "" {
 		refreshToken := cookie.Value
 

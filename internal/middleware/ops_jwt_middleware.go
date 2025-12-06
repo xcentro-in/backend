@@ -21,7 +21,7 @@ func OpsJWTMiddleware(authService opsauth.OpsAuthService, cfg *config.Config) ec
 			}
 
 			// Extract access token from cookie
-			cookie, err := c.Cookie("access_token")
+			cookie, err := c.Cookie("ops_access_token")
 			if err != nil {
 				return c.JSON(401, map[string]any{
 					"error":   "MISSING_TOKEN",

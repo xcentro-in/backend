@@ -568,7 +568,7 @@ func (r *PgBusinessRepository) GetBusinessDetailsForOps(ctx context.Context, bid
 	// Fetch users related to this business
 	usersQuery := `
 		SELECT
-			u.id, u.email, u.name, COALESCE(u.mobile, ''),
+			u.id, u.email, COALESCE(u.name, ''), COALESCE(u.mobile, ''),
 			bur.role, bur.role_claim, u.kyc_status, bur.kyc_needed,
 			COALESCE(ui.tax_id, ''), COALESCE(ui.national_id, ''),
 			u.email_verified, u.mobile_verified,
