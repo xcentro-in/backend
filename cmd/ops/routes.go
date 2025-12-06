@@ -228,5 +228,11 @@ func initializeNotificationTrigger(clients *externalClients) {
 
 func registerRouters(s *opsDashboardServer) {
 	initializeNotificationTrigger(&s.meta.clients)
+
+	// Public health check route (no authentication required)
+	s.echo.GET("/ops/health", func(c echo.Context) error {
+		return c.JSON(200, map[string]string{"status": "ok", "service": "ops-dashboard"})
+	})
+
 	registerOpsV1Routes(s)
 }
