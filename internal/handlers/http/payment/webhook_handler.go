@@ -16,6 +16,7 @@ import (
 	"xcentro.in/internal/adapters/external/payment/easebuzz"
 	"xcentro.in/internal/adapters/external/payment/jiopay"
 	"xcentro.in/internal/adapters/external/payment/mockpg"
+	"xcentro.in/internal/core/metrics"
 	"xcentro.in/internal/core/payment"
 	paymentSvc "xcentro.in/internal/services/payment"
 	"xcentro.in/internal/shared/logger"
@@ -31,6 +32,7 @@ type WebhookHandler struct {
 	mockPGEnabled   bool // Flag to check if mock PG is enabled
 	stateLogger     *paymentSvc.PaymentStateLogger
 	logger          *logger.Logger
+	metrics         metrics.MetricsProvider
 }
 
 // NewWebhookHandler creates a new webhook handler
@@ -42,7 +44,13 @@ func NewWebhookHandler(
 	mockPGEnabled bool,
 	stateChangeRepo payment.PaymentStateChangeRepository,
 	log *logger.Logger,
+	metricsProvider metrics.MetricsProvider,
 ) *WebhookHandler {
+	// Use no-op metrics if not provided
+	if metricsProvider == nil {
+		metricsProvider = metrics.NewNoOpMetricsProvider()
+	}
+
 	return &WebhookHandler{
 		paymentRepo:     paymentRepo,
 		jioPayGateway:   jioPayGateway,
@@ -51,6 +59,7 @@ func NewWebhookHandler(
 		mockPGEnabled:   mockPGEnabled,
 		stateLogger:     paymentSvc.NewPaymentStateLogger(stateChangeRepo),
 		logger:          log,
+		metrics:         metricsProvider,
 	}
 }
 
@@ -87,6 +96,13 @@ func (h *WebhookHandler) HandlePaymentStatusWebhook(c echo.Context) error {
 // Note: Webhook payload structure might differ from SURL/FURL callback - validate with PG team
 func (h *WebhookHandler) handleJioPayPaymentWebhook(c echo.Context) error {
 	ctx := c.Request().Context()
+	startTime := time.Now()
+
+	// Track webhook received
+	_ = h.metrics.Counter(ctx, "webhook.received", 1, metrics.MetricLabels{
+		"gateway": "jiopay",
+		"type":    "payment_status",
+	})
 
 	fmt.Println("=== JIOPAY WEBHOOK: Async notification received ===")
 
@@ -119,6 +135,13 @@ func (h *WebhookHandler) handleJioPayPaymentWebhook(c echo.Context) error {
 	// Step 3: Verify signature
 	if err := h.jioPayGateway.ValidateWebhook(bodyBytes, webhook.SecureHash); err != nil {
 		fmt.Printf("❌ Webhook signature verification failed: %v\n", err)
+
+		// Track signature verification failure
+		_ = h.metrics.Counter(ctx, "webhook.signature_failed", 1, metrics.MetricLabels{
+			"gateway": "jiopay",
+			"type":    "payment_status",
+		})
+
 		// Return 200 OK to avoid gateway retries, but log the failure
 		return c.JSON(http.StatusOK, map[string]string{
 			"status":  "error",
@@ -200,12 +223,26 @@ func (h *WebhookHandler) handleJioPayPaymentWebhook(c echo.Context) error {
 		}
 	} else {
 		fmt.Printf("⚠️  Payment already in terminal state: %s (idempotency - no update)\n", pmt.Status)
+
+		// Track duplicate webhook
+		_ = h.metrics.Counter(ctx, "webhook.duplicate", 1, metrics.MetricLabels{
+			"gateway": "jiopay",
+			"type":    "payment_status",
+		})
 	}
 
 	// TODO: Store webhook history for debugging
 	// Create webhook_logs table to log all webhook attempts
 
 	fmt.Println("=== JIOPAY WEBHOOK: Processing complete ===")
+
+	// Track processing duration
+	duration := time.Since(startTime)
+	_ = h.metrics.Timer(ctx, "webhook.processing_duration", duration, metrics.MetricLabels{
+		"gateway": "jiopay",
+		"type":    "payment_status",
+		"status":  "success",
+	})
 
 	return c.JSON(http.StatusOK, map[string]string{
 		"status":  "success",

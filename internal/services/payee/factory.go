@@ -7,6 +7,7 @@ import (
 	payoutFactory "xcentro.in/internal/adapters/external/payout/factory"
 	"xcentro.in/internal/core/business"
 	"xcentro.in/internal/core/business_rules"
+	"xcentro.in/internal/core/metrics"
 	"xcentro.in/internal/core/payout"
 	"xcentro.in/internal/services/verification"
 	"xcentro.in/internal/shared/config"
@@ -20,15 +21,20 @@ type PayeeServiceFactory struct {
 	txManager       client.TxManager
 	businessService business.BusinessService
 	config          *config.Config
+	metrics         metrics.MetricsProvider
 }
 
 // NewPayeeServiceFactory creates a new factory for PayeeService
-func NewPayeeServiceFactory(db client.DB, txManager client.TxManager, businessService business.BusinessService, cfg *config.Config) *PayeeServiceFactory {
+func NewPayeeServiceFactory(db client.DB, txManager client.TxManager, businessService business.BusinessService, cfg *config.Config, metricsProvider metrics.MetricsProvider) *PayeeServiceFactory {
+	if metricsProvider == nil {
+		metricsProvider = metrics.NewNoOpMetricsProvider()
+	}
 	return &PayeeServiceFactory{
 		db:              db,
 		txManager:       txManager,
 		businessService: businessService,
 		config:          cfg,
+		metrics:         metricsProvider,
 	}
 }
 
@@ -46,7 +52,7 @@ func (f *PayeeServiceFactory) NewPayeeService() *PayeeService {
 	businessPayeeRelationRepo := payeeRepo.NewPgBusinessPayeeRelationRepository(f.db, f.config.BankAccountEncryption.EncryptionKey)
 
 	// Create payout provider factory (supports mock mode via CASTLER_MOCK_ENABLED)
-	providerFactory := payoutFactory.NewPayoutProviderFactory(f.config)
+	providerFactory := payoutFactory.NewPayoutProviderFactory(f.config, f.metrics)
 
 	// Get payout provider (returns mock or real based on config)
 	payoutProvider, err := providerFactory.GetProvider(payout.ProviderCastler)

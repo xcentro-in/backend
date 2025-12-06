@@ -149,8 +149,8 @@ func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group
 		// Real gateways will be nil (never called when MockPG is enabled)
 	} else {
 		// Production mode: Only initialize real payment gateways
-		easebuzzClient = easebuzz.NewEasebuzzClient(cfg.Easebuzz.BaseURL, cfg.Easebuzz.MerchantKey, cfg.Easebuzz.Salt, cfg.Easebuzz.APIKey, cfg.Easebuzz.MerchantTokenID, cfg.Easebuzz.IsAggregatorModel, userService)
-		jioPayClient = jiopay.NewJioPayClient(cfg.JioPay.BaseURL, cfg.JioPay.TokenizationBaseURL, cfg.JioPay.MerchantID, cfg.JioPay.APIKey, cfg.JioPay.AppID, cfg.JioPay.EncryptionKey, cfg.JioPay.IsAggregatorModel, busSvc)
+		easebuzzClient = easebuzz.NewEasebuzzClient(cfg.Easebuzz.BaseURL, cfg.Easebuzz.MerchantKey, cfg.Easebuzz.Salt, cfg.Easebuzz.APIKey, cfg.Easebuzz.MerchantTokenID, cfg.Easebuzz.IsAggregatorModel, userService, clients.metrics)
+		jioPayClient = jiopay.NewJioPayClient(cfg.JioPay.BaseURL, cfg.JioPay.TokenizationBaseURL, cfg.JioPay.MerchantID, cfg.JioPay.APIKey, cfg.JioPay.AppID, cfg.JioPay.EncryptionKey, cfg.JioPay.IsAggregatorModel, busSvc, clients.metrics)
 		// MockPG will be nil (not used in production)
 	}
 
@@ -174,13 +174,16 @@ func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group
 	notificationEventRepo := notificationRepo.NewPgNotificationEventRepository(clients.db)
 	voucherService := voucherSvc.NewVoucherService(voucherRepository, queueRepository, voucherCoreService, businessPayeeRelationRepo, notificationEventRepo, logger.GetDefault())
 
-	paymentService := payments.NewPaymentService(orchestrator, paymentRepository, storedCardRepository, bankAccountRepository, walletService, feeCalculator, clients.txManager, voucherService, voucherRepository, pendingVoucherRepository, busSvc, stateChangeRepository, cfg, logger.GetDefault())
+	paymentService := payments.NewPaymentService(orchestrator, paymentRepository, storedCardRepository, bankAccountRepository, walletService, feeCalculator, clients.txManager, voucherService, voucherRepository, pendingVoucherRepository, busSvc, stateChangeRepository, cfg, logger.GetDefault(), clients.metrics)
 
 	processPaymentGroup := group.Group("/process_payment")
 
+	walletGroup := group.Group("/wallet")
+	payment.RegisterWalletRoutes(walletGroup, paymentService, paymentSourceService, authSvc, logger.GetDefault())
+
 	// Register public routes FIRST (no JWT required) - these are called by external systems
 	// 1. Webhooks (called by payment gateways)
-	webhookHandler := payment.NewWebhookHandler(paymentRepository, jioPayClient, easebuzzClient, mockPGClient, cfg.MockPG.Enabled, stateChangeRepository, logger.GetDefault())
+	webhookHandler := payment.NewWebhookHandler(paymentRepository, jioPayClient, easebuzzClient, mockPGClient, cfg.MockPG.Enabled, stateChangeRepository, logger.GetDefault(), clients.metrics)
 	webhookGroup := processPaymentGroup.Group("/webhooks")
 	webhookGroup.POST("/payment_status", webhookHandler.HandlePaymentStatusWebhook)
 	webhookGroup.POST("/settlement_status", webhookHandler.HandleSettlementStatusWebhook)
@@ -230,7 +233,7 @@ func registerV1PayeeRoutes(clients *externalClients, cfg *config.Config, group *
 	factory := &serviceFactory{clients, cfg}
 	_, _, _, _, _, busSvc, authSvc := factory.createCoreServices(nil)
 
-	payeeFactory := payeeSvc.NewPayeeServiceFactory(clients.db, clients.txManager, busSvc, cfg)
+	payeeFactory := payeeSvc.NewPayeeServiceFactory(clients.db, clients.txManager, busSvc, cfg, clients.metrics)
 	payeeService := payeeFactory.NewPayeeService()
 
 	payeeGroup := group.Group("/payees")

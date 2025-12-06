@@ -10,6 +10,7 @@ import (
 	paymentdb "xcentro.in/internal/adapters/database/postgres/payment"
 	"xcentro.in/internal/core/business"
 	"xcentro.in/internal/core/business_rules"
+	"xcentro.in/internal/core/metrics"
 	"xcentro.in/internal/core/payment"
 	paymentSvc "xcentro.in/internal/services/payment"
 	"xcentro.in/internal/shared/config"
@@ -32,6 +33,7 @@ type PaymentService struct {
 	stateChangeRepo      *paymentdb.PostgresPaymentStateChangeRepository    // Concrete type for transaction support
 	config               *config.Config                                     // Application configuration (server URL, etc.)
 	logger               *logger.Logger
+	metrics              metrics.MetricsProvider
 }
 
 // NewPaymentService creates a new payment service with all dependencies
@@ -50,6 +52,7 @@ func NewPaymentService(
 	stateChangeRepo payment.PaymentStateChangeRepository, // For logging payment state changes
 	cfg *config.Config, // Application configuration
 	logger *logger.Logger,
+	metricsProvider metrics.MetricsProvider,
 ) *PaymentService {
 	s := &PaymentService{
 		orchestrator:       orchestrator,
@@ -66,6 +69,7 @@ func NewPaymentService(
 		stateChangeRepo:    stateChangeRepo.(*paymentdb.PostgresPaymentStateChangeRepository),
 		config:             cfg,
 		logger:             logger,
+		metrics:            metricsProvider,
 	}
 
 	// NOTE: Voucher finalization happens in callback handler (when payment succeeds)
@@ -78,6 +82,8 @@ func NewPaymentService(
 // ProcessPayment orchestrates the complete payment flow with transactional atomicity
 // All payment and voucher operations are wrapped in a single database transaction
 func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.PaymentRequest) (*payment.PaymentResponse, error) {
+	startTime := time.Now()
+
 	s.logger.InfoWith("Starting payment processing",
 		"business_id", req.BusinessID,
 		"user_id", req.UserID,
@@ -355,6 +361,14 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 	if err != nil {
 		// Transaction rolled back - no data persisted
 		s.logger.ErrorWith("Payment processing transaction failed - all changes rolled back", "error", err)
+
+		// Track payment processing duration (for performance monitoring)
+		duration := time.Since(startTime)
+		_ = s.metrics.Timer(ctx, "payment.duration", duration, metrics.MetricLabels{
+			"payment_method": string(req.PaymentMethod),
+			"status":         "failed",
+		})
+
 		return nil, err
 	}
 
@@ -363,6 +377,14 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 		"payment_id", response.PaymentID,
 		"gateway_used", response.GatewayUsed)
 	s.logger.DebugWith("Redirect URL generated", "redirect_url", response.RedirectURL)
+
+	// Track payment processing duration (for performance monitoring)
+	duration := time.Since(startTime)
+	_ = s.metrics.Timer(ctx, "payment.duration", duration, metrics.MetricLabels{
+		"payment_method": string(req.PaymentMethod),
+		"gateway":        string(response.GatewayUsed),
+		"status":         "success",
+	})
 
 	// Update onboarding flag (non-blocking, first-time only, outside transaction)
 	// Skip for tokenization payments (₹1 card verification) - only count actual voucher payments
@@ -399,6 +421,8 @@ func (s *PaymentService) AddPaymentSource(ctx context.Context, businessID string
 // TokenizeCard tokenizes a card and stores it in the wallet
 // Creates a ₹1 payment record for the tokenization transaction
 func (s *PaymentService) TokenizeCard(ctx context.Context, req payment.TokenizeRequest) (*payment.TokenizeResponse, error) {
+	startTime := time.Now()
+
 	s.logger.InfoWith("Starting card tokenization", "business_id", req.BusinessID)
 
 	// Step 1: Generate UUID for tokenization payment at application level
@@ -465,6 +489,13 @@ func (s *PaymentService) TokenizeCard(ctx context.Context, req payment.TokenizeR
 		_ = s.paymentRepo.UpdatePaymentStatus(ctx, paymentID, payment.PaymentStatusFailed, failureMetadata)
 
 		s.logger.ErrorWith("Card tokenization failed", "error", err)
+
+		// Track tokenization duration (for performance monitoring)
+		duration := time.Since(startTime)
+		_ = s.metrics.Timer(ctx, "payment.tokenization.duration", duration, metrics.MetricLabels{
+			"status": "failed",
+		})
+
 		return nil, fmt.Errorf("tokenization failed: %w", err)
 	}
 
@@ -479,6 +510,14 @@ func (s *PaymentService) TokenizeCard(ctx context.Context, req payment.TokenizeR
 	s.logger.InfoWith("Card tokenized successfully",
 		"card_id", response.CardID,
 		"payment_id", paymentID)
+
+	// Track tokenization duration (for performance monitoring)
+	duration := time.Since(startTime)
+	_ = s.metrics.Timer(ctx, "payment.tokenization.duration", duration, metrics.MetricLabels{
+		"gateway": string(response.GatewayUsed),
+		"status":  "success",
+	})
+
 	return response, nil
 }
 

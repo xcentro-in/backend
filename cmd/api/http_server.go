@@ -16,6 +16,7 @@ import (
 	"xcentro.in/internal/adapters/providers/mailers"
 	metricsProvider "xcentro.in/internal/adapters/providers/metrics"
 	"xcentro.in/internal/core/metrics"
+	customMiddleware "xcentro.in/internal/middleware"
 	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/logger"
 	"xcentro.in/internal/shared/ratelimiter"
@@ -74,6 +75,7 @@ func NewXcentroServer() *xcentroServer {
 	server.registerValidator()
 	server.registerGlobalMiddleware()
 	server.registerClients()
+	server.registerMetricsMiddleware() // Add metrics middleware after clients are registered
 	server.registerRouters()
 
 	return server
@@ -235,11 +237,17 @@ func (s *xcentroServer) registerClients() {
 	s.meta.clients.metrics = metricsClient
 
 	// AuthBridge client (singleton)
-	if err := authbridge.Initialize(&s.meta.config); err != nil {
+	if err := authbridge.Initialize(&s.meta.config, metricsClient); err != nil {
 		s.log.Errorf("Failed to initialize AuthBridge client: %v", err)
 		panic(err)
 	}
 	s.log.Info("AuthBridge client initialized successfully")
+}
+
+func (s *xcentroServer) registerMetricsMiddleware() {
+	// Register metrics middleware to track HTTP requests
+	s.echo.Use(customMiddleware.MetricsMiddleware(s.meta.clients.metrics))
+	s.log.Info("Metrics middleware registered successfully")
 }
 
 func (s *xcentroServer) registerRouters() {

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"xcentro.in/internal/core/metrics"
 	"xcentro.in/internal/core/payout"
 	"xcentro.in/internal/shared/crypto"
 	"xcentro.in/internal/shared/logger"
@@ -27,6 +28,7 @@ type CastlerClient struct {
 	encryptionKey string // AES-256 encryption key (required)
 	fixedIV       []byte // Fixed IV for AES encryption (required)
 	logger        *logger.Logger
+	metrics       metrics.MetricsProvider
 }
 
 // NewCastlerClient creates a new Castler payout client
@@ -39,7 +41,8 @@ type CastlerClient struct {
 //   - encryptionKey: AES-256 encryption key (32 bytes, required)
 //   - encryptionIVBase64: Fixed IV in base64 format (16 bytes, required, e.g., "TkMwVjAkMFQwTDAzMFJNRQ==")
 //   - log: Logger instance for structured logging
-func NewCastlerClient(baseURL, apiKey, secretKey, escrowID, encryptionKey, encryptionIVBase64 string, log *logger.Logger) (*CastlerClient, error) {
+//   - metricsProvider: Metrics provider for tracking API performance
+func NewCastlerClient(baseURL, apiKey, secretKey, escrowID, encryptionKey, encryptionIVBase64 string, log *logger.Logger, metricsProvider metrics.MetricsProvider) (*CastlerClient, error) {
 	// Validate required parameters
 	if encryptionKey == "" {
 		return nil, fmt.Errorf("encryption key is required for Castler API")
@@ -57,6 +60,11 @@ func NewCastlerClient(baseURL, apiKey, secretKey, escrowID, encryptionKey, encry
 		return nil, fmt.Errorf("invalid IV length: expected %d bytes, got %d bytes", aes.BlockSize, len(fixedIV))
 	}
 
+	// Use no-op metrics if not provided
+	if metricsProvider == nil {
+		metricsProvider = metrics.NewNoOpMetricsProvider()
+	}
+
 	return &CastlerClient{
 		baseURL:       baseURL,
 		apiKey:        apiKey,
@@ -67,7 +75,8 @@ func NewCastlerClient(baseURL, apiKey, secretKey, escrowID, encryptionKey, encry
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
-		logger: log,
+		logger:  log,
+		metrics: metricsProvider,
 	}, nil
 }
 
@@ -341,13 +350,29 @@ func maskCredentialEnd(s string, showLast int) string {
 }
 
 func (c *CastlerClient) post(ctx context.Context, endpoint string, reqBody interface{}, respBody interface{}) error {
+	startTime := time.Now()
 	var bodyReader io.Reader
+
+	// Determine operation from endpoint
+	operation := "unknown"
+	if strings.Contains(endpoint, "/payee") {
+		operation = "onboard_beneficiary"
+	} else if strings.Contains(endpoint, "/transfer") {
+		operation = "create_transfer"
+	} else if strings.Contains(endpoint, "/validation") {
+		operation = "verify_bank"
+	}
 
 	// Encrypt request body (always encrypted)
 	if reqBody != nil {
 		// Marshal to JSON
 		jsonData, err := json.Marshal(reqBody)
 		if err != nil {
+			_ = c.metrics.Counter(ctx, "third_party.error", 1, metrics.MetricLabels{
+				"provider":   "castler",
+				"operation":  operation,
+				"error_type": "marshal_error",
+			})
 			return fmt.Errorf("failed to marshal request: %w", err)
 		}
 
@@ -357,6 +382,11 @@ func (c *CastlerClient) post(ctx context.Context, endpoint string, reqBody inter
 		// Encrypt request
 		encryptedData, err := crypto.EncryptForCastler(string(jsonData), c.encryptionKey, c.fixedIV)
 		if err != nil {
+			_ = c.metrics.Counter(ctx, "third_party.error", 1, metrics.MetricLabels{
+				"provider":   "castler",
+				"operation":  operation,
+				"error_type": "encryption_error",
+			})
 			return fmt.Errorf("failed to encrypt request: %w", err)
 		}
 		bodyReader = strings.NewReader(encryptedData)
@@ -364,6 +394,11 @@ func (c *CastlerClient) post(ctx context.Context, endpoint string, reqBody inter
 
 	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+endpoint, bodyReader)
 	if err != nil {
+		_ = c.metrics.Counter(ctx, "third_party.error", 1, metrics.MetricLabels{
+			"provider":   "castler",
+			"operation":  operation,
+			"error_type": "request_creation_error",
+		})
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 
@@ -371,7 +406,19 @@ func (c *CastlerClient) post(ctx context.Context, endpoint string, reqBody inter
 	c.setCommonHeaders(req)
 
 	resp, err := c.httpClient.Do(req)
+	duration := time.Since(startTime)
+
 	if err != nil {
+		_ = c.metrics.Counter(ctx, "third_party.error", 1, metrics.MetricLabels{
+			"provider":   "castler",
+			"operation":  operation,
+			"error_type": "network_error",
+		})
+		_ = c.metrics.Timer(ctx, "third_party.response_time", duration, metrics.MetricLabels{
+			"provider":  "castler",
+			"operation": operation,
+			"status":    "error",
+		})
 		return fmt.Errorf("HTTP request failed: %w", err)
 	}
 	defer resp.Body.Close()
@@ -379,6 +426,11 @@ func (c *CastlerClient) post(ctx context.Context, endpoint string, reqBody inter
 	// Read response body (always encrypted, including error responses)
 	bodyBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
+		_ = c.metrics.Counter(ctx, "third_party.error", 1, metrics.MetricLabels{
+			"provider":   "castler",
+			"operation":  operation,
+			"error_type": "read_error",
+		})
 		return fmt.Errorf("failed to read response: %w", err)
 	}
 
@@ -397,18 +449,41 @@ func (c *CastlerClient) post(ctx context.Context, endpoint string, reqBody inter
 	// Decrypt response (error responses are also encrypted)
 	decryptedData, err := crypto.DecryptFromCastler(string(bodyBytes), c.encryptionKey, c.fixedIV)
 	if err != nil {
+		_ = c.metrics.Counter(ctx, "third_party.error", 1, metrics.MetricLabels{
+			"provider":   "castler",
+			"operation":  operation,
+			"error_type": "decryption_error",
+		})
 		c.logger.ErrorWith("Castler API: Decryption failed", "error", err, "response_body", rawResponse)
 		return fmt.Errorf("failed to decrypt response: %w", err)
 	}
 
+	// Track response time
+	_ = c.metrics.Timer(ctx, "third_party.response_time", duration, metrics.MetricLabels{
+		"provider":    "castler",
+		"operation":   operation,
+		"status_code": strconv.Itoa(resp.StatusCode),
+	})
+
 	// Check status code after decryption
 	if resp.StatusCode >= 400 {
+		_ = c.metrics.Counter(ctx, "third_party.error", 1, metrics.MetricLabels{
+			"provider":    "castler",
+			"operation":   operation,
+			"error_type":  "http_error",
+			"status_code": strconv.Itoa(resp.StatusCode),
+		})
 		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, decryptedData)
 	}
 
 	// Parse decrypted JSON into response body
 	if respBody != nil {
 		if err := json.Unmarshal([]byte(decryptedData), respBody); err != nil {
+			_ = c.metrics.Counter(ctx, "third_party.error", 1, metrics.MetricLabels{
+				"provider":   "castler",
+				"operation":  operation,
+				"error_type": "parse_error",
+			})
 			return fmt.Errorf("failed to parse decrypted response: %w", err)
 		}
 	}

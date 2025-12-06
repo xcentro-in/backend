@@ -9,8 +9,10 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"time"
 
+	"xcentro.in/internal/core/metrics"
 	"xcentro.in/internal/core/payment"
 	"xcentro.in/internal/core/user"
 	"xcentro.in/internal/shared/logger"
@@ -29,6 +31,7 @@ type EasebuzzClient struct {
 	hashGenerator       *SecureHashGenerator   // Hash generator for request/response signatures
 	userService         user.UserService       // User service for fetching customer details (required for tokenization)
 	logger              *logger.Logger
+	metrics             metrics.MetricsProvider
 }
 
 // NewEasebuzzClient creates a new Easebuzz payment gateway client
@@ -53,7 +56,12 @@ type EasebuzzClient struct {
 //	    cfg.Easebuzz.IsAggregatorModel,
 //	    userService,
 //	)
-func NewEasebuzzClient(baseURL, merchantKey, salt, apiKey, merchantTokenID string, isAggregatorModel bool, userService user.UserService) payment.PaymentGateway {
+func NewEasebuzzClient(baseURL, merchantKey, salt, apiKey, merchantTokenID string, isAggregatorModel bool, userService user.UserService, metricsProvider metrics.MetricsProvider) payment.PaymentGateway {
+	// Use no-op metrics if not provided
+	if metricsProvider == nil {
+		metricsProvider = metrics.NewNoOpMetricsProvider()
+	}
+
 	log := logger.GetDefault()
 
 	paymentModel := "Normal"
@@ -81,6 +89,7 @@ func NewEasebuzzClient(baseURL, merchantKey, salt, apiKey, merchantTokenID strin
 		hashGenerator: NewSecureHashGenerator(merchantKey, salt),
 		userService:   userService,
 		logger:        log,
+		metrics:       metricsProvider,
 	}
 }
 
@@ -218,18 +227,49 @@ func (c *EasebuzzClient) TokenizeCard(ctx context.Context, request payment.Gatew
 
 	fmt.Println("🚀 Calling Easebuzz TMS API...")
 
+	startTime := time.Now()
 	resp, err := c.httpClient.Do(req)
+	duration := time.Since(startTime)
+
 	if err != nil {
+		_ = c.metrics.Counter(ctx, "gateway.error", 1, metrics.MetricLabels{
+			"gateway":    "easebuzz",
+			"operation":  "tokenize",
+			"error_type": "network_error",
+		})
+		_ = c.metrics.Timer(ctx, "gateway.response_time", duration, metrics.MetricLabels{
+			"gateway":   "easebuzz",
+			"operation": "tokenize",
+			"status":    "error",
+		})
 		return nil, fmt.Errorf("HTTP request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
+		_ = c.metrics.Counter(ctx, "gateway.error", 1, metrics.MetricLabels{
+			"gateway":    "easebuzz",
+			"operation":  "tokenize",
+			"error_type": "read_error",
+		})
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 
+	// Track response time
+	_ = c.metrics.Timer(ctx, "gateway.response_time", duration, metrics.MetricLabels{
+		"gateway":     "easebuzz",
+		"operation":   "tokenize",
+		"status_code": strconv.Itoa(resp.StatusCode),
+	})
+
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		_ = c.metrics.Counter(ctx, "gateway.error", 1, metrics.MetricLabels{
+			"gateway":     "easebuzz",
+			"operation":   "tokenize",
+			"error_type":  "http_error",
+			"status_code": strconv.Itoa(resp.StatusCode),
+		})
 		return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
 	}
 

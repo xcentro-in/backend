@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"xcentro.in/internal/adapters/external/payout/castler"
+	"xcentro.in/internal/core/metrics"
 	"xcentro.in/internal/core/payout"
 	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/logger"
@@ -11,7 +12,8 @@ import (
 
 // PayoutProviderFactory creates payout provider instances based on provider type
 type PayoutProviderFactory struct {
-	config *config.Config
+	config  *config.Config
+	metrics metrics.MetricsProvider
 	// Cache provider instances (singleton pattern)
 	castlerClient     *castler.CastlerClient
 	mockCastlerClient *castler.MockCastlerClient
@@ -19,9 +21,13 @@ type PayoutProviderFactory struct {
 }
 
 // NewPayoutProviderFactory creates a new factory with configuration
-func NewPayoutProviderFactory(cfg *config.Config) *PayoutProviderFactory {
+func NewPayoutProviderFactory(cfg *config.Config, metricsProvider metrics.MetricsProvider) *PayoutProviderFactory {
+	if metricsProvider == nil {
+		metricsProvider = metrics.NewNoOpMetricsProvider()
+	}
 	return &PayoutProviderFactory{
-		config: cfg,
+		config:  cfg,
+		metrics: metricsProvider,
 	}
 }
 
@@ -68,7 +74,7 @@ func (f *PayoutProviderFactory) getCastlerClient() payout.PayoutProvider {
 		encryptionKey := f.config.Castler.EncryptionKey
 		encryptionIV := f.config.Castler.EncryptionIV
 
-		client, err := castler.NewCastlerClient(baseURL, apiKey, secretKey, escrowID, encryptionKey, encryptionIV, logger.GetDefault())
+		client, err := castler.NewCastlerClient(baseURL, apiKey, secretKey, escrowID, encryptionKey, encryptionIV, logger.GetDefault(), f.metrics)
 		if err != nil {
 			panic("Failed to create Castler client: " + err.Error())
 		}
