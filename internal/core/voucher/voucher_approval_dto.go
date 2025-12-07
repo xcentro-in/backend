@@ -16,8 +16,8 @@ const (
 // VoucherApprovalRequest represents the request to create/update an approval
 type VoucherApprovalRequest struct {
 	VoucherID       string         `json:"voucher_id" validate:"required,uuid"`
-	BusinessID      string         `json:"-"` // Set from header, not from request body
-	RequesterUserID string         `json:"-"` // Set from JWT context, not from request body
+	BusinessID      string         `json:"-"`                                         // Set from header, not from request body
+	RequesterUserID string         `json:"-"`                                         // Set from JWT context, not from request body
 	ApproverUserID  string         `json:"approver_user_id" validate:"required,uuid"` // Who should approve
 	Action          ApprovalAction `json:"action" validate:"required,oneof=pending approved rejected request_changes edited"`
 	Remarks         string         `json:"remarks"` // Optional remarks
@@ -30,7 +30,7 @@ type VoucherApprovalResponse struct {
 	ApprovalID            string         `json:"approval_id,omitempty"`
 	VoucherID             string         `json:"voucher_id"`
 	Action                ApprovalAction `json:"action"`
-	CreatedAt             time.Time      `json:"created_at"` // When this action was taken
+	CreatedAt             time.Time      `json:"created_at"`                        // When this action was taken
 	PreviousApprovalState ApprovalAction `json:"previous_approval_state,omitempty"` // State before this change (empty if fresh)
 	PreviousApproverID    string         `json:"previous_approver_id,omitempty"`    // User who was responsible for previous state (empty if fresh)
 }
@@ -60,15 +60,15 @@ type VoucherApprovalInboxRequest struct {
 
 // VoucherApprovalInboxItem represents a single voucher in the approval inbox
 type VoucherApprovalInboxItem struct {
-	VoucherID              string                `json:"voucher_id"`
-	VoucherNumber          string                `json:"voucher_number"`
-	InvoiceNumber          string                `json:"invoice_number"`
-	InvoiceDueDate         *time.Time            `json:"invoice_due_date"`
-	PayeeName              string                `json:"payee_name"`
-	TotalAmount            int64                 `json:"total_amount"` // In paise
-	VoucherStatus          string                `json:"voucher_status"`
-	CurrentApprovalStatus  ApprovalAction        `json:"current_approval_status"` // Latest approval action
-	ApprovalHistory        []ApprovalHistoryItem `json:"approval_history"`        // Complete chronological history
+	VoucherID             string                `json:"voucher_id"`
+	VoucherNumber         string                `json:"voucher_number"`
+	InvoiceNumber         string                `json:"invoice_number"`
+	InvoiceDueDate        *time.Time            `json:"invoice_due_date"`
+	PayeeName             string                `json:"payee_name"`
+	TotalAmount           int64                 `json:"total_amount"` // In paise
+	VoucherStatus         string                `json:"voucher_status"`
+	CurrentApprovalStatus ApprovalAction        `json:"current_approval_status"` // Latest approval action
+	ApprovalHistory       []ApprovalHistoryItem `json:"approval_history"`        // Complete chronological history
 }
 
 // VoucherApprovalInboxResponse represents the approval inbox response
@@ -87,21 +87,21 @@ type VoucherApprovalInboxCounts struct {
 
 // BatchApprovalRequest represents a batch approval request for multiple vouchers
 type BatchApprovalRequest struct {
-	VoucherIDs     []string `json:"voucher_ids" validate:"required,min=1,dive,uuid"`
-	ApprovedByID   string   `json:"approved_by_id" validate:"required,uuid"`
-	RequesterID    string   `json:"-"` // Set from JWT context
-	BusinessID     string   `json:"-"` // Set from header
-	Remarks        string   `json:"remarks"` // Optional remarks for all approvals
+	VoucherIDs   []string `json:"voucher_ids" validate:"required,min=1,dive,uuid"`
+	ApprovedByID string   `json:"approved_by_id" validate:"required,uuid"`
+	RequesterID  string   `json:"-"`       // Set from JWT context
+	BusinessID   string   `json:"-"`       // Set from header
+	Remarks      string   `json:"remarks"` // Optional remarks for all approvals
 }
 
 // BatchApprovalResponse represents the result of batch approval operation
 type BatchApprovalResponse struct {
-	Success        bool                       `json:"success"`
-	Message        string                     `json:"message"`
-	TotalRequested int                        `json:"total_requested"`
-	TotalApproved  int                        `json:"total_approved"`
-	TotalFailed    int                        `json:"total_failed"`
-	Results        []BatchApprovalResultItem  `json:"results"`
+	Success        bool                      `json:"success"`
+	Message        string                    `json:"message"`
+	TotalRequested int                       `json:"total_requested"`
+	TotalApproved  int                       `json:"total_approved"`
+	TotalFailed    int                       `json:"total_failed"`
+	Results        []BatchApprovalResultItem `json:"results"`
 }
 
 // BatchApprovalResultItem represents the result for a single voucher in batch operation
@@ -171,8 +171,8 @@ type VoucherWithPayeeDetails struct {
 	NetAmount     int64  `json:"net_amount"`
 
 	// Payee relation details (from business_payee_relation JOIN)
-	RelationID         string                 `json:"relation_id"`
-	DisplayName        string                 `json:"display_name"`
-	PayeeType          string                 `json:"payee_type"`
-	TypeSpecificData   map[string]interface{} `json:"type_specific_data,omitempty"`
+	RelationID       string                 `json:"relation_id"`
+	DisplayName      string                 `json:"display_name"`
+	PayeeType        string                 `json:"payee_type"`
+	TypeSpecificData map[string]interface{} `json:"type_specific_data,omitempty"`
 }

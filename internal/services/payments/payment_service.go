@@ -3,6 +3,7 @@ package payments
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -11,6 +12,7 @@ import (
 	"xcentro.in/internal/core/business"
 	"xcentro.in/internal/core/business_rules"
 	"xcentro.in/internal/core/payment"
+	"xcentro.in/internal/core/voucher"
 	paymentSvc "xcentro.in/internal/services/payment"
 	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/logger"
@@ -84,6 +86,38 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 		"amount", req.Amount,
 		"currency", req.Currency,
 		"payment_method", req.PaymentMethod)
+
+	// Step 0: Derive amount from vouchers if voucher_ids provided
+	// This ensures amount is always calculated from database (single source of truth)
+	if len(req.VoucherIDs) > 0 {
+		s.logger.InfoWith("Deriving payment amount from vouchers", "voucher_count", len(req.VoucherIDs))
+
+		// Parse voucher IDs to UUIDs
+		voucherUUIDs := make([]uuid.UUID, 0, len(req.VoucherIDs))
+		for _, voucherIDStr := range req.VoucherIDs {
+			voucherUUID, parseErr := uuid.Parse(voucherIDStr)
+			if parseErr != nil {
+				s.logger.ErrorWith("Invalid voucher ID format", "voucher_id", voucherIDStr, "error", parseErr)
+				return nil, fmt.Errorf("invalid voucher ID %s: %w", voucherIDStr, parseErr)
+			}
+			voucherUUIDs = append(voucherUUIDs, voucherUUID)
+		}
+
+		// Single query: Validate ownership + status + calculate sum
+		totalAmount, count, err := s.voucherRepo.(voucher.VoucherRepository).ValidateAndSumVouchers(
+			ctx, voucherUUIDs, req.BusinessID,
+		)
+		if err != nil {
+			s.logger.ErrorWith("Voucher validation failed", "error", err)
+			return nil, fmt.Errorf("voucher validation failed: %w", err)
+		}
+
+		// Override request amount with derived value (ignore any amount sent by client)
+		req.Amount = totalAmount
+		s.logger.InfoWith("Payment amount derived from vouchers",
+			"derived_amount", totalAmount,
+			"voucher_count", count)
+	}
 
 	// Step 1: Fetch fee rule from database
 	s.logger.DebugWith("Fetching fee rule for payment")
@@ -352,6 +386,49 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 				}
 				voucherUUIDs = append(voucherUUIDs, voucherUUID)
 			}
+
+			// RACE CONDITION PROTECTION: Acquire advisory locks and validate vouchers
+			// This prevents concurrent payments for the same voucher(s)
+			s.logger.InfoWith("Acquiring locks on vouchers and validating status", "count", len(voucherUUIDs))
+
+			// Type assert voucherRepo to access WithTx method
+			voucherRepoTyped, ok := s.voucherRepo.(voucher.VoucherRepository)
+			if !ok {
+				s.logger.ErrorWith("Invalid voucher repository type")
+				return fmt.Errorf("invalid voucher repository type")
+			}
+
+			// Create transactional voucher repository instance
+			txVoucherRepo := voucherRepoTyped.WithTx(tx)
+
+			// Acquire lock and validate each voucher
+			for _, voucherUUID := range voucherUUIDs {
+				lockErr := txVoucherRepo.AcquireVoucherLockAndValidate(txCtx, voucherUUID, req.BusinessID)
+				if lockErr != nil {
+					s.logger.ErrorWith("Failed to lock/validate voucher",
+						"voucher_id", voucherUUID.String(),
+						"error", lockErr)
+
+					// Provide user-friendly error messages
+					errMsg := lockErr.Error()
+					if strings.Contains(errMsg, "locked") || strings.Contains(errMsg, "in progress") {
+						return fmt.Errorf("voucher %s is already being paid by another user", voucherUUID.String())
+					} else if strings.Contains(errMsg, "not in draft") {
+						return fmt.Errorf("voucher %s is not available for payment", voucherUUID.String())
+					} else if strings.Contains(errMsg, "not found") {
+						return fmt.Errorf("voucher %s not found", voucherUUID.String())
+					}
+					return fmt.Errorf("failed to validate voucher %s: %w", voucherUUID.String(), lockErr)
+				}
+
+				s.logger.DebugWith("Voucher locked and validated",
+					"voucher_id", voucherUUID.String())
+			}
+
+			s.logger.InfoWith("All vouchers locked successfully", "count", len(voucherUUIDs))
+
+			// Amount validation no longer needed - amount was already derived and validated
+			// from vouchers before transaction started (Step 0)
 
 			// Store pending voucher relationships
 			s.logger.DebugWith("Calling StorePendingVouchers", "payment_id", paymentID, "voucher_count", len(voucherUUIDs))

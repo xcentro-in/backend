@@ -35,7 +35,6 @@ const (
 	VoucherTypeJournal VoucherType = "journal" // Journal voucher (future)
 )
 
-
 // Voucher represents a payment voucher domain entity
 // It serves as the accounting document linking payments to ERP systems
 type Voucher struct {

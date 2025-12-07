@@ -55,7 +55,7 @@ type UnpaidBillItem struct {
 	InvoiceNumber string            `json:"invoice_number"`
 	TotalAmount   int64             `json:"total_amount"` // Net amount in paise
 	DueDate       *time.Time        `json:"due_date"`
-	Status        BillPaymentStatus `json:"status"`       // open or overdue
+	Status        BillPaymentStatus `json:"status"` // open or overdue
 	VendorName    string            `json:"vendor_name"`
 	VendorGSTIN   string            `json:"vendor_gstin"`
 }
@@ -70,27 +70,27 @@ type UnpaidBillsResponse struct {
 
 // VoucherCountsResponse represents the counts of vouchers by payment status
 type VoucherCountsResponse struct {
-	All     int `json:"all"`      // Total vouchers (all statuses)
-	Paid    int `json:"paid"`     // Payment completed
-	Open    int `json:"open"`     // Not paid, due date in future
-	Overdue int `json:"overdue"`  // Not paid, due date passed
+	All     int `json:"all"`     // Total vouchers (all statuses)
+	Paid    int `json:"paid"`    // Payment completed
+	Open    int `json:"open"`    // Not paid, due date in future
+	Overdue int `json:"overdue"` // Not paid, due date passed
 }
 
 // CalendarBillItem represents a single bill in the calendar view
 // Used for displaying bills month by month with high-level details
 type CalendarBillItem struct {
 	VoucherID     string     `json:"voucher_id"`
-	VoucherNumber string     `json:"voucher_number"`  // PV-2024-00001
-	InvoiceNumber string     `json:"invoice_number"`  // Vendor's invoice number
-	DueDate       *time.Time `json:"due_date"`        // Invoice due date
-	GrossAmount   int64      `json:"gross_amount"`    // Total amount before deductions (in paise)
-	NetAmount     int64      `json:"net_amount"`      // Net amount after deductions (in paise)
-	PayeeID       string     `json:"payee_id"`        // Payee ID (part of relation composite key)
-	AccountID     string     `json:"account_id"`      // Account ID (part of relation composite key)
-	PayeeName     string     `json:"payee_name"`      // Display name from business_payee_relation
-	Description   string     `json:"description"`     // Bill description
-	VoucherStatus string     `json:"voucher_status"`  // draft, finalized, posted, synced
-	PaymentStatus *string    `json:"payment_status"`  // Payment transaction status (null if no payment)
+	VoucherNumber string     `json:"voucher_number"` // PV-2024-00001
+	InvoiceNumber string     `json:"invoice_number"` // Vendor's invoice number
+	DueDate       *time.Time `json:"due_date"`       // Invoice due date
+	GrossAmount   int64      `json:"gross_amount"`   // Total amount before deductions (in paise)
+	NetAmount     int64      `json:"net_amount"`     // Net amount after deductions (in paise)
+	PayeeID       string     `json:"payee_id"`       // Payee ID (part of relation composite key)
+	AccountID     string     `json:"account_id"`     // Account ID (part of relation composite key)
+	PayeeName     string     `json:"payee_name"`     // Display name from business_payee_relation
+	Description   string     `json:"description"`    // Bill description
+	VoucherStatus string     `json:"voucher_status"` // draft, finalized, posted, synced
+	PaymentStatus *string    `json:"payment_status"` // Payment transaction status (null if no payment)
 }
 
 // CalendarViewRequest represents the request for calendar view
