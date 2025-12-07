@@ -89,7 +89,7 @@ func (h *PaymentHandler) FetchWallet(c echo.Context) error {
 	h.logger.DebugWith("Business ID extracted", "business_id", businessID)
 
 	// Call wallet service directly to get business wallet information
-	// showInactive = true to include failed tokenization cards within 7-day window
+	// showInactive = true to include failed tokenization cards within 2-day window
 	h.logger.Debug("Fetching business wallet from wallet service")
 	businessWallet, err := h.walletService.GetBusinessWallet(c.Request().Context(), businessID, true)
 	if err != nil {
