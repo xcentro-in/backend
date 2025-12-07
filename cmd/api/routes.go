@@ -154,16 +154,15 @@ func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group
 		// MockPG will be nil (not used in production)
 	}
 
-	// Initialize fee calculator
+	// Initialize fee rules repository (direct access, no bloated calculator layer)
 	feeRulesRepository := paymentRepo.NewPostgresFeeRulesRepository(clients.db)
 	databaseFeeCalculator := business_rules.NewDatabaseFeeCalculator(feeRulesRepository)
 
-	// Adapter to convert business_rules.DatabaseFeeCalculator to payment.FeeCalculatorWithTax
+	// Adapter for orchestrator (still needed for gateway fee calculations)
 	feeCalculatorAdapter := &feeCalculatorAdapter{calc: databaseFeeCalculator}
 
-	// Create payment orchestrator with all gateway clients and fee calculator
+	// Create payment orchestrator with all gateway clients
 	orchestrator := corePayment.NewPaymentOrchestrator(paymentRepository, storedCardRepository, jioPayClient, easebuzzClient, mockPGClient, cfg.MockPG.Enabled, feeCalculatorAdapter, logger.GetDefault())
-	feeCalculator := business_rules.NewFeeCalculator()
 	walletService := business_rules.NewWalletService(storedCardRepository, bankAccountRepository, clients.txManager, busSvc, logger.GetDefault())
 	paymentSourceService := payments.NewPaymentSourceService(walletService, databaseFeeCalculator)
 
@@ -174,7 +173,8 @@ func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group
 	notificationEventRepo := notificationRepo.NewPgNotificationEventRepository(clients.db)
 	voucherService := voucherSvc.NewVoucherService(voucherRepository, queueRepository, voucherCoreService, businessPayeeRelationRepo, notificationEventRepo, logger.GetDefault())
 
-	paymentService := payments.NewPaymentService(orchestrator, paymentRepository, storedCardRepository, bankAccountRepository, walletService, feeCalculator, clients.txManager, voucherService, voucherRepository, pendingVoucherRepository, busSvc, stateChangeRepository, cfg, logger.GetDefault())
+	// Pass fee rules repository directly to payment service (no calculator wrapper)
+	paymentService := payments.NewPaymentService(orchestrator, paymentRepository, storedCardRepository, bankAccountRepository, walletService, feeRulesRepository, clients.txManager, voucherService, voucherRepository, pendingVoucherRepository, busSvc, stateChangeRepository, cfg, logger.GetDefault())
 
 	processPaymentGroup := group.Group("/process_payment")
 

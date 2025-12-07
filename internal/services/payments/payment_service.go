@@ -18,20 +18,20 @@ import (
 
 // PaymentService orchestrates payment operations with proper layering
 type PaymentService struct {
-	orchestrator         payment.PaymentOrchestrator
-	paymentRepo          payment.PaymentRepository
-	storedCardRepo       payment.StoredCardRepository
-	bankAccountRepo      payment.BankAccountRepository
-	walletService        business_rules.WalletService
-	feeCalculator        business_rules.FeeCalculator
-	txManager            client.TxManager
-	voucherService       interface{}                                         // voucher.VoucherService, using interface{} to avoid circular import (Phase 6)
-	voucherRepo          interface{}                                         // voucher.VoucherRepository, using interface{} to avoid circular import
-	pendingVoucherRepo   *paymentdb.PaymentVoucherPendingRepository         // Concrete type for temporary voucher-payment linkage
-	businessService      business.BusinessService
-	stateChangeRepo      *paymentdb.PostgresPaymentStateChangeRepository    // Concrete type for transaction support
-	config               *config.Config                                     // Application configuration (server URL, etc.)
-	logger               *logger.Logger
+	orchestrator       payment.PaymentOrchestrator
+	paymentRepo        payment.PaymentRepository
+	storedCardRepo     payment.StoredCardRepository
+	bankAccountRepo    payment.BankAccountRepository
+	walletService      business_rules.WalletService
+	feeRulesRepo       business_rules.FeeRulesRepository // Direct access to fee rules from database
+	txManager          client.TxManager
+	voucherService     interface{}                                // voucher.VoucherService, using interface{} to avoid circular import (Phase 6)
+	voucherRepo        interface{}                                // voucher.VoucherRepository, using interface{} to avoid circular import
+	pendingVoucherRepo *paymentdb.PaymentVoucherPendingRepository // Concrete type for temporary voucher-payment linkage
+	businessService    business.BusinessService
+	stateChangeRepo    *paymentdb.PostgresPaymentStateChangeRepository // Concrete type for transaction support
+	config             *config.Config                                  // Application configuration (server URL, etc.)
+	logger             *logger.Logger
 }
 
 // NewPaymentService creates a new payment service with all dependencies
@@ -41,7 +41,7 @@ func NewPaymentService(
 	storedCardRepo payment.StoredCardRepository,
 	bankAccountRepo payment.BankAccountRepository,
 	walletService business_rules.WalletService,
-	feeCalculator business_rules.FeeCalculator,
+	feeRulesRepo business_rules.FeeRulesRepository,
 	txManager client.TxManager,
 	voucherService interface{}, // Phase 6: Voucher service for payment integration
 	voucherRepo interface{}, // voucher.VoucherRepository for transactional operations
@@ -57,7 +57,7 @@ func NewPaymentService(
 		storedCardRepo:     storedCardRepo,
 		bankAccountRepo:    bankAccountRepo,
 		walletService:      walletService,
-		feeCalculator:      feeCalculator,
+		feeRulesRepo:       feeRulesRepo,
 		txManager:          txManager,
 		voucherService:     voucherService,
 		voucherRepo:        voucherRepo,
@@ -85,24 +85,43 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 		"currency", req.Currency,
 		"payment_method", req.PaymentMethod)
 
-	// Step 1: Calculate fees before transaction (read-only operation)
-	s.logger.DebugWith("Calculating payment fees")
-	feeCalculation, err := s.feeCalculator.CalculateFee(
-		req.Amount,
-		req.PaymentMethod,
-		getCardTypeFromRequest(&req),
-		getCardCategoryFromRequest(&req),
-	)
+	// Step 1: Fetch fee rule from database
+	s.logger.DebugWith("Fetching fee rule for payment")
+	cardType := s.getCardTypeFromRequest(ctx, &req)
+	cardCategory := s.getCardCategoryFromRequest(ctx, &req)
+
+	// Normalize payment method for fee lookup (token_card → card, etc.)
+	feePaymentMethod := s.normalizeFeePaymentMethod(req.PaymentMethod)
+
+	s.logger.DebugWith("Card details extracted",
+		"card_type", cardType,
+		"card_category", cardCategory,
+		"payment_method", req.PaymentMethod,
+		"fee_payment_method", feePaymentMethod)
+
+	feeRule, err := s.feeRulesRepo.GetFeeRule(ctx, feePaymentMethod, &cardType, &cardCategory)
 	if err != nil {
-		s.logger.ErrorWith("Fee calculation failed", "error", err)
+		s.logger.ErrorWith("Failed to fetch fee rule", "error", err)
+		return nil, fmt.Errorf("fee rule not found: %w", err)
+	}
+
+	// Step 2: Calculate fees using the rule (utility function from business_rules)
+	feeBreakdown, err := business_rules.CalculateFeeWithRule(req.Amount, feeRule)
+	if err != nil {
+		s.logger.ErrorWith("Failed to calculate fee", "error", err)
 		return nil, fmt.Errorf("fee calculation failed: %w", err)
 	}
 
+	convenienceFee := feeBreakdown.ConvenienceFee
+	convenienceFeeGST := feeBreakdown.ConvenienceFeeGST
+	totalFee := feeBreakdown.TotalFee
+
 	s.logger.DebugWith("Fee calculation completed",
-		"base_amount", feeCalculation.BaseAmount,
-		"fee_amount", feeCalculation.FeeAmount,
-		"total_amount", feeCalculation.TotalAmount,
-		"currency", feeCalculation.Currency)
+		"base_amount", req.Amount,
+		"convenience_fee", convenienceFee,
+		"convenience_fee_gst", convenienceFeeGST,
+		"total_fee", totalFee,
+		"gst_percentage", feeRule.GSTPercentage)
 
 	// Step 2: Generate payment ID and callback URL (no DB operations)
 	paymentID := uuid.Must(uuid.NewV7()).String()
@@ -142,10 +161,10 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 				ExpiryMonth:    req.CardDetails.ExpiryMonth,
 				ExpiryYear:     req.CardDetails.ExpiryYear,
 				CardHolderName: req.CardDetails.HolderName,
-				Token:          "", // Will be filled in Phase 2 (after tokenization)
-				IssuerBank:     "", // Will be filled in Phase 2
+				Token:          "",    // Will be filled in Phase 2 (after tokenization)
+				IssuerBank:     "",    // Will be filled in Phase 2
 				IsActive:       false, // Not active until tokenization succeeds
-				GatewayUsed:    "", // Will be updated in Phase 2 after gateway selection
+				GatewayUsed:    "",    // Will be updated in Phase 2 after gateway selection
 				AddedAt:        time.Now(),
 				Metadata: map[string]any{
 					"status": "pending_tokenization",
@@ -169,10 +188,8 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 		// Sub-step 1: Create payment record within transaction
 		s.logger.DebugWith("Creating payment record within transaction")
 
-		// Calculate GST breakdown (18% GST on convenience fee)
-		convenienceFee := feeCalculation.FeeAmount
-		convenienceFeeGST := int64(float64(convenienceFee) * 0.18)
-		totalFee := convenienceFee + convenienceFeeGST
+		// Fee values already calculated above from database rule
+		// convenienceFee, convenienceFeeGST, totalFee are already available
 
 		// Default payment type to 'payment' if not specified
 		paymentType := req.PaymentType
@@ -181,21 +198,21 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 		}
 
 		p := &payment.Payment{
-			ID:               paymentID,
-			UserID:           req.UserID,
-			BusinessID:       req.BusinessID,
-			Amount:           req.Amount,
-			Currency:         req.Currency,
-			PaymentMethod:    req.PaymentMethod,
-			PaymentType:      paymentType, // Use payment type from request (payment/tokenization/refund), default to 'payment'
-			Status:           payment.PaymentStatusPending,
-			Description:      req.Description,
-			CallbackURL:      callbackURL,
-			FeeAmount:        totalFee,              // Total fee (base + GST)
-			ConvenienceFee:   convenienceFee,        // Base convenience fee before GST
-			ConvenienceFeeGST: convenienceFeeGST,    // 18% GST on convenience fee
-			TotalAmount:      req.Amount + totalFee, // Base amount + total fee
-			Metadata:         req.Metadata,
+			ID:                paymentID,
+			UserID:            req.UserID,
+			BusinessID:        req.BusinessID,
+			Amount:            req.Amount,
+			Currency:          req.Currency,
+			PaymentMethod:     req.PaymentMethod,
+			PaymentType:       paymentType, // Use payment type from request (payment/tokenization/refund), default to 'payment'
+			Status:            payment.PaymentStatusPending,
+			Description:       req.Description,
+			CallbackURL:       callbackURL,
+			FeeAmount:         totalFee,              // Total fee (base + GST)
+			ConvenienceFee:    convenienceFee,        // Base convenience fee before GST
+			ConvenienceFeeGST: convenienceFeeGST,     // GST on convenience fee
+			TotalAmount:       req.Amount + totalFee, // Base amount + total fee
+			Metadata:          req.Metadata,
 		}
 
 		// Set payment source details for different payment methods
@@ -482,43 +499,118 @@ func (s *PaymentService) TokenizeCard(ctx context.Context, req payment.TokenizeR
 	return response, nil
 }
 
-// GetFeeRules retrieves fee calculation rules
+// GetFeeRules retrieves fee calculation rules from database
 func (s *PaymentService) GetFeeRules(paymentMethod payment.PaymentMethod) ([]*business_rules.FeeRule, error) {
-	s.logger.DebugWith("Fetching fee rules", "payment_method", paymentMethod)
-	return s.feeCalculator.GetFeeRules(paymentMethod)
+	s.logger.DebugWith("Fetching fee rules from database", "payment_method", paymentMethod)
+	ctx := context.Background()
+
+	// Get all active rules and filter by payment method
+	allRules, err := s.feeRulesRepo.GetActiveFeeRules(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	var rules []*business_rules.FeeRule
+	for _, rule := range allRules {
+		if rule.PaymentMethod == paymentMethod {
+			rules = append(rules, rule)
+		}
+	}
+
+	return rules, nil
 }
 
-// GetAllFeeRules retrieves all fee calculation rules
+// GetAllFeeRules retrieves all active fee calculation rules from database
 func (s *PaymentService) GetAllFeeRules() ([]*business_rules.FeeRule, error) {
-	s.logger.DebugWith("Fetching all fee rules")
-	return s.feeCalculator.GetAllFeeRules()
+	s.logger.DebugWith("Fetching all fee rules from database")
+	ctx := context.Background()
+	return s.feeRulesRepo.GetActiveFeeRules(ctx)
 }
 
-// CalculateFee calculates fee for a payment amount
+// CalculateFee calculates fee for a payment amount using database rules
 func (s *PaymentService) CalculateFee(amount int64, paymentMethod payment.PaymentMethod, cardType payment.CardType, cardCategory payment.CardCategory) (*business_rules.FeeCalculation, error) {
-	return s.feeCalculator.CalculateFee(amount, paymentMethod, cardType, cardCategory)
+	ctx := context.Background()
+
+	// Normalize payment method for fee lookup (token_card → card)
+	feePaymentMethod := s.normalizeFeePaymentMethod(paymentMethod)
+
+	// Fetch rule from database
+	rule, err := s.feeRulesRepo.GetFeeRule(ctx, feePaymentMethod, &cardType, &cardCategory)
+	if err != nil {
+		return nil, fmt.Errorf("fee rule not found: %w", err)
+	}
+
+	// Calculate fees using utility function from business_rules
+	feeBreakdown, err := business_rules.CalculateFeeWithRule(amount, rule)
+	if err != nil {
+		return nil, fmt.Errorf("fee calculation failed: %w", err)
+	}
+
+	// Return in old FeeCalculation format for backward compatibility
+	return &business_rules.FeeCalculation{
+		BaseAmount:  amount,
+		FeeAmount:   feeBreakdown.ConvenienceFee + feeBreakdown.ConvenienceFeeGST,
+		TotalAmount: amount + feeBreakdown.TotalFee,
+		Currency:    rule.Currency,
+		AppliedRule: rule,
+		Breakdown: &business_rules.FeeBreakdown{
+			PercentageFee:           rule.PercentageFee,
+			CalculatedPercentageFee: feeBreakdown.ConvenienceFee,
+			FixedFee:                rule.FixedFee,
+			Description:             fmt.Sprintf("Convenience fee: %d, GST (%0.2f%%): %d", feeBreakdown.ConvenienceFee, rule.GSTPercentage, feeBreakdown.ConvenienceFeeGST),
+		},
+	}, nil
 }
 
 // Helper functions
 
-func getCardTypeFromRequest(req *payment.PaymentRequest) payment.CardType {
+// normalizeFeePaymentMethod converts payment method identifiers to their base type for fee lookup
+// Example: token_card → card (because fees are the same for new and saved cards)
+func (s *PaymentService) normalizeFeePaymentMethod(method payment.PaymentMethod) payment.PaymentMethod {
+	switch method {
+	case payment.PaymentMethodTokenCard:
+		// token_card is just "use a saved card" - fees are based on card type/category
+		return payment.PaymentMethodCard
+	default:
+		// For other methods (card, netbanking, upi, wallet), use as-is
+		return method
+	}
+}
+
+// getCardTypeFromRequest extracts card type from request or looks it up from stored card
+func (s *PaymentService) getCardTypeFromRequest(ctx context.Context, req *payment.PaymentRequest) payment.CardType {
 	if req.CardDetails != nil {
 		return req.CardDetails.CardType
 	}
 	if req.TokenCardDetails != nil {
-		// TODO: Lookup card type from stored card
-		return ""
+		// Lookup card type from stored card
+		storedCard, err := s.storedCardRepo.GetStoredCardByID(ctx, req.TokenCardDetails.CardID)
+		if err != nil {
+			s.logger.WarnWith("Failed to fetch stored card for card type lookup", "card_id", req.TokenCardDetails.CardID, "error", err)
+			return ""
+		}
+		s.logger.DebugWith("Retrieved card details from stored card",
+			"card_id", req.TokenCardDetails.CardID,
+			"card_type", storedCard.CardType,
+			"last_four", storedCard.LastFourDigits)
+		return storedCard.CardType
 	}
 	return ""
 }
 
-func getCardCategoryFromRequest(req *payment.PaymentRequest) payment.CardCategory {
+// getCardCategoryFromRequest extracts card category from request or looks it up from stored card
+func (s *PaymentService) getCardCategoryFromRequest(ctx context.Context, req *payment.PaymentRequest) payment.CardCategory {
 	if req.CardDetails != nil {
 		return req.CardDetails.CardCategory
 	}
 	if req.TokenCardDetails != nil {
-		// TODO: Lookup card category from stored card
-		return ""
+		// Lookup card category from stored card
+		storedCard, err := s.storedCardRepo.GetStoredCardByID(ctx, req.TokenCardDetails.CardID)
+		if err != nil {
+			s.logger.WarnWith("Failed to fetch stored card for card category lookup", "card_id", req.TokenCardDetails.CardID, "error", err)
+			return ""
+		}
+		return storedCard.CardCategory
 	}
 	return ""
 }
@@ -719,12 +811,12 @@ func (s *PaymentService) RetryPayment(ctx context.Context, originalPaymentID str
 		CallingDevice: callingDevice,
 		VoucherIDs:    voucherIDStrings,
 		Metadata: map[string]any{
-			"retry_of":             originalPaymentID,
-			"retry_count":          1, // Always 1 since max 1 retry allowed
-			"retry_reason":         "user_initiated",
-			"original_created_at":  originalPayment.CreatedAt.Format(time.RFC3339),
-			"original_status":      string(originalPayment.Status),
-			"original_gateway":     string(originalPayment.GatewayUsed),
+			"retry_of":            originalPaymentID,
+			"retry_count":         1, // Always 1 since max 1 retry allowed
+			"retry_reason":        "user_initiated",
+			"original_created_at": originalPayment.CreatedAt.Format(time.RFC3339),
+			"original_status":     string(originalPayment.Status),
+			"original_gateway":    string(originalPayment.GatewayUsed),
 		},
 	}
 

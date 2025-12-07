@@ -53,7 +53,7 @@ func NewWalletService(storedCardRepo payment.StoredCardRepository, bankAccountRe
 
 // GetBusinessWallet retrieves the complete business wallet with all payment sources
 // All data is fetched from database repositories
-// showInactive: false (default) = only active cards, true = active + failed cards from last 7 days
+// showInactive: false (default) = only active cards, true = active + failed cards from last 2 days
 func (ws *WalletServiceImpl) GetBusinessWallet(ctx context.Context, businessID string, showInactive bool) (*payment.BusinessWallet, error) {
 	ws.logger.InfoWith("Fetching business wallet", "business_id", businessID, "show_inactive", showInactive)
 
