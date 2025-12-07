@@ -3,6 +3,7 @@ package main
 import (
 	"github.com/labstack/echo/v4"
 	"xcentro.in/internal/adapters/database/postgres/business"
+	invoiceRepo "xcentro.in/internal/adapters/database/postgres/invoice"
 	notificationRepo "xcentro.in/internal/adapters/database/postgres/notification"
 	opsAuthRepo "xcentro.in/internal/adapters/database/postgres/opsauth"
 	payeeRepo "xcentro.in/internal/adapters/database/postgres/payee"
@@ -12,6 +13,7 @@ import (
 	voucherRepo "xcentro.in/internal/adapters/database/postgres/voucher"
 	"xcentro.in/internal/adapters/external/payout/factory"
 	businessHandler "xcentro.in/internal/handlers/http/business"
+	invoiceHandler "xcentro.in/internal/handlers/http/invoice"
 	notificationHandler "xcentro.in/internal/handlers/http/notification"
 	opsAuthHandler "xcentro.in/internal/handlers/http/opsauth"
 	paymentHandler "xcentro.in/internal/handlers/http/payment"
@@ -19,6 +21,7 @@ import (
 	userHandler "xcentro.in/internal/handlers/http/user"
 	"xcentro.in/internal/middleware"
 	businessSvc "xcentro.in/internal/services/business"
+	invoiceSvc "xcentro.in/internal/services/invoice"
 	notificationSvc "xcentro.in/internal/services/notification"
 	opsAuthSvc "xcentro.in/internal/services/opsauth"
 	"xcentro.in/internal/services/payments"
@@ -27,6 +30,7 @@ import (
 	"xcentro.in/internal/services/verification"
 	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/logger"
+	"xcentro.in/internal/shared/utils"
 )
 
 // Shared service factory to avoid duplication
@@ -190,6 +194,24 @@ func registerOpsPayoutRoutes(clients *externalClients, cfg *config.Config, group
 	payoutHandler.RegisterOpsPayoutRoutes(group, opsPayoutService, payoutService)
 }
 
+// registerOpsInvoiceRoutes registers ops dashboard invoice routes
+func registerOpsInvoiceRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
+	// Create invoice repository
+	invoiceRepository := invoiceRepo.NewPgInvoiceRepository(clients.db)
+
+	// Create invoice service
+	invoiceService := invoiceSvc.NewInvoiceService(invoiceRepository)
+	pdfGenerator := utils.NewPDFGenerator()
+
+	// Create handler
+	opsInvoiceHandler := invoiceHandler.NewOpsInvoiceHandler(invoiceService, pdfGenerator)
+
+	// Register routes
+	invoiceGroup := group.Group("/invoices")
+	invoiceGroup.GET("", opsInvoiceHandler.ListInvoices)
+	invoiceGroup.GET("/export", opsInvoiceHandler.ExportInvoices)
+}
+
 func registerOpsV1Routes(s *opsDashboardServer) {
 	v1 := s.echo.Group("/ops/v1")
 
@@ -218,6 +240,7 @@ func registerOpsV1Routes(s *opsDashboardServer) {
 	registerOpsPayoutRoutes(clients, cfg, protectedGroup)                // Payouts
 	registerOpsCollectionRoutes(clients, cfg, protectedGroup)            // Collections/Payments
 	registerOpsFeeRulesRoutes(clients, cfg, protectedGroup)              // Fee rules
+	registerOpsInvoiceRoutes(clients, cfg, protectedGroup)               // Invoices
 }
 
 func initializeNotificationTrigger(clients *externalClients) {

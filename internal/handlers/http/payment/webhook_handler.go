@@ -15,7 +15,9 @@ import (
 	"xcentro.in/internal/adapters/external/payment/easebuzz"
 	"xcentro.in/internal/adapters/external/payment/jiopay"
 	"xcentro.in/internal/adapters/external/payment/mockpg"
+	"xcentro.in/internal/core/business"
 	"xcentro.in/internal/core/payment"
+	invoiceService "xcentro.in/internal/services/invoice"
 	paymentSvc "xcentro.in/internal/services/payment"
 )
 
@@ -28,6 +30,8 @@ type WebhookHandler struct {
 	mockPGGateway   payment.PaymentGateway
 	mockPGEnabled   bool // Flag to check if mock PG is enabled
 	stateLogger     *paymentSvc.PaymentStateLogger
+	businessRepo    business.BusinessRepository
+	invoiceService  *invoiceService.InvoiceService
 }
 
 // NewWebhookHandler creates a new webhook handler
@@ -38,6 +42,8 @@ func NewWebhookHandler(
 	mockPGGateway payment.PaymentGateway,
 	mockPGEnabled bool,
 	stateChangeRepo payment.PaymentStateChangeRepository,
+	businessRepo business.BusinessRepository,
+	invoiceService *invoiceService.InvoiceService,
 ) *WebhookHandler {
 	return &WebhookHandler{
 		paymentRepo:     paymentRepo,
@@ -46,6 +52,8 @@ func NewWebhookHandler(
 		mockPGGateway:   mockPGGateway,
 		mockPGEnabled:   mockPGEnabled,
 		stateLogger:     paymentSvc.NewPaymentStateLogger(stateChangeRepo),
+		businessRepo:    businessRepo,
+		invoiceService:  invoiceService,
 	}
 }
 
@@ -182,6 +190,35 @@ func (h *WebhookHandler) handleJioPayPaymentWebhook(c echo.Context) error {
 				fmt.Printf("⚠️  Failed to initialize settlement status: %v\n", err)
 			} else {
 				fmt.Println("✅ Settlement status initialized to pending")
+			}
+
+			// Verify existing invoice (should have been created by callback)
+			if h.invoiceService != nil && h.businessRepo != nil {
+				// Fetch business to get GSTIN
+				bizEntity, err := h.businessRepo.FindByID(ctx, pmt.BusinessID)
+				if err != nil {
+					fmt.Printf("⚠️  Failed to fetch business for invoice verification: %v\n", err)
+				} else if bizEntity != nil && bizEntity.GSTIN != "" {
+					// Get existing invoice
+					existingInvoice, err := h.invoiceService.GetInvoiceByPaymentID(ctx, pmt.ID)
+					if err != nil {
+						fmt.Printf("⚠️  Failed to fetch invoice for verification: %v\n", err)
+					} else if existingInvoice != nil {
+						// Verify invoice matches payment details
+						if !h.invoiceService.VerifyInvoice(ctx, existingInvoice, bizEntity.GSTIN, pmt.ConvenienceFee, pmt.ConvenienceFeeGST) {
+							fmt.Printf("❌ Invoice verification failed - deleting mismatched invoice ID: %d\n", existingInvoice.InvoiceID)
+							if err := h.invoiceService.DeleteInvoice(ctx, existingInvoice.InvoiceID); err != nil {
+								fmt.Printf("⚠️  Failed to delete mismatched invoice: %v\n", err)
+							} else {
+								fmt.Println("✅ Mismatched invoice deleted successfully")
+							}
+						} else {
+							fmt.Println("✅ Invoice verification passed")
+						}
+					} else {
+						fmt.Printf("⚠️  No invoice found for payment (should have been created by callback)\n")
+					}
+				}
 			}
 		}
 
@@ -321,6 +358,35 @@ func (h *WebhookHandler) handleEasebuzzPaymentWebhook(c echo.Context) error {
 			} else {
 				fmt.Println("✅ Settlement status initialized to pending")
 			}
+
+			// Verify existing invoice (should have been created by callback)
+			if h.invoiceService != nil && h.businessRepo != nil {
+				// Fetch business to get GSTIN
+				bizEntity, err := h.businessRepo.FindByID(ctx, pmt.BusinessID)
+				if err != nil {
+					fmt.Printf("⚠️  Failed to fetch business for invoice verification: %v\n", err)
+				} else if bizEntity != nil && bizEntity.GSTIN != "" {
+					// Get existing invoice
+					existingInvoice, err := h.invoiceService.GetInvoiceByPaymentID(ctx, pmt.ID)
+					if err != nil {
+						fmt.Printf("⚠️  Failed to fetch invoice for verification: %v\n", err)
+					} else if existingInvoice != nil {
+						// Verify invoice matches payment details
+						if !h.invoiceService.VerifyInvoice(ctx, existingInvoice, bizEntity.GSTIN, pmt.ConvenienceFee, pmt.ConvenienceFeeGST) {
+							fmt.Printf("❌ Invoice verification failed - deleting mismatched invoice ID: %d\n", existingInvoice.InvoiceID)
+							if err := h.invoiceService.DeleteInvoice(ctx, existingInvoice.InvoiceID); err != nil {
+								fmt.Printf("⚠️  Failed to delete mismatched invoice: %v\n", err)
+							} else {
+								fmt.Println("✅ Mismatched invoice deleted successfully")
+							}
+						} else {
+							fmt.Println("✅ Invoice verification passed")
+						}
+					} else {
+						fmt.Printf("⚠️  No invoice found for payment (should have been created by callback)\n")
+					}
+				}
+			}
 		}
 
 		// Update gateway payment ID if not set or if it's still our txnid
@@ -450,6 +516,35 @@ func (h *WebhookHandler) handleMockPGPaymentWebhook(c echo.Context) error {
 				fmt.Printf("⚠️  Failed to initialize settlement status: %v\n", err)
 			} else {
 				fmt.Println("✅ Settlement status initialized to pending")
+			}
+
+			// Verify existing invoice (should have been created by callback)
+			if h.invoiceService != nil && h.businessRepo != nil {
+				// Fetch business to get GSTIN
+				bizEntity, err := h.businessRepo.FindByID(ctx, pmt.BusinessID)
+				if err != nil {
+					fmt.Printf("⚠️  Failed to fetch business for invoice verification: %v\n", err)
+				} else if bizEntity != nil && bizEntity.GSTIN != "" {
+					// Get existing invoice
+					existingInvoice, err := h.invoiceService.GetInvoiceByPaymentID(ctx, pmt.ID)
+					if err != nil {
+						fmt.Printf("⚠️  Failed to fetch invoice for verification: %v\n", err)
+					} else if existingInvoice != nil {
+						// Verify invoice matches payment details
+						if !h.invoiceService.VerifyInvoice(ctx, existingInvoice, bizEntity.GSTIN, pmt.ConvenienceFee, pmt.ConvenienceFeeGST) {
+							fmt.Printf("❌ Invoice verification failed - deleting mismatched invoice ID: %d\n", existingInvoice.InvoiceID)
+							if err := h.invoiceService.DeleteInvoice(ctx, existingInvoice.InvoiceID); err != nil {
+								fmt.Printf("⚠️  Failed to delete mismatched invoice: %v\n", err)
+							} else {
+								fmt.Println("✅ Mismatched invoice deleted successfully")
+							}
+						} else {
+							fmt.Println("✅ Invoice verification passed")
+						}
+					} else {
+						fmt.Printf("⚠️  No invoice found for payment (should have been created by callback)\n")
+					}
+				}
 			}
 		}
 

@@ -10,6 +10,7 @@ import (
 	"xcentro.in/internal/adapters/database/postgres/client"
 	dashboardRepo "xcentro.in/internal/adapters/database/postgres/dashboard"
 	featureFlagsRepo "xcentro.in/internal/adapters/database/postgres/feature_flags"
+	invoiceRepo "xcentro.in/internal/adapters/database/postgres/invoice"
 	notificationRepo "xcentro.in/internal/adapters/database/postgres/notification"
 	payeeRepo "xcentro.in/internal/adapters/database/postgres/payee"
 	paymentRepo "xcentro.in/internal/adapters/database/postgres/payment"
@@ -31,6 +32,7 @@ import (
 	businessHandler "xcentro.in/internal/handlers/http/business"
 	dashboardHandler "xcentro.in/internal/handlers/http/dashboard"
 	featureFlagsHandler "xcentro.in/internal/handlers/http/feature_flags"
+	invoiceHandler "xcentro.in/internal/handlers/http/invoice"
 	notificationHandler "xcentro.in/internal/handlers/http/notification"
 	"xcentro.in/internal/handlers/http/payee"
 	"xcentro.in/internal/handlers/http/payment"
@@ -43,6 +45,7 @@ import (
 	businessSvc "xcentro.in/internal/services/business"
 	dashboardSvc "xcentro.in/internal/services/dashboard"
 	featureFlagsSvc "xcentro.in/internal/services/feature_flags"
+	invoiceSvc "xcentro.in/internal/services/invoice"
 	notificationService "xcentro.in/internal/services/notification"
 	payeeSvc "xcentro.in/internal/services/payee"
 	"xcentro.in/internal/services/payments"
@@ -51,6 +54,7 @@ import (
 	voucherSvc "xcentro.in/internal/services/voucher"
 	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/logger"
+	"xcentro.in/internal/shared/utils"
 )
 
 // Shared service factory to avoid duplication
@@ -179,14 +183,20 @@ func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group
 	processPaymentGroup := group.Group("/process_payment")
 
 	// Register public routes FIRST (no JWT required) - these are called by external systems
+	// Invoice dependencies (needed by both callback and webhook handlers)
+	businessRepo := business.NewPgBusinessRepository(clients.db).(*business.PgBusinessRepository)
+	invoiceRepository := invoiceRepo.NewPgInvoiceRepository(clients.db)
+	invoiceService := invoiceSvc.NewInvoiceService(invoiceRepository)
+	pdfGenerator := utils.NewPDFGenerator()
+
 	// 1. Webhooks (called by payment gateways)
-	webhookHandler := payment.NewWebhookHandler(paymentRepository, jioPayClient, easebuzzClient, mockPGClient, cfg.MockPG.Enabled, stateChangeRepository)
+	webhookHandler := payment.NewWebhookHandler(paymentRepository, jioPayClient, easebuzzClient, mockPGClient, cfg.MockPG.Enabled, stateChangeRepository, businessRepo, invoiceService)
 	webhookGroup := processPaymentGroup.Group("/webhooks")
 	webhookGroup.POST("/payment_status", webhookHandler.HandlePaymentStatusWebhook)
 	webhookGroup.POST("/settlement_status", webhookHandler.HandleSettlementStatusWebhook)
 
 	// 2. Callbacks (redirects from payment gateways after payment completion)
-	callbackHandler := payment.NewCallbackHandler(paymentRepository, storedCardRepository, walletService, jioPayClient, easebuzzClient, mockPGClient, cfg.MockPG.Enabled, pendingVoucherRepository, voucherRepository, clients.txManager, stateChangeRepository)
+	callbackHandler := payment.NewCallbackHandler(paymentRepository, storedCardRepository, walletService, jioPayClient, easebuzzClient, mockPGClient, cfg.MockPG.Enabled, pendingVoucherRepository, voucherRepository, clients.txManager, stateChangeRepository, businessRepo, invoiceService)
 	processPaymentGroup.POST("/callback", callbackHandler.HandleCallback)
 
 	// 3. Mock 3DS page (simulates bank OTP/3DS page for testing)
@@ -196,6 +206,12 @@ func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group
 	// 4. Payment callback page (user-facing HTML redirect pages)
 	paymentCallbackHandler := payment.NewPaymentCallbackHandler(paymentRepository)
 	processPaymentGroup.GET("/callback_page", paymentCallbackHandler.HandlePaymentCallback)
+
+	// Invoice routes (user-facing)
+	invoiceGroup := group.Group("/invoices")
+	invoiceUserHandler := invoiceHandler.NewInvoiceHandler(invoiceService, pdfGenerator)
+	invoiceGroup.Use(middleware.JWTMiddleware(authSvc))
+	invoiceGroup.GET("/download", invoiceUserHandler.DownloadInvoice)
 
 	// Register JWT-protected routes (authenticated user operations)
 	payment.RegisterPaymentRoutes(processPaymentGroup, paymentService, paymentSourceService, walletService, authSvc, voucherRepository, stateChangeRepository, businessPayeeRelationRepo, storedCardRepository, bankAccountRepository, logger.GetDefault())
