@@ -11,7 +11,6 @@ import (
 	"github.com/google/uuid"
 	"xcentro.in/internal/adapters/database/postgres/client"
 	"xcentro.in/internal/adapters/external/payout/castler"
-	"xcentro.in/internal/adapters/providers/authbridge"
 	"xcentro.in/internal/adapters/providers/fileupload"
 	"xcentro.in/internal/core/business"
 	"xcentro.in/internal/core/business_rules"
@@ -21,6 +20,7 @@ import (
 	"xcentro.in/internal/services/verification"
 	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/logger"
+	"xcentro.in/internal/shared/utils"
 )
 
 // CastlerPayeeOnboarder interface for Castler-specific payee onboarding operations
@@ -183,16 +183,19 @@ func (s *PayeeService) onboardVendor(ctx context.Context, req payee.OnboardPayee
 
 		// Map to business_rules response format for consistency
 		gstResp = &business_rules.GSTVerificationResponse{
-			RequestID: transID,
-			GSTIN:     gstData.GSTIN,
-			LegalName: gstData.LegalName,
-			TradeName: gstData.TradeName,
-			Status:    gstData.Status,
-			Metadata:  gstData.RawResponse,
+			RequestID:      transID,
+			GSTIN:          gstData.GSTIN,
+			LegalName:      gstData.LegalName,
+			TradeName:      gstData.TradeName,
+			ProprietorName: gstData.ProprietorName,
+			Status:         gstData.Status,
+			Metadata:       gstData.RawResponse,
 		}
 
 		s.logger.InfoWith("GST verification successful",
 			"legal_name", gstResp.LegalName,
+			"trade_name", gstResp.TradeName,
+			"proprietors", gstResp.ProprietorName,
 			"status", gstResp.Status)
 	} else {
 		needsVendorCreation = false
@@ -230,64 +233,38 @@ func (s *PayeeService) onboardVendor(ctx context.Context, req payee.OnboardPayee
 			s.logger.WarnWith("account_type not provided, defaulting to current")
 		}
 
-		bankReq := authbridge.NewBankVerificationRequest(
-			"10000",
-			vendor.AccountNumber,
-			vendor.IFSCCode,
-		)
-
-		s.logger.InfoWith("Bank Request body", bankReq)
-
 		// Step 5: Verify bank account (penny drop)
-		authbridgeClient, err := authbridge.NewClient()
+		transID := fmt.Sprintf("vendor_bank_%s_%d", req.BusinessID, time.Now().Unix())
+		bankData, err := s.docVerificationSvc.VerifyBankAccount(ctx, vendor.AccountNumber, vendor.IFSCCode, transID)
 		if err != nil {
-			s.logger.ErrorWith("Failed to create authbridge client", err)
-			return nil, fmt.Errorf("failed to create authbridge client: %w", err)
-		}
-		bankResp, err := authbridgeClient.SearchDocument(bankReq)
-		if err != nil {
-			s.logger.ErrorWith("Failed to search document", err)
-			return nil, fmt.Errorf("failed to search document: %w", err)
+			return nil, fmt.Errorf("bank verification failed: %w", err)
 		}
 
-		// Step 5: Verify bank account (penny drop)
-		// bankReq := business_rules.BankVerificationRequest{
-		// 	BusinessID:        req.BusinessID,
-		// 	RequestID:         fmt.Sprintf("onboard_%s_%d", req.BusinessID, time.Now().Unix()),
-		// 	AccountNumber:     vendor.AccountNumber,
-		// 	IFSCCode:          vendor.IFSCCode,
-		// 	AccountHolderName: vendor.AccountHolderName,
-		// 	BankName:          vendor.BankName,
-		// 	BranchName:        vendor.BranchName,
-		// 	AccountType:       accountType,
-		// 	Metadata: map[string]any{
-		// 		"email": req.ContactEmail,
-		// 		"phone": req.ContactPhone,
-		// 	},
-		// }
+		s.logger.InfoWith("Bank verification successful",
+			"account_holder", bankData.AccountHolderName,
+			"account_type", bankData.AccountType,
+			"rrn", bankData.RRN)
 
-		// bankResp, err := s.bankVerificationSvc.VerifyBankAccount(ctx, bankReq)
+		// Step 5.1: Validate account holder name against GSTIN names (if vendor is new)
+		if needsVendorCreation && gstResp != nil {
+			// Define similarity threshold (0.7 = 70% match required)
+			const nameSimilarityThreshold = 0.7
 
-		// Type assert to access nested map
-		msgData, ok := bankResp["msg"].(map[string]interface{})
-		if !ok {
-			s.logger.ErrorWith("Invalid bank verification response format")
-			return nil, fmt.Errorf("invalid bank verification response format")
+			err := s.validateAccountHolderName(
+				bankData.AccountHolderName,
+				gstResp.LegalName,
+				gstResp.TradeName,
+				nameSimilarityThreshold,
+			)
+			if err != nil {
+				return nil, fmt.Errorf("name validation failed: %w", err)
+			}
 		}
 
-		verificationStatus, _ := msgData["status"].(string)
-		s.logger.InfoWith("Bank verification completed", "status", verificationStatus)
-
-		// Fail fast: Abort if bank verification did not succeed
-		if verificationStatus != "SUCCESS" {
-			s.logger.ErrorWith("Bank verification failed, aborting onboarding", "status", verificationStatus)
-			return nil, fmt.Errorf("bank verification failed: account could not be verified")
+		// Step 6: Money rotation check (anti-fraud)
+		if err := s.checkMoneyRotation(ctx, req.BusinessID, bankData.AccountHolderName); err != nil {
+			return nil, err
 		}
-
-		// Step 6: Money rotation check
-		// if err := s.checkMoneyRotation(ctx, req.BusinessID, bankResp.VerifiedAccountName); err != nil {
-		// 	return nil, err
-		// }
 
 		// Step 7.5: Onboard payee to Castler (after all verifications pass)
 		s.logger.InfoWith("Onboarding payee to Castler")
@@ -460,10 +437,6 @@ func (s *PayeeService) onboardVendor(ctx context.Context, req payee.OnboardPayee
 		IsFullyVerified:         true,
 		Message:                 fmt.Sprintf("Payee '%s' successfully onboarded", req.DisplayName),
 	}, nil
-}
-
-func gen_random_string(i int) string {
-	panic("unimplemented")
 }
 
 // onboardGSTPayee handles GST payment payee onboarding (government virtual account)
@@ -850,56 +823,20 @@ func (s *PayeeService) onboardEmployee(ctx context.Context, req payee.OnboardPay
 		// Step 4: Perform penny drop verification (only for new accounts)
 		s.logger.InfoWith("Bank account not found, initiating bank account verification")
 
-		bankReq := authbridge.NewBankVerificationRequest(
-			"10000",
-			employee.AccountNumber,
-			employee.IFSCCode,
-		)
-		authbridgeClient, err := authbridge.NewClient()
+		transID := fmt.Sprintf("employee_bank_%s_%d", req.BusinessID, time.Now().Unix())
+		bankData, err := s.docVerificationSvc.VerifyBankAccount(ctx, employee.AccountNumber, employee.IFSCCode, transID)
 		if err != nil {
-			s.logger.ErrorWith("Failed to create authbridge client", err)
-			return nil, fmt.Errorf("failed to create authbridge client: %w", err)
-		}
-		bankResp, err := authbridgeClient.SearchDocument(bankReq)
-		if err != nil {
-			s.logger.ErrorWith("Failed to search document", err)
-			return nil, fmt.Errorf("failed to search document: %w", err)
-		}
-		s.logger.InfoWith("Bank verification response", bankResp)
-
-		/*
-			// response from authbridge
-			{
-			"msg": {
-				"accountType":"SAVINGS",
-				"beneficiaryName":"DARAHAS KOPPARAPU",
-				"clientRefId":"02112025859128",
-				"responseCode":"00",
-				"responseMsg":"SUCCESS",
-				"rrn":"530613010252",
-				"status":"SUCCESS",
-				"transDateTime":"02/11/2025 13:45:04"
-				},
-				"status":1,
-				"transId":"12",
-				"tsTransId":"TS-UXR-307481"
-			}
-		*/
-
-		// Type assert to access nested map
-		msgData, ok := bankResp["msg"].(map[string]interface{})
-		if !ok {
-			s.logger.ErrorWith("Invalid bank verification response format")
-			return nil, fmt.Errorf("invalid bank verification response format")
+			return nil, fmt.Errorf("bank verification failed: %w", err)
 		}
 
-		verificationStatus, _ := msgData["status"].(string)
-		s.logger.InfoWith("Bank verification completed", "status", verificationStatus)
+		s.logger.InfoWith("Bank verification successful",
+			"account_holder", bankData.AccountHolderName,
+			"account_type", bankData.AccountType,
+			"rrn", bankData.RRN)
 
-		// Fail fast: Abort if bank verification did not succeed
-		if verificationStatus != "SUCCESS" {
-			s.logger.ErrorWith("Bank verification failed, aborting onboarding", "status", verificationStatus)
-			return nil, fmt.Errorf("bank verification failed: account could not be verified")
+		// Step 4.1: Money rotation check (anti-fraud)
+		if err := s.checkMoneyRotation(ctx, req.BusinessID, bankData.AccountHolderName); err != nil {
+			return nil, err
 		}
 
 		s.logger.InfoWith("Onboarding payee to Castler")
@@ -1359,25 +1296,43 @@ func (s *PayeeService) maskAccountNumber(accountNumber string) string {
 }
 
 // checkMoneyRotation performs money rotation fraud detection by comparing payee account holder
-// name against the directors of the business that is onboarding the payee.
-// This prevents scenarios where business directors create fake vendors with their own bank accounts.
-//
-// Future enhancements:
-// - ML-based name matching (fuzzy matching, nicknames, aliases)
-// - Historical transaction pattern analysis
-// - Cross-business director checks
-// - Risk scoring instead of binary pass/fail
+// name against the business's proprietors (from GST data) and directors (from CID data).
+// This prevents scenarios where business owners create fake vendors with their own bank accounts.
 func (s *PayeeService) checkMoneyRotation(ctx context.Context, businessID string, payeeAccountHolderName string) error {
-	s.logger.DebugWith("Performing money rotation check")
+	s.logger.InfoWith("Performing money rotation check",
+		"business_id", businessID,
+		"account_holder", payeeAccountHolderName)
 
-	// Extract director names from BUSINESS's KYB data
-	var directorNames []string
+	var allOwnerNames []string
 
-	// Fetch business KYB data
+	// Step 1: Fetch business data to get GST proprietors
+	business, err := s.businessService.GetBusiness(ctx, businessID)
+	if err != nil {
+		s.logger.WarnWith("Could not fetch business data for money rotation check", "error", err)
+		// Continue - we'll check what we can
+	} else if business.GSTINData != "" {
+		// Parse GSTIN data JSON to extract proprietor names
+		var gstData map[string]interface{}
+		if err := json.Unmarshal([]byte(business.GSTINData), &gstData); err != nil {
+			s.logger.WarnWith("Failed to parse gst_data", "error", err)
+		} else if msg, ok := gstData["msg"].(map[string]interface{}); ok {
+			// Extract proprietor_name array
+			if proprietorNameRaw, ok := msg["proprietor_name"].([]interface{}); ok {
+				for _, name := range proprietorNameRaw {
+					if nameStr, ok := name.(string); ok && nameStr != "" {
+						allOwnerNames = append(allOwnerNames, nameStr)
+					}
+				}
+				s.logger.InfoWith("Found proprietors in business GST data", "proprietor_count", len(allOwnerNames))
+			}
+		}
+	}
+
+	// Step 2: Fetch business KYB data to get CID directors
 	kybData, err := s.businessService.GetBusinessKYBData(ctx, businessID)
 	if err != nil {
 		s.logger.WarnWith("Could not fetch business KYB data for money rotation check", "error", err)
-		// Continue without director names (money rotation check will have empty list)
+		// Continue - we'll check what we have from GST
 	} else if kybData.CIDData != "" {
 		// Parse company_id_data JSON to extract director names
 		var companyData map[string]interface{}
@@ -1388,34 +1343,41 @@ func (s *PayeeService) checkMoneyRotation(ctx context.Context, businessID string
 				for _, dirInterface := range masterDirectors {
 					if dir, ok := dirInterface.(map[string]interface{}); ok {
 						if name, ok := dir["name"].(string); ok && name != "" {
-							directorNames = append(directorNames, name)
+							allOwnerNames = append(allOwnerNames, name)
 						}
 					}
 				}
-				s.logger.DebugWith("Found directors in business KYB data", "director_count", len(directorNames))
+				s.logger.InfoWith("Found directors in business CID data", "director_count", len(allOwnerNames))
 			}
 		}
 	}
 
-	// Prepare money rotation check request
-	moneyRotationReq := business_rules.MoneyRotationCheckRequest{
-		CustomerBusinessID: businessID,
-		PayeeAccountName:   payeeAccountHolderName,
-		PayeeGSTDirectors:  directorNames, // Business directors, not payee directors
+	// Step 3: Check if payee account holder name matches any owner/director
+	if len(allOwnerNames) == 0 {
+		s.logger.WarnWith("No proprietor or director names found for money rotation check - skipping")
+		return nil
 	}
 
-	// Call verification service
-	moneyRotationResp, err := s.crossVerificationSvc.CheckMoneyRotation(ctx, moneyRotationReq)
-	if err != nil {
-		return fmt.Errorf("money rotation check failed: %w", err)
+	// Define money rotation threshold (0.75 = 75% similarity indicates same person)
+	const moneyRotationThreshold = 0.85
+
+	for _, ownerName := range allOwnerNames {
+		similarity := utils.FuzzyMatch(payeeAccountHolderName, ownerName)
+
+		s.logger.InfoWith("Money rotation similarity check",
+			"account_holder", payeeAccountHolderName,
+			"business_owner", ownerName,
+			"similarity", similarity,
+			"threshold", moneyRotationThreshold)
+
+		if similarity >= moneyRotationThreshold {
+			return fmt.Errorf("money rotation detected: account holder '%s' matches business owner '%s' (similarity: %.2f%%, threshold: %.2f%%)",
+				payeeAccountHolderName, ownerName, similarity*100, moneyRotationThreshold*100)
+		}
 	}
 
-	// Check if money rotation detected
-	if moneyRotationResp.IsMoneyRotation {
-		return fmt.Errorf("money rotation detected: %s", moneyRotationResp.Details)
-	}
-
-	s.logger.InfoWith("Money rotation check passed")
+	s.logger.InfoWith("Money rotation check passed - no matches found",
+		"checked_owners", len(allOwnerNames))
 	return nil
 }
 
@@ -1863,3 +1825,45 @@ func (s *PayeeService) createS3Client() (*fileupload.S3Client, error) {
 	}
 	return fileupload.NewS3ClientFromConfig(*s.s3Config)
 }
+
+// validateAccountHolderName validates if the bank account holder name matches GSTIN legal/trade name
+// Returns error if similarity score is below threshold
+func (s *PayeeService) validateAccountHolderName(accountHolderName, legalName, tradeName string, threshold float64) error {
+	s.logger.InfoWith("Validating account holder name against GSTIN names",
+		"account_holder", accountHolderName,
+		"legal_name", legalName,
+		"trade_name", tradeName,
+		"threshold", threshold)
+
+	// Calculate similarity scores using fuzzy matching utility
+	legalNameScore := utils.FuzzyMatch(accountHolderName, legalName)
+	tradeNameScore := utils.FuzzyMatch(accountHolderName, tradeName)
+
+	// Use the higher score of the two
+	maxScore := legalNameScore
+	matchedAgainst := "legal_name"
+	if tradeNameScore > legalNameScore {
+		maxScore = tradeNameScore
+		matchedAgainst = "trade_name"
+	}
+
+	s.logger.InfoWith("Name similarity check completed",
+		"legal_name_score", legalNameScore,
+		"trade_name_score", tradeNameScore,
+		"max_score", maxScore,
+		"matched_against", matchedAgainst,
+		"threshold", threshold)
+
+	// Check if max score meets threshold
+	if maxScore < threshold {
+		return fmt.Errorf("account holder name mismatch: '%s' does not match GSTIN names (legal: '%s', trade: '%s') - similarity score %.2f%% below threshold %.2f%%",
+			accountHolderName, legalName, tradeName, maxScore*100, threshold*100)
+	}
+
+	s.logger.InfoWith("Account holder name validation passed",
+		"score", maxScore,
+		"matched_against", matchedAgainst)
+
+	return nil
+}
+
