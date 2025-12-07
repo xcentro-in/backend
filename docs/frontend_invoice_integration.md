@@ -1,6 +1,8 @@
-# Frontend Integration Guide: GST Invoice System
+# Frontend Integration Guide: GST Invoice System (User-Facing)
 
 ## Overview
+
+This guide covers the **user-facing invoice endpoints** for business users to download invoices. For **ops dashboard endpoints** (list, filter, export), see [Ops Invoice Endpoints](ops_invoice_endpoints.md).
 
 The XCentro backend automatically generates GST-compliant invoices for all successful payments. Invoices are created by whichever endpoint (callback or webhook) processes the payment first, and contain convenience fee breakdown with GST details.
 
@@ -653,6 +655,7 @@ axios.get(url, { responseType: 'blob' })
 For integration issues or questions:
 - **Technical Documentation:** `/docs/payment_module.md`
 - **API Reference:** `/docs/API_REFERENCE.md`
+- **Ops Dashboard Invoice API:** [Ops Invoice Endpoints](ops_invoice_endpoints.md)
 - **Backend Team:** backend@xcentro.in
 
 ---
@@ -661,6 +664,7 @@ For integration issues or questions:
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.2.0 | 2025-12-07 | Reorganized documentation - separated user-facing and ops dashboard endpoints |
 | 1.1.0 | 2025-12-07 | Added bidirectional invoice creation (callback/webhook can both create) with automatic verification |
 | 1.0.0 | 2025-11-19 | Initial release with automatic invoice generation |
 
@@ -705,6 +709,9 @@ interface InvoiceErrorResponse {
 
 ---
 
-**Document Version:** 1.0.0
-**Last Updated:** 2025-11-19
+**Document Version:** 1.2.0
+**Last Updated:** 2025-12-07
 **Maintained By:** XCentro Backend Team
+
+**Related Documentation:**
+- [Ops Dashboard Invoice Endpoints](ops_invoice_endpoints.md)
