@@ -185,7 +185,8 @@ For detailed information, see:
 - **`EXAMPLES.md`** - Code examples and integration flows
 - **`GATEWAY_INTEGRATION.md`** - Payment gateway technical details
 - **`docs/payment_module.md`** - Payment system architecture
-- **`docs/frontend_invoice_integration.md`** - GST invoice system integration guide for frontend
+- **`docs/frontend_invoice_integration.md`** - GST invoice system (user-facing endpoints)
+- **`docs/ops_invoice_endpoints.md`** - GST invoice system (ops dashboard endpoints)
 - **`docs/business_module.md`** - Business entity management
 - **`docs/payee_module.md`** - Payee management
 - **`docs/migrations.md`** - Migration guide
