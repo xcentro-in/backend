@@ -2,12 +2,14 @@
 
 ## Overview
 
-The XCentro backend automatically generates GST-compliant invoices for all successful payments. Invoices are created when the payment callback is processed (first call after payment success) and contain convenience fee breakdown with GST details.
+The XCentro backend automatically generates GST-compliant invoices for all successful payments. Invoices are created by whichever endpoint (callback or webhook) processes the payment first, and contain convenience fee breakdown with GST details.
 
 **Key Points:**
 - ✅ Invoices are automatically created on payment success
 - ✅ No frontend action required for invoice creation
-- ✅ Invoices are available immediately after callback processing
+- ✅ Invoices are available immediately after processing (callback or webhook)
+- ✅ Bidirectional creation: Either callback OR webhook can create the invoice
+- ✅ Automatic verification: Second endpoint verifies invoice consistency
 - ✅ Download endpoints support both PDF and JSON formats
 - ✅ JWT authentication required for all invoice endpoints
 
@@ -17,6 +19,7 @@ The XCentro backend automatically generates GST-compliant invoices for all succe
 
 ### Current Payment Flow (No Changes Required)
 
+**Typical Flow (Callback First):**
 ```
 1. User initiates payment
 2. Frontend redirects to payment gateway
@@ -24,10 +27,27 @@ The XCentro backend automatically generates GST-compliant invoices for all succe
 4. Gateway redirects back to: /v1/process_payment/callback
 5. Callback handler processes payment and creates invoice ✅
 6. Frontend receives success response
-7. [NEW] Frontend can now fetch invoice
+7. Gateway sends webhook to: /v1/process_payment/webhooks/payment_status
+8. Webhook handler verifies existing invoice ✅
+9. [NEW] Frontend can now fetch invoice
 ```
 
-**Important:** Invoice creation happens automatically in step 5. No additional API calls needed during payment flow.
+**Alternate Flow (Webhook First - Rare):**
+```
+1-3. Same as above
+4. Gateway sends webhook first (async race condition)
+5. Webhook handler creates invoice ✅
+6. Gateway redirects to callback
+7. Callback handler verifies existing invoice ✅
+8. Frontend receives success response
+9. Frontend can fetch invoice
+```
+
+**Important:**
+- Invoice creation happens automatically - whichever endpoint is called first creates it
+- The second endpoint automatically verifies the invoice matches payment details
+- No additional API calls needed during payment flow
+- Invoice is guaranteed to exist after both callback and webhook complete
 
 ---
 
@@ -585,14 +605,26 @@ The generated PDF includes:
 
 ### Issue: Invoice download returns 404
 **Possible Causes:**
-1. Payment hasn't completed callback processing yet
+1. Payment hasn't completed processing yet (both callback and webhook need to complete)
 2. Payment failed (no invoice created for failed payments)
-3. Invoice was deleted due to verification mismatch
+3. Business doesn't have a valid GSTIN configured
 
 **Solution:**
 - Wait a few seconds and retry
 - Check payment status first
+- Verify business has valid GSTIN in profile
 - Contact support if persists
+
+### Issue: Invoice data seems incorrect
+**Possible Causes:**
+1. Invoice verification failed (logged on backend but invoice still exists)
+2. Race condition between callback and webhook created invoice with old data
+
+**Solution:**
+- Invoice exists even if verification fails - payment is successful
+- Verification errors are logged on backend for investigation
+- Frontend will still receive valid invoice data
+- Contact support if amounts are incorrect
 
 ### Issue: PDF downloads but is corrupted
 **Possible Causes:**
@@ -629,6 +661,7 @@ For integration issues or questions:
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.1.0 | 2025-12-07 | Added bidirectional invoice creation (callback/webhook can both create) with automatic verification |
 | 1.0.0 | 2025-11-19 | Initial release with automatic invoice generation |
 
 ---

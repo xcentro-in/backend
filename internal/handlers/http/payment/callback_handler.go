@@ -848,13 +848,25 @@ func (h *CallbackHandler) handlePostPaymentUpdate(
 				h.logger.ErrorWith("Failed to fetch business for invoice creation (non-fatal)", "payment_id", pmt.ID, "gateway", gatewayName, "error", err)
 				fmt.Printf("⚠️  Failed to fetch business for invoice creation: %v\n", err)
 			} else if bizEntity != nil && bizEntity.GSTIN != "" {
-				_, err := h.invoiceService.CreateInvoiceForPayment(ctx, pmt.ID, bizEntity.GSTIN, pmt.ConvenienceFee, pmt.ConvenienceFeeGST)
+				inv, err := h.invoiceService.CreateInvoiceForPayment(ctx, pmt.ID, bizEntity.GSTIN, pmt.ConvenienceFee, pmt.ConvenienceFeeGST)
 				if err != nil {
-					h.logger.ErrorWith("Failed to create invoice (non-fatal)", "payment_id", pmt.ID, "gateway", gatewayName, "error", err)
-					fmt.Printf("⚠️  Failed to create invoice: %v\n", err)
+					// Check if it's a verification error (invoice exists but doesn't match)
+					if inv != nil {
+						h.logger.ErrorWith("Invoice verification failed - existing invoice doesn't match payment (non-fatal)",
+							"payment_id", pmt.ID,
+							"invoice_id", inv.InvoiceID,
+							"gateway", gatewayName,
+							"error", err)
+						fmt.Printf("❌ Invoice verification failed: %v (InvoiceID: %d)\n", err, inv.InvoiceID)
+					} else {
+						h.logger.ErrorWith("Failed to create invoice (non-fatal)", "payment_id", pmt.ID, "gateway", gatewayName, "error", err)
+						fmt.Printf("⚠️  Failed to create invoice: %v\n", err)
+					}
 				} else {
-					h.logger.InfoWith("Invoice created successfully", "payment_id", pmt.ID, "gateway", gatewayName)
-					fmt.Println("✅ Invoice created successfully")
+					if inv != nil {
+						h.logger.InfoWith("Invoice processed successfully", "payment_id", pmt.ID, "invoice_id", inv.InvoiceID, "gateway", gatewayName)
+						fmt.Printf("✅ Invoice processed successfully (InvoiceID: %d)\n", inv.InvoiceID)
+					}
 				}
 			} else {
 				h.logger.WarnWith("Business GSTIN not available for invoice creation", "payment_id", pmt.ID, "gateway", gatewayName)

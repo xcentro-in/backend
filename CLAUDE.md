@@ -41,6 +41,7 @@ HTTP → handlers → services → core → repository interface → adapters
 - **Business**: Business entity management, KYB (`/v1/business`)
 - **Wallet**: Payment source management (`/v1/wallet`)
 - **Payment**: Payment processing with gateway orchestration (`/v1/process_payment`)
+- **Invoice**: GST-compliant invoice generation (`/v1/invoices`, `/ops/v1/invoices`)
 - **Payee**: Payee onboarding with verification (`/v1/payees`)
 - **Voucher**: Multi-bill payments (`/v1/vouchers`)
 - **Payout**: Vendor payouts (`/v1/payout`)
@@ -94,6 +95,18 @@ See `.env.example` for full list. Key variables:
 - **Voucher Flow**: Draft → Finalized (on payment success) → Posted → Synced
 - **Multi-bill**: Single payment can link to multiple vouchers
 - **Payout**: Auto-triggered after settlement, tracks individual UTRs per payee
+
+### Invoice System
+- **Table**: `payment_invoices` with GST compliance fields
+- **Auto-generation**: Created automatically on payment success (bidirectional)
+- **Endpoints**: Both callback (`/v1/process_payment/callback`) and webhook (`/v1/process_payment/webhooks/payment_status`) can create invoices
+- **Flow**: Whichever endpoint processes payment first creates invoice, second one verifies
+- **IRN**: SHA256-based Invoice Reference Number for GST e-invoicing
+- **PDF Generation**: GST-compliant invoice PDF with QR code support
+- **User Routes**: `/v1/invoices/download` (PDF/JSON by invoice_id or payment_id)
+- **Ops Routes**: `/ops/v1/invoices` (paginated list with filters), `/ops/v1/invoices/export`
+- **Verification**: Automatic validation of GSTIN, amounts (taxable, GST, total) with 0.01 tolerance
+- **Error Handling**: Non-fatal - invoice errors don't affect payment success
 
 ## Development Workflow
 
@@ -172,6 +185,7 @@ For detailed information, see:
 - **`EXAMPLES.md`** - Code examples and integration flows
 - **`GATEWAY_INTEGRATION.md`** - Payment gateway technical details
 - **`docs/payment_module.md`** - Payment system architecture
+- **`docs/frontend_invoice_integration.md`** - GST invoice system integration guide for frontend
 - **`docs/business_module.md`** - Business entity management
 - **`docs/payee_module.md`** - Payee management
 - **`docs/migrations.md`** - Migration guide
