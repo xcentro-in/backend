@@ -59,13 +59,14 @@ func NewOpsAuthService(
 	// - openid: Required for OIDC, provides ID token with sub claim
 	// - profile: Required for name and email in ID token
 	// - offline_access: Required for refresh tokens
-	// - api://6244537c-2e10-44b7-af9e-be5fe297ed11/access_as_user: Custom API scope for accessing backend
+	// - {client_id}/role: Custom API scope for accessing role claims
+	roleScope := fmt.Sprintf("%s/role", cfg.OpsOAuth.ClientID)
 	oauth2Config := &oauth2.Config{
 		ClientID:     cfg.OpsOAuth.ClientID,
 		ClientSecret: cfg.OpsOAuth.ClientSecret,
 		RedirectURL:  cfg.OpsOAuth.RedirectURL,
 		Endpoint:     provider.Endpoint(), // Use discovered endpoints instead of hardcoded
-		Scopes:       []string{oidc.ScopeOpenID, "profile", "email", "offline_access", "api://6244537c-2e10-44b7-af9e-be5fe297ed11/access_as_user"},
+		Scopes:       []string{oidc.ScopeOpenID, "profile", "email", "offline_access", roleScope},
 	}
 
 	// Create OIDC ID token verifier
@@ -119,31 +120,22 @@ func (s *OpsAuthService) HandleCallback(
 		return nil, fmt.Errorf("failed to verify ID token: %w", err)
 	}
 
-	// Extract all claims from ID token for logging
-	var allIDTokenClaims map[string]interface{}
-	if err := idToken.Claims(&allIDTokenClaims); err != nil {
-		return nil, fmt.Errorf("failed to parse ID token claims: %w", err)
-	}
-
-	// Log all ID token claims for debugging
-	logger.Infof("==== Entra ID ID Token Claims ====")
-	for key, value := range allIDTokenClaims {
-		logger.Infof("  %s: %v (type: %T)", key, value, value)
-	}
-	logger.Infof("==================================")
-
-	// Extract specific claims we need
+	// Extract specific claims we need from ID token
 	var claims struct {
-		Sub            string `json:"sub"` // Subject - unique Entra user ID (logged but not stored)
-		Email          string `json:"email"`
-		PreferredEmail string `json:"preferred_username"` // Fallback for email
-		UPN            string `json:"upn"`                // Another fallback
-		Name           string `json:"name"`
-		OID            string `json:"oid"` // Object ID from Entra
+		Sub            string   `json:"sub"`                // Subject - unique Entra user ID (logged but not stored)
+		Email          string   `json:"email"`              // Email from email scope
+		PreferredEmail string   `json:"preferred_username"` // Fallback for email
+		UPN            string   `json:"upn"`                // Another fallback
+		Name           string   `json:"name"`               // Name from profile scope
+		OID            string   `json:"oid"`                // Object ID from Entra
+		Roles          []string `json:"roles"`              // Roles array
 	}
 	if err := idToken.Claims(&claims); err != nil {
 		return nil, fmt.Errorf("failed to parse ID token claims: %w", err)
 	}
+
+	// Log essential ID token claims for debugging
+	logger.Infof("ID Token - OID: %s, Email: %s, Name: %s, Roles: %v", claims.OID, claims.Email, claims.Name, claims.Roles)
 
 	// Determine email with fallbacks (profile scope provides email in ID token)
 	email := claims.Email
@@ -161,9 +153,6 @@ func (s *OpsAuthService) HandleCallback(
 	if strings.TrimSpace(claims.Name) == "" {
 		return nil, fmt.Errorf("name cannot be empty")
 	}
-
-	// Log user info from ID token
-	logger.Infof("ID Token - Sub: %s, Email: %s, Name: %s, OID: %s", claims.Sub, email, claims.Name, claims.OID)
 
 	// Extract OID, email, name, and roles from access token (single source of truth)
 	oid, accessEmail, accessName, roles, err := s.extractUserDataFromAccessToken(oauth2Token.AccessToken)
@@ -525,13 +514,6 @@ func (s *OpsAuthService) extractUserDataFromAccessToken(accessToken string) (oid
 		return "", "", "", nil, fmt.Errorf("invalid claims format")
 	}
 
-	// Log all claims from the access token for debugging
-	logger.Infof("==== Entra ID Access Token Claims ====")
-	for key, value := range claims {
-		logger.Infof("  %s: %v (type: %T)", key, value, value)
-	}
-	logger.Infof("=====================================")
-
 	// Extract OID (Object ID - unique user identifier in Entra)
 	if oidVal, ok := claims["oid"].(string); ok {
 		oid = oidVal
@@ -568,8 +550,10 @@ func (s *OpsAuthService) extractUserDataFromAccessToken(accessToken string) (oid
 	// If no roles found, use empty array
 	if roles == nil {
 		roles = []string{}
-		logger.Infof("No 'roles' claim found in access token")
 	}
+
+	// Log essential access token claims for debugging
+	logger.Infof("Access Token - OID: %s, Email: %s, Name: %s, Roles: %v", oid, email, name, roles)
 
 	return oid, email, name, roles, nil
 }
