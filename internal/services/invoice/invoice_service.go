@@ -33,6 +33,8 @@ func NewInvoiceService(invoiceRepo invoice.InvoiceRepository) *InvoiceService {
 }
 
 // CreateInvoiceForPayment creates an invoice for a successful payment
+// If invoice already exists, it verifies the invoice matches the payment details
+// Returns the invoice (existing or newly created) and any verification errors (non-fatal)
 func (s *InvoiceService) CreateInvoiceForPayment(ctx context.Context, paymentID string, gstinRecipient string, convenienceFee, convenienceFeeGST int64) (*invoice.Invoice, error) {
 	s.logger.Info(fmt.Sprintf("[InvoiceService] CreateInvoiceForPayment called - PaymentID: %s", paymentID))
 
@@ -41,8 +43,28 @@ func (s *InvoiceService) CreateInvoiceForPayment(ctx context.Context, paymentID 
 	if err != nil {
 		return nil, fmt.Errorf("failed to check existing invoice: %w", err)
 	}
+
+	// If invoice exists, verify it matches the payment details
 	if existingInvoice != nil {
-		s.logger.Info(fmt.Sprintf("[InvoiceService] Invoice already exists for PaymentID: %s", paymentID))
+		s.logger.Info(fmt.Sprintf("[InvoiceService] Invoice already exists for PaymentID: %s, verifying details", paymentID))
+
+		// Verify invoice matches current payment details
+		if !s.VerifyInvoice(ctx, existingInvoice, gstinRecipient, convenienceFee, convenienceFeeGST) {
+			s.logger.ErrorWith("Invoice verification failed - invoice exists but details don't match",
+				"payment_id", paymentID,
+				"invoice_id", existingInvoice.InvoiceID,
+				"expected_gstin", gstinRecipient,
+				"actual_gstin", existingInvoice.GSTINRecipient,
+				"expected_taxable", float64(convenienceFee)/100.0,
+				"actual_taxable", existingInvoice.TaxableValue,
+				"expected_gst", float64(convenienceFeeGST)/100.0,
+				"actual_gst", existingInvoice.GSTAmount)
+
+			// Return error but don't fail the payment - this is non-fatal
+			return existingInvoice, fmt.Errorf("invoice verification failed: existing invoice details don't match payment details")
+		}
+
+		s.logger.Info(fmt.Sprintf("[InvoiceService] Invoice verification passed for PaymentID: %s", paymentID))
 		return existingInvoice, nil
 	}
 
