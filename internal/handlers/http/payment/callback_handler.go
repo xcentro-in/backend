@@ -17,10 +17,12 @@ import (
 	"xcentro.in/internal/adapters/external/payment/easebuzz"
 	"xcentro.in/internal/adapters/external/payment/jiopay"
 	"xcentro.in/internal/adapters/external/payment/mockpg"
-	corenotification "xcentro.in/internal/core/notification"
-	"xcentro.in/internal/services/notification"
+	"xcentro.in/internal/core/business"
 	"xcentro.in/internal/core/business_rules"
+	corenotification "xcentro.in/internal/core/notification"
 	"xcentro.in/internal/core/payment"
+	invoiceService "xcentro.in/internal/services/invoice"
+	"xcentro.in/internal/services/notification"
 	paymentSvc "xcentro.in/internal/services/payment"
 	"xcentro.in/internal/shared/logger"
 )
@@ -41,6 +43,8 @@ type CallbackHandler struct {
 	txManager          client.TxManager
 	stateChangeRepo    payment.PaymentStateChangeRepository
 	stateLogger        *paymentSvc.PaymentStateLogger
+	businessRepo       business.BusinessRepository
+	invoiceService     *invoiceService.InvoiceService
 	logger             *logger.Logger
 }
 
@@ -57,6 +61,8 @@ func NewCallbackHandler(
 	voucherRepo interface{},
 	txManager interface{},
 	stateChangeRepo payment.PaymentStateChangeRepository,
+	businessRepo business.BusinessRepository,
+	invoiceService *invoiceService.InvoiceService,
 ) *CallbackHandler {
 	return &CallbackHandler{
 		paymentRepo:        paymentRepoParam,
@@ -71,6 +77,8 @@ func NewCallbackHandler(
 		txManager:          txManager.(client.TxManager),
 		stateChangeRepo:    stateChangeRepo,
 		stateLogger:        paymentSvc.NewPaymentStateLogger(stateChangeRepo),
+		businessRepo:       businessRepo,
+		invoiceService:     invoiceService,
 		logger:             logger.GetDefault(),
 	}
 }
@@ -827,9 +835,47 @@ func (h *CallbackHandler) handlePostPaymentUpdate(
 		h.logger.InfoWith("Payment status changed but not logging (pending/unknown)", "payment_id", pmt.ID, "status", newStatus)
 	}
 
-	// Step 2: Finalize vouchers if payment succeeded
+	// Step 2: Create invoice if payment succeeded
 	if newStatus == payment.PaymentStatusSuccess {
-		h.logger.InfoWith("Payment succeeded, attempting voucher finalization", "payment_id", pmt.ID, "gateway", gatewayName)
+		// Step 2: Create invoice (if payment succeeded)
+		h.logger.InfoWith("Payment succeeded, attempting invoice creation", "payment_id", pmt.ID, "gateway", gatewayName)
+		fmt.Println("📄 Payment succeeded, creating invoice...")
+
+		if h.invoiceService != nil && h.businessRepo != nil {
+			// Fetch business to get GSTIN
+			bizEntity, err := h.businessRepo.FindByID(ctx, pmt.BusinessID)
+			if err != nil {
+				h.logger.ErrorWith("Failed to fetch business for invoice creation (non-fatal)", "payment_id", pmt.ID, "gateway", gatewayName, "error", err)
+				fmt.Printf("⚠️  Failed to fetch business for invoice creation: %v\n", err)
+			} else if bizEntity != nil && bizEntity.GSTIN != "" {
+				inv, err := h.invoiceService.CreateInvoiceForPayment(ctx, pmt.ID, bizEntity.GSTIN, pmt.ConvenienceFee, pmt.ConvenienceFeeGST)
+				if err != nil {
+					// Check if it's a verification error (invoice exists but doesn't match)
+					if inv != nil {
+						h.logger.ErrorWith("Invoice verification failed - existing invoice doesn't match payment (non-fatal)",
+							"payment_id", pmt.ID,
+							"invoice_id", inv.InvoiceID,
+							"gateway", gatewayName,
+							"error", err)
+						fmt.Printf("❌ Invoice verification failed: %v (InvoiceID: %d)\n", err, inv.InvoiceID)
+					} else {
+						h.logger.ErrorWith("Failed to create invoice (non-fatal)", "payment_id", pmt.ID, "gateway", gatewayName, "error", err)
+						fmt.Printf("⚠️  Failed to create invoice: %v\n", err)
+					}
+				} else {
+					if inv != nil {
+						h.logger.InfoWith("Invoice processed successfully", "payment_id", pmt.ID, "invoice_id", inv.InvoiceID, "gateway", gatewayName)
+						fmt.Printf("✅ Invoice processed successfully (InvoiceID: %d)\n", inv.InvoiceID)
+					}
+				}
+			} else {
+				h.logger.WarnWith("Business GSTIN not available for invoice creation", "payment_id", pmt.ID, "gateway", gatewayName)
+				fmt.Printf("⚠️  Business GSTIN not available for invoice creation\n")
+			}
+		}
+
+		// Step 3: Finalize vouchers
+		h.logger.InfoWith("Attempting voucher finalization", "payment_id", pmt.ID, "gateway", gatewayName)
 
 		if err := h.finalizeVouchersOnSuccess(ctx, pmt.ID, gatewayName); err != nil {
 			h.logger.ErrorWith("Failed to finalize vouchers (non-fatal)", "payment_id", pmt.ID, "gateway", gatewayName, "error", err)

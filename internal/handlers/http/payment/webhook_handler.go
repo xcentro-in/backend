@@ -15,7 +15,9 @@ import (
 	"xcentro.in/internal/adapters/external/payment/easebuzz"
 	"xcentro.in/internal/adapters/external/payment/jiopay"
 	"xcentro.in/internal/adapters/external/payment/mockpg"
+	"xcentro.in/internal/core/business"
 	"xcentro.in/internal/core/payment"
+	invoiceService "xcentro.in/internal/services/invoice"
 	paymentSvc "xcentro.in/internal/services/payment"
 )
 
@@ -28,6 +30,8 @@ type WebhookHandler struct {
 	mockPGGateway   payment.PaymentGateway
 	mockPGEnabled   bool // Flag to check if mock PG is enabled
 	stateLogger     *paymentSvc.PaymentStateLogger
+	businessRepo    business.BusinessRepository
+	invoiceService  *invoiceService.InvoiceService
 }
 
 // NewWebhookHandler creates a new webhook handler
@@ -38,6 +42,8 @@ func NewWebhookHandler(
 	mockPGGateway payment.PaymentGateway,
 	mockPGEnabled bool,
 	stateChangeRepo payment.PaymentStateChangeRepository,
+	businessRepo business.BusinessRepository,
+	invoiceService *invoiceService.InvoiceService,
 ) *WebhookHandler {
 	return &WebhookHandler{
 		paymentRepo:     paymentRepo,
@@ -46,6 +52,8 @@ func NewWebhookHandler(
 		mockPGGateway:   mockPGGateway,
 		mockPGEnabled:   mockPGEnabled,
 		stateLogger:     paymentSvc.NewPaymentStateLogger(stateChangeRepo),
+		businessRepo:    businessRepo,
+		invoiceService:  invoiceService,
 	}
 }
 
@@ -182,6 +190,31 @@ func (h *WebhookHandler) handleJioPayPaymentWebhook(c echo.Context) error {
 				fmt.Printf("⚠️  Failed to initialize settlement status: %v\n", err)
 			} else {
 				fmt.Println("✅ Settlement status initialized to pending")
+			}
+
+			// Create or verify invoice (either endpoint can be called first)
+			if h.invoiceService != nil && h.businessRepo != nil {
+				// Fetch business to get GSTIN
+				bizEntity, err := h.businessRepo.FindByID(ctx, pmt.BusinessID)
+				if err != nil {
+					fmt.Printf("⚠️  Failed to fetch business for invoice processing: %v\n", err)
+				} else if bizEntity != nil && bizEntity.GSTIN != "" {
+					inv, err := h.invoiceService.CreateInvoiceForPayment(ctx, pmt.ID, bizEntity.GSTIN, pmt.ConvenienceFee, pmt.ConvenienceFeeGST)
+					if err != nil {
+						// Check if it's a verification error (invoice exists but doesn't match)
+						if inv != nil {
+							fmt.Printf("❌ Invoice verification failed: %v (InvoiceID: %d)\n", err, inv.InvoiceID)
+						} else {
+							fmt.Printf("⚠️  Failed to create invoice: %v\n", err)
+						}
+					} else {
+						if inv != nil {
+							fmt.Printf("✅ Invoice processed successfully (InvoiceID: %d)\n", inv.InvoiceID)
+						}
+					}
+				} else {
+					fmt.Printf("⚠️  Business GSTIN not available for invoice processing\n")
+				}
 			}
 		}
 
@@ -321,6 +354,31 @@ func (h *WebhookHandler) handleEasebuzzPaymentWebhook(c echo.Context) error {
 			} else {
 				fmt.Println("✅ Settlement status initialized to pending")
 			}
+
+			// Create or verify invoice (either endpoint can be called first)
+			if h.invoiceService != nil && h.businessRepo != nil {
+				// Fetch business to get GSTIN
+				bizEntity, err := h.businessRepo.FindByID(ctx, pmt.BusinessID)
+				if err != nil {
+					fmt.Printf("⚠️  Failed to fetch business for invoice processing: %v\n", err)
+				} else if bizEntity != nil && bizEntity.GSTIN != "" {
+					inv, err := h.invoiceService.CreateInvoiceForPayment(ctx, pmt.ID, bizEntity.GSTIN, pmt.ConvenienceFee, pmt.ConvenienceFeeGST)
+					if err != nil {
+						// Check if it's a verification error (invoice exists but doesn't match)
+						if inv != nil {
+							fmt.Printf("❌ Invoice verification failed: %v (InvoiceID: %d)\n", err, inv.InvoiceID)
+						} else {
+							fmt.Printf("⚠️  Failed to create invoice: %v\n", err)
+						}
+					} else {
+						if inv != nil {
+							fmt.Printf("✅ Invoice processed successfully (InvoiceID: %d)\n", inv.InvoiceID)
+						}
+					}
+				} else {
+					fmt.Printf("⚠️  Business GSTIN not available for invoice processing\n")
+				}
+			}
 		}
 
 		// Update gateway payment ID if not set or if it's still our txnid
@@ -450,6 +508,31 @@ func (h *WebhookHandler) handleMockPGPaymentWebhook(c echo.Context) error {
 				fmt.Printf("⚠️  Failed to initialize settlement status: %v\n", err)
 			} else {
 				fmt.Println("✅ Settlement status initialized to pending")
+			}
+
+			// Create or verify invoice (either endpoint can be called first)
+			if h.invoiceService != nil && h.businessRepo != nil {
+				// Fetch business to get GSTIN
+				bizEntity, err := h.businessRepo.FindByID(ctx, pmt.BusinessID)
+				if err != nil {
+					fmt.Printf("⚠️  Failed to fetch business for invoice processing: %v\n", err)
+				} else if bizEntity != nil && bizEntity.GSTIN != "" {
+					inv, err := h.invoiceService.CreateInvoiceForPayment(ctx, pmt.ID, bizEntity.GSTIN, pmt.ConvenienceFee, pmt.ConvenienceFeeGST)
+					if err != nil {
+						// Check if it's a verification error (invoice exists but doesn't match)
+						if inv != nil {
+							fmt.Printf("❌ Invoice verification failed: %v (InvoiceID: %d)\n", err, inv.InvoiceID)
+						} else {
+							fmt.Printf("⚠️  Failed to create invoice: %v\n", err)
+						}
+					} else {
+						if inv != nil {
+							fmt.Printf("✅ Invoice processed successfully (InvoiceID: %d)\n", inv.InvoiceID)
+						}
+					}
+				} else {
+					fmt.Printf("⚠️  Business GSTIN not available for invoice processing\n")
+				}
 			}
 		}
 
