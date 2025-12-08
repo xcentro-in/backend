@@ -1,6 +1,8 @@
 package invoice
 
 import (
+	"bytes"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -87,14 +89,22 @@ func (h *OpsInvoiceHandler) ListInvoices(c echo.Context) error {
 		}
 	}
 
-	// Parse date range
-	if dateFromStr := c.QueryParam("date_from"); dateFromStr != "" {
+	// Parse date range (support both date_from/date_to and start_date/end_date)
+	dateFromStr := c.QueryParam("date_from")
+	if dateFromStr == "" {
+		dateFromStr = c.QueryParam("start_date")
+	}
+	if dateFromStr != "" {
 		if dateFrom, err := time.Parse("2006-01-02", dateFromStr); err == nil {
 			filter.DateFrom = &dateFrom
 		}
 	}
 
-	if dateToStr := c.QueryParam("date_to"); dateToStr != "" {
+	dateToStr := c.QueryParam("date_to")
+	if dateToStr == "" {
+		dateToStr = c.QueryParam("end_date")
+	}
+	if dateToStr != "" {
 		if dateTo, err := time.Parse("2006-01-02", dateToStr); err == nil {
 			filter.DateTo = &dateTo
 		}
@@ -129,7 +139,7 @@ func (h *OpsInvoiceHandler) ExportInvoices(c echo.Context) error {
 
 	exportFormat := invoice.ExportFormat(format)
 	if !exportFormat.IsValid() {
-		return c.JSON(400, map[string]any{"message": "Invalid format. Must be 'pdf' or 'json'", "data": nil})
+		return c.JSON(400, map[string]any{"message": "Invalid format. Must be 'pdf', 'json', or 'csv'", "data": nil})
 	}
 
 	// Parse filters (same as ListInvoices)
@@ -171,14 +181,22 @@ func (h *OpsInvoiceHandler) ExportInvoices(c echo.Context) error {
 		}
 	}
 
-	// Parse date range
-	if dateFromStr := c.QueryParam("date_from"); dateFromStr != "" {
+	// Parse date range (support both date_from/date_to and start_date/end_date)
+	dateFromStr := c.QueryParam("date_from")
+	if dateFromStr == "" {
+		dateFromStr = c.QueryParam("start_date")
+	}
+	if dateFromStr != "" {
 		if dateFrom, err := time.Parse("2006-01-02", dateFromStr); err == nil {
 			filter.DateFrom = &dateFrom
 		}
 	}
 
-	if dateToStr := c.QueryParam("date_to"); dateToStr != "" {
+	dateToStr := c.QueryParam("date_to")
+	if dateToStr == "" {
+		dateToStr = c.QueryParam("end_date")
+	}
+	if dateToStr != "" {
 		if dateTo, err := time.Parse("2006-01-02", dateToStr); err == nil {
 			filter.DateTo = &dateTo
 		}
@@ -212,6 +230,77 @@ func (h *OpsInvoiceHandler) ExportInvoices(c echo.Context) error {
 
 		return c.Blob(200, "application/json", jsonData)
 
+	case invoice.ExportFormatCSV:
+		// Export all invoices as CSV
+		var buf bytes.Buffer
+		writer := csv.NewWriter(&buf)
+
+		// Write CSV header
+		header := []string{
+			"Invoice Number", "Payment ID", "Invoice Date",
+			"GSTIN Supplier", "GSTIN Recipient",
+			"Description", "SAC Code",
+			"Taxable Value", "GST Rate", "GST Amount", "Total Amount",
+			"IRN Status", "Filing Status",
+			"IRN", "IRN Ack No", "IRN Ack Date",
+			"Created At", "Updated At",
+		}
+		if err := writer.Write(header); err != nil {
+			h.logger.Error(fmt.Sprintf("Error writing CSV header: %v", err))
+			return c.JSON(500, map[string]any{"message": "Failed to generate CSV", "data": nil})
+		}
+
+		// Write invoice rows
+		for _, inv := range response.Invoices {
+			irnVal := ""
+			if inv.IRN != nil {
+				irnVal = *inv.IRN
+			}
+			irnAckNoVal := ""
+			if inv.IRNAckNo != nil {
+				irnAckNoVal = *inv.IRNAckNo
+			}
+			irnAckDateVal := ""
+			if inv.IRNAckDate != nil {
+				irnAckDateVal = inv.IRNAckDate.Format("2006-01-02 15:04:05")
+			}
+
+			row := []string{
+				fmt.Sprintf("INV-%d", inv.InvoiceID),
+				inv.PaymentID,
+				inv.InvoiceDate.Format("2006-01-02"),
+				inv.GSTINSupplier,
+				inv.GSTINRecipient,
+				inv.Description,
+				inv.SACCode,
+				fmt.Sprintf("%.2f", inv.TaxableValue),
+				fmt.Sprintf("%.2f", inv.GSTRate),
+				fmt.Sprintf("%.2f", inv.GSTAmount),
+				fmt.Sprintf("%.2f", inv.TotalAmount),
+				string(inv.IRNStatus),
+				string(inv.FilingStatus),
+				irnVal,
+				irnAckNoVal,
+				irnAckDateVal,
+				inv.CreatedAt.Format("2006-01-02 15:04:05"),
+				inv.UpdatedAt.Format("2006-01-02 15:04:05"),
+			}
+			if err := writer.Write(row); err != nil {
+				h.logger.Error(fmt.Sprintf("Error writing CSV row: %v", err))
+				return c.JSON(500, map[string]any{"message": "Failed to generate CSV", "data": nil})
+			}
+		}
+
+		writer.Flush()
+		if err := writer.Error(); err != nil {
+			h.logger.Error(fmt.Sprintf("Error flushing CSV: %v", err))
+			return c.JSON(500, map[string]any{"message": "Failed to generate CSV", "data": nil})
+		}
+
+		c.Response().Header().Set("Content-Type", "text/csv")
+		c.Response().Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=invoices-%s.csv", timestamp))
+		return c.Blob(200, "text/csv", buf.Bytes())
+
 	case invoice.ExportFormatPDF:
 		// For PDF, export only the first invoice (or implement multi-invoice PDF)
 		if len(response.Invoices) == 1 {
@@ -225,12 +314,12 @@ func (h *OpsInvoiceHandler) ExportInvoices(c echo.Context) error {
 			c.Response().Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=invoice-%s.pdf", response.Invoices[0].InvoiceNumber))
 			return c.Blob(200, "application/pdf", pdfData)
 		} else {
-			// For multiple invoices, suggest using JSON or provide single invoice_id
+			// For multiple invoices, suggest using JSON or CSV or provide single invoice_id
 			return c.JSON(400, map[string]any{
-				"message": "PDF export supports single invoice only. Please provide invoice_id or use JSON format for multiple invoices",
+				"message": "PDF export supports single invoice only. Please provide invoice_id or use JSON/CSV format for multiple invoices",
 				"data": map[string]any{
 					"invoice_count": len(response.Invoices),
-					"suggestion":    "Use format=json for multiple invoices or add invoice_id parameter for single invoice PDF",
+					"suggestion":    "Use format=json or format=csv for multiple invoices or add invoice_id parameter for single invoice PDF",
 				},
 			})
 		}

@@ -25,6 +25,7 @@ type ExportFormat string
 const (
 	ExportFormatPDF  ExportFormat = "pdf"
 	ExportFormatJSON ExportFormat = "json"
+	ExportFormatCSV  ExportFormat = "csv"
 )
 
 // IsValid checks if the IRN status is valid
@@ -50,7 +51,7 @@ func (s FilingStatus) IsValid() bool {
 // IsValid checks if the export format is valid
 func (f ExportFormat) IsValid() bool {
 	switch f {
-	case ExportFormatPDF, ExportFormatJSON:
+	case ExportFormatPDF, ExportFormatJSON, ExportFormatCSV:
 		return true
 	default:
 		return false
