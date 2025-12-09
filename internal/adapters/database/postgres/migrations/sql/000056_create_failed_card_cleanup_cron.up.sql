@@ -59,7 +59,8 @@ SELECT cron.schedule(
 );
 
 -- Step 4: Grant execute permission to app user
-GRANT EXECUTE ON FUNCTION xcentro.cleanup_failed_tokenization_cards() TO xcentro_app_user;
+-- Note: Default privileges should already grant this, but explicit grant ensures compatibility
+GRANT EXECUTE ON FUNCTION xcentro.cleanup_failed_tokenization_cards() TO xcentro_rw;
 
 -- Verify the job was created
 SELECT jobid, schedule, command, active
