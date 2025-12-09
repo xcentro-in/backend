@@ -28,6 +28,8 @@ func NewCustomValidator() *CustomValidator {
 	v.RegisterValidation("phone_in", validateIndianPhone)
 	v.RegisterValidation("strong_password", validateStrongPassword)
 
+	v.RegisterValidation("ifsc", validateIFSC)
+
 	return &CustomValidator{validator: v}
 }
 
@@ -106,6 +108,8 @@ func getErrorMessage(err validator.FieldError) string {
 		return fmt.Sprintf("%s must be greater than %s", field, err.Param())
 	case "lt":
 		return fmt.Sprintf("%s must be less than %s", field, err.Param())
+	case "ifsc":
+		return fmt.Sprintf("%s must be a valid IFSC code (format: ABCD0123456)", field)
 	default:
 		return fmt.Sprintf("%s is invalid", field)
 	}
@@ -159,6 +163,15 @@ func validateIndianPhone(fl validator.FieldLevel) bool {
 func validateStrongPassword(fl validator.FieldLevel) bool {
 	password := fl.Field().String()
 	return security.ValidatePasswordStrength(password) == nil
+}
+
+// validateIFSC validates Indian IFSC code format: ABCD0123456 (4 letters, 7 digits with 5th char as 0)
+// Note: Input is already trimmed by TrimStrings() before validation
+func validateIFSC(fl validator.FieldLevel) bool {
+	ifsc := fl.Field().String()
+	// IFSC format: 4 bank code letters + 1 zero + 6 branch code alphanumeric
+	ifscRegex := regexp.MustCompile(`^[A-Z]{4}0[A-Z0-9]{6}$`)
+	return ifscRegex.MatchString(ifsc)
 }
 
 // TrimStrings trims all string fields in a struct (recursively)

@@ -807,11 +807,9 @@ func (h *CallbackHandler) handlePostPaymentUpdate(
 
 		if err := h.stateLogger.LogPaymentSuccess(ctx, paymentUUID, pmt.TotalAmount, gatewayName, gatewayPaymentID, metadata); err != nil {
 			h.logger.ErrorWith("Failed to record payment success (non-fatal)", "payment_id", pmt.ID, "gateway", gatewayName, "error", err)
-			fmt.Printf("⚠️  Failed to record state change: %v\n", err)
 			// Non-fatal: Continue to voucher finalization
 		} else {
 			h.logger.InfoWith("Payment success recorded", "payment_id", pmt.ID, "gateway", gatewayName)
-			fmt.Println("✅ Payment state change recorded")
 		}
 
 	case payment.PaymentStatusFailed:
@@ -885,38 +883,42 @@ func (h *CallbackHandler) handlePostPaymentUpdate(
 		}
 
 		// Step 3: Send notification to owner about successful payment
-		h.logger.InfoWith("Triggering payment success notification", "payment_id", pmt.ID, "business_id", pmt.BusinessID)
+		// Only notify for actual business payments, not internal tokenization payments
+		if pmt.PaymentType != payment.PaymentTypeTokenization {
+			h.logger.InfoWith("Triggering payment success notification", "payment_id", pmt.ID, "business_id", pmt.BusinessID, "payment_type", pmt.PaymentType)
 
-		// Format amount for display (convert paise to rupees)
-		amountINR := float64(pmt.Amount) / 100.0
+			// Format amount for display (convert paise to rupees)
+			amountINR := float64(pmt.TotalAmount) / 100.0
 
-		// Create notification payload
-		paymentIDStr := pmt.ID
-		err := notification.TriggerBroadcast(
-			ctx,
-			pmt.BusinessID,                              // business_id
-			corenotification.RoleOwner,                  // minimum_role (owner only)
-			corenotification.EventPaymentCompleted,      // event_type
-			"Payment Successful",                        // title
-			fmt.Sprintf("Payment of ₹%.2f has been processed successfully via %s", amountINR, gatewayName), // body
-			corenotification.EntityReferences{           // entities
-				BusinessID: &pmt.BusinessID,
-				PaymentID:  &paymentIDStr,
-			},
-			[]corenotification.ActionButton{             // actions
-				{
-					Type: corenotification.ButtonTypeNeutral,
-					Text: "View Details",
-					Href: fmt.Sprintf("/payments/%s", pmt.ID),
+			// Create notification payload
+			paymentIDStr := pmt.ID
+			err := notification.TriggerMulticast(
+				ctx,
+				pmt.BusinessID,                              // business_id
+				corenotification.EventPaymentCompleted,      // event_type
+				"Payment Successful",                        // title
+				fmt.Sprintf("Payment of ₹%.2f has been processed successfully via", amountINR), // body
+				corenotification.RoleOwner,                  // minimum_role (owner only)
+				nil,
+				corenotification.EntityReferences{           // entities
+					BusinessID: &pmt.BusinessID,
+					PaymentID:  &paymentIDStr,
 				},
-			},
-		)
+				[]corenotification.ActionButton{             // actions
+					{
+						Type: corenotification.ButtonTypeNeutral,
+						Text: "View Details",
+						Href: fmt.Sprintf("/payments/%s", pmt.ID),
+					},
+				},
+			)
 
-		if err != nil {
-			h.logger.WarnWith("Failed to trigger payment success notification (non-fatal)", "payment_id", pmt.ID, "error", err)
-			// Non-fatal: Payment is still successful
-		} else {
-			h.logger.InfoWith("Payment success notification triggered", "payment_id", pmt.ID)
+			if err != nil {
+				h.logger.WarnWith("Failed to trigger payment success notification (non-fatal)", "payment_id", pmt.ID, "error", err)
+				// Non-fatal: Payment is still successful
+			} else {
+				h.logger.InfoWith("Payment success notification triggered", "payment_id", pmt.ID)
+			}
 		}
 	}
 

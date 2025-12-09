@@ -3,6 +3,7 @@ package voucher
 import (
 	"context"
 	"database/sql"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -154,6 +155,112 @@ func (r *PostgresVoucherRepository) FinalizeVoucher(ctx context.Context, voucher
 	}
 
 	return nil
+}
+
+// AcquireVoucherLockAndValidate acquires an advisory lock on voucher and validates it's available for payment
+// This prevents concurrent payments for the same voucher (race condition protection)
+// Lock is automatically released when transaction commits or rolls back
+func (r *PostgresVoucherRepository) AcquireVoucherLockAndValidate(ctx context.Context, voucherID uuid.UUID, businessID string) error {
+	// Step 1: Acquire advisory lock using pg_try_advisory_xact_lock
+	// This is a transaction-level lock that's automatically released on commit/rollback
+	lockKey := hashUUIDToInt64(voucherID)
+
+	query := `SELECT pg_try_advisory_xact_lock($1)`
+
+	var acquired bool
+	err := r.querier.QueryRow(ctx, query, lockKey).Scan(&acquired)
+	if err != nil {
+		return fmt.Errorf("failed to acquire advisory lock: %w", err)
+	}
+
+	if !acquired {
+		// Lock already held by another transaction - payment in progress
+		return voucher.ErrVoucherLocked
+	}
+
+	// Step 2: Verify voucher exists, belongs to business, and is in draft status
+	validateQuery := `
+		SELECT status, business_id
+		FROM xcentro.payment_vouchers
+		WHERE voucher_id = $1
+	`
+
+	var status voucher.VoucherStatus
+	var voucherBusinessID string
+
+	err = r.querier.QueryRow(ctx, validateQuery, voucherID).Scan(&status, &voucherBusinessID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return voucher.ErrVoucherNotFound
+		}
+		return fmt.Errorf("failed to validate voucher: %w", err)
+	}
+
+	// Verify business ownership
+	if voucherBusinessID != businessID {
+		return voucher.ErrVoucherNotFound // Don't leak existence of vouchers from other businesses
+	}
+
+	// Verify voucher is in draft status
+	if status != voucher.StatusDraft {
+		return voucher.ErrVoucherNotDraft
+	}
+
+	return nil
+}
+
+// hashUUIDToInt64 converts UUID to int64 for PostgreSQL advisory lock
+// Uses first 8 bytes of UUID as the lock key
+func hashUUIDToInt64(id uuid.UUID) int64 {
+	bytes := id[:]
+	// Use first 8 bytes and convert to int64
+	return int64(binary.BigEndian.Uint64(bytes[:8]))
+}
+
+// ValidateAndSumVouchers validates vouchers and returns their total net amount in a single query
+// This method atomically:
+// - Validates all vouchers exist
+// - Validates all belong to the specified business
+// - Validates all are in draft status
+// - Calculates the sum of net_amount
+// Returns: (totalAmount, validVoucherCount, error)
+func (r *PostgresVoucherRepository) ValidateAndSumVouchers(ctx context.Context, voucherIDs []uuid.UUID, businessID string) (int64, int, error) {
+	query := `
+		SELECT
+			COUNT(*) as voucher_count,
+			COALESCE(SUM(net_amount), 0) as total_amount,
+			COUNT(CASE WHEN business_id != $1 THEN 1 END) as wrong_business_count,
+			COUNT(CASE WHEN status != 'draft' THEN 1 END) as non_draft_count
+		FROM xcentro.payment_vouchers
+		WHERE voucher_id = ANY($2)
+	`
+
+	var count, wrongBusinessCount, nonDraftCount int
+	var totalAmount int64
+
+	err := r.querier.QueryRow(ctx, query, businessID, voucherIDs).Scan(
+		&count, &totalAmount, &wrongBusinessCount, &nonDraftCount,
+	)
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to validate vouchers: %w", err)
+	}
+
+	// Validate all vouchers were found
+	if count != len(voucherIDs) {
+		return 0, 0, fmt.Errorf("not all vouchers found (expected %d, found %d)", len(voucherIDs), count)
+	}
+
+	// Validate all belong to business
+	if wrongBusinessCount > 0 {
+		return 0, 0, fmt.Errorf("%d voucher(s) do not belong to this business", wrongBusinessCount)
+	}
+
+	// Validate all are in draft status
+	if nonDraftCount > 0 {
+		return 0, 0, fmt.Errorf("%d voucher(s) are not in draft status", nonDraftCount)
+	}
+
+	return totalAmount, count, nil
 }
 
 // ValidateVoucherForApproval checks if voucher exists, belongs to business, and is in valid status for approval

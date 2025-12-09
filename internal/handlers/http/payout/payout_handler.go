@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
@@ -492,171 +491,25 @@ func (h *PayoutHandler) processPayoutsAsync(ctx context.Context, transfers []*pa
 }
 
 // processSinglePayout processes a single payout transfer
-// Called in goroutine - updates status to 'pending' on success or 'failed' on error
+// Called in goroutine - delegates to service layer for Castler API processing
 func (h *PayoutHandler) processSinglePayout(ctx context.Context, transfer *payout.PayoutTransferRequest) {
 	h.logger.InfoWith("Processing single payout transfer",
 		"transfer_id", transfer.TransferRequestID,
 		"voucher_id", transfer.VoucherID,
 		"amount", transfer.Amount)
 
-	// Parse UUIDs for activity tracking
-	transferUUID, err := uuid.Parse(transfer.TransferRequestID)
-	if err != nil {
-		h.logger.ErrorWith("Invalid transfer_request_id UUID", "error", err)
-		return
-	}
-
-	paymentUUID, err := uuid.Parse(transfer.PaymentID)
-	if err != nil {
-		h.logger.ErrorWith("Invalid payment_id UUID", "error", err)
-		return
-	}
-
-	// Record activity: Payout initiated
-	now := time.Now()
-	_, err = h.stateChangeRepo.Create(ctx, &payment.CreatePaymentStateChangeRequest{
-		PaymentID:       paymentUUID,
-		TransferID:      &transferUUID,
-		Action:          payment.PayoutActionInitiated,
-		ActionTimestamp: now,
-		ActorType:       payment.ActorTypeSystem,
-		ActorName:       "payout_handler",
-		PreviousState:   "",
-		NewState:        "initiated",
-		Amount:          transfer.Amount,
-		Currency:        transfer.Currency,
-		Provider:        string(transfer.Provider),
-		Metadata: map[string]any{
-			"transfer_mode": transfer.TransferMode,
-			"purpose":       transfer.Purpose,
-		},
-		Remarks: fmt.Sprintf("Manual payout initiated for transfer %s", transfer.TransferRequestID),
-	})
-	if err != nil {
-		h.logger.ErrorWith("Failed to create activity record (initiated)", "error", err)
-		// Continue processing even if activity tracking fails
-	}
-
-	// Get provider
-	provider, err := h.providerFactory.GetProvider(transfer.Provider)
-	if err != nil {
-		h.logger.ErrorWith("Failed to get provider", "error", err, "transfer_id", transfer.TransferRequestID)
-		h.markTransferFailed(ctx, transfer, transferUUID, paymentUUID, fmt.Sprintf("Failed to get provider: %v", err))
-		return
-	}
-
-	// Call Castler payout API
-	createReq := &payout.CreateTransferRequest{
-		TransferRequestID:     transfer.TransferRequestID,
-		VoucherID:             transfer.VoucherID,
-		ProviderBeneficiaryID: transfer.ProviderBeneficiaryID,
-		EscrowID:              transfer.EscrowID,
-		Amount:                transfer.Amount,
-		Currency:              transfer.Currency,
-		Purpose:               transfer.Purpose,
-		Reference:             transfer.Reference,
-		Narration:             transfer.Narration,
-		TransferMode:          transfer.TransferMode,
-	}
-
-	resp, err := provider.CreateTransferRequest(ctx, createReq)
-	if err != nil {
-		h.logger.ErrorWith("Castler API error",
+	// Call service to process transfer (centralizes all Castler API logic)
+	if err := h.service.ProcessTransferToCastler(ctx, transfer); err != nil {
+		h.logger.ErrorWith("Failed to process transfer",
 			"error", err,
-			"transfer_id", transfer.TransferRequestID)
-		h.markTransferFailed(ctx, transfer, transferUUID, paymentUUID, fmt.Sprintf("Castler API error: %v", err))
+			"transfer_id", transfer.TransferRequestID,
+			"voucher_id", transfer.VoucherID)
+		// Error already logged and status updated to 'failed' by service
 		return
-	}
-
-	h.logger.InfoWith("Castler API success",
-		"transfer_id", transfer.TransferRequestID,
-		"provider_transfer_id", resp.ProviderTransferID)
-
-	// Update status to 'pending' (Castler API success)
-	pendingTime := time.Now()
-	if err := h.transferRepo.UpdateStatus(ctx, transfer.TransferRequestID, payout.TransferStatusPending, pendingTime); err != nil {
-		h.logger.ErrorWith("Failed to update status to pending", "error", err)
-		return
-	}
-
-	// Store Castler's provider transfer ID
-	if err := h.transferRepo.UpdateProviderTransferID(ctx, transfer.TransferRequestID, resp.ProviderTransferID); err != nil {
-		h.logger.ErrorWith("Failed to update provider transfer ID", "error", err)
-		return
-	}
-
-	// Record activity: Payout pending (API success = pending status)
-	_, err = h.stateChangeRepo.Create(ctx, &payment.CreatePaymentStateChangeRequest{
-		PaymentID:       paymentUUID,
-		TransferID:      &transferUUID,
-		Action:          payment.PayoutActionProcessing, // Use 'processing' action for 'pending' state
-		ActionTimestamp: pendingTime,
-		ActorType:       payment.ActorTypeSystem,
-		ActorName:       "payout_handler",
-		PreviousState:   "initiated",
-		NewState:        "pending",
-		Amount:          transfer.Amount,
-		Currency:        transfer.Currency,
-		Provider:        string(transfer.Provider),
-		Metadata: map[string]any{
-			"provider_transfer_id": resp.ProviderTransferID,
-			"transfer_mode":        transfer.TransferMode,
-		},
-		Remarks: fmt.Sprintf("Castler API success - now pending settlement (Castler transferId: %s)", resp.ProviderTransferID),
-	})
-	if err != nil {
-		h.logger.ErrorWith("Failed to create activity record (pending)", "error", err)
-	}
-
-	// Set webhook timeout
-	config, err := h.configRepo.GetConfig(ctx, nil)
-	if err == nil {
-		timeoutAt := pendingTime.Add(time.Duration(config.WebhookTimeoutMinutes) * time.Minute)
-		if err := h.transferRepo.SetWebhookTimeout(ctx, transfer.TransferRequestID, timeoutAt); err != nil {
-			h.logger.ErrorWith("Failed to set webhook timeout", "error", err)
-		}
 	}
 
 	h.logger.InfoWith("Payout transfer processed successfully",
-		"transfer_id", transfer.TransferRequestID,
-		"status", "pending")
-}
-
-// markTransferFailed updates transfer status to failed and records activity
-func (h *PayoutHandler) markTransferFailed(ctx context.Context, transfer *payout.PayoutTransferRequest, transferUUID, paymentUUID uuid.UUID, reason string) {
-	failedTime := time.Now()
-
-	// Update status to failed
-	if err := h.transferRepo.MarkFailed(ctx, transfer.TransferRequestID, reason, failedTime); err != nil {
-		h.logger.ErrorWith("Failed to mark transfer as failed", "error", err)
-		return
-	}
-
-	// Record activity: Payout failed
-	_, err := h.stateChangeRepo.Create(ctx, &payment.CreatePaymentStateChangeRequest{
-		PaymentID:       paymentUUID,
-		TransferID:      &transferUUID,
-		Action:          payment.PayoutActionFailed,
-		ActionTimestamp: failedTime,
-		ActorType:       payment.ActorTypeSystem,
-		ActorName:       "payout_handler",
-		PreviousState:   "initiated",
-		NewState:        "failed",
-		Amount:          transfer.Amount,
-		Currency:        transfer.Currency,
-		Provider:        string(transfer.Provider),
-		Metadata: map[string]any{
-			"failure_reason": reason,
-		},
-		Remarks: fmt.Sprintf("Payout failed: %s", reason),
-	})
-	if err != nil {
-		h.logger.ErrorWith("Failed to create activity record (failed)", "error", err)
-	}
-
-	h.logger.ErrorWith("Transfer marked as failed",
-		"transfer_id", transfer.TransferRequestID,
-		"reason", reason)
+		"transfer_id", transfer.TransferRequestID)
 }
 
 // RegisterOpsDashboardPayoutRoutes registers all ops dashboard payout operation routes

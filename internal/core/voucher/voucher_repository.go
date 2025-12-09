@@ -118,18 +118,31 @@ type VoucherRepository interface {
 	// WithTx creates a new repository instance that uses a transaction
 	// This enables transactional voucher operations (e.g., finalizing vouchers atomically with payments)
 	WithTx(tx interface{}) VoucherRepository
+
+	// AcquireVoucherLockAndValidate acquires advisory lock and validates voucher status
+	// Used for race condition prevention in concurrent payment scenarios
+	// Returns ErrVoucherLocked if another transaction holds the lock
+	// Returns ErrVoucherNotFound if voucher doesn't exist or doesn't belong to business
+	// Returns ErrVoucherNotDraft if voucher is not in draft status
+	AcquireVoucherLockAndValidate(ctx context.Context, voucherID uuid.UUID, businessID string) error
+
+	// ValidateAndSumVouchers validates vouchers and returns their total net amount in a single query
+	// Validates: all vouchers exist, belong to business, are in draft status
+	// Returns: (totalAmount, validVoucherCount, error)
+	// Error cases: not all vouchers found, wrong business, not in draft status
+	ValidateAndSumVouchers(ctx context.Context, voucherIDs []uuid.UUID, businessID string) (int64, int, error)
 }
 
 // VoucherFilters defines filter criteria for listing vouchers
 type VoucherFilters struct {
-	Status        *VoucherStatus
-	ERPSyncStatus *ERPSyncStatus
-	DateFrom      *time.Time
-	DateTo        *time.Time
-	FiscalYear    *string
-	PayeeID       *uuid.UUID
+	Status          *VoucherStatus
+	ERPSyncStatus   *ERPSyncStatus
+	DateFrom        *time.Time
+	DateTo          *time.Time
+	FiscalYear      *string
+	PayeeID         *uuid.UUID
 	ExpenseCategory *string
-	InvoiceNumber *string
+	InvoiceNumber   *string
 
 	// Pagination
 	Page  int

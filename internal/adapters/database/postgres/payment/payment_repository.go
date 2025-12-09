@@ -651,6 +651,143 @@ func (r *PgPaymentRepository) GetPendingSettlements(ctx context.Context, busines
 	return payments, nil
 }
 
+// GetSettledPaymentsReadyForPayout retrieves settled payments that are ready for auto-payout processing
+// Filters out payments that already have active or completed payout transfers
+func (r *PgPaymentRepository) GetSettledPaymentsReadyForPayout(ctx context.Context, limit int) ([]*payment.Payment, error) {
+	r.logger.DebugWith("Getting settled payments ready for payout", "limit", limit)
+
+	query := `
+		SELECT payment_id, user_id, business_id, amount, currency, payment_method, payment_type, status,
+		       description, gateway_used::text, gateway_payment_id, callback_url, redirect_url,
+		       payment_source_id, payment_source_type, fee_amount, convenience_fee, convenience_fee_gst,
+		       total_amount, metadata,
+		       settlement_status::text, settled_at::text, settlement_reference_id, settlement_utr,
+		       settlement_metadata, settlement_amount, mdr_amount, net_settlement_amount,
+		       created_at, updated_at
+		FROM xcentro.payments
+		WHERE settlement_status = 'settled'
+		  AND payment_type = 'payment'
+		  AND status = 'success'
+		  AND payment_id NOT IN (
+		      SELECT DISTINCT payment_id
+		      FROM xcentro.payout_transfer_requests
+		      WHERE status IN ('initiated', 'pending', 'processing', 'completed')
+		        AND is_deleted = false
+		  )
+		ORDER BY settled_at ASC
+		LIMIT $1
+	`
+
+	rows, err := r.querier.Query(ctx, query, limit)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query settled payments for payout: %w", err)
+	}
+	defer rows.Close()
+
+	var payments []*payment.Payment
+	for rows.Next() {
+		var p payment.Payment
+		var gatewayUsed, gatewayPaymentID, redirectURL, paymentSourceID, paymentSourceType *string
+		var metadataJSON, settlementMetadataJSON []byte
+		var updatedAt *time.Time
+		var settlementStatus, settledAtStr string
+		var settlementReferenceID, settlementUTR *string
+		var settlementAmount, netSettlementAmount *int64
+
+		err := rows.Scan(
+			&p.ID,
+			&p.UserID,
+			&p.BusinessID,
+			&p.Amount,
+			&p.Currency,
+			&p.PaymentMethod,
+			&p.PaymentType,
+			&p.Status,
+			&p.Description,
+			&gatewayUsed,
+			&gatewayPaymentID,
+			&p.CallbackURL,
+			&redirectURL,
+			&paymentSourceID,
+			&paymentSourceType,
+			&p.FeeAmount,
+			&p.ConvenienceFee,
+			&p.ConvenienceFeeGST,
+			&p.TotalAmount,
+			&metadataJSON,
+			&settlementStatus,
+			&settledAtStr,
+			&settlementReferenceID,
+			&settlementUTR,
+			&settlementMetadataJSON,
+			&settlementAmount,
+			&p.MDRAmount,
+			&netSettlementAmount,
+			&p.CreatedAt,
+			&updatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan payment: %w", err)
+		}
+
+		// Handle NULL fields for payment basics
+		if gatewayUsed != nil {
+			p.GatewayUsed = payment.GatewayType(*gatewayUsed)
+		}
+		if gatewayPaymentID != nil {
+			p.GatewayPaymentID = *gatewayPaymentID
+		}
+		if redirectURL != nil {
+			p.RedirectURL = *redirectURL
+		}
+		p.PaymentSourceID = paymentSourceID
+		if paymentSourceType != nil {
+			pst := payment.PaymentSourceType(*paymentSourceType)
+			p.PaymentSourceType = &pst
+		}
+		if updatedAt != nil {
+			p.UpdatedAt = *updatedAt
+		}
+
+		// Handle settlement fields
+		p.SettlementStatus = payment.SettlementStatus(settlementStatus)
+		if settledAtStr != "" {
+			settledAt, err := time.Parse(time.RFC3339, settledAtStr)
+			if err == nil {
+				p.SettledAt = &settledAt
+			}
+		}
+		if settlementReferenceID != nil {
+			p.SettlementReferenceID = *settlementReferenceID
+		}
+		if settlementUTR != nil {
+			p.SettlementUTR = *settlementUTR
+		}
+		p.SettlementAmount = settlementAmount
+		p.NetSettlementAmount = netSettlementAmount
+
+		// Deserialize JSONB metadata
+		if len(metadataJSON) > 0 {
+			if err := json.Unmarshal(metadataJSON, &p.Metadata); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal metadata: %w", err)
+			}
+		}
+		if len(settlementMetadataJSON) > 0 {
+			if err := json.Unmarshal(settlementMetadataJSON, &p.SettlementMetadata); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal settlement metadata: %w", err)
+			}
+		}
+
+		payments = append(payments, &p)
+	}
+
+	r.logger.InfoWith("Found settled payments ready for payout",
+		"count", len(payments),
+		"limit", limit)
+
+	return payments, nil
+}
+
 // ============================================================================
 // Payment List Methods (for display/dashboard)
 // ============================================================================

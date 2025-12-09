@@ -35,6 +35,7 @@ type GSTVerificationResponse struct {
 	GSTIN            string        `json:"gstin"`
 	LegalName        string        `json:"legal_name"`         // Official registered name
 	TradeName        string        `json:"trade_name"`         // Trade/brand name
+	ProprietorName   []string      `json:"proprietor_name,omitempty"` // For proprietorship firms
 	BusinessType     string        `json:"business_type"`      // Proprietorship, Partnership, Private Limited, etc.
 	RegistrationDate time.Time     `json:"registration_date"`
 	Status           string        `json:"status"`             // Active, Cancelled, Suspended

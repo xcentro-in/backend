@@ -120,9 +120,9 @@ func (s *BusinessServiceImpl) GetKYBDocumentUploadURL(ctx context.Context, userR
 		return "", fmt.Errorf("failed to create S3 client: %w", err)
 	}
 
-	// Generate presigned upload URL
-	key := fmt.Sprintf("PII/%s/%s", userRoles[0].BID, "business_deed")
-	url, _, err := fileuploader.GetPresignedUploadURL(ctx, "test.pdf", "application/pdf", key, 15*time.Minute)
+	// Generate presigned upload URL business/<business_id>/kyb/business_deed.pdf
+	key := fmt.Sprintf("business/%s/kyb/business_deed.pdf", userRoles[0].BID)
+	url, _, err := fileuploader.GetPresignedUploadURL(ctx, "application/pdf", key, 15*time.Minute)
 	if err != nil {
 		return "", fmt.Errorf("failed to get presigned upload URL: %w", err)
 	}
@@ -144,7 +144,7 @@ func (s *BusinessServiceImpl) ConfirmKYBDocumentUpload(ctx context.Context, user
 	}
 
 	// Confirm upload and get file URL
-	key := fmt.Sprintf("PII/%s/%s", userRoles[0].BID, "business_deed.pdf")
+	key := fmt.Sprintf("business/%s/kyb/business_deed.pdf", userRoles[0].BID)
 	fileurl, err := fileuploader.ConfirmUpload(ctx, key, 15*time.Minute)
 	if err != nil {
 		return "", fmt.Errorf("failed to confirm upload: %w", err)
@@ -179,11 +179,6 @@ func (s *BusinessServiceImpl) InitiateOnboarding(ctx context.Context, uid string
 	// Step 1: Validate inputs
 	if name == "" || gstin == "" {
 		return nil, types.NewInvalidInputError("name or gstin", "both name and GSTIN are required")
-	}
-
-	// Step 2: Validate GSTIN format (must be exactly 15 characters)
-	if len(gstin) != 15 {
-		return nil, types.NewInvalidInputError("gstin", "GSTIN must be exactly 15 characters")
 	}
 
 	// Step 3: Extract PAN from GSTIN (characters 3-12, positions 2-11 in 0-indexed)
@@ -613,10 +608,9 @@ func (s *BusinessServiceImpl) InviteUserToBusiness(ctx context.Context, bid stri
 		}
 
 		// Notify admins and above about new user addition
-		adminRole := "admin"
 		if err := notification.TriggerMulticast(ctx, bid, coreNotification.EventUserInvited, "New User Added",
 			fmt.Sprintf("A new user has been added to the business with role: %s", role),
-			&adminRole, nil, coreNotification.EntityReferences{}, []coreNotification.ActionButton{
+			coreNotification.RoleAdmin, nil, coreNotification.EntityReferences{}, []coreNotification.ActionButton{
 				{
 					Type: "button-positive",
 					Text: "View Settings",
@@ -664,10 +658,9 @@ func (s *BusinessServiceImpl) AddUserToBusiness(ctx context.Context, relation *b
 	}
 
 	// Notify admins and above about new user addition
-	adminRole := "admin"
 	if err := notification.TriggerMulticast(ctx, relation.BID, coreNotification.EventUserInvited, "New User Added",
 		fmt.Sprintf("A new user has been added to the business with role: %s", relation.Role),
-		&adminRole, nil, coreNotification.EntityReferences{}, []coreNotification.ActionButton{}); err != nil {
+		coreNotification.RoleAdmin, nil, coreNotification.EntityReferences{}, []coreNotification.ActionButton{}); err != nil {
 		s.logger.Errorf("Failed to trigger user invited notification: %v", err)
 		// Don't fail the operation if notification trigger fails
 	}

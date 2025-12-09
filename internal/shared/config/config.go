@@ -156,13 +156,14 @@ type JioPayConfig struct {
 // EasebuzzConfig holds Easebuzz payment gateway configuration.
 type EasebuzzConfig struct {
 	BaseURL           string `json:"base_url" env:"EASEBUZZ_BASE_URL" env-default:"https://pay.easebuzz.in"`
-	MerchantKey       string `json:"-" env:"EASEBUZZ_MERCHANT_KEY"`                                              // Merchant key (sensitive)
-	Salt              string `json:"-" env:"EASEBUZZ_SALT"`                                                      // Hash salt (sensitive)
-	APIKey            string `json:"-" env:"EASEBUZZ_API_KEY"`                                                   // API key for tokenization (EBZ-KEY header, sensitive)
-	EncryptionKey     string `json:"-" env:"EASEBUZZ_ENCRYPTION_KEY"`                                            // AES encryption key (sensitive, optional)
-	EncryptionIV      string `json:"-" env:"EASEBUZZ_ENCRYPTION_IV"`                                             // Fixed AES IV in base64 (sensitive, optional)
-	WebhookSecret     string `json:"-" env:"EASEBUZZ_WEBHOOK_SECRET"`                                            // Webhook signature verification (sensitive)
-	IsAggregatorModel bool   `json:"is_aggregator_model" env:"EASEBUZZ_IS_AGGREGATOR_MODEL" env-default:"false"` // Payment model: true = aggregator (PG charges customer), false = normal (merchant charges customer)
+	MerchantKey       string `json:"-" env:"EASEBUZZ_MERCHANT_KEY"`                                                      // Merchant key (sensitive)
+	Salt              string `json:"-" env:"EASEBUZZ_SALT"`                                                              // Hash salt (sensitive)
+	APIKey            string `json:"-" env:"EASEBUZZ_API_KEY"`                                                           // API key for tokenization (EBZ-KEY header, sensitive)
+	MerchantTokenID   string `json:"-" env:"EASEBUZZ_MERCHANT_TOKEN_ID"`                                                 // Merchant token ID provided by Easebuzz (sensitive)
+	EncryptionKey     string `json:"-" env:"EASEBUZZ_ENCRYPTION_KEY"`                                                    // AES encryption key (sensitive, optional)
+	EncryptionIV      string `json:"-" env:"EASEBUZZ_ENCRYPTION_IV"`                                                     // Fixed AES IV in base64 (sensitive, optional)
+	WebhookSecret     string `json:"-" env:"EASEBUZZ_WEBHOOK_SECRET"`                                                    // Webhook signature verification (sensitive)
+	IsAggregatorModel bool   `json:"is_aggregator_model" env:"EASEBUZZ_IS_AGGREGATOR_MODEL" env-default:"false"`        // Payment model: true = aggregator (PG charges customer), false = normal (merchant charges customer)
 }
 
 // MockPGConfig holds Mock Payment Gateway configuration for testing.
@@ -241,6 +242,7 @@ type FrontendConfig struct {
 // WorkersConfig holds worker configuration.
 type WorkersConfig struct {
 	Notification NotificationWorkerConfig `json:"notification"`
+	AutoPayout   AutoPayoutWorkerConfig   `json:"auto_payout"`
 }
 
 // NotificationWorkerConfig holds notification worker configuration.
@@ -263,6 +265,14 @@ type NotificationWorkerConfig struct {
 	ProcessingTimeoutMinutes int `json:"processing_timeout_minutes" env:"NOTIFICATION_PROCESSING_TIMEOUT_MINUTES" env-default:"10"`
 	RecoveryWorkers          int `json:"recovery_workers" env:"NOTIFICATION_RECOVERY_WORKERS" env-default:"1"`
 	RecoveryIntervalSeconds  int `json:"recovery_interval_seconds" env:"NOTIFICATION_RECOVERY_INTERVAL_SECONDS" env-default:"60"`
+}
+
+// AutoPayoutWorkerConfig holds auto-payout worker configuration.
+// This worker automatically scans for settled payments and initiates payouts after validation.
+type AutoPayoutWorkerConfig struct {
+	Enabled             bool `json:"enabled" env:"AUTO_PAYOUT_WORKER_ENABLED" env-default:"false"`                       // Enable/disable auto-payout worker (disabled by default for safety)
+	PollIntervalMinutes int  `json:"poll_interval_minutes" env:"AUTO_PAYOUT_POLL_INTERVAL_MINUTES" env-default:"30"`    // How often to scan for settled payments (in minutes)
+	BatchSize           int  `json:"batch_size" env:"AUTO_PAYOUT_BATCH_SIZE" env-default:"50"`                          // Max number of payments to process per run
 }
 
 // BankAccountEncryptionConfig holds bank account encryption configuration for PCI DSS compliance.
@@ -423,6 +433,7 @@ func (c Config) Safe() Config {
 	c.Easebuzz.MerchantKey = "***REDACTED***"
 	c.Easebuzz.Salt = "***REDACTED***"
 	c.Easebuzz.APIKey = "***REDACTED***"
+	c.Easebuzz.MerchantTokenID = "***REDACTED***"
 	c.Easebuzz.EncryptionKey = "***REDACTED***"
 	c.Easebuzz.EncryptionIV = "***REDACTED***"
 	c.Easebuzz.WebhookSecret = "***REDACTED***"

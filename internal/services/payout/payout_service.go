@@ -271,6 +271,135 @@ func (s *PayoutService) InitiateManualPayout(ctx context.Context, paymentID stri
 	return transfers, nil
 }
 
+// ProcessTransferToCastler calls Castler API to process a transfer request
+// Moves transfer from 'initiated' to 'processing' (success) or 'failed' (error)
+// This centralizes the Castler API call logic - used by both handler and worker
+func (s *PayoutService) ProcessTransferToCastler(ctx context.Context, transfer *payout.PayoutTransferRequest) error {
+	s.logger.InfoWith("Processing transfer to Castler",
+		"transfer_request_id", transfer.TransferRequestID,
+		"voucher_id", transfer.VoucherID,
+		"amount", transfer.Amount)
+
+	// Parse UUIDs for activity tracking
+	transferUUID, err := uuid.Parse(transfer.TransferRequestID)
+	if err != nil {
+		return fmt.Errorf("invalid transfer_request_id UUID: %w", err)
+	}
+
+	paymentUUID, err := uuid.Parse(transfer.PaymentID)
+	if err != nil {
+		return fmt.Errorf("invalid payment_id UUID: %w", err)
+	}
+
+	// Record activity: Payout initiated
+	now := time.Now()
+	_, err = s.stateChangeRepo.Create(ctx, &payment.CreatePaymentStateChangeRequest{
+		PaymentID:       paymentUUID,
+		TransferID:      &transferUUID,
+		Action:          payment.PayoutActionInitiated,
+		ActionTimestamp: now,
+		ActorType:       payment.ActorTypeSystem,
+		ActorName:       "payout_service",
+		PreviousState:   "initiated",
+		NewState:        "processing",
+		Amount:          transfer.Amount,
+		Currency:        transfer.Currency,
+		Provider:        string(transfer.Provider),
+		Metadata: map[string]any{
+			"transfer_mode": transfer.TransferMode,
+			"purpose":       transfer.Purpose,
+		},
+		Remarks: fmt.Sprintf("Payout processing started for transfer %s", transfer.TransferRequestID),
+	})
+	if err != nil {
+		s.logger.WarnWith("Failed to create activity record (initiated)",
+			"error", err,
+			"transfer_request_id", transfer.TransferRequestID)
+	}
+
+	// Get provider
+	provider, err := s.providerFactory.GetProvider(transfer.Provider)
+	if err != nil {
+		s.logger.ErrorWith("Failed to get provider", "error", err)
+		s.markTransferFailed(ctx, transfer, transferUUID, paymentUUID, fmt.Sprintf("Failed to get provider: %v", err))
+		return fmt.Errorf("failed to get provider: %w", err)
+	}
+
+	// Call Castler payout API
+	createReq := &payout.CreateTransferRequest{
+		TransferRequestID:     transfer.TransferRequestID,
+		VoucherID:             transfer.VoucherID,
+		ProviderBeneficiaryID: transfer.ProviderBeneficiaryID,
+		EscrowID:              transfer.EscrowID,
+		Amount:                transfer.Amount,
+		Currency:              transfer.Currency,
+		Purpose:               transfer.Purpose,
+		Reference:             transfer.Reference,
+		Narration:             transfer.Narration,
+		TransferMode:          transfer.TransferMode,
+	}
+
+	resp, err := provider.CreateTransferRequest(ctx, createReq)
+	if err != nil {
+		s.logger.ErrorWith("Castler API error", "error", err, "transfer_request_id", transfer.TransferRequestID)
+		s.markTransferFailed(ctx, transfer, transferUUID, paymentUUID, fmt.Sprintf("Castler API error: %v", err))
+		return fmt.Errorf("castler API error: %w", err)
+	}
+
+	s.logger.InfoWith("Transfer sent to Castler successfully",
+		"transfer_request_id", transfer.TransferRequestID,
+		"provider_transfer_id", resp.ProviderTransferID)
+
+	// Update status to 'processing'
+	processingTime := time.Now()
+	if err := s.transferRepo.UpdateStatus(ctx, transfer.TransferRequestID, payout.TransferStatusProcessing, processingTime); err != nil {
+		return fmt.Errorf("failed to update status: %w", err)
+	}
+
+	// Store Castler's provider transfer ID
+	if err := s.transferRepo.UpdateProviderTransferID(ctx, transfer.TransferRequestID, resp.ProviderTransferID); err != nil {
+		return fmt.Errorf("failed to update provider transfer ID: %w", err)
+	}
+
+	// Record activity: Payout processing
+	_, err = s.stateChangeRepo.Create(ctx, &payment.CreatePaymentStateChangeRequest{
+		PaymentID:       paymentUUID,
+		TransferID:      &transferUUID,
+		Action:          payment.PayoutActionProcessing,
+		ActionTimestamp: processingTime,
+		ActorType:       payment.ActorTypeSystem,
+		ActorName:       "payout_service",
+		PreviousState:   "initiated",
+		NewState:        "processing",
+		Amount:          transfer.Amount,
+		Currency:        transfer.Currency,
+		Provider:        string(transfer.Provider),
+		Metadata: map[string]any{
+			"provider_transfer_id": resp.ProviderTransferID,
+			"transfer_mode":        transfer.TransferMode,
+		},
+		Remarks: fmt.Sprintf("Castler API success - now processing (transferId: %s)", resp.ProviderTransferID),
+	})
+	if err != nil {
+		s.logger.WarnWith("Failed to create activity record (processing)",
+			"error", err,
+			"transfer_request_id", transfer.TransferRequestID)
+	}
+
+	// Set webhook timeout
+	webhookTimeoutMinutes := s.config.Payout.WebhookTimeoutMinutes
+	timeoutAt := processingTime.Add(time.Duration(webhookTimeoutMinutes) * time.Minute)
+	if err := s.transferRepo.SetWebhookTimeout(ctx, transfer.TransferRequestID, timeoutAt); err != nil {
+		return fmt.Errorf("failed to set webhook timeout: %w", err)
+	}
+
+	s.logger.InfoWith("Transfer processing completed successfully",
+		"transfer_request_id", transfer.TransferRequestID,
+		"timeout_at", timeoutAt.Format(time.RFC3339))
+
+	return nil
+}
+
 // InitiatePayoutForVoucher creates a transfer request for a voucher
 // DEPRECATED: Use InitiateManualPayout with payment_id instead
 // Kept for backward compatibility during transition

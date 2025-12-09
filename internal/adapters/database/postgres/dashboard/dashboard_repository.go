@@ -29,7 +29,7 @@ func NewPgDashboardRepository(db client.DB) *PgDashboardRepository {
 // GetTotalSpendThisMonth returns total successful payment amount for current month
 func (r *PgDashboardRepository) GetTotalSpendThisMonth(ctx context.Context, businessID string) (int64, error) {
 	query := `
-		SELECT COALESCE(SUM(amount), 0) as total_spend
+		SELECT COALESCE(SUM(total_amount), 0) as total_spend
 		FROM xcentro.payments
 		WHERE business_id = $1
 		  AND created_at >= date_trunc('month', CURRENT_DATE)
@@ -76,7 +76,7 @@ func (r *PgDashboardRepository) GetRecentPayments(ctx context.Context, businessI
 	query := `
 		SELECT
 			payment_id,
-			amount,
+			total_amount,
 			payment_method,
 			status,
 			created_at
@@ -197,7 +197,7 @@ func (r *PgDashboardRepository) GetMonthlySpends(ctx context.Context, businessID
 	query := `
 		SELECT
 			date_trunc('month', created_at) as month,
-			SUM(amount) as total_spend,
+			SUM(total_amount) as total_spend,
 			COUNT(*) as txn_count
 		FROM xcentro.payments
 		WHERE business_id = $1
@@ -251,7 +251,7 @@ func (r *PgDashboardRepository) GetPaymentSourceBreakdown(ctx context.Context, b
 			sc.card_type,
 			sc.last_four_digits,
 			ba.bank_name,
-			SUM(p.amount) as total_amount,
+			SUM(p.total_amount) as total_amount,
 			COUNT(*) as txn_count
 		FROM xcentro.payments p
 		LEFT JOIN xcentro.stored_cards sc

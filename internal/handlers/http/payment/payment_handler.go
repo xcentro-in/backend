@@ -21,6 +21,7 @@ import (
 	"xcentro.in/internal/middleware"
 	"xcentro.in/internal/services/payments"
 	"xcentro.in/internal/shared/logger"
+	"xcentro.in/internal/shared/ratelimiter"
 )
 
 // PaymentHandler handles payment-related HTTP requests
@@ -89,7 +90,7 @@ func (h *PaymentHandler) FetchWallet(c echo.Context) error {
 	h.logger.DebugWith("Business ID extracted", "business_id", businessID)
 
 	// Call wallet service directly to get business wallet information
-	// showInactive = true to include failed tokenization cards within 7-day window
+	// showInactive = true to include failed tokenization cards within 2-day window
 	h.logger.Debug("Fetching business wallet from wallet service")
 	businessWallet, err := h.walletService.GetBusinessWallet(c.Request().Context(), businessID, true)
 	if err != nil {
@@ -720,9 +721,57 @@ func (h *PaymentHandler) MakePayment(c echo.Context) error {
 
 	if err != nil {
 		h.logger.ErrorWith("Payment processing failed", "error", err, "business_id", businessID)
+
+		// Check for specific error types and return user-friendly messages
+		errMsg := err.Error()
+
+		// Voucher already being paid (race condition caught by advisory lock)
+		if strings.Contains(errMsg, "already being paid") {
+			// Extract voucher ID from error message: "voucher 019afa40-... is already being paid"
+			voucherID := extractVoucherIDFromError(errMsg)
+			message := "One of the bills in your payment is currently being processed by another payment. Please wait a moment and try again."
+			if voucherID != "" {
+				message = fmt.Sprintf("Bill %s is currently being processed by another payment. Please wait a moment and try again.", voucherID)
+			}
+			return c.JSON(http.StatusConflict, map[string]any{
+				"error":      "bill_already_being_paid",
+				"message":    message,
+				"voucher_id": voucherID,
+			})
+		}
+
+		// Voucher not available (not in draft status)
+		if strings.Contains(errMsg, "not available for payment") {
+			voucherID := extractVoucherIDFromError(errMsg)
+			message := "One of the bills in your payment is not available. It may have already been paid or is in a different status."
+			if voucherID != "" {
+				message = fmt.Sprintf("Bill %s is not available for payment. It may have already been paid or is in a different status.", voucherID)
+			}
+			return c.JSON(http.StatusBadRequest, map[string]any{
+				"error":      "bill_not_available",
+				"message":    message,
+				"voucher_id": voucherID,
+			})
+		}
+
+		// Voucher not found
+		if strings.Contains(errMsg, "voucher") && strings.Contains(errMsg, "not found") {
+			voucherID := extractVoucherIDFromError(errMsg)
+			message := "One or more bills in your payment request could not be found."
+			if voucherID != "" {
+				message = fmt.Sprintf("Bill %s could not be found.", voucherID)
+			}
+			return c.JSON(http.StatusNotFound, map[string]any{
+				"error":      "bill_not_found",
+				"message":    message,
+				"voucher_id": voucherID,
+			})
+		}
+
+		// Generic payment processing error
 		return c.JSON(http.StatusInternalServerError, map[string]any{
 			"error":   "payment_processing_failed",
-			"message": "Failed to process payment",
+			"message": "Failed to process payment. Please try again.",
 		})
 	}
 
@@ -1138,6 +1187,27 @@ func extractLastFourDigits(cardNumber string) string {
 	return cleaned
 }
 
+// extractVoucherIDFromError extracts voucher ID from error messages
+// Error format: "voucher 019afa40-115f-70b5-8050-c1f23b814dca is already being paid"
+func extractVoucherIDFromError(errMsg string) string {
+	// Find "voucher " prefix
+	start := strings.Index(errMsg, "voucher ")
+	if start == -1 {
+		return ""
+	}
+	start += len("voucher ")
+
+	// Find the end of UUID (space or end of string)
+	remaining := errMsg[start:]
+	end := strings.Index(remaining, " ")
+	if end == -1 {
+		// UUID goes to end of string
+		return remaining
+	}
+
+	return remaining[:end]
+}
+
 // handleTokenizationError provides user-friendly error responses
 func (h *PaymentHandler) handleTokenizationError(err error) error {
 	errorMessage := err.Error()
@@ -1327,6 +1397,7 @@ func RegisterPaymentRoutes(
 
 	// Apply JWT middleware to all payment routes
 	group.Use(middleware.JWTMiddleware(authService))
+	group.Use(ratelimiter.MiddlewareDefault())
 
 	// Core payment operations
 	group.POST("/get_fee_rules", handler.GetFeeRules)
@@ -1349,6 +1420,7 @@ func RegisterWalletRoutes(group *echo.Group, paymentService *payments.PaymentSer
 
 	// Apply JWT middleware to all wallet routes
 	group.Use(middleware.JWTMiddleware(authService))
+	group.Use(ratelimiter.MiddlewareDefault())
 
 	// Wallet operations
 	group.GET("", handler.FetchWallet)                            // GET /wallet - fetch wallet with inactive cards

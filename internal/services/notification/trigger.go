@@ -123,14 +123,14 @@ func TriggerUnicastWithTx(ctx context.Context, tx client.Tx, businessID, userID,
 // TriggerMulticast sends notification to users based on role or specific user IDs
 // If minimumRole is provided, sends to all users with role >= minimumRole
 // Otherwise, sends to specific users in userIDs list (fallback)
-func TriggerMulticast(ctx context.Context, businessID, eventType, title, body string, minimumRole *string, userIDs []string, entities notification.EntityReferences, actions []notification.ActionButton) error {
+func TriggerMulticast(ctx context.Context, businessID, eventType, title, body string, minimumRole string, userIDs []string, entities notification.EntityReferences, actions []notification.ActionButton) error {
 	payload := notification.NotificationEventPayload{
 		Timestamp: time.Now().Format(time.RFC3339),
 		EventType: eventType,
 		Target: notification.TargetInfo{
 			BusinessID:  businessID,
 			Type:        notification.TargetMulticast,
-			MinimumRole: minimumRole,
+			MinimumRole: &minimumRole,
 			IDs:         userIDs,
 		},
 		Entities: entities,
@@ -147,14 +147,14 @@ func TriggerMulticast(ctx context.Context, businessID, eventType, title, body st
 // TriggerMulticastWithTx sends notification to users based on role or specific user IDs within an existing transaction
 // If minimumRole is provided, sends to all users with role >= minimumRole
 // Otherwise, sends to specific users in userIDs list (fallback)
-func TriggerMulticastWithTx(ctx context.Context, tx client.Tx, businessID, eventType, title, body string, minimumRole *string, userIDs []string, entities notification.EntityReferences, actions []notification.ActionButton) error {
+func TriggerMulticastWithTx(ctx context.Context, tx client.Tx, businessID, eventType, title, body string, minimumRole string, userIDs []string, entities notification.EntityReferences, actions []notification.ActionButton) error {
 	payload := notification.NotificationEventPayload{
 		Timestamp: time.Now().Format(time.RFC3339),
 		EventType: eventType,
 		Target: notification.TargetInfo{
 			BusinessID:  businessID,
 			Type:        notification.TargetMulticast,
-			MinimumRole: minimumRole,
+			MinimumRole: &minimumRole,
 			IDs:         userIDs,
 		},
 		Entities: entities,

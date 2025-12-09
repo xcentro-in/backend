@@ -171,13 +171,19 @@ type CryptogramAPIRequest struct {
 }
 
 // CryptogramResponse represents the response from Easebuzz cryptogram API
+// Actual API response structure from Easebuzz TMS
 type CryptogramResponse struct {
-	Status int `json:"status"` // 1 for success, 0 for failure
+	Status bool `json:"status"` // true for success, false for failure
 	Data   struct {
-		Cryptogram string `json:"cryptogram"` // Generated cryptogram
-		ExpiresAt  string `json:"expires_at"` // Expiry timestamp
-		TokenID    string `json:"token_id"`   // Token identifier
-		Message    string `json:"message"`    // Response message
+		EasebuzzTokenID  string `json:"easebuzz_token_id"`  // Easebuzz token ID
+		MerchantTokenID  string `json:"merchant_token_id"`  // Merchant token ID
+		TokenDetails     struct {
+			Number          string `json:"number"`          // Network token (use this as card_token in payment)
+			ExpirationMonth string `json:"expirationMonth"` // Expiry month (MM)
+			ExpirationYear  string `json:"expirationYear"`  // Expiry year (YYYY)
+			Cryptogram      string `json:"cryptogram"`      // Cryptogram for payment authorization
+			RequestorID     string `json:"requestorId"`     // Token requester ID (TRID)
+		} `json:"token_details"`
 	} `json:"data"`
 	Message string `json:"message,omitempty"`
 	Error   string `json:"error,omitempty"`
