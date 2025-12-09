@@ -46,7 +46,11 @@ func RegisterAuthRoutes(e *echo.Group, authService auth.AuthService, businessSer
 	publicAuth.POST("/logout", authHandler.HandleLogout)
 	publicAuth.GET("/forgot-password", authHandler.HandleForgotPassword)
 	publicAuth.POST("/reset-password", authHandler.HandleResetPassword)
+	publicAuth.POST("/reset-password-with-otp", authHandler.HandleResetPasswordWithOTP)
+	publicAuth.POST("/send-invite-otp", authHandler.HandleSendInviteOTP)
 	publicAuth.POST("/verify-email", authHandler.HandleVerifyEmail)
+	publicAuth.POST("/verify-email-with-mobile", authHandler.HandleVerifyEmailWithMobile)
+	publicAuth.POST("/verify-mobile-otp", authHandler.HandleVerifyMobileOTP)
 	publicAuth.POST("/resend-verification", authHandler.HandleResendEmailVerification)
 
 	// Protected routes (JWT middleware first, then rate limiter can use user ID)
@@ -55,6 +59,7 @@ func RegisterAuthRoutes(e *echo.Group, authService auth.AuthService, businessSer
 	protectedAuth.Use(ratelimiter.MiddlewareDefault())
 	protectedAuth.POST("/revoke", authHandler.HandleRevokeToken)
 	protectedAuth.POST("/revoke-all", authHandler.HandleRevokeAllTokens)
+	protectedAuth.POST("/generate-mobile-otp", authHandler.HandleGenerateMobileOTP)
 	protectedAuth.POST("/change-password", authHandler.HandleChangePassword)
 	protectedAuth.GET("/onboarding-status", authHandler.HandleGetBusinessOnboardingFlags)
 
@@ -335,13 +340,40 @@ func (ah AuthHandler) HandleResetPassword(c echo.Context) error {
 	}
 
 	// Delegate to service
-	if err := ah.authService.ResetPasswordWithToken(c.Request().Context(), req.Token, req.NewPassword); err != nil {
+	if err := ah.authService.ResetPasswordWithToken(c.Request().Context(), req.UserID, req.Token, req.Signature, req.NewPassword); err != nil {
 		logger.Errorf("Password reset failed: %v", err)
 		return c.JSON(400, map[string]any{"message": err.Error(), "data": nil})
 	}
 
 	return c.JSON(200, map[string]any{
 		"message": "Password has been reset successfully. All existing sessions have been invalidated.",
+		"data":    nil,
+	})
+}
+
+// HandleGenerateMobileOTP generates and sends OTP to user's registered mobile number
+func (ah AuthHandler) HandleGenerateMobileOTP(c echo.Context) error {
+	// Get userID from context (set by JWT middleware)
+	userID, ok := c.Get("userId").(string)
+	if !ok || userID == "" {
+		return c.JSON(401, map[string]any{"message": "Unauthorized", "data": nil})
+	}
+
+	// Delegate to service (no request body needed, uses userID from JWT)
+	if err := ah.authService.GenerateMobileOTP(c.Request().Context(), userID); err != nil {
+		logger.Errorf("Failed to generate mobile OTP for user %s: %v", userID, err)
+
+		// Return 404 if user doesn't have mobile number
+		if err.Error() == "user does not have a mobile number registered" {
+			return c.JSON(404, map[string]any{"message": "Mobile number not registered. Please update your profile.", "data": nil})
+		}
+
+		// Return 500 for other errors
+		return c.JSON(500, map[string]any{"message": "Failed to send OTP", "data": nil})
+	}
+
+	return c.JSON(200, map[string]any{
+		"message": "OTP sent successfully to your registered mobile number",
 		"data":    nil,
 	})
 }
@@ -372,11 +404,15 @@ func (ah AuthHandler) HandleChangePassword(c echo.Context) error {
 	}
 
 	// Delegate to service
-	if err := ah.authService.ChangePassword(c.Request().Context(), userID, req.OldPassword, req.NewPassword); err != nil {
+	if err := ah.authService.ChangePassword(c.Request().Context(), userID, req.OldPassword, req.NewPassword, req.OTP); err != nil {
 		logger.Errorf("Password change failed: %v", err)
 		// Return 401 for authentication failures (wrong old password)
 		if err.Error() == "invalid old password" {
 			return c.JSON(401, map[string]any{"message": "Current password is incorrect", "data": nil})
+		}
+		// Return 400 for OTP errors
+		if err.Error() == "invalid or expired OTP" || err.Error() == "OTP already used" || err.Error() == "OTP has expired" {
+			return c.JSON(400, map[string]any{"message": err.Error(), "data": nil})
 		}
 		// Return 400 for validation errors
 		if err.Error() == "new password cannot be the same as old password" ||
@@ -436,7 +472,7 @@ func (ah AuthHandler) HandleVerifyEmail(c echo.Context) error {
 		return c.JSON(400, map[string]any{"message": "Validation failed", "data": nil})
 	}
 
-	if err := ah.authService.VerifyEmailWithToken(c.Request().Context(), req.Token); err != nil {
+	if err := ah.authService.VerifyEmailWithToken(c.Request().Context(), req.UserID, req.Token, req.Signature); err != nil {
 		logger.Errorf("Error verifying email with token: %v", err)
 
 		// Handle specific error cases
@@ -447,6 +483,8 @@ func (ah AuthHandler) HandleVerifyEmail(c echo.Context) error {
 			return c.JSON(400, map[string]string{"message": "Verification token has already been used"})
 		case "verification token has expired":
 			return c.JSON(400, map[string]string{"message": "Verification token has expired"})
+		case "invalid or tampered verification link":
+			return c.JSON(400, map[string]string{"message": "Invalid or tampered verification link"})
 		default:
 			return c.JSON(500, map[string]string{"message": "Failed to verify email"})
 		}
@@ -493,6 +531,170 @@ func (ah AuthHandler) HandleResendEmailVerification(c echo.Context) error {
 
 	return c.JSON(200, map[string]interface{}{
 		"message": "Verification email sent successfully. Please check your inbox.",
+		"data":    nil,
+	})
+}
+
+// ============================================================================
+// Mobile Verification Handlers (Phase 2)
+// ============================================================================
+
+// HandleVerifyEmailWithMobile verifies email and captures mobile number for OTP
+func (ah AuthHandler) HandleVerifyEmailWithMobile(c echo.Context) error {
+	var req auth.VerifyEmailWithMobileRequest
+
+	// Bind input
+	if err := c.Bind(&req); err != nil {
+		logger.Errorf("Invalid input: %v", err)
+		return c.JSON(400, map[string]string{"message": "Invalid input provided"})
+	}
+
+	// Validate input
+	if err := c.Validate(&req); err != nil {
+		logger.Errorf("Validation failed: %v", err)
+		if ve, ok := err.(*customValidator.ValidationError); ok {
+			return c.JSON(400, map[string]any{"message": "Validation failed", "errors": ve.Errors})
+		}
+		return c.JSON(400, map[string]any{"message": "Validation failed"})
+	}
+
+	// Call service
+	if err := ah.authService.VerifyEmailWithMobile(c.Request().Context(), req.UserID, req.Token, req.Signature, req.MobileNumber); err != nil {
+		logger.Errorf("Error verifying email with mobile: %v", err)
+
+		// Handle specific error cases
+		switch {
+		case err.Error() == "verification token not found":
+			return c.JSON(404, map[string]string{"message": "Invalid verification token"})
+		case err.Error() == "verification token already used":
+			return c.JSON(400, map[string]string{"message": "Verification token has already been used"})
+		case err.Error() == "verification token has expired":
+			return c.JSON(400, map[string]string{"message": "Verification token has expired"})
+		case err.Error() == "invalid or tampered verification link":
+			return c.JSON(400, map[string]string{"message": "Invalid or tampered verification link"})
+		default:
+			return c.JSON(500, map[string]string{"message": "Failed to verify email and send OTP"})
+		}
+	}
+
+	return c.JSON(200, map[string]interface{}{
+		"message": "Email verified successfully. OTP sent to your mobile number.",
+		"data":    nil,
+	})
+}
+
+// HandleVerifyMobileOTP verifies the mobile OTP and marks mobile as verified
+func (ah AuthHandler) HandleVerifyMobileOTP(c echo.Context) error {
+	var req auth.VerifyMobileOTPRequest
+
+	// Bind input
+	if err := c.Bind(&req); err != nil {
+		logger.Errorf("Invalid input: %v", err)
+		return c.JSON(400, map[string]string{"message": "Invalid input provided"})
+	}
+
+	// Validate input
+	if err := c.Validate(&req); err != nil {
+		logger.Errorf("Validation failed: %v", err)
+		if ve, ok := err.(*customValidator.ValidationError); ok {
+			return c.JSON(400, map[string]any{"message": "Validation failed", "errors": ve.Errors})
+		}
+		return c.JSON(400, map[string]any{"message": "Validation failed"})
+	}
+
+	// Call service
+	if err := ah.authService.VerifyMobileOTP(c.Request().Context(), req.UserID, req.OTP); err != nil {
+		logger.Errorf("Error verifying mobile OTP: %v", err)
+
+		// Handle specific error cases
+		switch {
+		case err.Error() == "invalid or expired OTP":
+			return c.JSON(400, map[string]string{"message": "Invalid or expired OTP"})
+		case err.Error() == "OTP already used":
+			return c.JSON(400, map[string]string{"message": "OTP has already been used"})
+		case err.Error() == "OTP has expired":
+			return c.JSON(400, map[string]string{"message": "OTP has expired"})
+		default:
+			return c.JSON(500, map[string]string{"message": "Failed to verify mobile OTP"})
+		}
+	}
+
+	return c.JSON(200, map[string]interface{}{
+		"message": "Mobile number verified successfully. You can now log in.",
+		"data":    nil,
+	})
+}
+
+// HandleResetPasswordWithOTP resets password with mobile OTP verification (for invited users)
+// HandleSendInviteOTP sends OTP to invited user's registered mobile number
+func (ah AuthHandler) HandleSendInviteOTP(c echo.Context) error {
+	var req auth.SendInviteOTPRequest
+
+	// Bind input
+	if err := c.Bind(&req); err != nil {
+		logger.Errorf("Invalid input: %v", err)
+		return c.JSON(400, map[string]any{"message": "Invalid input provided", "data": nil})
+	}
+
+	// Validate input
+	if err := c.Validate(&req); err != nil {
+		logger.Errorf("Validation failed: %v", err)
+		if ve, ok := err.(*customValidator.ValidationError); ok {
+			return c.JSON(400, map[string]any{"message": "Validation failed", "errors": ve.Errors, "data": nil})
+		}
+		return c.JSON(400, map[string]any{"message": "Validation failed", "data": nil})
+	}
+
+	// Delegate to service
+	if err := ah.authService.SendInviteOTP(c.Request().Context(), req.UserID, req.Token, req.Signature); err != nil {
+		logger.Errorf("Failed to send invite OTP for user %s: %v", req.UserID, err)
+
+		// Return 403 for invalid/tampered link
+		if err.Error() == "invalid or tampered invitation link" {
+			return c.JSON(403, map[string]any{"message": "Invalid invitation link", "data": nil})
+		}
+
+		// Return 404 if user doesn't have mobile number
+		if err.Error() == "user does not have a mobile number registered" {
+			return c.JSON(404, map[string]any{"message": "Mobile number not found for this user", "data": nil})
+		}
+
+		// Return 500 for other errors
+		return c.JSON(500, map[string]any{"message": "Failed to send OTP", "data": nil})
+	}
+
+	return c.JSON(200, map[string]any{
+		"message": "OTP sent successfully to your registered mobile number",
+		"data":    nil,
+	})
+}
+
+func (ah AuthHandler) HandleResetPasswordWithOTP(c echo.Context) error {
+	var req auth.ResetPasswordWithMobileOTPRequest
+
+	// Bind input
+	if err := c.Bind(&req); err != nil {
+		logger.Errorf("Invalid input: %v", err)
+		return c.JSON(400, map[string]any{"message": "Invalid input provided", "data": nil})
+	}
+
+	// Validate input
+	if err := c.Validate(&req); err != nil {
+		logger.Errorf("Validation failed: %v", err)
+		if ve, ok := err.(*customValidator.ValidationError); ok {
+			return c.JSON(400, map[string]any{"message": "Validation failed", "errors": ve.Errors, "data": nil})
+		}
+		return c.JSON(400, map[string]any{"message": "Validation failed", "data": nil})
+	}
+
+	// Delegate to service
+	if err := ah.authService.ResetPasswordWithMobileOTP(c.Request().Context(), req.UserID, req.Token, req.Signature, req.OTP, req.NewPassword); err != nil {
+		logger.Errorf("Password reset with OTP failed: %v", err)
+		return c.JSON(400, map[string]any{"message": err.Error(), "data": nil})
+	}
+
+	return c.JSON(200, map[string]any{
+		"message": "Password reset and mobile verified successfully. All existing sessions have been invalidated.",
 		"data":    nil,
 	})
 }

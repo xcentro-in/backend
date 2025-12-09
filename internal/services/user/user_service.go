@@ -892,12 +892,12 @@ func (s *UserServiceImpl) updateAadhaarVerificationData(ctx context.Context, tax
 // CreateInvitedUser creates a new user for business invitation
 // Note: This no longer sends emails - caller should use auth service for password reset/invitation emails
 // User is created with empty password hash - they MUST use the invitation link to set their password
-func (s *UserServiceImpl) CreateInvitedUser(ctx context.Context, email, name string, kycNeeded bool) (*user.User, error) {
-	s.logger.Info("Creating invited user with email: %s", email)
+func (s *UserServiceImpl) CreateInvitedUser(ctx context.Context, email, name, mobile string, kycNeeded bool) (*user.User, error) {
+	s.logger.Info("Creating invited user with email: %s, mobile: %s", email, mobile)
 
 	// Input validation
-	if email == "" || name == "" {
-		return nil, fmt.Errorf("email and name are required")
+	if email == "" || name == "" || mobile == "" {
+		return nil, fmt.Errorf("email, name, and mobile are required")
 	}
 
 	// Check if user already exists
@@ -918,8 +918,8 @@ func (s *UserServiceImpl) CreateInvitedUser(ctx context.Context, email, name str
 	}
 	hashedPassword := string(hashedPasswordBytes)
 
-	// Create user with empty password hash
-	createdUser, err := s.userRepo.CreateInvitedUser(ctx, email, hashedPassword, name, kycNeeded)
+	// Create user with empty password hash and mobile
+	createdUser, err := s.userRepo.CreateInvitedUser(ctx, email, hashedPassword, name, mobile, kycNeeded)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create invited user: %w", err)
 	}

@@ -15,6 +15,7 @@ import (
 	"xcentro.in/internal/adapters/providers/authbridge"
 	"xcentro.in/internal/adapters/providers/mailers"
 	metricsProvider "xcentro.in/internal/adapters/providers/metrics"
+	"xcentro.in/internal/adapters/providers/sms"
 	"xcentro.in/internal/core/metrics"
 	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/logger"
@@ -28,6 +29,7 @@ type externalClients struct {
 	txManager    client.TxManager
 	rcache       *redis.RedisClient
 	emailService mailers.EmailService
+	smsService   sms.SMSService
 	metrics      metrics.MetricsProvider
 }
 
@@ -46,6 +48,10 @@ func (e *externalClients) GetRedisClient() *redis.RedisClient {
 
 func (e *externalClients) GetEmailService() mailers.EmailService {
 	return e.emailService
+}
+
+func (e *externalClients) GetSMSService() sms.SMSService {
+	return e.smsService
 }
 
 func (e *externalClients) GetMetrics() interface{} {
@@ -220,6 +226,15 @@ func (s *xcentroServer) registerClients() {
 	}
 	s.log.Info("Email service created successfully")
 	s.meta.clients.emailService = emailService
+
+	// SMS service (Fast2SMS)
+	smsService, err := sms.NewFast2SMSClient(s.meta.config.SMS)
+	if err != nil {
+		s.log.Errorf("Failed to create SMS service: %v", err)
+		panic(err)
+	}
+	s.log.Info("SMS service created successfully")
+	s.meta.clients.smsService = smsService
 
 	// Metrics provider (CloudWatch)
 	metricsClient, err := metricsProvider.NewMetricsProvider(s.meta.config)

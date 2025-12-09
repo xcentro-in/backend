@@ -4,6 +4,7 @@ import (
 	redisClient "xcentro.in/internal/adapters/cache/redis/client"
 	"xcentro.in/internal/adapters/database/postgres/client"
 	"xcentro.in/internal/adapters/providers/mailers"
+	"xcentro.in/internal/adapters/providers/sms"
 )
 
 // ExternalClients interface provides access to all external clients
@@ -19,6 +20,7 @@ type ExternalClients interface {
 
 	// External service clients
 	GetEmailService() mailers.EmailService
+	GetSMSService() sms.SMSService
 
 	// Metrics client
 	// Returns interface{} to avoid circular dependency

@@ -37,7 +37,7 @@ type UserService interface {
 	ProcessAadhaarWebhook(ctx context.Context, encryptedResponse string) error
 
 	// Invited user methods
-	CreateInvitedUser(ctx context.Context, email, name string, kycNeeded bool) (*User, error)
+	CreateInvitedUser(ctx context.Context, email, name, mobile string, kycNeeded bool) (*User, error)
 
 	// Ops dashboard methods
 	SearchUsersByBusinesses(ctx context.Context, businessIDs []string, searchTerm string) ([]*OpsUserSearchResult, error)

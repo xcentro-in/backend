@@ -638,6 +638,44 @@ func (r *PgUserRepository) MarkVerificationCodeAsUsed(ctx context.Context, codeI
 	return nil
 }
 
+// GetVerificationCodeByUserIDAndCode retrieves a verification code for a specific user (faster lookup with userID)
+func (r *PgUserRepository) GetVerificationCodeByUserIDAndCode(ctx context.Context, userID, hashedCode string, codeType shared.VerificationType) (*user.UserVerificationCodes, error) {
+	query := `
+		SELECT id, user_id, code, code_type, expires_at, created_at, used, retry_attempts
+		FROM xcentro.user_verification_codes
+		WHERE user_id = $1 AND code = $2 AND code_type = $3 AND used = false
+		ORDER BY created_at DESC
+		LIMIT 1
+	`
+
+	var vc user.UserVerificationCodes
+	var expiresAt, createdAt time.Time
+
+	err := r.querier.QueryRow(ctx, query, userID, hashedCode, codeType).Scan(
+		&vc.ID,
+		&vc.UserID,
+		&vc.Code,
+		&vc.CodeType,
+		&expiresAt,
+		&createdAt,
+		&vc.Used,
+		&vc.RetryAttempts,
+	)
+
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("verification code not found")
+		}
+		return nil, fmt.Errorf("failed to get verification code: %w", err)
+	}
+
+	// Convert time.Time to string format
+	vc.ExpiresAt = expiresAt.Format(time.RFC3339)
+	vc.CreatedAt = createdAt.Format(time.RFC3339)
+
+	return &vc, nil
+}
+
 // UpdateUserEmailVerification updates user's email verification status
 func (r *PgUserRepository) UpdateUserEmailVerification(ctx context.Context, userID string, verified bool) error {
 	query := `
@@ -649,6 +687,27 @@ func (r *PgUserRepository) UpdateUserEmailVerification(ctx context.Context, user
 	result, err := r.querier.Exec(ctx, query, verified, userID)
 	if err != nil {
 		return fmt.Errorf("failed to update email verification status: %w", err)
+	}
+
+	rowsAffected := result.RowsAffected()
+	if rowsAffected == 0 {
+		return fmt.Errorf("user not found")
+	}
+
+	return nil
+}
+
+// UpdateUserMobileVerification updates user's mobile verification status
+func (r *PgUserRepository) UpdateUserMobileVerification(ctx context.Context, userID string, verified bool) error {
+	query := `
+		UPDATE xcentro.user_table
+		SET mobile_verified = $1, updated_at = NOW()
+		WHERE id = $2
+	`
+
+	result, err := r.querier.Exec(ctx, query, verified, userID)
+	if err != nil {
+		return fmt.Errorf("failed to update mobile verification status: %w", err)
 	}
 
 	rowsAffected := result.RowsAffected()
@@ -723,11 +782,11 @@ func (r *PgUserRepository) UpdateUserPasswordHash(ctx context.Context, userID, n
 }
 
 // CreateInvitedUser creates a new user for business invitation with all required fields
-func (r *PgUserRepository) CreateInvitedUser(ctx context.Context, email, passwordHash, name string, kycNeeded bool) (*user.User, error) {
+func (r *PgUserRepository) CreateInvitedUser(ctx context.Context, email, passwordHash, name, mobile string, kycNeeded bool) (*user.User, error) {
 	query := `
-		INSERT INTO xcentro.user_table (email, pwd_hash, name, kyc_needed, email_verified)
-		VALUES ($1, $2, $3, $4, true)
-		RETURNING id, email, name, kyc_needed, kyc_status, email_verified, mobile_verified
+		INSERT INTO xcentro.user_table (email, pwd_hash, name, mobile, kyc_needed, email_verified)
+		VALUES ($1, $2, $3, $4, $5, true)
+		RETURNING id, email, name, mobile, kyc_needed, kyc_status, email_verified, mobile_verified
 	`
 
 	var u user.User
@@ -737,11 +796,13 @@ func (r *PgUserRepository) CreateInvitedUser(ctx context.Context, email, passwor
 		email,
 		passwordHash,
 		name,
+		mobile,
 		kycNeeded,
 	).Scan(
 		&u.Id,
 		&u.Email,
 		&u.Name,
+		&u.Mobile,
 		&u.KycNeeded,
 		&kycStatusStr,
 		&u.EmailVerified,

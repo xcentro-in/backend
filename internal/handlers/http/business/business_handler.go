@@ -409,7 +409,7 @@ func (h *BusinessHandler) InviteUser(c echo.Context) error {
 	}
 
 	// Call service to invite user (service handles all authorization and validation)
-	response, err := h.businessService.InviteUserToBusiness(c.Request().Context(), businessID, req.Email, req.Name, req.Role, requesterRole)
+	response, err := h.businessService.InviteUserToBusiness(c.Request().Context(), businessID, req.Email, req.Name, req.Mobile, req.Role, requesterRole)
 	if err != nil {
 		h.logger.Errorf("Error inviting user: %v", err)
 		return c.JSON(500, map[string]interface{}{
@@ -419,8 +419,11 @@ func (h *BusinessHandler) InviteUser(c echo.Context) error {
 	}
 
 	// Send invitation email using auth service (after successful DB operations)
+	// User will request OTP separately using the invite link
 	go func() {
 		bgCtx := context.Background()
+
+		// Send password reset email
 		if err := h.authService.SendPasswordResetEmail(bgCtx, req.Email, "invite"); err != nil {
 			h.logger.Errorf("Error sending invitation email: %v", err)
 			h.logger.Warnf("User %s created but invitation email failed to send", response.UserID)
