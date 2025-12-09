@@ -36,6 +36,7 @@ type AuthService interface {
 	// Mobile verification
 	SendMobileVerificationOTP(ctx context.Context, userID, mobileNumber string) error
 	GenerateMobileOTP(ctx context.Context, userID string) error
+	SendInviteOTP(ctx context.Context, userID, token, signature string) error
 	VerifyEmailWithMobile(ctx context.Context, userID, token, signature, mobileNumber string) error
 	VerifyMobileOTP(ctx context.Context, userID, otp string) error
 	ResetPasswordWithMobileOTP(ctx context.Context, userID, token, signature, otp, newPassword string) error

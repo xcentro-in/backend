@@ -98,19 +98,14 @@ type SESConfig struct {
 	Profile               string `json:"profile" env:"AWS_PROFILE"` // optional shared profile
 }
 
-// SMSConfig holds AWS End User Messaging SMS configuration.
-// Access/Secret keys are optional if the environment uses IAM roles or other providers.
+// SMSConfig holds Fast2SMS configuration.
 type SMSConfig struct {
-	Region           string        `json:"region" env:"SMS_REGION" env-required:"true"`
-	OriginationID    string        `json:"origination_id" env:"SMS_ORIGINATION_ID" env-default:"Xcentro"` // Sender ID (alphanumeric, max 11 chars)
-	Endpoint         string        `json:"endpoint" env:"SMS_ENDPOINT"`                                   // optional custom endpoint (localstack)
-	AccessKey        string        `json:"-" env:"SMS_ACCESS_KEY"`                                        // optional static credentials
-	SecretKey        string        `json:"-" env:"SMS_SECRET_KEY"`
-	SessionToken     string        `json:"-" env:"SMS_SESSION_TOKEN"`
-	Profile          string        `json:"profile" env:"AWS_PROFILE"`                                                // optional shared profile
-	OTPExpiryMinutes int           `json:"otp_expiry_minutes" env:"SMS_OTP_EXPIRY_MINUTES" env-default:"10"`         // OTP expiry in minutes
-	OTPLength        int           `json:"otp_length" env:"SMS_OTP_LENGTH" env-default:"6"`                          // OTP length (default 6 digits)
-	OTPExpiry        time.Duration `json:"otp_expiry" env:"SMS_OTP_EXPIRY" env-default:"10m"`                        // Calculated from OTPExpiryMinutes
+	APIKey           string        `json:"-" env:"FAST2SMS_API_KEY" env-required:"true"`                                         // Fast2SMS API key (sensitive)
+	SenderID         string        `json:"sender_id" env:"FAST2SMS_SENDER_ID" env-default:"XCNTRO"`                              // Sender ID (DLT approved)
+	Endpoint         string        `json:"endpoint" env:"FAST2SMS_ENDPOINT" env-default:"https://www.fast2sms.com/dev/bulkV2"`   // Fast2SMS API endpoint
+	OTPExpiryMinutes int           `json:"otp_expiry_minutes" env:"SMS_OTP_EXPIRY_MINUTES" env-default:"10"`                     // OTP expiry in minutes
+	OTPLength        int           `json:"otp_length" env:"SMS_OTP_LENGTH" env-default:"6"`                                      // OTP length (default 6 digits)
+	OTPExpiry        time.Duration `json:"otp_expiry" env:"SMS_OTP_EXPIRY" env-default:"10m"`                                    // Calculated from OTPExpiryMinutes
 }
 
 // CastlerConfig holds Castler payout provider configuration.
@@ -415,9 +410,7 @@ func (c Config) Safe() Config {
 	c.SES.AccessKey = "***REDACTED***"
 	c.SES.SecretKey = "***REDACTED***"
 	c.SES.SessionToken = "***REDACTED***"
-	c.SMS.AccessKey = "***REDACTED***"
-	c.SMS.SecretKey = "***REDACTED***"
-	c.SMS.SessionToken = "***REDACTED***"
+	c.SMS.APIKey = "***REDACTED***"
 	c.Castler.APIKey = "***REDACTED***"
 	c.Castler.SecretKey = "***REDACTED***"
 	c.Castler.WebhookSecret = "***REDACTED***"

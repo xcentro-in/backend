@@ -97,6 +97,13 @@ type ResetPasswordWithMobileOTPRequest struct {
 	NewPassword string `json:"newPassword" validate:"required,strong_password"`
 }
 
+// SendInviteOTPRequest represents the request to send OTP for invited user
+type SendInviteOTPRequest struct {
+	UserID    string `json:"uid" validate:"required"`
+	Token     string `json:"token" validate:"required"`
+	Signature string `json:"sig" validate:"required"`
+}
+
 // type AuthJWTClaim struct {
 // 	jwt.RegisteredClaims
 // 	Roles []shared.UserRole `json:"rls"`

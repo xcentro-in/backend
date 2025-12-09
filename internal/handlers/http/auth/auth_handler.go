@@ -47,6 +47,7 @@ func RegisterAuthRoutes(e *echo.Group, authService auth.AuthService, businessSer
 	publicAuth.GET("/forgot-password", authHandler.HandleForgotPassword)
 	publicAuth.POST("/reset-password", authHandler.HandleResetPassword)
 	publicAuth.POST("/reset-password-with-otp", authHandler.HandleResetPasswordWithOTP)
+	publicAuth.POST("/send-invite-otp", authHandler.HandleSendInviteOTP)
 	publicAuth.POST("/verify-email", authHandler.HandleVerifyEmail)
 	publicAuth.POST("/verify-email-with-mobile", authHandler.HandleVerifyEmailWithMobile)
 	publicAuth.POST("/verify-mobile-otp", authHandler.HandleVerifyMobileOTP)
@@ -625,6 +626,49 @@ func (ah AuthHandler) HandleVerifyMobileOTP(c echo.Context) error {
 }
 
 // HandleResetPasswordWithOTP resets password with mobile OTP verification (for invited users)
+// HandleSendInviteOTP sends OTP to invited user's registered mobile number
+func (ah AuthHandler) HandleSendInviteOTP(c echo.Context) error {
+	var req auth.SendInviteOTPRequest
+
+	// Bind input
+	if err := c.Bind(&req); err != nil {
+		logger.Errorf("Invalid input: %v", err)
+		return c.JSON(400, map[string]any{"message": "Invalid input provided", "data": nil})
+	}
+
+	// Validate input
+	if err := c.Validate(&req); err != nil {
+		logger.Errorf("Validation failed: %v", err)
+		if ve, ok := err.(*customValidator.ValidationError); ok {
+			return c.JSON(400, map[string]any{"message": "Validation failed", "errors": ve.Errors, "data": nil})
+		}
+		return c.JSON(400, map[string]any{"message": "Validation failed", "data": nil})
+	}
+
+	// Delegate to service
+	if err := ah.authService.SendInviteOTP(c.Request().Context(), req.UserID, req.Token, req.Signature); err != nil {
+		logger.Errorf("Failed to send invite OTP for user %s: %v", req.UserID, err)
+
+		// Return 403 for invalid/tampered link
+		if err.Error() == "invalid or tampered invitation link" {
+			return c.JSON(403, map[string]any{"message": "Invalid invitation link", "data": nil})
+		}
+
+		// Return 404 if user doesn't have mobile number
+		if err.Error() == "user does not have a mobile number registered" {
+			return c.JSON(404, map[string]any{"message": "Mobile number not found for this user", "data": nil})
+		}
+
+		// Return 500 for other errors
+		return c.JSON(500, map[string]any{"message": "Failed to send OTP", "data": nil})
+	}
+
+	return c.JSON(200, map[string]any{
+		"message": "OTP sent successfully to your registered mobile number",
+		"data":    nil,
+	})
+}
+
 func (ah AuthHandler) HandleResetPasswordWithOTP(c echo.Context) error {
 	var req auth.ResetPasswordWithMobileOTPRequest
 
