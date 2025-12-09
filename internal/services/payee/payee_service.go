@@ -1674,9 +1674,9 @@ func (s *PayeeService) GetRemunerationDocumentUploadURL(ctx context.Context, bus
 		return "", fmt.Errorf("failed to create S3 client: %w", err)
 	}
 
-	// Generate presigned upload URL with S3 key: PII/<businessID>/employees/<payeeID>.pdf
-	key := fmt.Sprintf("PII/%s/employees/%s.pdf", businessID, payeeID)
-	url, _, err := fileuploader.GetPresignedUploadURL(ctx, "remuneration_document.pdf", "application/pdf", key, 15*time.Minute)
+	// Generate presigned upload URL with S3 key: business/<business_ID>/employees/<employeeID>/remuneration/proof.pdf
+	key := fmt.Sprintf("business/%s/employees/%s/remuneration/proof.pdf", businessID, payeeID)
+	url, _, err := fileuploader.GetPresignedUploadURL(ctx, "application/pdf", key, 15*time.Minute)
 	if err != nil {
 		return "", fmt.Errorf("failed to get presigned upload URL: %w", err)
 	}
@@ -1731,7 +1731,7 @@ func (s *PayeeService) ConfirmRemunerationDocumentUpload(ctx context.Context, bu
 	}
 
 	// Confirm upload and get presigned download URL
-	key := fmt.Sprintf("PII/%s/employees/%s.pdf", businessID, payeeID)
+	key := fmt.Sprintf("business/%s/employees/%s/remuneration/proof.pdf", businessID, payeeID)
 	fileURL, err := fileuploader.ConfirmUpload(ctx, key, 15*time.Minute)
 	if err != nil {
 		return "", fmt.Errorf("failed to confirm upload: %w", err)

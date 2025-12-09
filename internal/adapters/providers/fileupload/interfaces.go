@@ -12,7 +12,7 @@ type FileUploader interface {
 	UploadFile(ctx context.Context, file *multipart.FileHeader, key string) (string, error)
 
 	// GetPresignedUploadURL generates a presigned URL for client-side upload
-	GetPresignedUploadURL(ctx context.Context, filename string, contentType string, key string, expiration time.Duration) (string, string, error)
+	GetPresignedUploadURL(ctx context.Context, contentType string, key string, expiration time.Duration) (string, string, error)
 
 	// GetPresignedDownloadURL generates a presigned URL for downloading
 	GetPresignedDownloadURL(ctx context.Context, key string, expiration time.Duration) (string, error)

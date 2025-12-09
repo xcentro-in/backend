@@ -120,9 +120,9 @@ func (s *BusinessServiceImpl) GetKYBDocumentUploadURL(ctx context.Context, userR
 		return "", fmt.Errorf("failed to create S3 client: %w", err)
 	}
 
-	// Generate presigned upload URL
-	key := fmt.Sprintf("PII/%s/%s", userRoles[0].BID, "business_deed")
-	url, _, err := fileuploader.GetPresignedUploadURL(ctx, "test.pdf", "application/pdf", key, 15*time.Minute)
+	// Generate presigned upload URL business/<business_id>/kyb/business_deed.pdf
+	key := fmt.Sprintf("business/%s/kyb/business_deed.pdf", userRoles[0].BID)
+	url, _, err := fileuploader.GetPresignedUploadURL(ctx, "application/pdf", key, 15*time.Minute)
 	if err != nil {
 		return "", fmt.Errorf("failed to get presigned upload URL: %w", err)
 	}
@@ -144,7 +144,7 @@ func (s *BusinessServiceImpl) ConfirmKYBDocumentUpload(ctx context.Context, user
 	}
 
 	// Confirm upload and get file URL
-	key := fmt.Sprintf("PII/%s/%s", userRoles[0].BID, "business_deed.pdf")
+	key := fmt.Sprintf("business/%s/kyb/business_deed.pdf", userRoles[0].BID)
 	fileurl, err := fileuploader.ConfirmUpload(ctx, key, 15*time.Minute)
 	if err != nil {
 		return "", fmt.Errorf("failed to confirm upload: %w", err)

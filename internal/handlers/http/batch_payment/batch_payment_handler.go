@@ -303,13 +303,11 @@ func (h *BatchPaymentHandler) DownloadSampleCSV(c echo.Context) error {
 			"message": "File download service is not available",
 		})
 	}
-
-	// TODO: Replace this placeholder with the actual S3 key for your sample CSV file
-	// Example: "templates/batch_payment_sample.csv" or "batch-payments/samples/template.csv"
-	const sampleCSVS3Key = "PLACEHOLDER_S3_KEY_FOR_SAMPLE_CSV"
+	filename := "batch_upload_sample.csv"
+	sampleCSVS3Key := fmt.Sprintf("business/templates/%s",filename)
 
 	// Generate presigned download URL with 15 minute expiration
-	presignedURL, err := h.s3Client.GetPresignedDownloadURL(c.Request().Context(), sampleCSVS3Key, 15*time.Minute)
+	presignedURL, err := h.s3Client.GetPresignedDownloadURL(c.Request().Context(), sampleCSVS3Key, 5*time.Minute)
 	if err != nil {
 		h.logger.ErrorWith("Failed to generate presigned URL for sample CSV", "error", err, "s3_key", sampleCSVS3Key)
 		return c.JSON(http.StatusInternalServerError, map[string]any{
@@ -326,7 +324,7 @@ func (h *BatchPaymentHandler) DownloadSampleCSV(c echo.Context) error {
 		"data": map[string]any{
 			"download_url": presignedURL,
 			"expires_in":   900, // 15 minutes in seconds
-			"filename":     "batch_payment_sample.csv",
+			"filename": filename,
 		},
 	})
 }
