@@ -302,6 +302,128 @@ See Query #10 in `/docs/POSTGRES_METRICS_QUERIES.md` for complete end-to-end dur
 
 ---
 
+### 5. Third-Party API Metrics
+
+**Locations**:
+- `/internal/adapters/external/payout/castler/castler_client.go` (Castler)
+- `/internal/adapters/providers/authbridge/client.go` (Authbridge)
+
+**⚠️ Why These Metrics Are Critical**:
+
+Unlike payment gateways (which are async), Castler and Authbridge are **synchronous third-party APIs** called during:
+- **Onboarding flows**: User/vendor verification, bank account verification
+- **Payout operations**: Beneficiary onboarding, transfer creation
+
+**Cannot track failures in PostgreSQL** because:
+- ❌ API failures happen BEFORE database records are created
+- ❌ Network timeouts leave no trace in database
+- ❌ Encryption/decryption errors occur during API call
+
+**Real-time monitoring is essential** for:
+- ✅ Detecting third-party API outages immediately
+- ✅ Alerting on high error rates during onboarding
+- ✅ Measuring third-party API SLAs
+- ✅ Identifying slow verification processes
+
+| Metric Name | Type | Labels | Description |
+|------------|------|--------|-------------|
+| `third_party.response_time` | Timer | provider, operation, status_code | Third-party API response time |
+| `third_party.error` | Counter | provider, operation, error_type, [status_code] | Third-party API errors |
+
+#### Castler Operations
+
+**Provider**: `castler`
+
+**Operations**:
+- `onboard_beneficiary` - Onboard payee to Castler for payouts
+- `create_transfer` - Initiate payout transfer to vendor
+- `verify_bank` - Penny drop bank account verification (if used)
+
+**Error Types**:
+- `marshal_error` - Request JSON marshaling failure
+- `encryption_error` - AES-256-CBC encryption failure
+- `network_error` - HTTP request/timeout failure
+- `read_error` - Response reading failure
+- `decryption_error` - Response decryption failure
+- `http_error` - HTTP 4xx/5xx from Castler API
+- `parse_error` - Response JSON parsing failure
+
+**Example CloudWatch Queries**:
+
+1. **Castler API P95 Response Time**:
+   - Metric: `third_party.response_time`
+   - Dimensions: provider=castler, operation=create_transfer
+   - Statistic: p95
+   - Alert: > 10000ms (10 seconds)
+
+2. **Castler Onboarding Errors**:
+   - Metric: `third_party.error`
+   - Dimensions: provider=castler, operation=onboard_beneficiary
+   - Statistic: Sum
+   - Group by: error_type
+   - Alert: > 5 errors in 15 minutes
+
+3. **Castler Error Rate**:
+   - Metric m1: `third_party.response_time` (Count by provider=castler)
+   - Metric m2: `third_party.error` (Sum by provider=castler)
+   - Math: `(m2/m1)*100`
+   - Label: "Castler Error Rate (%)"
+
+#### Authbridge Operations
+
+**Provider**: `authbridge`
+
+**Operations**:
+- `verify_pan` - Basic PAN verification
+- `verify_pan_comprehensive` - Comprehensive PAN details
+- `verify_pan_aadhaar_link` - PAN-Aadhaar linkage check
+- `verify_aadhaar` - Aadhaar verification via DigiLocker
+- `verify_gstin` - GST registration verification
+- `verify_cin` - Company identification number verification
+- `verify_bank` - Bank account verification (penny drop)
+
+**Error Types**: (Same as Castler)
+- `marshal_error`, `encryption_error`, `network_error`, `read_error`
+- `decryption_error`, `http_error`, `parse_error`
+
+**Example CloudWatch Queries**:
+
+1. **Authbridge KYC Verification Time**:
+   - Metric: `third_party.response_time`
+   - Dimensions: provider=authbridge, operation=verify_pan
+   - Statistic: Average
+   - Target: < 5000ms (5 seconds)
+
+2. **Authbridge Verification Failures by Document Type**:
+   - Metric: `third_party.error`
+   - Dimensions: provider=authbridge
+   - Statistic: Sum
+   - Group by: operation
+   - View as: Bar chart
+
+3. **Bank Verification Success Rate**:
+   - Metric m1: Total calls (Count of `third_party.response_time` where operation=verify_bank)
+   - Metric m2: Errors (Sum of `third_party.error` where operation=verify_bank)
+   - Math: `((m1-m2)/m1)*100`
+   - Label: "Bank Verification Success Rate (%)"
+
+4. **Encryption/Decryption Errors** (Critical - indicates config issue):
+   - Metric: `third_party.error`
+   - Dimensions: provider=authbridge
+   - Filter: error_type IN (encryption_error, decryption_error)
+   - Statistic: Sum
+   - Alert: > 1 error (immediate investigation needed)
+
+**Why Track Both Providers?**
+
+1. **Onboarding Impact**: Failures block user onboarding → revenue loss
+2. **SLA Monitoring**: Track if vendors meet their response time SLAs
+3. **Vendor Comparison**: Evaluate provider reliability
+4. **Early Detection**: Alert on outages before customers complain
+5. **Cost Analysis**: Measure API call volume for cost forecasting
+
+---
+
 ## Key Performance Indicators (KPIs)
 
 ### 1. Payment Success Rate (CRITICAL)
@@ -328,6 +450,18 @@ See Query #10 in `/docs/POSTGRES_METRICS_QUERIES.md` for complete end-to-end dur
 **Formula**: `(http.errors.5xx / http.request) × 100`
 **Target**: < 1%
 **Alert**: > 5%
+
+### 6. Third-Party API Success Rate (HIGH)
+**Formula**: `((third_party.calls - third_party.error) / third_party.calls) × 100`
+**Target**: > 95%
+**Alert**: < 90%
+**Why Critical**: Failures block onboarding flows, impacting revenue
+
+### 7. Third-Party API P95 Response Time (MEDIUM)
+**Metric**: `p95(third_party.response_time)`
+**Target**: < 5000ms (5s) for Authbridge, < 10000ms (10s) for Castler
+**Alert**: > 30000ms (30s - timeout threshold)
+**Why Monitor**: Slow verification = poor user experience during onboarding
 
 ---
 
@@ -424,6 +558,44 @@ Group By: path
 Period: 15 minutes
 ```
 
+#### 4. Third-Party API Monitoring Dashboard
+
+**Widget 1: Third-Party API Response Time Comparison (Line Graph)**
+```
+Metrics:
+- third_party.response_time (provider=castler, operation=onboard_beneficiary)
+- third_party.response_time (provider=castler, operation=create_transfer)
+- third_party.response_time (provider=authbridge, operation=verify_pan)
+- third_party.response_time (provider=authbridge, operation=verify_aadhaar)
+Statistic: p95
+Period: 5 minutes
+```
+
+**Widget 2: Third-Party Error Rate (Line Graph)**
+```
+Metric m1: third_party.response_time (Count by provider)
+Metric m2: third_party.error (Sum by provider)
+Math: (m2/m1)*100
+Label: "Error Rate (%) by Provider"
+Period: 5 minutes
+```
+
+**Widget 3: Third-Party Errors by Type (Stacked Bar)**
+```
+Metric: third_party.error
+Group By: error_type, provider
+Period: 15 minutes
+```
+
+**Widget 4: Authbridge Operations Breakdown (Pie Chart)**
+```
+Metric: third_party.response_time (provider=authbridge)
+Statistic: Count
+Group By: operation
+Period: 1 hour
+Note: Shows which verification types are most used
+```
+
 ---
 
 ## CloudWatch Alarms
@@ -483,6 +655,26 @@ Evaluation: 3 consecutive periods of 5 minutes
 Action: Notify engineering team
 ```
 
+#### 7. Third-Party API Failure Spike
+```
+Metric: third_party.error
+Statistic: Sum
+Threshold: > 10 errors
+Evaluation: 2 consecutive periods of 5 minutes
+Action: Notify engineering team + check provider status
+Note: Failures block onboarding flows
+```
+
+#### 8. Third-Party API Timeout
+```
+Metric: third_party.response_time
+Statistic: p95
+Threshold: > 30000ms (30s)
+Evaluation: 2 consecutive periods of 5 minutes
+Action: Notify engineering team
+Note: May indicate provider outage or network issue
+```
+
 ---
 
 ## Cost Estimation
@@ -495,7 +687,7 @@ Action: Notify engineering team
 ### Optimized Implementation Cost
 
 **Before Optimization**: ~50 unique metric/label combinations = **$15/month**
-**After Optimization**: ~15-20 unique metric/label combinations = **$5/month**
+**After Optimization**: ~25-30 unique metric/label combinations = **$8/month**
 
 **Cost Breakdown**:
 ```
@@ -507,11 +699,13 @@ Essential CloudWatch Metrics (Kept):
 - gateway.response_time          ~4 metrics (jiopay/easebuzz × tokenize/payment)
 - gateway.error                  ~3 metrics (network/http/read errors)
 - webhook.* metrics              ~3 metrics (received, failed, duplicate)
+- third_party.response_time      ~7 metrics (castler × 3 ops + authbridge × 4 ops)
+- third_party.error              ~4 metrics (castler/authbridge × common errors)
 ----------------------------------------
-Total: ~15-20 metrics × $0.30 = $4.50-6.00/month
-API calls: ~100 requests/day = $0.03/month
+Total: ~25-30 metrics × $0.30 = $7.50-9.00/month
+API calls: ~150 requests/day = $0.05/month
 ----------------------------------------
-TOTAL: ~$5/month per environment
+TOTAL: ~$8/month per environment
 ```
 
 **Business Metrics (Moved to PostgreSQL - $0 cost)**:
@@ -520,13 +714,14 @@ TOTAL: ~$5/month per environment
 - ❌ payment.tokenization.initiated, payment.tokenization.success, payment.tokenization.failed
 - ❌ gateway.request
 
-**Savings**: $10/month per environment (~70% reduction)
+**Savings**: $7/month per environment (~50% reduction)
 
 **What Changed:**
 1. ✅ **Removed business counters**: Payment counts, amounts, success rates now queried from PostgreSQL
 2. ✅ **Kept performance timers**: API latency, gateway response times (cannot measure from DB)
 3. ✅ **Kept infrastructure errors**: Real-time alerting on network/timeout failures
-4. ✅ **Zero compromise**: All essential observability retained
+4. ✅ **Added third-party monitoring**: Castler & Authbridge API tracking (+$3.30/month)
+5. ✅ **Worth the cost**: Third-party metrics catch failures before database records are created
 
 **See**: `/docs/POSTGRES_METRICS_QUERIES.md` for PostgreSQL alternatives to removed metrics
 
@@ -649,7 +844,7 @@ TOTAL: ~$5/month per environment
 
 ### Tier 3 Metrics (Month 2+)
 
-1. **Payout Metrics** (in `/internal/services/payout/`)
+1. ✅ **Third-Party API Metrics** - Implemented (Castler, Authbridge)
 2. **Voucher Workflow** (in `/internal/services/voucher/`)
 3. **Cache Performance** (Redis hit/miss rates)
 4. **Worker Job Metrics** (notification worker, etc.)
@@ -681,6 +876,6 @@ TOTAL: ~$5/month per environment
 
 ---
 
-**Last Updated**: 2025-11-08
-**Version**: 1.0
+**Last Updated**: 2025-12-09
+**Version**: 1.1
 **Author**: XCentro Engineering Team
