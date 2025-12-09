@@ -1,6 +1,7 @@
 package security
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -31,4 +32,21 @@ func HashTokenWithPepper(token, pepper string) string {
 	pepperedToken := fmt.Sprintf("%s_%s_%s", pepper, token, "xcentro")
 	hash := sha256.Sum256([]byte(pepperedToken))
 	return hex.EncodeToString(hash[:])
+}
+
+// GenerateHMACSignature generates an HMAC-SHA256 signature for userid:token
+// This prevents tampering with verification URLs by ensuring integrity
+// secretKey should be the JWT secret key from application config
+func GenerateHMACSignature(userID, token, secretKey string) string {
+	data := fmt.Sprintf("%s:%s", userID, token)
+	h := hmac.New(sha256.New, []byte(secretKey))
+	h.Write([]byte(data))
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// ValidateHMACSignature validates an HMAC signature against userid:token
+// Returns true if signature is valid, false otherwise
+func ValidateHMACSignature(userID, token, signature, secretKey string) bool {
+	expectedSignature := GenerateHMACSignature(userID, token, secretKey)
+	return hmac.Equal([]byte(expectedSignature), []byte(signature))
 }

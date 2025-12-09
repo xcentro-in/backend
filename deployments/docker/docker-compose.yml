@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:18-alpine
+    image: postgres:18-trixie
     container_name: xcentro-postgres
     restart: unless-stopped
     environment:
@@ -10,10 +10,10 @@ services:
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
-      - pg_data:/var/lib/postgresql/data
+      - pg_data:/var/lib/postgresql/
 
   redis:
-    image: redis:8-alpine
+    image: redis:8-bookworm
     container_name: xcentro-redis
     restart: unless-stopped
     command: ["sh", "/usr/local/etc/redis/redis-entrypoint.sh"]

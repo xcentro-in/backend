@@ -49,7 +49,9 @@ type RevokeTokenRequest struct {
 
 // ResetPasswordRequest represents the request to reset password with token
 type ResetPasswordRequest struct {
+	UserID      string `json:"uid" validate:"required"`
 	Token       string `json:"token" validate:"required"`
+	Signature   string `json:"sig" validate:"required"`
 	NewPassword string `json:"newPassword" validate:"required,strong_password"`
 }
 
@@ -57,16 +59,49 @@ type ResetPasswordRequest struct {
 type ChangePasswordRequest struct {
 	OldPassword string `json:"oldPassword" validate:"required"`
 	NewPassword string `json:"newPassword" validate:"required,strong_password"`
+	OTP         string `json:"otp" validate:"required,len=6,numeric"`
 }
 
 // VerifyEmailRequest represents the request to verify email with token
 type VerifyEmailRequest struct {
-	Token string `json:"token" validate:"required"`
+	UserID    string `json:"uid" validate:"required"`
+	Token     string `json:"token" validate:"required"`
+	Signature string `json:"sig" validate:"required"`
 }
 
 // ResendVerificationRequest represents the request to resend email verification
 type ResendVerificationRequest struct {
 	Email string `json:"email" validate:"required,email"`
+}
+
+// VerifyEmailWithMobileRequest represents the request to verify email and capture mobile number
+type VerifyEmailWithMobileRequest struct {
+	UserID      string `json:"uid" validate:"required"`
+	Token       string `json:"token" validate:"required"`
+	Signature   string `json:"sig" validate:"required"`
+	MobileNumber string `json:"mobileNumber" validate:"required,phone_in"`
+}
+
+// VerifyMobileOTPRequest represents the request to verify mobile OTP
+type VerifyMobileOTPRequest struct {
+	UserID string `json:"uid" validate:"required"`
+	OTP    string `json:"otp" validate:"required,len=6,numeric"`
+}
+
+// ResetPasswordWithMobileOTPRequest represents the request to reset password with mobile OTP
+type ResetPasswordWithMobileOTPRequest struct {
+	UserID      string `json:"uid" validate:"required"`
+	Token       string `json:"token" validate:"required"`
+	Signature   string `json:"sig" validate:"required"`
+	OTP         string `json:"otp" validate:"required,len=6,numeric"`
+	NewPassword string `json:"newPassword" validate:"required,strong_password"`
+}
+
+// SendInviteOTPRequest represents the request to send OTP for invited user
+type SendInviteOTPRequest struct {
+	UserID    string `json:"uid" validate:"required"`
+	Token     string `json:"token" validate:"required"`
+	Signature string `json:"sig" validate:"required"`
 }
 
 // type AuthJWTClaim struct {

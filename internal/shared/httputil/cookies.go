@@ -10,13 +10,29 @@ import (
 
 // CookieManager handles setting and clearing authentication cookies
 type CookieManager struct {
-	config *config.Config
+	config           *config.Config
+	refreshTokenPath string // Base path for refresh token cookies (/v1/auth or /ops/v1/auth)
+	accessTokenName  string // Cookie name for access token (access_token or ops_access_token)
+	refreshTokenName string // Cookie name for refresh token (refresh_token or ops_refresh_token)
 }
 
-// NewCookieManager creates a new cookie manager with the given configuration
+// NewCookieManager creates a new cookie manager for regular API (path: /v1/auth)
 func NewCookieManager(cfg *config.Config) *CookieManager {
 	return &CookieManager{
-		config: cfg,
+		config:           cfg,
+		refreshTokenPath: "/v1/auth",
+		accessTokenName:  "access_token",
+		refreshTokenName: "refresh_token",
+	}
+}
+
+// NewOpsCookieManager creates a new cookie manager for ops dashboard (path: /ops/v1/auth)
+func NewOpsCookieManager(cfg *config.Config) *CookieManager {
+	return &CookieManager{
+		config:           cfg,
+		refreshTokenPath: "/ops/v1/auth",
+		accessTokenName:  "ops_access_token",
+		refreshTokenName: "ops_refresh_token",
 	}
 }
 
@@ -37,7 +53,7 @@ func (cm *CookieManager) getSameSiteMode() http.SameSite {
 // SetAccessTokenCookie sets the access token cookie (available on all paths)
 func (cm *CookieManager) SetAccessTokenCookie(c echo.Context, token string) {
 	cookie := &http.Cookie{
-		Name:     "access_token",
+		Name:     cm.accessTokenName,
 		Value:    token,
 		Path:     "/",
 		HttpOnly: true,
@@ -50,12 +66,13 @@ func (cm *CookieManager) SetAccessTokenCookie(c echo.Context, token string) {
 	c.SetCookie(cookie)
 }
 
-// SetRefreshTokenCookie sets the refresh token cookie (restricted to /v1/auth routes)
+// SetRefreshTokenCookie sets the refresh token cookie (restricted to auth routes)
+// Path is determined by which constructor was used (NewCookieManager or NewOpsCookieManager)
 func (cm *CookieManager) SetRefreshTokenCookie(c echo.Context, token string) {
 	cookie := &http.Cookie{
-		Name:     "refresh_token",
+		Name:     cm.refreshTokenName,
 		Value:    token,
-		Path:     "/v1/auth",
+		Path:     cm.refreshTokenPath,
 		HttpOnly: true,
 		Secure:   cm.config.Cookie.Secure,
 		SameSite: cm.getSameSiteMode(),
@@ -69,7 +86,7 @@ func (cm *CookieManager) SetRefreshTokenCookie(c echo.Context, token string) {
 // ClearAccessTokenCookie clears the access token cookie
 func (cm *CookieManager) ClearAccessTokenCookie(c echo.Context) {
 	cookie := &http.Cookie{
-		Name:     "access_token",
+		Name:     cm.accessTokenName,
 		Value:    "",
 		Path:     "/",
 		HttpOnly: true,
@@ -85,11 +102,12 @@ func (cm *CookieManager) ClearAccessTokenCookie(c echo.Context) {
 }
 
 // ClearRefreshTokenCookie clears the refresh token cookie
+// Path is determined by which constructor was used (NewCookieManager or NewOpsCookieManager)
 func (cm *CookieManager) ClearRefreshTokenCookie(c echo.Context) {
 	cookie := &http.Cookie{
-		Name:     "refresh_token",
+		Name:     cm.refreshTokenName,
 		Value:    "",
-		Path:     "/v1/auth",
+		Path:     cm.refreshTokenPath,
 		HttpOnly: true,
 		Secure:   cm.config.Cookie.Secure,
 		SameSite: cm.getSameSiteMode(),

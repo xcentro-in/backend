@@ -24,6 +24,7 @@ type Config struct {
 	CORS                  CORSConfig                  `json:"cors"`
 	S3                    S3Config                    `json:"s3"`
 	SES                   SESConfig                   `json:"ses"`
+	SMS                   SMSConfig                   `json:"sms"`
 	Castler               CastlerConfig               `json:"castler"`
 	Payout                PayoutConfig                `json:"payout"`
 	JioPay                JioPayConfig                `json:"jiopay"`
@@ -37,6 +38,8 @@ type Config struct {
 	RateLimiter           RateLimiterConfig           `json:"rate_limiter"`
 	OpsAccess             OpsAccessConfig             `json:"ops_access"`
 	Logger                LoggerConfig                `json:"logger"`
+	OpsOAuth              OpsOAuthConfig              `json:"ops_oauth"`
+	OpsTokenEncryption    OpsTokenEncryptionConfig    `json:"ops_token_encryption"`
 }
 
 // JWTSecretConfig holds JWT secret configuration.
@@ -95,6 +98,16 @@ type SESConfig struct {
 	Profile               string `json:"profile" env:"AWS_PROFILE"` // optional shared profile
 }
 
+// SMSConfig holds Fast2SMS configuration.
+type SMSConfig struct {
+	APIKey           string        `json:"-" env:"FAST2SMS_API_KEY" env-required:"true"`                                         // Fast2SMS API key (sensitive)
+	SenderID         string        `json:"sender_id" env:"FAST2SMS_SENDER_ID" env-default:"XCNTRO"`                              // Sender ID (DLT approved)
+	Endpoint         string        `json:"endpoint" env:"FAST2SMS_ENDPOINT" env-default:"https://www.fast2sms.com/dev/bulkV2"`   // Fast2SMS API endpoint
+	OTPExpiryMinutes int           `json:"otp_expiry_minutes" env:"SMS_OTP_EXPIRY_MINUTES" env-default:"10"`                     // OTP expiry in minutes
+	OTPLength        int           `json:"otp_length" env:"SMS_OTP_LENGTH" env-default:"6"`                                      // OTP length (default 6 digits)
+	OTPExpiry        time.Duration `json:"otp_expiry" env:"SMS_OTP_EXPIRY" env-default:"10m"`                                    // Calculated from OTPExpiryMinutes
+}
+
 // CastlerConfig holds Castler payout provider configuration.
 type CastlerConfig struct {
 	BaseURL       string `json:"base_url" env:"CASTLER_BASE_URL" env-default:"https://api.castler.in"`
@@ -123,8 +136,8 @@ func NewPayoutConfig() PayoutConfig {
 		MaxRetryAttempts:       3,
 		RetryDelayMinutes:      15,
 		RetryBackoffMultiplier: 2.0,
-		WebhookTimeoutMinutes:  60,        // 1 hour
-		RTGSThresholdAmount:    20000000,  // ₹2 lakh
+		WebhookTimeoutMinutes:  60,       // 1 hour
+		RTGSThresholdAmount:    20000000, // ₹2 lakh
 	}
 }
 
@@ -137,7 +150,7 @@ type JioPayConfig struct {
 	AppID               string `json:"-" env:"JIOPAY_APP_ID"`                                                                                           // x-app-id header for vault APIs (sensitive)
 	EncryptionKey       string `json:"-" env:"JIOPAY_ENCRYPTION_KEY"`                                                                                   // AES-128 encryption key for x-app-token (sensitive)
 	WebhookSecret       string `json:"-" env:"JIOPAY_WEBHOOK_SECRET"`                                                                                   // Webhook signature verification (sensitive)
-	IsAggregatorModel   bool   `json:"is_aggregator_model" env:"JIOPAY_IS_AGGREGATOR_MODEL" env-default:"false"`                                       // Payment model: true = aggregator (PG charges customer), false = normal (merchant charges customer)
+	IsAggregatorModel   bool   `json:"is_aggregator_model" env:"JIOPAY_IS_AGGREGATOR_MODEL" env-default:"false"`                                        // Payment model: true = aggregator (PG charges customer), false = normal (merchant charges customer)
 }
 
 // EasebuzzConfig holds Easebuzz payment gateway configuration.
@@ -155,11 +168,11 @@ type EasebuzzConfig struct {
 
 // MockPGConfig holds Mock Payment Gateway configuration for testing.
 type MockPGConfig struct {
-	Enabled           bool   `json:"enabled" env:"MOCKPG_ENABLED" env-default:"false"`                                 // Enable mock PG (bypass real gateways)
-	MerchantID        string `json:"merchant_id" env:"MOCKPG_MERCHANT_ID" env-default:"MOCK_MERCH"`                    // Mock merchant identifier
-	APIKey            string `json:"-" env:"MOCKPG_API_KEY" env-default:"mock_api_key_123"`                            // Mock API key (sensitive)
-	SimulateSuccess   bool   `json:"simulate_success" env:"MOCKPG_SIMULATE_SUCCESS" env-default:"true"`                // If true, always succeed; if false, simulate random failures
-	IsAggregatorModel bool   `json:"is_aggregator_model" env:"MOCKPG_IS_AGGREGATOR_MODEL" env-default:"false"`        // Payment model: true = aggregator (PG charges customer), false = normal (merchant charges customer)
+	Enabled           bool   `json:"enabled" env:"MOCKPG_ENABLED" env-default:"false"`                         // Enable mock PG (bypass real gateways)
+	MerchantID        string `json:"merchant_id" env:"MOCKPG_MERCHANT_ID" env-default:"MOCK_MERCH"`            // Mock merchant identifier
+	APIKey            string `json:"-" env:"MOCKPG_API_KEY" env-default:"mock_api_key_123"`                    // Mock API key (sensitive)
+	SimulateSuccess   bool   `json:"simulate_success" env:"MOCKPG_SIMULATE_SUCCESS" env-default:"true"`        // If true, always succeed; if false, simulate random failures
+	IsAggregatorModel bool   `json:"is_aggregator_model" env:"MOCKPG_IS_AGGREGATOR_MODEL" env-default:"false"` // Payment model: true = aggregator (PG charges customer), false = normal (merchant charges customer)
 }
 
 // CloudWatchConfig holds AWS CloudWatch metrics configuration.
@@ -285,6 +298,20 @@ type LoggerConfig struct {
 	Format string `json:"format" env:"LOG_FORMAT" env-default:"text"` // Log format: text, json
 }
 
+// OpsOAuthConfig holds OAuth2/OIDC configuration for ops dashboard authentication.
+type OpsOAuthConfig struct {
+	ClientID       string `json:"client_id" env:"OPS_OAUTH_CLIENT_ID" env-required:"true"`         // Office365 Application (client) ID
+	ClientSecret   string `json:"-" env:"OPS_OAUTH_CLIENT_SECRET" env-required:"true"`             // Office365 Client secret (sensitive)
+	RedirectURL    string `json:"redirect_url" env:"OPS_OAUTH_REDIRECT_URL" env-required:"true"`   // OAuth callback URL (e.g., https://ops.xcentro.in/ops/v1/auth/callback)
+	TenantID       string `json:"tenant_id" env:"OPS_OAUTH_TENANT_ID" env-default:"organizations"` // Office365 Tenant ID (default: organizations for multi-tenant)
+	SkipValidation bool   `json:"skip_validation" env:"OPS_OAUTH_SKIP_VALIDATION" env-default:"false"` // Skip OAuth token validation in middleware (dev/testing only)
+}
+
+// OpsTokenEncryptionConfig holds encryption configuration for storing OIDC tokens.
+type OpsTokenEncryptionConfig struct {
+	EncryptionKey string `json:"-" env:"OPS_TOKEN_ENCRYPTION_KEY" env-required:"true"` // AES-256-GCM key for encrypting OIDC refresh tokens (32 bytes)
+}
+
 // RateLimiterConfig holds rate limiter configuration for token-bucket algorithm.
 type RateLimiterConfig struct {
 	Enabled                      bool          `json:"enabled" env:"RATE_LIMITER_ENABLED" env-default:"true"`
@@ -393,6 +420,7 @@ func (c Config) Safe() Config {
 	c.SES.AccessKey = "***REDACTED***"
 	c.SES.SecretKey = "***REDACTED***"
 	c.SES.SessionToken = "***REDACTED***"
+	c.SMS.APIKey = "***REDACTED***"
 	c.Castler.APIKey = "***REDACTED***"
 	c.Castler.SecretKey = "***REDACTED***"
 	c.Castler.WebhookSecret = "***REDACTED***"
@@ -411,5 +439,7 @@ func (c Config) Safe() Config {
 	c.Easebuzz.WebhookSecret = "***REDACTED***"
 	c.MockPG.APIKey = "***REDACTED***"
 	c.BankAccountEncryption.EncryptionKey = "***REDACTED***"
+	c.OpsOAuth.ClientSecret = "***REDACTED***"
+	c.OpsTokenEncryption.EncryptionKey = "***REDACTED***"
 	return c
 }

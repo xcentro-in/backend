@@ -553,8 +553,8 @@ func (s *BusinessServiceImpl) GetOnboardingStatus(ctx context.Context, uid strin
 }
 
 // InviteUserToBusiness invites a user to a business with authorization checks and sends invitation email
-func (s *BusinessServiceImpl) InviteUserToBusiness(ctx context.Context, bid string, email string, name string, role shared.UserRole, requesterRole shared.UserRole) (*business.InviteUserResponse, error) {
-	s.logger.Infof("Inviting user %s to business %s with role %s (requester role: %s)", email, bid, role, requesterRole)
+func (s *BusinessServiceImpl) InviteUserToBusiness(ctx context.Context, bid string, email string, name string, mobile string, role shared.UserRole, requesterRole shared.UserRole) (*business.InviteUserResponse, error) {
+	s.logger.Infof("Inviting user %s (mobile: %s) to business %s with role %s (requester role: %s)", email, mobile, bid, role, requesterRole)
 
 	// Validate role is valid
 	validRoles := []shared.UserRole{shared.Owner, shared.Admin, shared.Manager, shared.Auditor}
@@ -584,7 +584,7 @@ func (s *BusinessServiceImpl) InviteUserToBusiness(ctx context.Context, bid stri
 	// Use transaction to ensure atomicity
 	err := s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
 		// Create invited user (always require KYC for invited users)
-		createdUser, err := s.userService.CreateInvitedUser(ctx, email, name, true)
+		createdUser, err := s.userService.CreateInvitedUser(ctx, email, name, mobile, true)
 		if err != nil {
 			s.logger.Errorf("Error creating invited user: %v", err)
 			return fmt.Errorf("failed to create invited user: %w", err)

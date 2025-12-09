@@ -11,6 +11,7 @@ import (
 	"xcentro.in/internal/adapters/cache/redis/keys"
 	"xcentro.in/internal/adapters/database/postgres/client"
 	"xcentro.in/internal/adapters/providers/mailers"
+	"xcentro.in/internal/adapters/providers/sms"
 	"xcentro.in/internal/core/auth"
 	"xcentro.in/internal/core/business"
 	"xcentro.in/internal/core/metrics"
@@ -32,6 +33,8 @@ type AuthService struct {
 	userService     user.UserService
 	businessService business.BusinessService
 	emailService    mailers.EmailService
+	smsService      sms.SMSService
+	smsConfig       *config.SMSConfig
 	metrics         metrics.MetricsProvider
 	appConfig       *config.Config
 	txManager       client.TxManager
@@ -54,6 +57,8 @@ func NewAuthService(
 		userService:     userService,
 		businessService: businessService,
 		emailService:    clients.GetEmailService(), // Extract from clients
+		smsService:      clients.GetSMSService(),   // Extract from clients
+		smsConfig:       &cfg.SMS,                  // Extract SMS config
 		metrics:         clients.GetMetrics().(metrics.MetricsProvider),
 		appConfig:       cfg,
 		txManager:       clients.GetTxManager(), // Extract from clients
@@ -274,9 +279,13 @@ func (s *AuthService) parseAndValidateToken(tokenString string) (*jwt.Registered
 	return claims, nil
 }
 
-// ChangePassword changes the user's password after verifying the old password.
-func (s *AuthService) ChangePassword(ctx context.Context, userID, oldPassword, newPassword string) error {
+// ChangePassword changes the user's password after verifying OTP and old password.
+func (s *AuthService) ChangePassword(ctx context.Context, userID, oldPassword, newPassword, otp string) error {
 	logger.Infof("Processing password change for user: %s", userID)
+
+	if userID == "" || oldPassword == "" || newPassword == "" || otp == "" {
+		return fmt.Errorf("all fields are required")
+	}
 
 	// Validate new password strength
 	if err := security.ValidatePasswordStrength(newPassword); err != nil {
@@ -284,16 +293,43 @@ func (s *AuthService) ChangePassword(ctx context.Context, userID, oldPassword, n
 		return err
 	}
 
-	// Hash new password upfront
+	// Hash new password and OTP upfront
 	hashedPassword, err := s.HashPassword(newPassword)
 	if err != nil {
 		logger.Errorf("Failed to hash new password: %v", err)
 		return fmt.Errorf("failed to process new password")
 	}
+	hashedOTP := security.HashOTP(otp)
 
 	// Use transaction to ensure atomicity
 	err = s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
 		txUserRepo := s.userRepo.WithTx(tx)
+
+		// Verify OTP first
+		verificationCode, err := txUserRepo.GetVerificationCodeByUserIDAndCode(ctx, userID, hashedOTP, shared.MobileVerification)
+		if err != nil {
+			logger.Errorf("Failed to get mobile verification code: %v", err)
+			return fmt.Errorf("invalid or expired OTP")
+		}
+
+		if verificationCode.Used {
+			return fmt.Errorf("OTP already used")
+		}
+
+		// Check OTP expiry
+		expiresAt, err := time.Parse(time.RFC3339, verificationCode.ExpiresAt)
+		if err != nil {
+			return fmt.Errorf("invalid expiration time format")
+		}
+
+		if time.Now().After(expiresAt) {
+			return fmt.Errorf("OTP has expired")
+		}
+
+		// Mark OTP as used
+		if err := txUserRepo.MarkVerificationCodeAsUsed(ctx, verificationCode.ID); err != nil {
+			return fmt.Errorf("failed to mark OTP as used: %w", err)
+		}
 
 		// Get user by ID within transaction
 		userObj, err := txUserRepo.GetUserByID(ctx, userID)
@@ -530,8 +566,12 @@ func (s *AuthService) SendPasswordResetEmail(ctx context.Context, emailAddr stri
 		return fmt.Errorf("failed to create verification code: %w", err)
 	}
 
-	// Create password reset URL with token as query parameter
-	resetURL := fmt.Sprintf("%s/reset-password?token=%s", s.appConfig.Frontend.URL, resetToken)
+	// Generate HMAC signature for uid:token
+	signature := security.GenerateHMACSignature(userObj.Id, resetToken, s.config.SecretKey)
+
+	// Create password reset URL with uid, token, and sig as query parameters
+	resetURL := fmt.Sprintf("%s/reset-password?uid=%s&token=%s&sig=%s",
+		s.appConfig.Frontend.URL, userObj.Id, resetToken, signature)
 
 	// Render email templates using the email renderer
 	renderer := email.GetRenderer()
@@ -580,16 +620,22 @@ func (s *AuthService) SendPasswordResetEmail(ctx context.Context, emailAddr stri
 	return nil
 }
 
-// ResetPasswordWithToken resets user's password using verification token
-func (s *AuthService) ResetPasswordWithToken(ctx context.Context, token string, newPassword string) error {
-	logger.Infof("Resetting password with token")
+// ResetPasswordWithToken resets user's password using verification token with HMAC signature validation
+func (s *AuthService) ResetPasswordWithToken(ctx context.Context, userID, token, signature, newPassword string) error {
+	logger.Infof("Resetting password with token for user: %s", userID)
 
-	if token == "" {
-		return fmt.Errorf("reset token is required")
+	if userID == "" || token == "" || signature == "" {
+		return fmt.Errorf("userID, token, and signature are required")
 	}
 
 	if newPassword == "" {
 		return fmt.Errorf("new password is required")
+	}
+
+	// Validate HMAC signature first (prevents tampering)
+	if !security.ValidateHMACSignature(userID, token, signature, s.config.SecretKey) {
+		logger.Errorf("Invalid HMAC signature for user: %s", userID)
+		return fmt.Errorf("invalid or tampered reset link")
 	}
 
 	// Validate new password strength
@@ -608,14 +654,12 @@ func (s *AuthService) ResetPasswordWithToken(ctx context.Context, token string, 
 		return fmt.Errorf("failed to hash password: %w", err)
 	}
 
-	var userID string
-
 	// Use transaction to ensure atomicity
 	err = s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
 		txUserRepo := s.userRepo.WithTx(tx)
 
-		// Get verification code record using hashed token
-		verificationCode, err := txUserRepo.GetVerificationCodeByCode(ctx, hashedToken, shared.PasswordReset)
+		// Get verification code record using userID and hashed token (faster with userID index)
+		verificationCode, err := txUserRepo.GetVerificationCodeByUserIDAndCode(ctx, userID, hashedToken, shared.PasswordReset)
 		if err != nil {
 			logger.Errorf("Failed to get password reset code: %v", err)
 			return fmt.Errorf("invalid or expired reset token")
@@ -649,7 +693,6 @@ func (s *AuthService) ResetPasswordWithToken(ctx context.Context, token string, 
 			return fmt.Errorf("failed to update password: %w", err)
 		}
 
-		userID = verificationCode.UserID
 		return nil
 	})
 
@@ -723,8 +766,12 @@ func (s *AuthService) SendEmailVerification(ctx context.Context, userID string) 
 		return fmt.Errorf("failed to create verification code: %w", err)
 	}
 
-	// Create verification URL
-	verificationURL := fmt.Sprintf("%s/verify-email?token=%s", s.appConfig.Frontend.URL, verificationToken)
+	// Generate HMAC signature for uid:token
+	signature := security.GenerateHMACSignature(userID, verificationToken, s.config.SecretKey)
+
+	// Create verification URL with uid, token, and sig
+	verificationURL := fmt.Sprintf("%s/verify-email?uid=%s&token=%s&sig=%s",
+		s.appConfig.Frontend.URL, userID, verificationToken, signature)
 
 	// Render email templates using the email renderer
 	renderer := email.GetRenderer()
@@ -756,25 +803,29 @@ func (s *AuthService) SendEmailVerification(ctx context.Context, userID string) 
 	return nil
 }
 
-// VerifyEmailWithToken verifies user's email using verification token
-func (s *AuthService) VerifyEmailWithToken(ctx context.Context, token string) error {
-	logger.Infof("Verifying email with token")
+// VerifyEmailWithToken verifies user's email using verification token with HMAC signature validation
+func (s *AuthService) VerifyEmailWithToken(ctx context.Context, userID, token, signature string) error {
+	logger.Infof("Verifying email with token for user: %s", userID)
 
-	if token == "" {
-		return fmt.Errorf("verification token is required")
+	if userID == "" || token == "" || signature == "" {
+		return fmt.Errorf("userID, token, and signature are required")
+	}
+
+	// Validate HMAC signature first (prevents tampering)
+	if !security.ValidateHMACSignature(userID, token, signature, s.config.SecretKey) {
+		logger.Errorf("Invalid HMAC signature for user: %s", userID)
+		return fmt.Errorf("invalid or tampered verification link")
 	}
 
 	// Hash the incoming token to compare with stored hash
 	hashedToken := security.HashTokenWithPepper(token, s.bcryptConfig.Pepper)
 
-	var userID string
-
 	// Use transaction to ensure atomicity
 	err := s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
 		txUserRepo := s.userRepo.WithTx(tx)
 
-		// Get verification code record using hashed token
-		verificationCode, err := txUserRepo.GetVerificationCodeByCode(ctx, hashedToken, shared.EmailVerification)
+		// Get verification code record using userID and hashed token (faster with userID index)
+		verificationCode, err := txUserRepo.GetVerificationCodeByUserIDAndCode(ctx, userID, hashedToken, shared.EmailVerification)
 		if err != nil {
 			logger.Errorf("Failed to get verification code: %v", err)
 			return fmt.Errorf("invalid or expired verification token")
@@ -808,7 +859,6 @@ func (s *AuthService) VerifyEmailWithToken(ctx context.Context, token string) er
 			return fmt.Errorf("failed to update user email verification: %w", err)
 		}
 
-		userID = verificationCode.UserID
 		return nil
 	})
 
@@ -844,4 +894,406 @@ func (s *AuthService) ResendEmailVerification(ctx context.Context, email string)
 
 	// Send verification email
 	return s.SendEmailVerification(ctx, userObj.Id)
+}
+
+// ============================================================================
+// Mobile Verification Methods (Phase 2)
+// ============================================================================
+
+// SendMobileVerificationOTP generates and sends an OTP to user's mobile number
+func (s *AuthService) SendMobileVerificationOTP(ctx context.Context, userID, mobileNumber string) error {
+	logger.Infof("Sending mobile verification OTP to user: %s, mobile: %s", userID, mobileNumber)
+
+	if userID == "" || mobileNumber == "" {
+		return fmt.Errorf("userID and mobileNumber are required")
+	}
+
+	// Generate OTP
+	otp, err := security.GenerateOTP(s.smsConfig.OTPLength)
+	if err != nil {
+		return fmt.Errorf("failed to generate OTP: %w", err)
+	}
+
+	// Hash OTP for storage
+	hashedOTP := security.HashOTP(otp)
+
+	// Store OTP in database with expiry
+	verificationCode := &user.UserVerificationCodes{
+		UserID:        userID,
+		Code:          hashedOTP,
+		CodeType:      shared.MobileVerification,
+		ExpiresAt:     time.Now().Add(s.smsConfig.OTPExpiry).Format(time.RFC3339),
+		CreatedAt:     time.Now().Format(time.RFC3339),
+		Used:          false,
+		RetryAttempts: 0,
+	}
+
+	if err := s.userRepo.CreateVerificationCode(ctx, verificationCode); err != nil {
+		return fmt.Errorf("failed to create verification code: %w", err)
+	}
+
+	// Send OTP via SMS using Fast2SMS
+	// Use type assertion to access Fast2SMS-specific methods
+	var messageID string
+	if fast2smsClient, ok := s.smsService.(*sms.Fast2SMSClient); ok {
+		messageID, err = fast2smsClient.SendOTPSMS(ctx, mobileNumber, otp, "signup")
+		if err != nil {
+			logger.Errorf("Failed to send SMS OTP: %v", err)
+			return fmt.Errorf("failed to send SMS: %w", err)
+		}
+	} else {
+		// Fallback to generic SendSMS (for other providers)
+		smsMessage := &sms.SMSMessage{
+			To:   mobileNumber,
+			Body: otp,
+		}
+		messageID, err = s.smsService.SendSMS(ctx, smsMessage)
+		if err != nil {
+			logger.Errorf("Failed to send SMS OTP: %v", err)
+			return fmt.Errorf("failed to send SMS: %w", err)
+		}
+	}
+
+	logger.Infof("SMS OTP sent successfully to %s, Message ID: %s", mobileNumber, messageID)
+	return nil
+}
+
+// GenerateMobileOTP fetches user's mobile number and sends OTP (generic method for protected routes)
+func (s *AuthService) GenerateMobileOTP(ctx context.Context, userID string) error {
+	logger.Infof("Generating mobile OTP for user: %s", userID)
+
+	if userID == "" {
+		return fmt.Errorf("userID is required")
+	}
+
+	// Fetch user to get mobile number
+	usr, err := s.userRepo.GetUserByID(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("failed to fetch user: %w", err)
+	}
+
+	if usr.Mobile == "" {
+		return fmt.Errorf("user does not have a mobile number registered")
+	}
+
+	// Reuse existing SendMobileVerificationOTP method
+	return s.SendMobileVerificationOTP(ctx, userID, usr.Mobile)
+}
+
+// SendInviteOTP sends OTP for invited user (validates reset token signature first)
+func (s *AuthService) SendInviteOTP(ctx context.Context, userID, token, signature string) error {
+	logger.Infof("Sending invite OTP for user: %s", userID)
+
+	if userID == "" || token == "" || signature == "" {
+		return fmt.Errorf("userID, token, and signature are required")
+	}
+
+	// Validate HMAC signature to ensure legitimate invite link
+	if !security.ValidateHMACSignature(userID, token, signature, s.config.SecretKey) {
+		logger.Errorf("Invalid HMAC signature for user: %s", userID)
+		return fmt.Errorf("invalid or tampered invitation link")
+	}
+
+	// Fetch user to get mobile number
+	usr, err := s.userRepo.GetUserByID(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("failed to fetch user: %w", err)
+	}
+
+	if usr.Mobile == "" {
+		return fmt.Errorf("user does not have a mobile number registered")
+	}
+
+	// Generate OTP
+	otp, err := security.GenerateOTP(s.smsConfig.OTPLength)
+	if err != nil {
+		return fmt.Errorf("failed to generate OTP: %w", err)
+	}
+
+	// Hash OTP for storage
+	hashedOTP := security.HashOTP(otp)
+
+	// Store OTP in database with expiry
+	verificationCode := &user.UserVerificationCodes{
+		UserID:        userID,
+		Code:          hashedOTP,
+		CodeType:      shared.MobileVerification,
+		ExpiresAt:     time.Now().Add(s.smsConfig.OTPExpiry).Format(time.RFC3339),
+		CreatedAt:     time.Now().Format(time.RFC3339),
+		Used:          false,
+		RetryAttempts: 0,
+	}
+
+	if err := s.userRepo.CreateVerificationCode(ctx, verificationCode); err != nil {
+		return fmt.Errorf("failed to create verification code: %w", err)
+	}
+
+	// Send OTP via SMS using Fast2SMS (password reset template)
+	var messageID string
+	if fast2smsClient, ok := s.smsService.(*sms.Fast2SMSClient); ok {
+		messageID, err = fast2smsClient.SendOTPSMS(ctx, usr.Mobile, otp, "password_reset")
+		if err != nil {
+			logger.Errorf("Failed to send SMS OTP: %v", err)
+			return fmt.Errorf("failed to send SMS: %w", err)
+		}
+	} else {
+		// Fallback to generic SendSMS
+		smsMessage := &sms.SMSMessage{
+			To:   usr.Mobile,
+			Body: otp,
+		}
+		messageID, err = s.smsService.SendSMS(ctx, smsMessage)
+		if err != nil {
+			logger.Errorf("Failed to send SMS OTP: %v", err)
+			return fmt.Errorf("failed to send SMS: %w", err)
+		}
+	}
+
+	logger.Infof("Invite OTP sent successfully to %s, Message ID: %s", usr.Mobile, messageID)
+	return nil
+}
+
+// VerifyEmailWithMobile verifies email with token/signature and captures mobile number for OTP
+func (s *AuthService) VerifyEmailWithMobile(ctx context.Context, userID, token, signature, mobileNumber string) error {
+	logger.Infof("Verifying email with mobile for user: %s", userID)
+
+	if userID == "" || token == "" || signature == "" || mobileNumber == "" {
+		return fmt.Errorf("userID, token, signature, and mobileNumber are required")
+	}
+
+	// Validate HMAC signature first
+	if !security.ValidateHMACSignature(userID, token, signature, s.config.SecretKey) {
+		logger.Errorf("Invalid HMAC signature for user: %s", userID)
+		return fmt.Errorf("invalid or tampered verification link")
+	}
+
+	// Hash the incoming token
+	hashedToken := security.HashTokenWithPepper(token, s.bcryptConfig.Pepper)
+
+	// Use transaction to ensure atomicity
+	err := s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
+		txUserRepo := s.userRepo.WithTx(tx)
+
+		// Get verification code
+		verificationCode, err := txUserRepo.GetVerificationCodeByUserIDAndCode(ctx, userID, hashedToken, shared.EmailVerification)
+		if err != nil {
+			logger.Errorf("Failed to get verification code: %v", err)
+			return fmt.Errorf("invalid or expired verification token")
+		}
+
+		if verificationCode.Used {
+			return fmt.Errorf("verification token already used")
+		}
+
+		// Check expiry
+		expiresAt, err := time.Parse(time.RFC3339, verificationCode.ExpiresAt)
+		if err != nil {
+			return fmt.Errorf("invalid expiration time format")
+		}
+
+		if time.Now().After(expiresAt) {
+			return fmt.Errorf("verification token has expired")
+		}
+
+		// Mark verification code as used
+		if err := txUserRepo.MarkVerificationCodeAsUsed(ctx, verificationCode.ID); err != nil {
+			return fmt.Errorf("failed to mark verification code as used: %w", err)
+		}
+
+		// Update user email verification status
+		if err := txUserRepo.UpdateUserEmailVerification(ctx, userID, true); err != nil {
+			return fmt.Errorf("failed to update email verification: %w", err)
+		}
+
+		// Update user mobile number
+		if err := txUserRepo.UpdateUserMobile(ctx, userID, mobileNumber); err != nil {
+			return fmt.Errorf("failed to update mobile number: %w", err)
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return err
+	}
+
+	// Send mobile OTP (outside transaction)
+	if err := s.SendMobileVerificationOTP(ctx, userID, mobileNumber); err != nil {
+		logger.Errorf("Failed to send mobile OTP after email verification: %v", err)
+		// Don't fail the whole operation - email is already verified and mobile is saved
+		return fmt.Errorf("email verified but failed to send mobile OTP: %w", err)
+	}
+
+	logger.Infof("Email verified and mobile OTP sent successfully for user: %s", userID)
+	return nil
+}
+
+// VerifyMobileOTP verifies the mobile OTP and marks mobile as verified
+func (s *AuthService) VerifyMobileOTP(ctx context.Context, userID, otp string) error {
+	logger.Infof("Verifying mobile OTP for user: %s", userID)
+
+	if userID == "" || otp == "" {
+		return fmt.Errorf("userID and OTP are required")
+	}
+
+	// Hash the incoming OTP
+	hashedOTP := security.HashOTP(otp)
+
+	// Use transaction to ensure atomicity
+	err := s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
+		txUserRepo := s.userRepo.WithTx(tx)
+
+		// Get verification code
+		verificationCode, err := txUserRepo.GetVerificationCodeByUserIDAndCode(ctx, userID, hashedOTP, shared.MobileVerification)
+		if err != nil {
+			logger.Errorf("Failed to get mobile verification code: %v", err)
+			return fmt.Errorf("invalid or expired OTP")
+		}
+
+		if verificationCode.Used {
+			return fmt.Errorf("OTP already used")
+		}
+
+		// Check expiry
+		expiresAt, err := time.Parse(time.RFC3339, verificationCode.ExpiresAt)
+		if err != nil {
+			return fmt.Errorf("invalid expiration time format")
+		}
+
+		if time.Now().After(expiresAt) {
+			return fmt.Errorf("OTP has expired")
+		}
+
+		// Mark verification code as used
+		if err := txUserRepo.MarkVerificationCodeAsUsed(ctx, verificationCode.ID); err != nil {
+			return fmt.Errorf("failed to mark OTP as used: %w", err)
+		}
+
+		// Update user mobile verification status
+		if err := txUserRepo.UpdateUserMobileVerification(ctx, userID, true); err != nil {
+			return fmt.Errorf("failed to update mobile verification: %w", err)
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return err
+	}
+
+	logger.Infof("Mobile verified successfully for user: %s", userID)
+	return nil
+}
+
+// ResetPasswordWithMobileOTP resets password and verifies mobile OTP for invited users
+func (s *AuthService) ResetPasswordWithMobileOTP(ctx context.Context, userID, token, signature, otp, newPassword string) error {
+	logger.Infof("Resetting password with mobile OTP for user: %s", userID)
+
+	if userID == "" || token == "" || signature == "" || otp == "" || newPassword == "" {
+		return fmt.Errorf("all fields are required")
+	}
+
+	// Validate HMAC signature
+	if !security.ValidateHMACSignature(userID, token, signature, s.config.SecretKey) {
+		logger.Errorf("Invalid HMAC signature for user: %s", userID)
+		return fmt.Errorf("invalid or tampered reset link")
+	}
+
+	// Validate password strength
+	if err := security.ValidatePasswordStrength(newPassword); err != nil {
+		logger.Errorf("Password validation failed: %v", err)
+		return err
+	}
+
+	// Hash tokens and OTP
+	hashedToken := security.HashTokenWithPepper(token, s.bcryptConfig.Pepper)
+	hashedOTP := security.HashOTP(otp)
+	hashedPassword, err := s.HashPassword(newPassword)
+	if err != nil {
+		logger.Errorf("Failed to hash new password: %v", err)
+		return fmt.Errorf("failed to hash password: %w", err)
+	}
+
+	// Use transaction to ensure atomicity
+	err = s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
+		txUserRepo := s.userRepo.WithTx(tx)
+
+		// Verify password reset token
+		resetCode, err := txUserRepo.GetVerificationCodeByUserIDAndCode(ctx, userID, hashedToken, shared.PasswordReset)
+		if err != nil {
+			logger.Errorf("Failed to get password reset code: %v", err)
+			return fmt.Errorf("invalid or expired reset token")
+		}
+
+		if resetCode.Used {
+			return fmt.Errorf("reset token already used")
+		}
+
+		resetExpiresAt, err := time.Parse(time.RFC3339, resetCode.ExpiresAt)
+		if err != nil {
+			return fmt.Errorf("invalid expiration time format")
+		}
+
+		if time.Now().After(resetExpiresAt) {
+			return fmt.Errorf("reset token has expired")
+		}
+
+		// Verify mobile OTP
+		otpCode, err := txUserRepo.GetVerificationCodeByUserIDAndCode(ctx, userID, hashedOTP, shared.MobileVerification)
+		if err != nil {
+			logger.Errorf("Failed to get mobile OTP: %v", err)
+			return fmt.Errorf("invalid or expired OTP")
+		}
+
+		if otpCode.Used {
+			return fmt.Errorf("OTP already used")
+		}
+
+		otpExpiresAt, err := time.Parse(time.RFC3339, otpCode.ExpiresAt)
+		if err != nil {
+			return fmt.Errorf("invalid expiration time format")
+		}
+
+		if time.Now().After(otpExpiresAt) {
+			return fmt.Errorf("OTP has expired")
+		}
+
+		// Mark both codes as used
+		if err := txUserRepo.MarkVerificationCodeAsUsed(ctx, resetCode.ID); err != nil {
+			return fmt.Errorf("failed to mark reset code as used: %w", err)
+		}
+
+		if err := txUserRepo.MarkVerificationCodeAsUsed(ctx, otpCode.ID); err != nil {
+			return fmt.Errorf("failed to mark OTP as used: %w", err)
+		}
+
+		// Update password
+		if err := txUserRepo.UpdateUserPasswordHash(ctx, userID, hashedPassword); err != nil {
+			return fmt.Errorf("failed to update password: %w", err)
+		}
+
+		// Mark mobile as verified
+		if err := txUserRepo.UpdateUserMobileVerification(ctx, userID, true); err != nil {
+			return fmt.Errorf("failed to update mobile verification: %w", err)
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return err
+	}
+
+	logger.Infof("Password reset and mobile verified successfully for user: %s", userID)
+
+	// Invalidate all refresh tokens for security
+	logger.Infof("Invalidating all refresh tokens for user: %s", userID)
+	if revokeErr := s.RevokeAllUserTokens(ctx, userID); revokeErr != nil {
+		logger.Errorf("Failed to revoke all tokens for user %s: %v", userID, revokeErr)
+		// Don't fail the password reset if token revocation fails
+	} else {
+		logger.Infof("All refresh tokens revoked for user: %s", userID)
+	}
+
+	return nil
 }
