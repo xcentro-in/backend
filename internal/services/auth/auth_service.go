@@ -932,16 +932,26 @@ func (s *AuthService) SendMobileVerificationOTP(ctx context.Context, userID, mob
 		return fmt.Errorf("failed to create verification code: %w", err)
 	}
 
-	// Send OTP via SMS
-	smsMessage := &sms.SMSMessage{
-		To:   mobileNumber,
-		Body: fmt.Sprintf("Your XCentro verification code is: %s. Valid for %d minutes.", otp, s.smsConfig.OTPExpiryMinutes),
-	}
-
-	messageID, err := s.smsService.SendSMS(ctx, smsMessage)
-	if err != nil {
-		logger.Errorf("Failed to send SMS OTP: %v", err)
-		return fmt.Errorf("failed to send SMS: %w", err)
+	// Send OTP via SMS using Fast2SMS
+	// Use type assertion to access Fast2SMS-specific methods
+	var messageID string
+	if fast2smsClient, ok := s.smsService.(*sms.Fast2SMSClient); ok {
+		messageID, err = fast2smsClient.SendOTPSMS(ctx, mobileNumber, otp, "signup")
+		if err != nil {
+			logger.Errorf("Failed to send SMS OTP: %v", err)
+			return fmt.Errorf("failed to send SMS: %w", err)
+		}
+	} else {
+		// Fallback to generic SendSMS (for other providers)
+		smsMessage := &sms.SMSMessage{
+			To:   mobileNumber,
+			Body: otp,
+		}
+		messageID, err = s.smsService.SendSMS(ctx, smsMessage)
+		if err != nil {
+			logger.Errorf("Failed to send SMS OTP: %v", err)
+			return fmt.Errorf("failed to send SMS: %w", err)
+		}
 	}
 
 	logger.Infof("SMS OTP sent successfully to %s, Message ID: %s", mobileNumber, messageID)
@@ -968,6 +978,79 @@ func (s *AuthService) GenerateMobileOTP(ctx context.Context, userID string) erro
 
 	// Reuse existing SendMobileVerificationOTP method
 	return s.SendMobileVerificationOTP(ctx, userID, usr.Mobile)
+}
+
+// SendInviteOTP sends OTP for invited user (validates reset token signature first)
+func (s *AuthService) SendInviteOTP(ctx context.Context, userID, token, signature string) error {
+	logger.Infof("Sending invite OTP for user: %s", userID)
+
+	if userID == "" || token == "" || signature == "" {
+		return fmt.Errorf("userID, token, and signature are required")
+	}
+
+	// Validate HMAC signature to ensure legitimate invite link
+	if !security.ValidateHMACSignature(userID, token, signature, s.config.SecretKey) {
+		logger.Errorf("Invalid HMAC signature for user: %s", userID)
+		return fmt.Errorf("invalid or tampered invitation link")
+	}
+
+	// Fetch user to get mobile number
+	usr, err := s.userRepo.GetUserByID(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("failed to fetch user: %w", err)
+	}
+
+	if usr.Mobile == "" {
+		return fmt.Errorf("user does not have a mobile number registered")
+	}
+
+	// Generate OTP
+	otp, err := security.GenerateOTP(s.smsConfig.OTPLength)
+	if err != nil {
+		return fmt.Errorf("failed to generate OTP: %w", err)
+	}
+
+	// Hash OTP for storage
+	hashedOTP := security.HashOTP(otp)
+
+	// Store OTP in database with expiry
+	verificationCode := &user.UserVerificationCodes{
+		UserID:        userID,
+		Code:          hashedOTP,
+		CodeType:      shared.MobileVerification,
+		ExpiresAt:     time.Now().Add(s.smsConfig.OTPExpiry).Format(time.RFC3339),
+		CreatedAt:     time.Now().Format(time.RFC3339),
+		Used:          false,
+		RetryAttempts: 0,
+	}
+
+	if err := s.userRepo.CreateVerificationCode(ctx, verificationCode); err != nil {
+		return fmt.Errorf("failed to create verification code: %w", err)
+	}
+
+	// Send OTP via SMS using Fast2SMS (password reset template)
+	var messageID string
+	if fast2smsClient, ok := s.smsService.(*sms.Fast2SMSClient); ok {
+		messageID, err = fast2smsClient.SendOTPSMS(ctx, usr.Mobile, otp, "password_reset")
+		if err != nil {
+			logger.Errorf("Failed to send SMS OTP: %v", err)
+			return fmt.Errorf("failed to send SMS: %w", err)
+		}
+	} else {
+		// Fallback to generic SendSMS
+		smsMessage := &sms.SMSMessage{
+			To:   usr.Mobile,
+			Body: otp,
+		}
+		messageID, err = s.smsService.SendSMS(ctx, smsMessage)
+		if err != nil {
+			logger.Errorf("Failed to send SMS OTP: %v", err)
+			return fmt.Errorf("failed to send SMS: %w", err)
+		}
+	}
+
+	logger.Infof("Invite OTP sent successfully to %s, Message ID: %s", usr.Mobile, messageID)
+	return nil
 }
 
 // VerifyEmailWithMobile verifies email with token/signature and captures mobile number for OTP

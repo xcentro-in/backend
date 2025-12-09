@@ -227,8 +227,8 @@ func (s *xcentroServer) registerClients() {
 	s.log.Info("Email service created successfully")
 	s.meta.clients.emailService = emailService
 
-	// SMS service (AWS End User Messaging SMS)
-	smsService, err := sms.NewAWSSMSClientFromConfig(s.meta.config.SMS)
+	// SMS service (Fast2SMS)
+	smsService, err := sms.NewFast2SMSClient(s.meta.config.SMS)
 	if err != nil {
 		s.log.Errorf("Failed to create SMS service: %v", err)
 		panic(err)

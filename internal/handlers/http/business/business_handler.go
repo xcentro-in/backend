@@ -418,7 +418,8 @@ func (h *BusinessHandler) InviteUser(c echo.Context) error {
 		})
 	}
 
-	// Send invitation email and mobile OTP using auth service (after successful DB operations)
+	// Send invitation email using auth service (after successful DB operations)
+	// User will request OTP separately using the invite link
 	go func() {
 		bgCtx := context.Background()
 
@@ -429,18 +430,10 @@ func (h *BusinessHandler) InviteUser(c echo.Context) error {
 		} else {
 			h.logger.Infof("Invitation email sent successfully to %s", req.Email)
 		}
-
-		// Send mobile OTP for verification
-		if err := h.authService.SendMobileVerificationOTP(bgCtx, response.UserID, req.Mobile); err != nil {
-			h.logger.Errorf("Error sending mobile OTP: %v", err)
-			h.logger.Warnf("User %s created but mobile OTP failed to send", response.UserID)
-		} else {
-			h.logger.Infof("Mobile OTP sent successfully to %s", req.Mobile)
-		}
 	}()
 
 	return c.JSON(201, map[string]interface{}{
-		"message": "User invited successfully. Invitation email and mobile OTP sent.",
+		"message": "User invited successfully. Invitation email sent.",
 		"data":    response,
 	})
 }
