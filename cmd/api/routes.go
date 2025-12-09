@@ -51,6 +51,7 @@ import (
 	voucherSvc "xcentro.in/internal/services/voucher"
 	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/logger"
+	"xcentro.in/internal/shared/ratelimiter"
 )
 
 // Shared service factory to avoid duplication
@@ -138,7 +139,7 @@ func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group
 	pendingVoucherRepository := paymentRepo.NewPaymentVoucherPendingRepository(clients.db)
 	stateChangeRepository := paymentRepo.NewPostgresPaymentStateChangeRepository(clients.db)
 
-	_, _, _, businessUserRelRepo, _, busSvc, authSvc := factory.createCoreServices(nil)
+	_, _, _, businessUserRelRepo, userService, busSvc, authSvc := factory.createCoreServices(nil)
 
 	// Initialize payment gateway clients conditionally based on MockPG setting
 	var easebuzzClient, jioPayClient, mockPGClient corePayment.PaymentGateway
@@ -149,21 +150,20 @@ func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group
 		// Real gateways will be nil (never called when MockPG is enabled)
 	} else {
 		// Production mode: Only initialize real payment gateways
-		easebuzzClient = easebuzz.NewEasebuzzClient(cfg.Easebuzz.BaseURL, cfg.Easebuzz.MerchantKey, cfg.Easebuzz.Salt, cfg.Easebuzz.APIKey, cfg.Easebuzz.IsAggregatorModel)
+		easebuzzClient = easebuzz.NewEasebuzzClient(cfg.Easebuzz.BaseURL, cfg.Easebuzz.MerchantKey, cfg.Easebuzz.Salt, cfg.Easebuzz.APIKey, cfg.Easebuzz.MerchantTokenID, cfg.Easebuzz.IsAggregatorModel, userService)
 		jioPayClient = jiopay.NewJioPayClient(cfg.JioPay.BaseURL, cfg.JioPay.TokenizationBaseURL, cfg.JioPay.MerchantID, cfg.JioPay.APIKey, cfg.JioPay.AppID, cfg.JioPay.EncryptionKey, cfg.JioPay.IsAggregatorModel, busSvc)
 		// MockPG will be nil (not used in production)
 	}
 
-	// Initialize fee calculator
+	// Initialize fee rules repository (direct access, no bloated calculator layer)
 	feeRulesRepository := paymentRepo.NewPostgresFeeRulesRepository(clients.db)
 	databaseFeeCalculator := business_rules.NewDatabaseFeeCalculator(feeRulesRepository)
 
-	// Adapter to convert business_rules.DatabaseFeeCalculator to payment.FeeCalculatorWithTax
+	// Adapter for orchestrator (still needed for gateway fee calculations)
 	feeCalculatorAdapter := &feeCalculatorAdapter{calc: databaseFeeCalculator}
 
-	// Create payment orchestrator with all gateway clients and fee calculator
+	// Create payment orchestrator with all gateway clients
 	orchestrator := corePayment.NewPaymentOrchestrator(paymentRepository, storedCardRepository, jioPayClient, easebuzzClient, mockPGClient, cfg.MockPG.Enabled, feeCalculatorAdapter, logger.GetDefault())
-	feeCalculator := business_rules.NewFeeCalculator()
 	walletService := business_rules.NewWalletService(storedCardRepository, bankAccountRepository, clients.txManager, busSvc, logger.GetDefault())
 	paymentSourceService := payments.NewPaymentSourceService(walletService, databaseFeeCalculator)
 
@@ -174,7 +174,8 @@ func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group
 	notificationEventRepo := notificationRepo.NewPgNotificationEventRepository(clients.db)
 	voucherService := voucherSvc.NewVoucherService(voucherRepository, queueRepository, voucherCoreService, businessPayeeRelationRepo, notificationEventRepo, logger.GetDefault())
 
-	paymentService := payments.NewPaymentService(orchestrator, paymentRepository, storedCardRepository, bankAccountRepository, walletService, feeCalculator, clients.txManager, voucherService, voucherRepository, pendingVoucherRepository, busSvc, stateChangeRepository, cfg, logger.GetDefault())
+	// Pass fee rules repository directly to payment service (no calculator wrapper)
+	paymentService := payments.NewPaymentService(orchestrator, paymentRepository, storedCardRepository, bankAccountRepository, walletService, feeRulesRepository, clients.txManager, voucherService, voucherRepository, pendingVoucherRepository, busSvc, stateChangeRepository, cfg, logger.GetDefault())
 
 	processPaymentGroup := group.Group("/process_payment")
 
@@ -235,8 +236,6 @@ func registerV1PayeeRoutes(clients *externalClients, cfg *config.Config, group *
 
 	payeeGroup := group.Group("/payees")
 	payee.RegisterPayeeRoutes(payeeGroup, payeeService, authSvc)
-	payee.RegisterVendorDropdownRoute(group, payeeService, authSvc)
-	payee.RegisterEmployeeListRoute(group, payeeService, authSvc)
 }
 
 func registerV1VoucherRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
@@ -305,12 +304,13 @@ func registerV1BatchPaymentRoutes(clients *externalClients, cfg *config.Config, 
 	// Routes
 	batchGroup := group.Group("/batch_payments")
 	batchGroup.Use(middleware.JWTMiddleware(authSvc))
+	batchGroup.Use(ratelimiter.MiddlewareDefault())
 
 	batchGroup.POST("/upload", handler.UploadCSV)
 	batchGroup.GET("", handler.GetBatchList)
 	batchGroup.GET("/:batch_id", handler.GetBatchStatus)
 	batchGroup.POST("/:batch_id/process", handler.ProcessBatch)
-	batchGroup.GET("/sample_csv", handler.DownloadSampleCSV) // Download sample CSV template
+	batchGroup.GET("/template", handler.DownloadSampleCSV) // Download sample CSV template
 }
 
 func registerV1NotificationRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
@@ -340,8 +340,11 @@ func registerV1DashboardRoutes(clients *externalClients, cfg *config.Config, gro
 	// Get auth service for JWT middleware
 	_, _, _, _, _, _, authSvc := factory.createCoreServices(nil)
 
+	group.Use(middleware.JWTMiddleware(authSvc))
+	group.Use(ratelimiter.MiddlewareDefault())
+
 	// Register route with JWT middleware
-	group.GET("/dashboard", handler.GetDashboardMetrics, middleware.JWTMiddleware(authSvc))
+	group.GET("/dashboard", handler.GetDashboardMetrics)
 }
 
 func registerV1Routes(s *xcentroServer) {

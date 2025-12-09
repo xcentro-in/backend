@@ -11,44 +11,44 @@ import (
 // PaymentSourceWithFees represents a payment source with fee breakdown for Phase 10
 type PaymentSourceWithFees struct {
 	// Source identification
-	SourceID        string                     `json:"source_id"`
-	SourceType      payment.PaymentSourceType  `json:"source_type"`
-	PaymentMethod   payment.PaymentMethod      `json:"payment_method"`
-	DisplayName     string                     `json:"display_name"`
+	SourceID      string                    `json:"source_id"`
+	SourceType    payment.PaymentSourceType `json:"source_type"`
+	PaymentMethod payment.PaymentMethod     `json:"payment_method"`
+	DisplayName   string                    `json:"display_name"`
 
 	// Card-specific fields
-	CardType        *payment.CardType          `json:"card_type,omitempty"`
-	CardCategory    *payment.CardCategory      `json:"card_category,omitempty"`
-	LastFourDigits  string                     `json:"last_four_digits,omitempty"`
+	CardType       *payment.CardType     `json:"card_type,omitempty"`
+	CardCategory   *payment.CardCategory `json:"card_category,omitempty"`
+	LastFourDigits string                `json:"last_four_digits,omitempty"`
 
 	// Bank account specific
-	LastFiveDigits  string                     `json:"last_five_digits,omitempty"`
-	BankName        string                     `json:"bank_name,omitempty"`
-	IFSCCode        string                     `json:"ifsc_code,omitempty"`
+	LastFiveDigits string `json:"last_five_digits,omitempty"`
+	BankName       string `json:"bank_name,omitempty"`
+	IFSCCode       string `json:"ifsc_code,omitempty"`
 
 	// UPI specific
-	UPIAddress      string                     `json:"upi_address,omitempty"`
+	UPIAddress string `json:"upi_address,omitempty"`
 
 	// Restriction information
-	IsAllowed          bool                    `json:"is_allowed"`
-	RestrictionReason  string                  `json:"restriction_reason,omitempty"`
+	IsAllowed         bool   `json:"is_allowed"`
+	RestrictionReason string `json:"restriction_reason,omitempty"`
 
 	// Fee breakdown (only for allowed sources)
-	FeeBreakdown       *business_rules.FeeCalculationWithTax `json:"fee_breakdown,omitempty"`
+	FeeBreakdown *business_rules.FeeCalculationWithTax `json:"fee_breakdown,omitempty"`
 }
 
 // GetPaymentSourcesResponse represents the API response for Phase 10
 type GetPaymentSourcesResponse struct {
-	BusinessID      string                      `json:"business_id"`
-	PaymentContext  payment.PaymentContext      `json:"payment_context"`
-	BaseAmount      int64                       `json:"base_amount"`
-	Sources         []*PaymentSourceWithFees    `json:"sources"`
+	BusinessID     string                   `json:"business_id"`
+	PaymentContext payment.PaymentContext   `json:"payment_context"`
+	BaseAmount     int64                    `json:"base_amount"`
+	Sources        []*PaymentSourceWithFees `json:"sources"`
 }
 
 // PaymentSourceService handles payment source selection with context-aware fees
 type PaymentSourceService struct {
-	walletService     business_rules.WalletService
-	feeCalculator     business_rules.DatabaseFeeCalculator
+	walletService business_rules.WalletService
+	feeCalculator business_rules.DatabaseFeeCalculator
 }
 
 // NewPaymentSourceService creates a new payment source service
@@ -57,8 +57,8 @@ func NewPaymentSourceService(
 	feeCalculator business_rules.DatabaseFeeCalculator,
 ) *PaymentSourceService {
 	return &PaymentSourceService{
-		walletService:     walletService,
-		feeCalculator:     feeCalculator,
+		walletService: walletService,
+		feeCalculator: feeCalculator,
 	}
 }
 

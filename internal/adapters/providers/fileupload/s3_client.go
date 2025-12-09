@@ -142,13 +142,7 @@ func (s *S3Client) UploadFile(ctx context.Context, file *multipart.FileHeader, k
 }
 
 // GetPresignedUploadURL generates a presigned URL for CLIENT-SIDE upload
-func (s *S3Client) GetPresignedUploadURL(ctx context.Context, filename string, contentType string, key string, expiration time.Duration) (string, string, error) {
-	// Use provided key, append extension if not already present
-	ext := filepath.Ext(filename)
-	if ext != "" && filepath.Ext(key) == "" {
-		key = key + ext
-	}
-
+func (s *S3Client) GetPresignedUploadURL(ctx context.Context, contentType string, key string, expiration time.Duration) (string, string, error) {
 	presignClient := s3.NewPresignClient(s.client)
 
 	req, err := presignClient.PresignPutObject(ctx, &s3.PutObjectInput{
