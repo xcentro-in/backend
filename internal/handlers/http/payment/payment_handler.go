@@ -21,6 +21,7 @@ import (
 	"xcentro.in/internal/middleware"
 	"xcentro.in/internal/services/payments"
 	"xcentro.in/internal/shared/logger"
+	"xcentro.in/internal/shared/ratelimiter"
 )
 
 // PaymentHandler handles payment-related HTTP requests
@@ -1396,6 +1397,7 @@ func RegisterPaymentRoutes(
 
 	// Apply JWT middleware to all payment routes
 	group.Use(middleware.JWTMiddleware(authService))
+	group.Use(ratelimiter.MiddlewareDefault())
 
 	// Core payment operations
 	group.POST("/get_fee_rules", handler.GetFeeRules)
@@ -1418,6 +1420,7 @@ func RegisterWalletRoutes(group *echo.Group, paymentService *payments.PaymentSer
 
 	// Apply JWT middleware to all wallet routes
 	group.Use(middleware.JWTMiddleware(authService))
+	group.Use(ratelimiter.MiddlewareDefault())
 
 	// Wallet operations
 	group.GET("", handler.FetchWallet)                            // GET /wallet - fetch wallet with inactive cards

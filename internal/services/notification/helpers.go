@@ -121,8 +121,8 @@ func buildEmailHTML(title, body string, actions []notification.ActionButton) str
 	// Footer
 	sb.WriteString(`        </div>
         <div class="footer">
-            <p>XCentro Payment Platform</p>
-            <p>This is an automated notification. Please do not reply to this email.</p>
+            <p>Xcentro </p>
+            <p>This is a system generated mail. Please do not reply to this email.</p>
         </div>
     </div>
 </body>

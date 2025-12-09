@@ -7,6 +7,7 @@ import (
 	"xcentro.in/internal/core/business"
 	"xcentro.in/internal/middleware"
 	voucherSvc "xcentro.in/internal/services/voucher"
+	"xcentro.in/internal/shared/ratelimiter"
 	"xcentro.in/internal/shared/logger"
 )
 
@@ -16,6 +17,8 @@ func RegisterVoucherRoutes(group *echo.Group, voucherService voucherSvc.VoucherS
 
 	group.Use(middleware.JWTMiddleware(authService))
 	group.Use(middleware.BusinessRolesMiddleware(businessUserRelRepo, rclient))
+	group.Use(ratelimiter.MiddlewareDefault())
+
 	// Voucher management endpoints
 	group.POST("/draft", handler.CreateDraftVoucher)                         // POST /vouchers/draft - Create draft voucher
 	group.POST("/multi", handler.CreateMultiVouchers)                        // POST /vouchers/multi - Multi-bill payment

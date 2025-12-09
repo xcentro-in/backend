@@ -608,10 +608,9 @@ func (s *BusinessServiceImpl) InviteUserToBusiness(ctx context.Context, bid stri
 		}
 
 		// Notify admins and above about new user addition
-		adminRole := "admin"
 		if err := notification.TriggerMulticast(ctx, bid, coreNotification.EventUserInvited, "New User Added",
 			fmt.Sprintf("A new user has been added to the business with role: %s", role),
-			&adminRole, nil, coreNotification.EntityReferences{}, []coreNotification.ActionButton{
+			coreNotification.RoleAdmin, nil, coreNotification.EntityReferences{}, []coreNotification.ActionButton{
 				{
 					Type: "button-positive",
 					Text: "View Settings",
@@ -659,10 +658,9 @@ func (s *BusinessServiceImpl) AddUserToBusiness(ctx context.Context, relation *b
 	}
 
 	// Notify admins and above about new user addition
-	adminRole := "admin"
 	if err := notification.TriggerMulticast(ctx, relation.BID, coreNotification.EventUserInvited, "New User Added",
 		fmt.Sprintf("A new user has been added to the business with role: %s", relation.Role),
-		&adminRole, nil, coreNotification.EntityReferences{}, []coreNotification.ActionButton{}); err != nil {
+		coreNotification.RoleAdmin, nil, coreNotification.EntityReferences{}, []coreNotification.ActionButton{}); err != nil {
 		s.logger.Errorf("Failed to trigger user invited notification: %v", err)
 		// Don't fail the operation if notification trigger fails
 	}

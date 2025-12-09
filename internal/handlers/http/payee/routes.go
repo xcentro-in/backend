@@ -5,6 +5,7 @@ import (
 	"xcentro.in/internal/core/auth"
 	"xcentro.in/internal/middleware"
 	payeeSvc "xcentro.in/internal/services/payee"
+	"xcentro.in/internal/shared/ratelimiter"
 	"xcentro.in/internal/shared/logger"
 )
 
@@ -14,6 +15,7 @@ func RegisterPayeeRoutes(group *echo.Group, payeeService *payeeSvc.PayeeService,
 
 	// Apply JWT middleware to all payee routes
 	group.Use(middleware.JWTMiddleware(authService))
+	group.Use(ratelimiter.MiddlewareDefault())
 
 	// Payee management endpoints
 	group.POST("", handler.OnboardPayee)                       // POST /payees
@@ -27,30 +29,9 @@ func RegisterPayeeRoutes(group *echo.Group, payeeService *payeeSvc.PayeeService,
 	group.GET("/remuneration/upload-url", handler.GetRemunerationDocumentUploadURL)         // GET /payees/remuneration/upload-url?relation_id=xxx
 	group.GET("/remuneration/confirm-upload", handler.ConfirmRemunerationDocumentUpload)   // GET /payees/remuneration/confirm-upload?relation_id=xxx
 	group.GET("/remuneration/download-url", handler.GetRemunerationDocumentDownloadURL)    // GET /payees/remuneration/download-url?relation_id=xxx
-}
-
-// RegisterVendorDropdownRoute registers the lightweight vendor dropdown endpoint
-// This is registered separately at /v1/vendors (not under /v1/payees)
-func RegisterVendorDropdownRoute(group *echo.Group, payeeService *payeeSvc.PayeeService, authService auth.AuthService) {
-	handler := NewPayeeHandler(payeeService, logger.GetDefault())
-
-	// Apply JWT middleware
-	vendorGroup := group.Group("/vendors")
-	vendorGroup.Use(middleware.JWTMiddleware(authService))
 
 	// Vendor dropdown endpoint (optimized for voucher creation UI)
-	vendorGroup.GET("", handler.GetVendorsForDropdown) // GET /v1/vendors
-}
-
-// RegisterEmployeeListRoute registers the lightweight employee list endpoint
-// This is registered separately at /v1/employees (not under /v1/payees)
-func RegisterEmployeeListRoute(group *echo.Group, payeeService *payeeSvc.PayeeService, authService auth.AuthService) {
-	handler := NewPayeeHandler(payeeService, logger.GetDefault())
-
-	// Apply JWT middleware
-	employeeGroup := group.Group("/employees")
-	employeeGroup.Use(middleware.JWTMiddleware(authService))
-
+	group.GET("/vendors", handler.GetVendorsForDropdown)
 	// Employee list endpoint (for tabulated display)
-	employeeGroup.GET("", handler.GetEmployeesForList) // GET /v1/employees
+	group.GET("/employees", handler.GetEmployeesForList)
 }

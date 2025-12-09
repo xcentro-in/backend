@@ -51,6 +51,7 @@ import (
 	voucherSvc "xcentro.in/internal/services/voucher"
 	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/logger"
+	"xcentro.in/internal/shared/ratelimiter"
 )
 
 // Shared service factory to avoid duplication
@@ -235,8 +236,6 @@ func registerV1PayeeRoutes(clients *externalClients, cfg *config.Config, group *
 
 	payeeGroup := group.Group("/payees")
 	payee.RegisterPayeeRoutes(payeeGroup, payeeService, authSvc)
-	payee.RegisterVendorDropdownRoute(group, payeeService, authSvc)
-	payee.RegisterEmployeeListRoute(group, payeeService, authSvc)
 }
 
 func registerV1VoucherRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
@@ -305,6 +304,7 @@ func registerV1BatchPaymentRoutes(clients *externalClients, cfg *config.Config, 
 	// Routes
 	batchGroup := group.Group("/batch_payments")
 	batchGroup.Use(middleware.JWTMiddleware(authSvc))
+	batchGroup.Use(ratelimiter.MiddlewareDefault())
 
 	batchGroup.POST("/upload", handler.UploadCSV)
 	batchGroup.GET("", handler.GetBatchList)
@@ -340,8 +340,11 @@ func registerV1DashboardRoutes(clients *externalClients, cfg *config.Config, gro
 	// Get auth service for JWT middleware
 	_, _, _, _, _, _, authSvc := factory.createCoreServices(nil)
 
+	group.Use(middleware.JWTMiddleware(authSvc))
+	group.Use(ratelimiter.MiddlewareDefault())
+
 	// Register route with JWT middleware
-	group.GET("/dashboard", handler.GetDashboardMetrics, middleware.JWTMiddleware(authSvc))
+	group.GET("/dashboard", handler.GetDashboardMetrics)
 }
 
 func registerV1Routes(s *xcentroServer) {
