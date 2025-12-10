@@ -104,6 +104,17 @@ type SendInviteOTPRequest struct {
 	Signature string `json:"sig" validate:"required"`
 }
 
+// SendMobileUpdateOTPRequest represents the request to send OTP to new mobile number
+type SendMobileUpdateOTPRequest struct {
+	MobileNumber string `json:"mobileNumber" validate:"required,phone_in"`
+}
+
+// VerifyMobileUpdateRequest represents the request to verify OTP and update mobile
+type VerifyMobileUpdateRequest struct {
+	MobileNumber string `json:"mobileNumber" validate:"required,phone_in"`
+	OTP          string `json:"otp" validate:"required,len=6,numeric"`
+}
+
 // type AuthJWTClaim struct {
 // 	jwt.RegisteredClaims
 // 	Roles []shared.UserRole `json:"rls"`
