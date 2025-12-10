@@ -473,10 +473,10 @@ func (s *AuthService) Login(ctx context.Context, email, password, userAgent stri
 		return nil, fmt.Errorf("invalid email or password")
 	}
 
-	// Check email verification
-	if !userObj.EmailVerified {
-		logger.Error("Email not verified for user: %s", userObj.Id)
-		return nil, fmt.Errorf("email not verified. Please verify your email before logging in")
+	// Check email and mobile verification
+	if !userObj.EmailVerified || !userObj.MobileVerified {
+		logger.Error("Account verification incomplete for user: %s (email: %v, mobile: %v)", userObj.Id, userObj.EmailVerified, userObj.MobileVerified)
+		return nil, fmt.Errorf("account verification incomplete. Please verify both your email and mobile number")
 	}
 
 	// Verify password
@@ -1295,5 +1295,67 @@ func (s *AuthService) ResetPasswordWithMobileOTP(ctx context.Context, userID, to
 		logger.Infof("All refresh tokens revoked for user: %s", userID)
 	}
 
+	return nil
+}
+
+// VerifyAndUpdateMobile verifies OTP and updates user's mobile number
+func (s *AuthService) VerifyAndUpdateMobile(ctx context.Context, userID, newMobile, otp string) error {
+	logger.Infof("Verifying OTP and updating mobile for user: %s", userID)
+
+	if userID == "" || newMobile == "" || otp == "" {
+		return fmt.Errorf("userID, mobileNumber, and OTP are required")
+	}
+
+	// Hash the incoming OTP
+	hashedOTP := security.HashOTP(otp)
+
+	// Use transaction to ensure atomicity
+	err := s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
+		txUserRepo := s.userRepo.WithTx(tx)
+
+		// Get verification code
+		verificationCode, err := txUserRepo.GetVerificationCodeByUserIDAndCode(ctx, userID, hashedOTP, shared.MobileVerification)
+		if err != nil {
+			logger.Errorf("Failed to get mobile verification code: %v", err)
+			return fmt.Errorf("invalid or expired OTP")
+		}
+
+		if verificationCode.Used {
+			return fmt.Errorf("OTP already used")
+		}
+
+		// Check expiry
+		expiresAt, err := time.Parse(time.RFC3339, verificationCode.ExpiresAt)
+		if err != nil {
+			return fmt.Errorf("invalid expiration time format")
+		}
+
+		if time.Now().After(expiresAt) {
+			return fmt.Errorf("OTP has expired")
+		}
+
+		// Mark verification code as used
+		if err := txUserRepo.MarkVerificationCodeAsUsed(ctx, verificationCode.ID); err != nil {
+			return fmt.Errorf("failed to mark OTP as used: %w", err)
+		}
+
+		// Update user mobile number
+		if err := txUserRepo.UpdateUserMobile(ctx, userID, newMobile); err != nil {
+			return fmt.Errorf("failed to update mobile number: %w", err)
+		}
+
+		// Mark mobile as verified
+		if err := txUserRepo.UpdateUserMobileVerification(ctx, userID, true); err != nil {
+			return fmt.Errorf("failed to update mobile verification: %w", err)
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return err
+	}
+
+	logger.Infof("Mobile number updated and verified successfully for user: %s", userID)
 	return nil
 }

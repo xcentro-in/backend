@@ -61,6 +61,8 @@ func RegisterAuthRoutes(e *echo.Group, authService auth.AuthService, businessSer
 	protectedAuth.POST("/revoke-all", authHandler.HandleRevokeAllTokens)
 	protectedAuth.POST("/generate-mobile-otp", authHandler.HandleGenerateMobileOTP)
 	protectedAuth.POST("/change-password", authHandler.HandleChangePassword)
+	protectedAuth.POST("/send-mobile-update-otp", authHandler.HandleSendMobileUpdateOTP)
+	protectedAuth.POST("/verify-mobile-update", authHandler.HandleVerifyMobileUpdate)
 	protectedAuth.GET("/onboarding-status", authHandler.HandleGetBusinessOnboardingFlags)
 
 	// OAuth sub group
@@ -141,7 +143,7 @@ func (ah AuthHandler) HandleLogin(c echo.Context) error {
 	if err != nil {
 		logger.Errorf("Login failed: %v", err)
 		// Return 401 for authentication failures
-		if err.Error() == "email not verified. Please verify your email before logging in" ||
+		if err.Error() == "account verification incomplete. Please verify both your email and mobile number" ||
 			err.Error() == "invalid email or password" {
 			return c.JSON(401, map[string]any{"message": err.Error(), "data": nil})
 		}
@@ -695,6 +697,87 @@ func (ah AuthHandler) HandleResetPasswordWithOTP(c echo.Context) error {
 
 	return c.JSON(200, map[string]any{
 		"message": "Password reset and mobile verified successfully. All existing sessions have been invalidated.",
+		"data":    nil,
+	})
+}
+
+// HandleSendMobileUpdateOTP sends OTP to new mobile number for update
+func (ah AuthHandler) HandleSendMobileUpdateOTP(c echo.Context) error {
+	// Get userID from context (set by JWT middleware)
+	userID, ok := c.Get("userId").(string)
+	if !ok || userID == "" {
+		return c.JSON(401, map[string]any{"message": "Unauthorized", "data": nil})
+	}
+
+	var req auth.SendMobileUpdateOTPRequest
+
+	// Bind input
+	if err := c.Bind(&req); err != nil {
+		logger.Errorf("Invalid input: %v", err)
+		return c.JSON(400, map[string]any{"message": "Invalid input provided", "data": nil})
+	}
+
+	// Validate input
+	if err := c.Validate(&req); err != nil {
+		logger.Errorf("Validation failed: %v", err)
+		if ve, ok := err.(*customValidator.ValidationError); ok {
+			return c.JSON(400, map[string]any{"message": "Validation failed", "errors": ve.Errors, "data": nil})
+		}
+		return c.JSON(400, map[string]any{"message": "Validation failed", "data": nil})
+	}
+
+	// Delegate to service (reuses existing SendMobileVerificationOTP)
+	if err := ah.authService.SendMobileVerificationOTP(c.Request().Context(), userID, req.MobileNumber); err != nil {
+		logger.Errorf("Failed to send mobile update OTP for user %s: %v", userID, err)
+		return c.JSON(500, map[string]any{"message": "Failed to send OTP", "data": nil})
+	}
+
+	return c.JSON(200, map[string]any{
+		"message": "OTP sent successfully to the new mobile number",
+		"data":    nil,
+	})
+}
+
+// HandleVerifyMobileUpdate verifies OTP and updates mobile number
+func (ah AuthHandler) HandleVerifyMobileUpdate(c echo.Context) error {
+	// Get userID from context (set by JWT middleware)
+	userID, ok := c.Get("userId").(string)
+	if !ok || userID == "" {
+		return c.JSON(401, map[string]any{"message": "Unauthorized", "data": nil})
+	}
+
+	var req auth.VerifyMobileUpdateRequest
+
+	// Bind input
+	if err := c.Bind(&req); err != nil {
+		logger.Errorf("Invalid input: %v", err)
+		return c.JSON(400, map[string]any{"message": "Invalid input provided", "data": nil})
+	}
+
+	// Validate input
+	if err := c.Validate(&req); err != nil {
+		logger.Errorf("Validation failed: %v", err)
+		if ve, ok := err.(*customValidator.ValidationError); ok {
+			return c.JSON(400, map[string]any{"message": "Validation failed", "errors": ve.Errors, "data": nil})
+		}
+		return c.JSON(400, map[string]any{"message": "Validation failed", "data": nil})
+	}
+
+	// Delegate to service
+	if err := ah.authService.VerifyAndUpdateMobile(c.Request().Context(), userID, req.MobileNumber, req.OTP); err != nil {
+		logger.Errorf("Failed to verify and update mobile for user %s: %v", userID, err)
+
+		// Return 400 for OTP errors
+		if err.Error() == "invalid or expired OTP" || err.Error() == "OTP already used" || err.Error() == "OTP has expired" {
+			return c.JSON(400, map[string]any{"message": err.Error(), "data": nil})
+		}
+
+		// Return 500 for other errors
+		return c.JSON(500, map[string]any{"message": "Failed to update mobile number", "data": nil})
+	}
+
+	return c.JSON(200, map[string]any{
+		"message": "Mobile number updated and verified successfully",
 		"data":    nil,
 	})
 }
