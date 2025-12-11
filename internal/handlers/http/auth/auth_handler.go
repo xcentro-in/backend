@@ -138,8 +138,23 @@ func (ah AuthHandler) HandleLogin(c echo.Context) error {
 	// Get user agent from request
 	userAgent := c.Request().UserAgent()
 
+	// Get device type from request (defaults to "web" if not provided)
+	deviceType := loginReq.DeviceType
+	if deviceType == "" {
+		deviceType = "web"
+	}
+
+	// TODO: Support mobile device type in future - currently only "web" is supported
+	if deviceType != "web" {
+		logger.Warnf("Unsupported device type '%s' requested, rejecting", deviceType)
+		return c.JSON(400, map[string]any{
+			"message": "Only 'web' device type is currently supported",
+			"data":    nil,
+		})
+	}
+
 	// Delegate to service
-	response, err := ah.authService.Login(c.Request().Context(), loginReq.Email, loginReq.Password, userAgent)
+	response, err := ah.authService.Login(c.Request().Context(), loginReq.Email, loginReq.Password, userAgent, deviceType)
 	if err != nil {
 		logger.Errorf("Login failed: %v", err)
 		// Return 401 for authentication failures

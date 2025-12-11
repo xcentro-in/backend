@@ -10,7 +10,6 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/oauth2"
 	redis "xcentro.in/internal/adapters/cache/redis/client"
-	"xcentro.in/internal/adapters/cache/redis/keys"
 	"xcentro.in/internal/adapters/database/postgres/client"
 	"xcentro.in/internal/core/opsauth"
 	"xcentro.in/internal/shared/config"
@@ -264,15 +263,6 @@ func (s *OpsAuthService) RefreshAccessToken(ctx context.Context, refreshToken st
 	opsUserID := claims.Subject
 	refreshTokenHash := security.HashToken(refreshToken)
 
-	// Check if token is revoked in Redis
-	revokedKey := keys.User.RevokedTokens(opsUserID)
-	isRevoked, err := s.rclient.Client.HExists(ctx, revokedKey, refreshTokenHash).Result()
-	if err != nil {
-		logger.Warnf("Redis error checking revocation: %v", err)
-	} else if isRevoked {
-		return "", fmt.Errorf("authentication failed")
-	}
-
 	// Get session from database
 	session, err := s.opsSessionRepo.GetSessionByTokenHash(ctx, opsUserID, refreshTokenHash)
 	if err != nil {
@@ -388,17 +378,6 @@ func (s *OpsAuthService) Logout(ctx context.Context, opsUserID, refreshToken str
 	err := s.opsSessionRepo.DeleteSession(ctx, opsUserID, refreshTokenHash)
 	if err != nil {
 		return fmt.Errorf("failed to logout: %w", err)
-	}
-
-	// Mark as revoked in Redis cache
-	revokedKey := keys.User.RevokedTokens(opsUserID)
-	if err := s.rclient.Client.HSet(ctx, revokedKey, refreshTokenHash, "1").Err(); err != nil {
-		logger.Errorf("Failed to mark token as revoked in Redis: %v", err)
-	}
-
-	// Set TTL on revoked tokens hash (15 minutes)
-	if err := s.rclient.Client.Expire(ctx, revokedKey, keys.TTLRevokedToken).Err(); err != nil {
-		logger.Errorf("Failed to set TTL on revoked tokens: %v", err)
 	}
 
 	logger.Infof("Logout successful for user: %s", opsUserID)

@@ -64,3 +64,27 @@ const (
 	PremiumPlan    SubscriptionType = "premium_plan"
 	EnterprisePlan SubscriptionType = "enterprise_plan"
 )
+
+type DeviceType string
+
+const (
+	DeviceWeb    DeviceType = "web"
+	DeviceMobile DeviceType = "mobile"
+)
+
+// ValidateDeviceType checks if device type is valid
+func ValidateDeviceType(dt string) bool {
+	return dt == string(DeviceWeb) || dt == string(DeviceMobile)
+}
+
+// ParseDeviceType converts string to DeviceType with validation
+func ParseDeviceType(dt string) (DeviceType, bool) {
+	switch dt {
+	case string(DeviceWeb):
+		return DeviceWeb, true
+	case string(DeviceMobile):
+		return DeviceMobile, true
+	default:
+		return "", false
+	}
+}

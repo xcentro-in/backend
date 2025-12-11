@@ -1,11 +1,16 @@
 package auth
 
-import "time"
+import (
+	"time"
+
+	"github.com/golang-jwt/jwt/v5"
+)
 
 type AuthPayload struct {
-	Email    string `json:"email" validate:"required,email"`
-	Password string `json:"password" validate:"required,strong_password"`
-	AuthCode string `query:"code"`
+	Email      string `json:"email" validate:"required,email"`
+	Password   string `json:"password" validate:"required,strong_password"`
+	AuthCode   string `query:"code"`
+	DeviceType string `json:"deviceType" validate:"omitempty,oneof=web mobile"`
 }
 
 // SignupResponse represents the response after successful user registration
@@ -30,6 +35,23 @@ type Session struct {
 	CreatedAt        time.Time `json:"createdAt"`
 	LastUsedAt       time.Time `json:"lastUsedAt"`
 	UserAgent        string    `json:"userAgent,omitempty"`
+	DeviceType       string    `json:"deviceType"`
+	DeviceVersion    int       `json:"deviceVersion"`
+}
+
+// CustomClaims extends JWT registered claims with device information
+type CustomClaims struct {
+	jwt.RegisteredClaims
+	DeviceType    string `json:"device_type"`
+	DeviceVersion int    `json:"device_version"`
+}
+
+// UserDeviceVersion tracks JWT version per user per device type
+type UserDeviceVersion struct {
+	UserID         string    `json:"userId"`
+	DeviceType     string    `json:"deviceType"`
+	CurrentVersion int       `json:"currentVersion"`
+	UpdatedAt      time.Time `json:"updatedAt"`
 }
 
 // RefreshTokenRequest represents the request to refresh an access token

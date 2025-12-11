@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -25,23 +26,27 @@ import (
 )
 
 type AuthService struct {
-	config          *config.JWTSecretConfig
-	bcryptConfig    *config.BcryptConfig
-	rclient         *redis.RedisClient
-	sessionRepo     auth.SessionRepository
-	userRepo        user.UserRepository
-	userService     user.UserService
-	businessService business.BusinessService
-	emailService    mailers.EmailService
-	smsService      sms.SMSService
-	smsConfig       *config.SMSConfig
-	metrics         metrics.MetricsProvider
-	appConfig       *config.Config
-	txManager       client.TxManager
+	config              *config.JWTSecretConfig
+	bcryptConfig        *config.BcryptConfig
+	rclient             *redis.RedisClient
+	sessionRepo         auth.SessionRepository
+	deviceVersionRepo   auth.DeviceVersionRepository
+	businessUserRelRepo business.BusinessUserRelationRepository
+	userRepo            user.UserRepository
+	userService         user.UserService
+	businessService     business.BusinessService
+	emailService        mailers.EmailService
+	smsService          sms.SMSService
+	smsConfig           *config.SMSConfig
+	metrics             metrics.MetricsProvider
+	appConfig           *config.Config
+	txManager           client.TxManager
 }
 
 func NewAuthService(
 	sessionRepo auth.SessionRepository,
+	deviceVersionRepo auth.DeviceVersionRepository,
+	businessUserRelRepo business.BusinessUserRelationRepository,
 	userRepo user.UserRepository,
 	userService user.UserService,
 	businessService business.BusinessService,
@@ -49,28 +54,34 @@ func NewAuthService(
 	cfg *config.Config,
 ) *AuthService {
 	return &AuthService{
-		config:          &cfg.JWT,                 // Extract JWT config
-		bcryptConfig:    &cfg.Bcrypt,              // Extract Bcrypt config
-		rclient:         clients.GetRedisClient(), // Extract from clients
-		sessionRepo:     sessionRepo,
-		userRepo:        userRepo,
-		userService:     userService,
-		businessService: businessService,
-		emailService:    clients.GetEmailService(), // Extract from clients
-		smsService:      clients.GetSMSService(),   // Extract from clients
-		smsConfig:       &cfg.SMS,                  // Extract SMS config
-		metrics:         clients.GetMetrics().(metrics.MetricsProvider),
-		appConfig:       cfg,
-		txManager:       clients.GetTxManager(), // Extract from clients
+		config:              &cfg.JWT,                 // Extract JWT config
+		bcryptConfig:        &cfg.Bcrypt,              // Extract Bcrypt config
+		rclient:             clients.GetRedisClient(), // Extract from clients
+		sessionRepo:         sessionRepo,
+		deviceVersionRepo:   deviceVersionRepo,
+		businessUserRelRepo: businessUserRelRepo,
+		userRepo:            userRepo,
+		userService:         userService,
+		businessService:     businessService,
+		emailService:        clients.GetEmailService(), // Extract from clients
+		smsService:          clients.GetSMSService(),   // Extract from clients
+		smsConfig:           &cfg.SMS,                  // Extract SMS config
+		metrics:             clients.GetMetrics().(metrics.MetricsProvider),
+		appConfig:           cfg,
+		txManager:           clients.GetTxManager(), // Extract from clients
 	}
 }
 
-// generateToken creates a JWT token for the given user with specified expiry duration
-func (s *AuthService) generateToken(userID string, expiry time.Duration) (string, error) {
-	claims := jwt.RegisteredClaims{
-		Subject:   userID,
-		ExpiresAt: jwt.NewNumericDate(time.Now().Add(expiry)),
-		IssuedAt:  jwt.NewNumericDate(time.Now()),
+// generateToken creates a JWT token with device information
+func (s *AuthService) generateToken(userID string, deviceType string, deviceVersion int, expiry time.Duration) (string, error) {
+	claims := auth.CustomClaims{
+		RegisteredClaims: jwt.RegisteredClaims{
+			Subject:   userID,
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(expiry)),
+			IssuedAt:  jwt.NewNumericDate(time.Now()),
+		},
+		DeviceType:    deviceType,
+		DeviceVersion: deviceVersion,
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	signedToken, err := token.SignedString([]byte(s.config.SecretKey))
@@ -81,45 +92,119 @@ func (s *AuthService) generateToken(userID string, expiry time.Duration) (string
 	return signedToken, nil
 }
 
-// generateAccessToken creates a new short-lived access token for the given user
-func (s *AuthService) generateAccessToken(userID string) (string, error) {
-	return s.generateToken(userID, s.config.AccessTokenExpiry)
+// generateAccessToken creates a new short-lived access token with device information
+func (s *AuthService) generateAccessToken(userID string, deviceType string, deviceVersion int) (string, error) {
+	return s.generateToken(userID, deviceType, deviceVersion, s.config.AccessTokenExpiry)
 }
 
-// generateRefreshToken creates a new long-lived refresh token for the given user
-func (s *AuthService) generateRefreshToken(userID string) (string, error) {
-	return s.generateToken(userID, s.config.RefreshTokenExpiry)
+// generateRefreshToken creates a new long-lived refresh token with device information
+func (s *AuthService) generateRefreshToken(userID string, deviceType string, deviceVersion int) (string, error) {
+	return s.generateToken(userID, deviceType, deviceVersion, s.config.RefreshTokenExpiry)
 }
 
-// CreateTokenPair creates a new access and refresh token pair
-func (s *AuthService) CreateTokenPair(ctx context.Context, userID, userAgent string) (accessToken, refreshToken string, err error) {
-	// Generate access token (short-lived)
-	accessToken, err = s.generateAccessToken(userID)
+// CreateTokenPair creates a new access and refresh token pair with device session management
+func (s *AuthService) CreateTokenPair(ctx context.Context, userID, userAgent string, deviceType string) (accessToken, refreshToken string, err error) {
+	// Default to web if no device type provided (backward compatibility)
+	if deviceType == "" {
+		deviceType = string(shared.DeviceWeb)
+	}
+
+	// Validate device type
+	if !shared.ValidateDeviceType(deviceType) {
+		return "", "", fmt.Errorf("invalid device type: %s", deviceType)
+	}
+
+	var currentVersion int
+	var maxSessions int
+
+	// Get max sessions based on device type
+	switch deviceType {
+	case string(shared.DeviceWeb):
+		maxSessions = s.config.MaxWebSessions
+	case string(shared.DeviceMobile):
+		maxSessions = s.config.MaxMobileSessions
+	default:
+		maxSessions = 3 // Fallback
+	}
+
+	// Use transaction to ensure atomicity
+	err = s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
+		txSessionRepo := s.sessionRepo.WithTx(tx)
+		txDeviceVersionRepo := s.deviceVersionRepo.WithTx(tx)
+
+		// Count existing sessions for this device type
+		sessionCount, err := txSessionRepo.CountSessionsByDevice(ctx, userID, deviceType)
+		if err != nil {
+			return fmt.Errorf("failed to count sessions: %w", err)
+		}
+
+		// If max sessions reached, increment version and delete oldest session
+		if sessionCount >= maxSessions {
+			logger.Infof("Max sessions (%d) reached for user %s device %s, incrementing version", maxSessions, userID, deviceType)
+
+			// Increment device version
+			newVersion, err := txDeviceVersionRepo.IncrementDeviceVersion(ctx, userID, deviceType)
+			if err != nil {
+				return fmt.Errorf("failed to increment device version: %w", err)
+			}
+			currentVersion = newVersion
+
+			// Delete oldest session
+			if err := txSessionRepo.DeleteOldestSessionByDevice(ctx, userID, deviceType); err != nil {
+				return fmt.Errorf("failed to delete oldest session: %w", err)
+			}
+		} else {
+			// Get current version (will be 1 if not exists)
+			currentVersion, err = txDeviceVersionRepo.GetDeviceVersion(ctx, userID, deviceType)
+			if err != nil {
+				return fmt.Errorf("failed to get device version: %w", err)
+			}
+		}
+
+		// Generate tokens with device information
+		accessToken, err = s.generateAccessToken(userID, deviceType, currentVersion)
+		if err != nil {
+			return err
+		}
+
+		refreshToken, err = s.generateRefreshToken(userID, deviceType, currentVersion)
+		if err != nil {
+			return err
+		}
+
+		// Hash the refresh token for storage
+		tokenHash := security.HashToken(refreshToken)
+
+		// Store refresh token session in database with device info
+		_, err = txSessionRepo.CreateSession(
+			ctx,
+			userID,
+			tokenHash,
+			time.Now().Add(s.config.RefreshTokenExpiry),
+			userAgent,
+			deviceType,
+			currentVersion,
+		)
+		if err != nil {
+			logger.Errorf("Failed to store session: %v", err)
+			return fmt.Errorf("failed to store session")
+		}
+
+		return nil
+	})
+
 	if err != nil {
 		return "", "", err
 	}
 
-	// Generate refresh token (long-lived)
-	refreshToken, err = s.generateRefreshToken(userID)
-	if err != nil {
-		return "", "", err
-	}
-
-	// Hash the refresh token for storage
-	tokenHash := security.HashToken(refreshToken)
-
-	// Store refresh token session in database
-	_, err = s.sessionRepo.CreateSession(
-		ctx,
-		userID,
-		tokenHash,
-		time.Now().Add(s.config.RefreshTokenExpiry),
-		userAgent,
-	)
-	if err != nil {
-		logger.Errorf("Failed to store session: %v", err)
-		return "", "", fmt.Errorf("failed to store session")
-	}
+	// Invalidate device version cache in Redis (outside transaction, fire-and-forget)
+	go func() {
+		bgCtx := context.Background()
+		cacheKey := keys.User.DeviceVersion(userID, deviceType)
+		if err := s.rclient.Client.Del(bgCtx, cacheKey).Err(); err != nil {
+			logger.Warnf("Failed to invalidate device version cache: %v", err)
+		}
+	}()
 
 	return accessToken, refreshToken, nil
 }
@@ -134,44 +219,61 @@ func (s *AuthService) RefreshAccessToken(ctx context.Context, refreshToken strin
 	}
 
 	userID := claims.Subject
+	deviceType := claims.DeviceType
+	deviceVersion := claims.DeviceVersion
 	tokenHash := security.HashToken(refreshToken)
 
-	// Check if token is revoked in Redis cache first
-	revokedKey := keys.User.RevokedTokens(userID)
-	isRevoked, err := s.rclient.Client.HExists(ctx, revokedKey, tokenHash).Result()
+	// Validate device version with Redis/DB
+	cacheKey := keys.User.DeviceVersion(userID, deviceType)
 
-	if err != nil {
-		// Redis is down - fallback to DB check
-		logger.Warnf("Redis error checking revocation, falling back to DB: %v", err)
-
-		// Try to get session from DB (if exists = not revoked, if not exists = revoked)
-		_, dbErr := s.sessionRepo.GetSessionByTokenHash(ctx, userID, tokenHash)
-		if dbErr != nil {
-			logger.Errorf("Session not found in DB (token revoked): %v", dbErr)
-			return "", fmt.Errorf("refresh token has been revoked")
+	// Try Redis first
+	cachedVersion, err := s.rclient.Client.Get(ctx, cacheKey).Int()
+	if err == nil {
+		// Version found in cache
+		if cachedVersion != deviceVersion {
+			logger.Warnf("Device version mismatch for user %s device %s: token=%d, current=%d", userID, deviceType, deviceVersion, cachedVersion)
+			return "", fmt.Errorf("session invalidated")
 		}
-
-		// Session exists in DB, so not revoked - update last used timestamp
-		if err := s.sessionRepo.UpdateLastUsed(ctx, userID, tokenHash); err != nil {
-			logger.Warnf("Failed to update last used: %v", err)
-		}
-
-	} else if isRevoked {
-		// Token is in revoked set
-		logger.Errorf("Refresh token is revoked (cached)")
-		return "", fmt.Errorf("refresh token has been revoked")
 	} else {
-		// Redis is up and token not revoked - update last used timestamp
-		if err := s.sessionRepo.UpdateLastUsed(ctx, userID, tokenHash); err != nil {
-			logger.Warnf("Failed to update last used: %v", err)
+		// Redis miss - fallback to DB
+		dbVersion, err := s.deviceVersionRepo.GetDeviceVersion(ctx, userID, deviceType)
+		if err != nil {
+			logger.Errorf("Failed to get device version from DB: %v", err)
+			return "", fmt.Errorf("failed to validate session")
 		}
+
+		if dbVersion != deviceVersion {
+			logger.Warnf("Device version mismatch for user %s device %s: token=%d, current=%d", userID, deviceType, deviceVersion, dbVersion)
+			return "", fmt.Errorf("session invalidated")
+		}
+
+		// Cache the version for future requests
+		go func() {
+			bgCtx := context.Background()
+			if err := s.rclient.Client.Set(bgCtx, cacheKey, dbVersion, keys.TTLDeviceVersion).Err(); err != nil {
+				logger.Warnf("Failed to cache device version: %v", err)
+			}
+		}()
 	}
 
-	// Generate new access token
-	return s.generateAccessToken(userID)
+	// Check if session exists in DB (if deleted, token is effectively revoked)
+	_, err = s.sessionRepo.GetSessionByTokenHash(ctx, userID, tokenHash)
+	if err != nil {
+		logger.Errorf("Session not found in DB (token revoked or expired): %v", err)
+		return "", fmt.Errorf("refresh token has been revoked")
+	}
+
+	// Update last used timestamp
+	if err := s.sessionRepo.UpdateLastUsed(ctx, userID, tokenHash); err != nil {
+		logger.Warnf("Failed to update last used: %v", err)
+	}
+
+	// Generate new access token with same device info
+	return s.generateAccessToken(userID, deviceType, deviceVersion)
 }
 
-// RevokeRefreshToken revokes a specific refresh token
+// RevokeRefreshToken revokes a specific refresh token (logout from one session)
+// Simply deletes the session from DB - version check in middleware will handle validation
 func (s *AuthService) RevokeRefreshToken(ctx context.Context, userID, refreshToken string) error {
 	// Parse token to validate it and verify it belongs to the user
 	claims, err := s.parseAndValidateToken(refreshToken)
@@ -189,73 +291,269 @@ func (s *AuthService) RevokeRefreshToken(ctx context.Context, userID, refreshTok
 	// Hash the token
 	tokenHash := security.HashToken(refreshToken)
 
-	// Delete from database
+	// Delete session from database - this is sufficient, no need for revocation lists
+	// RefreshAccessToken will check if session exists in DB when Redis is down
 	if err := s.sessionRepo.DeleteSession(ctx, userID, tokenHash); err != nil {
 		logger.Errorf("Failed to delete session: %v", err)
 		return fmt.Errorf("failed to revoke token")
 	}
 
-	// Mark as revoked in Redis cache (MUST succeed)
-	revokedKey := keys.User.RevokedTokens(userID)
-	if err := s.rclient.Client.HSet(ctx, revokedKey, tokenHash, "1").Err(); err != nil {
-		logger.Errorf("Failed to mark token as revoked in Redis: %v", err)
-		return fmt.Errorf("failed to complete token revocation")
-	}
-
-	// Set TTL on the revoked tokens hash (15 minutes)
-	if err := s.rclient.Client.Expire(ctx, revokedKey, keys.TTLRevokedToken).Err(); err != nil {
-		logger.Errorf("Failed to set TTL on revoked tokens: %v", err)
-		return fmt.Errorf("failed to complete token revocation")
-	}
-
-	logger.Info("Successfully revoked refresh token for user %s", userID)
+	logger.Infof("Successfully revoked refresh token for user %s", userID)
 	return nil
 }
 
-// RevokeAllUserTokens revokes all refresh tokens for a user
+// RevokeAllUserTokens revokes all refresh tokens for a user by incrementing device versions
+// This efficiently invalidates ALL tokens across ALL devices (web + mobile) without maintaining revocation lists
 func (s *AuthService) RevokeAllUserTokens(ctx context.Context, userID string) error {
-	// Delete all sessions from database and get their token hashes
-	tokenHashes, err := s.sessionRepo.DeleteAllUserSessions(ctx, userID)
+	logger.Infof("Invalidating all tokens for user %s by bumping device versions", userID)
+
+	// Use transaction to atomically increment versions for both device types and delete sessions
+	err := s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
+		txDeviceVersionRepo := s.deviceVersionRepo.WithTx(tx)
+		txSessionRepo := s.sessionRepo.WithTx(tx)
+
+		// Increment version for WEB device type
+		webVersion, err := txDeviceVersionRepo.IncrementDeviceVersion(ctx, userID, string(shared.DeviceWeb))
+		if err != nil {
+			return fmt.Errorf("failed to increment web device version: %w", err)
+		}
+		logger.Infof("Bumped web device version to %d for user %s", webVersion, userID)
+
+		// Increment version for MOBILE device type
+		mobileVersion, err := txDeviceVersionRepo.IncrementDeviceVersion(ctx, userID, string(shared.DeviceMobile))
+		if err != nil {
+			return fmt.Errorf("failed to increment mobile device version: %w", err)
+		}
+		logger.Infof("Bumped mobile device version to %d for user %s", mobileVersion, userID)
+
+		// Delete all sessions from database
+		deletedCount, err := txSessionRepo.DeleteAllUserSessions(ctx, userID)
+		if err != nil {
+			return fmt.Errorf("failed to delete user sessions: %w", err)
+		}
+		logger.Infof("Deleted %d sessions for user %s", len(deletedCount), userID)
+
+		return nil
+	})
+
 	if err != nil {
-		logger.Errorf("Failed to delete user sessions: %v", err)
+		logger.Errorf("Failed to revoke all tokens for user %s: %v", userID, err)
 		return fmt.Errorf("failed to revoke tokens")
 	}
 
-	if len(tokenHashes) == 0 {
-		logger.Info("No tokens to revoke for user %s", userID)
-		return nil
-	}
+	// Invalidate device version cache for both device types (fire-and-forget)
+	go func() {
+		bgCtx := context.Background()
+		webKey := keys.User.DeviceVersion(userID, string(shared.DeviceWeb))
+		mobileKey := keys.User.DeviceVersion(userID, string(shared.DeviceMobile))
 
-	// Mark all tokens as revoked in Redis cache using HSET (MUST succeed)
-	revokedKey := keys.User.RevokedTokens(userID)
-	tokenMap := make(map[string]interface{})
-	for _, tokenHash := range tokenHashes {
-		tokenMap[tokenHash] = "1"
-	}
+		if err := s.rclient.Client.Del(bgCtx, webKey, mobileKey).Err(); err != nil {
+			logger.Warnf("Failed to invalidate device version cache: %v", err)
+		}
+	}()
 
-	if err := s.rclient.Client.HSet(ctx, revokedKey, tokenMap).Err(); err != nil {
-		logger.Errorf("Failed to mark tokens as revoked in Redis: %v", err)
-		return fmt.Errorf("failed to complete token revocation")
-	}
-
-	// Set TTL on the revoked tokens hash (15 minutes)
-	if err := s.rclient.Client.Expire(ctx, revokedKey, keys.TTLRevokedToken).Err(); err != nil {
-		logger.Errorf("Failed to set TTL on revoked tokens: %v", err)
-		return fmt.Errorf("failed to complete token revocation")
-	}
-
-	logger.Info("Successfully revoked %d tokens for user %s", len(tokenHashes), userID)
+	logger.Infof("Successfully invalidated all tokens for user %s across all devices", userID)
 	return nil
 }
 
 // ValidateAccessToken validates an access token and returns its claims
-func (s *AuthService) ValidateAccessToken(tokenString string) (*jwt.RegisteredClaims, error) {
+func (s *AuthService) ValidateAccessToken(tokenString string) (*auth.CustomClaims, error) {
 	return s.parseAndValidateToken(tokenString)
 }
 
+// ValidateAccessTokenWithVersion validates an access token and checks device version
+// This is used by middleware to ensure tokens are not invalidated
+func (s *AuthService) ValidateAccessTokenWithVersion(ctx context.Context, tokenString string) (*auth.CustomClaims, error) {
+	// Parse and validate token structure
+	claims, err := s.parseAndValidateToken(tokenString)
+	if err != nil {
+		return nil, err
+	}
+
+	userID := claims.Subject
+	deviceType := claims.DeviceType
+	deviceVersion := claims.DeviceVersion
+
+	// Validate device version with Redis/DB
+	cacheKey := keys.User.DeviceVersion(userID, deviceType)
+
+	// Try Redis first
+	cachedVersion, err := s.rclient.Client.Get(ctx, cacheKey).Int()
+	if err == nil {
+		// Version found in cache
+		if cachedVersion != deviceVersion {
+			logger.Warnf("Device version mismatch for user %s device %s: token=%d, current=%d", userID, deviceType, deviceVersion, cachedVersion)
+			return nil, fmt.Errorf("SESSION_INVALIDATED")
+		}
+	} else {
+		// Redis miss - fallback to DB
+		dbVersion, err := s.deviceVersionRepo.GetDeviceVersion(ctx, userID, deviceType)
+		if err != nil {
+			logger.Errorf("Failed to get device version from DB: %v", err)
+			return nil, fmt.Errorf("failed to validate session")
+		}
+
+		if dbVersion != deviceVersion {
+			logger.Warnf("Device version mismatch for user %s device %s: token=%d, current=%d", userID, deviceType, deviceVersion, dbVersion)
+			return nil, fmt.Errorf("SESSION_INVALIDATED")
+		}
+
+		// Cache the version for future requests
+		go func() {
+			bgCtx := context.Background()
+			if err := s.rclient.Client.Set(bgCtx, cacheKey, dbVersion, keys.TTLDeviceVersion).Err(); err != nil {
+				logger.Warnf("Failed to cache device version: %v", err)
+			}
+		}()
+	}
+
+	return claims, nil
+}
+
+// ValidateAccessTokenWithVersionAndRoles validates token, checks device version, and fetches user roles
+// Uses Redis pipeline for efficient single network call, with DB fallback for cache misses
+// This is the most efficient method for middleware that needs both validation and roles
+// Returns: claims, roles (as interface{}), error
+func (s *AuthService) ValidateAccessTokenWithVersionAndRoles(ctx context.Context, tokenString string) (*auth.CustomClaims, interface{}, error) {
+	// Parse and validate token structure
+	claims, err := s.parseAndValidateToken(tokenString)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	userID := claims.Subject
+	deviceType := claims.DeviceType
+	deviceVersion := claims.DeviceVersion
+
+	// Prepare Redis keys
+	versionKey := keys.User.DeviceVersion(userID, deviceType)
+	rolesKey := keys.Business.UserRoles(userID)
+
+	// Use Redis pipeline to fetch both in one network call
+	pipe := s.rclient.Client.Pipeline()
+	versionCmd := pipe.Get(ctx, versionKey)
+	rolesCmd := pipe.Get(ctx, rolesKey)
+	_, err = pipe.Exec(ctx)
+
+	var cachedVersion int
+	var userRoles []*business.BusinessUserRelation
+	versionCacheHit := false
+	rolesCacheHit := false
+
+	// Check version result
+	if versionCmd.Err() == nil {
+		cachedVersion, _ = versionCmd.Int()
+		versionCacheHit = true
+	}
+
+	// Check roles result
+	if rolesCmd.Err() == nil {
+		if rolesJSON := rolesCmd.Val(); rolesJSON != "" {
+			if err := json.Unmarshal([]byte(rolesJSON), &userRoles); err == nil {
+				rolesCacheHit = true
+			}
+		}
+	}
+
+	// If both are in cache, validate version and return
+	if versionCacheHit && rolesCacheHit {
+		if cachedVersion != deviceVersion {
+			logger.Warnf("Device version mismatch for user %s device %s: token=%d, current=%d", userID, deviceType, deviceVersion, cachedVersion)
+			return nil, nil, fmt.Errorf("SESSION_INVALIDATED")
+		}
+		return claims, userRoles, nil
+	}
+
+	// Cache miss for one or both - fetch from DB
+	logger.Infof("Cache miss - fetching version and/or roles from DB for user %s", userID)
+
+	var dbVersion int
+	var dbRoles interface{}
+
+	// If BOTH version and roles are cache misses, use combined query (1 DB call)
+	if !versionCacheHit && !rolesCacheHit {
+		logger.Infof("Both cache misses - using combined query for user %s", userID)
+		var rolesData interface{}
+		dbVersion, rolesData, err = s.deviceVersionRepo.GetDeviceVersionWithRoles(ctx, userID, deviceType)
+		if err != nil {
+			logger.Errorf("Failed to get device version and roles from DB: %v", err)
+			return nil, nil, fmt.Errorf("failed to validate session")
+		}
+
+		// Convert []map[string]interface{} to []*business.BusinessUserRelation
+		if roleMaps, ok := rolesData.([]map[string]interface{}); ok {
+			convertedRoles := make([]*business.BusinessUserRelation, 0, len(roleMaps))
+			for _, roleMap := range roleMaps {
+				rel := &business.BusinessUserRelation{
+					UserID:       getString(roleMap, "userid"),
+					BID:          getString(roleMap, "bid"),
+					Role:         shared.UserRole(getString(roleMap, "role")),
+					RoleClaim:    shared.UserRole(getString(roleMap, "roleClaim")),
+					AddedAt:      getString(roleMap, "addedAt"),
+					KybInitiated: getBool(roleMap, "kybInitiated"),
+					KycNeeded:    getBool(roleMap, "kycNeeded"),
+					Timestamp:    getString(roleMap, "timestamp"),
+				}
+				convertedRoles = append(convertedRoles, rel)
+			}
+			dbRoles = convertedRoles
+		} else {
+			dbRoles = []*business.BusinessUserRelation{}
+		}
+	} else {
+		// Partial cache hit - fetch only what's missing
+		if !versionCacheHit {
+			dbVersion, err = s.deviceVersionRepo.GetDeviceVersion(ctx, userID, deviceType)
+			if err != nil {
+				logger.Errorf("Failed to get device version from DB: %v", err)
+				return nil, nil, fmt.Errorf("failed to validate session")
+			}
+		} else {
+			dbVersion = cachedVersion
+		}
+
+		if !rolesCacheHit {
+			rolesFromDB, err := s.businessUserRelRepo.FindByUser(ctx, userID)
+			if err != nil {
+				logger.Warnf("Failed to fetch user roles from DB: %v", err)
+				dbRoles = []*business.BusinessUserRelation{} // Empty slice on error
+			} else {
+				dbRoles = rolesFromDB
+			}
+		} else {
+			dbRoles = userRoles
+		}
+	}
+
+	// Validate device version
+	if dbVersion != deviceVersion {
+		logger.Warnf("Device version mismatch for user %s device %s: token=%d, current=%d", userID, deviceType, deviceVersion, dbVersion)
+		return nil, nil, fmt.Errorf("SESSION_INVALIDATED")
+	}
+
+	// Cache the results asynchronously (fire-and-forget)
+	go func() {
+		bgCtx := context.Background()
+
+		if !versionCacheHit {
+			if err := s.rclient.Client.Set(bgCtx, versionKey, dbVersion, keys.TTLDeviceVersion).Err(); err != nil {
+				logger.Warnf("Failed to cache device version: %v", err)
+			}
+		}
+
+		if !rolesCacheHit {
+			if err := s.rclient.SetJSON(bgCtx, rolesKey, dbRoles, keys.TTLUserRoles); err != nil {
+				logger.Warnf("Failed to cache user roles: %v", err)
+			}
+		}
+	}()
+
+	return claims, dbRoles, nil
+}
+
 // parseAndValidateToken is a helper to parse and validate any JWT token
-func (s *AuthService) parseAndValidateToken(tokenString string) (*jwt.RegisteredClaims, error) {
-	token, err := jwt.ParseWithClaims(tokenString, &jwt.RegisteredClaims{}, func(token *jwt.Token) (interface{}, error) {
+func (s *AuthService) parseAndValidateToken(tokenString string) (*auth.CustomClaims, error) {
+	token, err := jwt.ParseWithClaims(tokenString, &auth.CustomClaims{}, func(token *jwt.Token) (interface{}, error) {
 		// Verify signing algorithm
 		if token.Method.Alg() != jwt.SigningMethodHS256.Name {
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
@@ -271,7 +569,7 @@ func (s *AuthService) parseAndValidateToken(tokenString string) (*jwt.Registered
 		return nil, fmt.Errorf("invalid token")
 	}
 
-	claims, ok := token.Claims.(*jwt.RegisteredClaims)
+	claims, ok := token.Claims.(*auth.CustomClaims)
 	if !ok {
 		return nil, fmt.Errorf("invalid token claims")
 	}
@@ -403,6 +701,25 @@ func (s *AuthService) GetRedisClient() *redis.RedisClient {
 	return s.rclient
 }
 
+// Helper functions for map value extraction
+func getString(m map[string]interface{}, key string) string {
+	if val, ok := m[key]; ok && val != nil {
+		if str, ok := val.(string); ok {
+			return str
+		}
+	}
+	return ""
+}
+
+func getBool(m map[string]interface{}, key string) bool {
+	if val, ok := m[key]; ok && val != nil {
+		if b, ok := val.(bool); ok {
+			return b
+		}
+	}
+	return false
+}
+
 // Signup handles complete user registration flow
 func (s *AuthService) Signup(ctx context.Context, email, password string) (*auth.SignupResponse, error) {
 	logger.Info("Processing signup for email: %s", email)
@@ -454,8 +771,8 @@ func (s *AuthService) Signup(ctx context.Context, email, password string) (*auth
 }
 
 // Login handles complete login flow with token pair generation
-func (s *AuthService) Login(ctx context.Context, email, password, userAgent string) (*auth.LoginResponse, error) {
-	logger.Info("Processing login for email: %s", email)
+func (s *AuthService) Login(ctx context.Context, email, password, userAgent, deviceType string) (*auth.LoginResponse, error) {
+	logger.Info("Processing login for email: %s, device: %s", email, deviceType)
 
 	// Validate input
 	if email == "" || password == "" {
@@ -485,8 +802,8 @@ func (s *AuthService) Login(ctx context.Context, email, password, userAgent stri
 		return nil, fmt.Errorf("invalid email or password")
 	}
 
-	// Create token pair
-	accessToken, refreshToken, err := s.CreateTokenPair(ctx, userObj.Id, userAgent)
+	// Create token pair with device information
+	accessToken, refreshToken, err := s.CreateTokenPair(ctx, userObj.Id, userAgent, deviceType)
 	if err != nil {
 		logger.Errorf("Failed to create token pair: %v", err)
 		return nil, fmt.Errorf("failed to create authentication tokens")

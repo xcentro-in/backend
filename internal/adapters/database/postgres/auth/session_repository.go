@@ -29,16 +29,16 @@ func (r *PgSessionRepository) WithTx(tx interface{}) auth.SessionRepository {
 	}
 }
 
-// CreateSession creates a new refresh token session
-func (r *PgSessionRepository) CreateSession(ctx context.Context, userID, tokenHash string, expiresAt time.Time, userAgent string) (string, error) {
+// CreateSession creates a new refresh token session with device information
+func (r *PgSessionRepository) CreateSession(ctx context.Context, userID, tokenHash string, expiresAt time.Time, userAgent string, deviceType string, deviceVersion int) (string, error) {
 	query := `
-		INSERT INTO xcentro.user_tokens (user_id, refresh_token_hash, expires_at, user_agent)
-		VALUES ($1, $2, $3, $4)
+		INSERT INTO xcentro.user_tokens (user_id, refresh_token_hash, expires_at, user_agent, device_type, device_version)
+		VALUES ($1, $2, $3, $4, $5, $6)
 		RETURNING session_id
 	`
 
 	var sessionID string
-	err := r.querier.QueryRow(ctx, query, userID, tokenHash, expiresAt, userAgent).Scan(&sessionID)
+	err := r.querier.QueryRow(ctx, query, userID, tokenHash, expiresAt, userAgent, deviceType, deviceVersion).Scan(&sessionID)
 	if err != nil {
 		return "", fmt.Errorf("failed to create session: %w", err)
 	}
@@ -188,4 +188,42 @@ func (r *PgSessionRepository) GetAllUserSessions(ctx context.Context, userID str
 	}
 
 	return sessions, nil
+}
+
+// CountSessionsByDevice counts active sessions for a user by device type
+func (r *PgSessionRepository) CountSessionsByDevice(ctx context.Context, userID string, deviceType string) (int, error) {
+	query := `
+		SELECT COUNT(*)
+		FROM xcentro.user_tokens
+		WHERE user_id = $1 AND device_type = $2 AND expires_at > NOW()
+	`
+
+	var count int
+	err := r.querier.QueryRow(ctx, query, userID, deviceType).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("failed to count sessions by device: %w", err)
+	}
+
+	return count, nil
+}
+
+// DeleteOldestSessionByDevice deletes the oldest session for a user by device type
+func (r *PgSessionRepository) DeleteOldestSessionByDevice(ctx context.Context, userID string, deviceType string) error {
+	query := `
+		DELETE FROM xcentro.user_tokens
+		WHERE session_id = (
+			SELECT session_id
+			FROM xcentro.user_tokens
+			WHERE user_id = $1 AND device_type = $2
+			ORDER BY created_at ASC
+			LIMIT 1
+		)
+	`
+
+	_, err := r.querier.Exec(ctx, query, userID, deviceType)
+	if err != nil {
+		return fmt.Errorf("failed to delete oldest session by device: %w", err)
+	}
+
+	return nil
 }
