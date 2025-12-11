@@ -47,6 +47,8 @@ type JWTSecretConfig struct {
 	SecretKey          string        `json:"secret_key" env:"JWT_SECRET_KEY" env-required:"true"`
 	AccessTokenExpiry  time.Duration `json:"access_token_expiry" env:"JWT_ACCESS_TOKEN_EXPIRY" env-default:"1h"`
 	RefreshTokenExpiry time.Duration `json:"refresh_token_expiry" env:"JWT_REFRESH_TOKEN_EXPIRY" env-default:"720h"` // 30 days
+	MaxWebSessions     int           `json:"max_web_sessions" env:"JWT_MAX_WEB_SESSIONS" env-default:"3"`
+	MaxMobileSessions  int           `json:"max_mobile_sessions" env:"JWT_MAX_MOBILE_SESSIONS" env-default:"5"`
 }
 
 // BcryptConfig holds bcrypt password hashing configuration.

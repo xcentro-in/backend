@@ -493,14 +493,14 @@ func (h *CallbackHandler) handleMockPGCallback(c echo.Context) error {
 		fmt.Println("🔄 Updating payment status...")
 
 		metadata := map[string]any{
-			"callback_received_at":      time.Now().Format(time.RFC3339),
-			"callback_type":             "payment_status",
-			"gateway":                   "mockpg",
-			"mock_gateway_payment_id":   callback.GatewayPaymentID,
-			"payment_method":            callback.PaymentMethod,
-			"processed_at":              callback.ProcessedAt,
-			"merchant_id":               callback.MerchantID,
-			"mock_simulation":           true,
+			"callback_received_at":    time.Now().Format(time.RFC3339),
+			"callback_type":           "payment_status",
+			"gateway":                 "mockpg",
+			"mock_gateway_payment_id": callback.GatewayPaymentID,
+			"payment_method":          callback.PaymentMethod,
+			"processed_at":            callback.ProcessedAt,
+			"merchant_id":             callback.MerchantID,
+			"mock_simulation":         true,
 		}
 
 		if err := h.paymentRepo.UpdatePaymentStatus(ctx, pmt.ID, newStatus, metadata); err != nil {
@@ -680,14 +680,6 @@ func (h *CallbackHandler) handleTokenizationAfterPayment(ctx context.Context, pm
 		"payment_id", pmt.ID)
 
 	return nil
-}
-
-// min returns the minimum of two integers
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 // ============================================================================
@@ -894,17 +886,17 @@ func (h *CallbackHandler) handlePostPaymentUpdate(
 			paymentIDStr := pmt.ID
 			err := notification.TriggerMulticast(
 				ctx,
-				pmt.BusinessID,                              // business_id
-				corenotification.EventPaymentCompleted,      // event_type
-				"Payment Successful",                        // title
-				fmt.Sprintf("Payment of ₹%.2f has been processed successfully via", amountINR), // body
-				corenotification.RoleOwner,                  // minimum_role (owner only)
+				pmt.BusinessID,                         // business_id
+				corenotification.EventPaymentCompleted, // event_type
+				"Payment Successful",                   // title
+				fmt.Sprintf("Payment of ₹%.2f has been processed successfully", amountINR), // body
+				corenotification.RoleOwner, // minimum_role (owner only)
 				nil,
-				corenotification.EntityReferences{           // entities
+				corenotification.EntityReferences{ // entities
 					BusinessID: &pmt.BusinessID,
 					PaymentID:  &paymentIDStr,
 				},
-				[]corenotification.ActionButton{             // actions
+				[]corenotification.ActionButton{ // actions
 					{
 						Type: corenotification.ButtonTypeNeutral,
 						Text: "View Details",

@@ -8,8 +8,8 @@ import (
 // TTL constants for different cache types
 const (
 	// User-related TTLs
-	TTLUserProfile  = 5 * time.Minute  // User profile data
-	TTLRevokedToken = 15 * time.Minute // Revoked refresh tokens (15 minutes)
+	TTLUserProfile   = 5 * time.Minute // User profile data
+	TTLDeviceVersion = 1 * time.Hour   // Device JWT version (1 hour, explicitly invalidated on change)
 
 	// Business-related TTLs
 	TTLBusinessDetails = 10 * time.Minute // Business details
@@ -65,11 +65,11 @@ func (featureFlagsKeys) Global() string {
 	return fmt.Sprintf("%s:feature_flags", keyPrefix)
 }
 
-// RevokedTokens returns cache key for user's revoked refresh tokens (Redis hash)
-// Pattern: xcentro:user:{userId}:token
-// Usage: HSET key tokenHash 1, HEXISTS key tokenHash
-func (userKeys) RevokedTokens(userID string) string {
-	return fmt.Sprintf("%s:user:%s:token", keyPrefix, userID)
+// DeviceVersion returns cache key for user's device JWT version number
+// Pattern: xcentro:user:{userId}:device:{deviceType}:version
+// Stores the current version number for session invalidation
+func (userKeys) DeviceVersion(userID string, deviceType string) string {
+	return fmt.Sprintf("%s:user:%s:device:%s:version", keyPrefix, userID, deviceType)
 }
 
 // InvalidateUser invalidates all user-related cache keys (helper for bulk invalidation)
