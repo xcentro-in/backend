@@ -1240,8 +1240,8 @@ func (r *PostgresVoucherRepository) GetVoucherListForBusiness(ctx context.Contex
 			-- Calculate bill payment status
 			CASE
 				WHEN p.payment_id IS NOT NULL AND p.status = 'success' THEN 'paid'
-				WHEN p.payment_id IS NULL AND v.invoice_due_date IS NOT NULL AND v.invoice_due_date <= CURRENT_DATE THEN 'overdue'
-				WHEN p.payment_id IS NULL AND (v.invoice_due_date IS NULL OR v.invoice_due_date > CURRENT_DATE) THEN 'open'
+				WHEN p.payment_id IS NULL AND v.invoice_due_date IS NOT NULL AND v.invoice_due_date < CURRENT_DATE THEN 'overdue'
+				WHEN p.payment_id IS NULL AND (v.invoice_due_date IS NULL OR v.invoice_due_date >= CURRENT_DATE) THEN 'open'
 				ELSE 'open'
 			END as bill_status,
 			-- Get latest approval status (if any)
@@ -1345,9 +1345,9 @@ func buildStatusCondition(status voucher.BillPaymentStatus) string {
 	case voucher.BillStatusPaid:
 		return "p.payment_id IS NOT NULL AND p.status = 'success'"
 	case voucher.BillStatusOverdue:
-		return "p.payment_id IS NULL AND v.invoice_due_date IS NOT NULL AND v.invoice_due_date <= CURRENT_DATE"
+		return "p.payment_id IS NULL AND v.invoice_due_date IS NOT NULL AND v.invoice_due_date < CURRENT_DATE"
 	case voucher.BillStatusOpen:
-		return "p.payment_id IS NULL AND (v.invoice_due_date IS NULL OR v.invoice_due_date > CURRENT_DATE)"
+		return "p.payment_id IS NULL AND (v.invoice_due_date IS NULL OR v.invoice_due_date >= CURRENT_DATE)"
 	default:
 		return "TRUE" // No filtering
 	}
