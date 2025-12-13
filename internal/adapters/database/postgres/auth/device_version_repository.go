@@ -103,7 +103,7 @@ func (r *PgDeviceVersionRepository) GetDeviceVersionWithRoles(ctx context.Contex
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			// No version exists yet - return default version 1 with empty roles
-			return 1, []interface{}{}, nil
+			return 1, []map[string]interface{}{}, nil
 		}
 		return 0, nil, fmt.Errorf("failed to get device version with roles: %w", err)
 	}
