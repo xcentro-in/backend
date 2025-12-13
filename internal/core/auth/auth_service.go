@@ -14,7 +14,6 @@ type AuthService interface {
 	RevokeAllUserTokens(ctx context.Context, userID string) error
 	ValidateAccessToken(tokenString string) (*CustomClaims, error)
 	ValidateAccessTokenWithVersion(ctx context.Context, tokenString string) (*CustomClaims, error)
-	ValidateAccessTokenWithVersionAndRoles(ctx context.Context, tokenString string) (claims *CustomClaims, roles interface{}, err error)
 
 	// Password utilities (internal use)
 	HashPassword(password string) (string, error)
