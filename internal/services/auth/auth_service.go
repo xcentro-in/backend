@@ -2,7 +2,6 @@ package auth
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"time"
 
@@ -410,147 +409,6 @@ func (s *AuthService) ValidateAccessTokenWithVersion(ctx context.Context, tokenS
 	return claims, nil
 }
 
-// ValidateAccessTokenWithVersionAndRoles validates token, checks device version, and fetches user roles
-// Uses Redis pipeline for efficient single network call, with DB fallback for cache misses
-// This is the most efficient method for middleware that needs both validation and roles
-// Returns: claims, roles (as interface{}), error
-func (s *AuthService) ValidateAccessTokenWithVersionAndRoles(ctx context.Context, tokenString string) (*auth.CustomClaims, interface{}, error) {
-	// Parse and validate token structure
-	claims, err := s.parseAndValidateToken(tokenString)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	userID := claims.Subject
-	deviceType := claims.DeviceType
-	deviceVersion := claims.DeviceVersion
-
-	// Prepare Redis keys
-	versionKey := keys.User.DeviceVersion(userID, deviceType)
-	rolesKey := keys.Business.UserRoles(userID)
-
-	// Use Redis pipeline to fetch both in one network call
-	pipe := s.rclient.Client.Pipeline()
-	versionCmd := pipe.Get(ctx, versionKey)
-	rolesCmd := pipe.Get(ctx, rolesKey)
-	_, err = pipe.Exec(ctx)
-
-	var cachedVersion int
-	var userRoles []*business.BusinessUserRelation
-	versionCacheHit := false
-	rolesCacheHit := false
-
-	// Check version result
-	if versionCmd.Err() == nil {
-		cachedVersion, _ = versionCmd.Int()
-		versionCacheHit = true
-	}
-
-	// Check roles result
-	if rolesCmd.Err() == nil {
-		if rolesJSON := rolesCmd.Val(); rolesJSON != "" {
-			if err := json.Unmarshal([]byte(rolesJSON), &userRoles); err == nil {
-				rolesCacheHit = true
-			}
-		}
-	}
-
-	// If both are in cache, validate version and return
-	if versionCacheHit && rolesCacheHit {
-		if cachedVersion != deviceVersion {
-			logger.Warnf("Device version mismatch for user %s device %s: token=%d, current=%d", userID, deviceType, deviceVersion, cachedVersion)
-			return nil, nil, fmt.Errorf("SESSION_INVALIDATED")
-		}
-		return claims, userRoles, nil
-	}
-
-	// Cache miss for one or both - fetch from DB
-	logger.Infof("Cache miss - fetching version and/or roles from DB for user %s", userID)
-
-	var dbVersion int
-	var dbRoles interface{}
-
-	// If BOTH version and roles are cache misses, use combined query (1 DB call)
-	if !versionCacheHit && !rolesCacheHit {
-		logger.Infof("Both cache misses - using combined query for user %s", userID)
-		var rolesData interface{}
-		dbVersion, rolesData, err = s.deviceVersionRepo.GetDeviceVersionWithRoles(ctx, userID, deviceType)
-		if err != nil {
-			logger.Errorf("Failed to get device version and roles from DB: %v", err)
-			return nil, nil, fmt.Errorf("failed to validate session")
-		}
-
-		// Convert []map[string]interface{} to []*business.BusinessUserRelation
-		if roleMaps, ok := rolesData.([]map[string]interface{}); ok {
-			convertedRoles := make([]*business.BusinessUserRelation, 0, len(roleMaps))
-			for _, roleMap := range roleMaps {
-				rel := &business.BusinessUserRelation{
-					UserID:       getString(roleMap, "userid"),
-					BID:          getString(roleMap, "bid"),
-					Role:         shared.UserRole(getString(roleMap, "role")),
-					RoleClaim:    shared.UserRole(getString(roleMap, "roleClaim")),
-					AddedAt:      getString(roleMap, "addedAt"),
-					KybInitiated: getBool(roleMap, "kybInitiated"),
-					KycNeeded:    getBool(roleMap, "kycNeeded"),
-					Timestamp:    getString(roleMap, "timestamp"),
-				}
-				convertedRoles = append(convertedRoles, rel)
-			}
-			dbRoles = convertedRoles
-		} else {
-			dbRoles = []*business.BusinessUserRelation{}
-		}
-	} else {
-		// Partial cache hit - fetch only what's missing
-		if !versionCacheHit {
-			dbVersion, err = s.deviceVersionRepo.GetDeviceVersion(ctx, userID, deviceType)
-			if err != nil {
-				logger.Errorf("Failed to get device version from DB: %v", err)
-				return nil, nil, fmt.Errorf("failed to validate session")
-			}
-		} else {
-			dbVersion = cachedVersion
-		}
-
-		if !rolesCacheHit {
-			rolesFromDB, err := s.businessUserRelRepo.FindByUser(ctx, userID)
-			if err != nil {
-				logger.Warnf("Failed to fetch user roles from DB: %v", err)
-				dbRoles = []*business.BusinessUserRelation{} // Empty slice on error
-			} else {
-				dbRoles = rolesFromDB
-			}
-		} else {
-			dbRoles = userRoles
-		}
-	}
-
-	// Validate device version
-	if dbVersion != deviceVersion {
-		logger.Warnf("Device version mismatch for user %s device %s: token=%d, current=%d", userID, deviceType, deviceVersion, dbVersion)
-		return nil, nil, fmt.Errorf("SESSION_INVALIDATED")
-	}
-
-	// Cache the results asynchronously (fire-and-forget)
-	go func() {
-		bgCtx := context.Background()
-
-		if !versionCacheHit {
-			if err := s.rclient.Client.Set(bgCtx, versionKey, dbVersion, keys.TTLDeviceVersion).Err(); err != nil {
-				logger.Warnf("Failed to cache device version: %v", err)
-			}
-		}
-
-		if !rolesCacheHit {
-			if err := s.rclient.SetJSON(bgCtx, rolesKey, dbRoles, keys.TTLUserRoles); err != nil {
-				logger.Warnf("Failed to cache user roles: %v", err)
-			}
-		}
-	}()
-
-	return claims, dbRoles, nil
-}
-
 // parseAndValidateToken is a helper to parse and validate any JWT token
 func (s *AuthService) parseAndValidateToken(tokenString string) (*auth.CustomClaims, error) {
 	token, err := jwt.ParseWithClaims(tokenString, &auth.CustomClaims{}, func(token *jwt.Token) (interface{}, error) {
@@ -699,25 +557,6 @@ func (s *AuthService) ComparePassword(hashedPassword, password string) error {
 // GetRedisClient returns the Redis client
 func (s *AuthService) GetRedisClient() *redis.RedisClient {
 	return s.rclient
-}
-
-// Helper functions for map value extraction
-func getString(m map[string]interface{}, key string) string {
-	if val, ok := m[key]; ok && val != nil {
-		if str, ok := val.(string); ok {
-			return str
-		}
-	}
-	return ""
-}
-
-func getBool(m map[string]interface{}, key string) bool {
-	if val, ok := m[key]; ok && val != nil {
-		if b, ok := val.(bool); ok {
-			return b
-		}
-	}
-	return false
 }
 
 // Signup handles complete user registration flow

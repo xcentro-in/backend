@@ -2,7 +2,6 @@ package auth
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
@@ -69,55 +68,6 @@ func (r *PgDeviceVersionRepository) IncrementDeviceVersion(ctx context.Context, 
 	}
 
 	return newVersion, nil
-}
-
-// GetDeviceVersionWithRoles retrieves device version and user roles in a single query
-func (r *PgDeviceVersionRepository) GetDeviceVersionWithRoles(ctx context.Context, userID string, deviceType string) (int, interface{}, error) {
-	query := `
-		SELECT
-			udv.current_version,
-			COALESCE(
-				json_agg(
-					json_build_object(
-						'userid', bur.user_id,
-						'bid', bur.bid,
-						'role', bur.role,
-						'roleClaim', bur.role_claim,
-						'addedAt', bur.added_at::text,
-						'kybInitiated', bur.kyb_initiated,
-						'kycNeeded', bur.kyc_needed,
-						'timestamp', COALESCE(bur.updated_at::text, '')
-					)
-				) FILTER (WHERE bur.user_id IS NOT NULL),
-				'[]'::json
-			) as roles
-		FROM xcentro.user_device_versions udv
-		LEFT JOIN xcentro.business_user_relation bur ON bur.user_id = udv.user_id
-		WHERE udv.user_id = $1 AND udv.device_type = $2
-		GROUP BY udv.current_version
-	`
-
-	var version int
-	var rolesJSON []byte
-	err := r.querier.QueryRow(ctx, query, userID, deviceType).Scan(&version, &rolesJSON)
-	if err != nil {
-		if err == pgx.ErrNoRows {
-			// No version exists yet - return default version 1 with empty roles
-			return 1, []map[string]interface{}{}, nil
-		}
-		return 0, nil, fmt.Errorf("failed to get device version with roles: %w", err)
-	}
-
-	// Parse JSON into raw slice first
-	var rolesRaw []map[string]interface{}
-	if err := json.Unmarshal(rolesJSON, &rolesRaw); err != nil {
-		return 0, nil, fmt.Errorf("failed to unmarshal roles: %w", err)
-	}
-
-	// Convert to proper business.BusinessUserRelation slice
-	// This is needed because the query returns JSON which needs to be converted
-	// to match the type returned by businessUserRelRepo.FindByUser()
-	return version, rolesRaw, nil
 }
 
 // UpsertDeviceVersion creates or updates device version
