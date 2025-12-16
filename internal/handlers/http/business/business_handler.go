@@ -67,19 +67,21 @@ func RegisterBusinessRoutes(e *echo.Group, businessService business.BusinessServ
 
 	// Onboarding routes
 	onboardingGroup := businessGroup.Group("/onboard")
-	onboardingGroup.POST("/init", handler.InitiateOnboarding)
-	onboardingGroup.POST("/complete", handler.CompleteOnboarding)
+	onboardingGroup.POST("/init", handler.InitiateOnboarding, middleware.TurnstileMiddleware())
+	onboardingGroup.POST("/complete", handler.CompleteOnboarding, middleware.TurnstileMiddleware())
 	onboardingGroup.GET("/status", handler.GetOnboardingStatus)
 	onboardingGroup.GET("/upload", handler.UploadKYBDocuments)
-	onboardingGroup.POST("/confirm-upload", handler.ConfirmKYBDocumentsUpload)
+	onboardingGroup.POST("/confirm-upload", handler.ConfirmKYBDocumentsUpload, middleware.TurnstileMiddleware())
 
 	// Invite user route
-	businessGroup.POST("/invite-user", handler.InviteUser)
+	businessGroup.POST("/invite-user", handler.InviteUser, middleware.TurnstileMiddleware())
 
 	// User management routes
 	businessGroup.GET("/users", handler.ListBusinessUsers)
-	businessGroup.POST("/users/update", handler.UpdateBusinessUser)
-	businessGroup.DELETE("/users", handler.RemoveBusinessUser)
+	// TODO: fix APi signature, why to pass ID in bodoy? - should be passed in params
+	// TODO: chose a consistent APi signature when dealing with resources
+	businessGroup.POST("/users/update", handler.UpdateBusinessUser, middleware.TurnstileMiddleware())
+	businessGroup.DELETE("/users", handler.RemoveBusinessUser, middleware.TurnstileMiddleware())
 }
 
 func (h *BusinessHandler) UploadKYBDocuments(c echo.Context) error {

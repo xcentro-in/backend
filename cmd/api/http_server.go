@@ -108,6 +108,7 @@ func (s *xcentroServer) registerGlobalMiddleware() {
 			"Origin",
 			"Cache-Control",
 			"X-CSRF-Token",
+			"CF-Turnstile-Token",
 		},
 		AllowMethods: []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"},
 		ExposeHeaders: []string{
@@ -155,11 +156,7 @@ func buildSecureConfig(env, frontendURL string) middleware.SecureConfig {
 }
 
 func (s *xcentroServer) loadConfig() {
-	cfg, err := config.Load(".env")
-	if err != nil {
-		s.log.Errorf("Failed to load config: %v", err)
-		panic(err)
-	}
+	cfg := config.MustLoad(".env") // Uses singleton - stores in loadedCfg
 	s.log.Info("Config loaded successfully")
 	s.meta.config = cfg
 }

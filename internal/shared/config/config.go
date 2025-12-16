@@ -40,6 +40,7 @@ type Config struct {
 	Logger                LoggerConfig                `json:"logger"`
 	OpsOAuth              OpsOAuthConfig              `json:"ops_oauth"`
 	OpsTokenEncryption    OpsTokenEncryptionConfig    `json:"ops_token_encryption"`
+	Turnstile             TurnstileConfig             `json:"turnstile"`
 }
 
 // JWTSecretConfig holds JWT secret configuration.
@@ -314,6 +315,12 @@ type OpsTokenEncryptionConfig struct {
 	EncryptionKey string `json:"-" env:"OPS_TOKEN_ENCRYPTION_KEY" env-required:"true"` // AES-256-GCM key for encrypting OIDC refresh tokens (32 bytes)
 }
 
+// TurnstileConfig holds Cloudflare Turnstile configuration for bot protection.
+type TurnstileConfig struct {
+	SecretKey string `json:"-" env:"TURNSTILE_SECRET_KEY"` // Cloudflare Turnstile secret key (sensitive, optional - if empty, middleware is disabled)
+	Enabled   bool   `json:"enabled" env:"TURNSTILE_ENABLED" env-default:"false"` // Enable/disable Turnstile verification
+}
+
 // RateLimiterConfig holds rate limiter configuration for token-bucket algorithm.
 type RateLimiterConfig struct {
 	Enabled                      bool          `json:"enabled" env:"RATE_LIMITER_ENABLED" env-default:"true"`
@@ -371,6 +378,14 @@ func MustLoad(path string) Config {
 	})
 	if loadErr != nil {
 		log.Fatalf("configuration error: %v", loadErr)
+	}
+	return loadedCfg
+}
+
+// Get returns the loaded configuration (must call MustLoad first).
+func Get() Config {
+	if loadErr != nil {
+		log.Fatalf("configuration not loaded: %v", loadErr)
 	}
 	return loadedCfg
 }
@@ -443,5 +458,6 @@ func (c Config) Safe() Config {
 	c.BankAccountEncryption.EncryptionKey = "***REDACTED***"
 	c.OpsOAuth.ClientSecret = "***REDACTED***"
 	c.OpsTokenEncryption.EncryptionKey = "***REDACTED***"
+	c.Turnstile.SecretKey = "***REDACTED***"
 	return c
 }

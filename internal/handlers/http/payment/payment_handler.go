@@ -1400,13 +1400,13 @@ func RegisterPaymentRoutes(
 	group.Use(ratelimiter.MiddlewareDefault())
 
 	// Core payment operations
-	group.POST("/get_fee_rules", handler.GetFeeRules)
-	group.POST("/tokenize", handler.Tokenize)
-	group.POST("/make_payment", handler.MakePayment)
-	group.POST("/retry", handler.RetryPayment) // Retry failed/pending payment
+	group.POST("/get_fee_rules", handler.GetFeeRules, middleware.TurnstileMiddleware())
+	group.POST("/tokenize", handler.Tokenize, middleware.TurnstileMiddleware())
+	group.POST("/make_payment", handler.MakePayment, middleware.TurnstileMiddleware())
+	group.POST("/retry", handler.RetryPayment, middleware.TurnstileMiddleware()) // Retry failed/pending payment
 
 	// Phase 10: Payment source selection with context-aware fees
-	group.POST("/get_payment_sources_with_fees", handler.GetPaymentSourcesWithFees)
+	group.POST("/get_payment_sources_with_fees", handler.GetPaymentSourcesWithFees, middleware.TurnstileMiddleware())
 
 	// Payment list and details for dashboard/history
 	group.GET("/list", handler.GetPaymentList)

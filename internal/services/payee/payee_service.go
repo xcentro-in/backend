@@ -809,7 +809,7 @@ func (s *PayeeService) onboardEmployee(ctx context.Context, req payee.OnboardPay
 	// Default account_type to "current" if not provided
 	accountType = employee.AccountType
 	if accountType == "" {
-		accountType = payment.BankAccountTypeCurrent
+		accountType = payment.BankAccountTypeSavings
 		s.logger.WarnWith("account_type not provided, defaulting to current")
 	}
 

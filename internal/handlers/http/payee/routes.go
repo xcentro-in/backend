@@ -18,12 +18,15 @@ func RegisterPayeeRoutes(group *echo.Group, payeeService *payeeSvc.PayeeService,
 	group.Use(ratelimiter.MiddlewareDefault())
 
 	// Payee management endpoints
-	group.POST("", handler.OnboardPayee)                       // POST /payees
+	group.POST("", handler.OnboardPayee, middleware.TurnstileMiddleware())                       // POST /payees
 	group.GET("", handler.GetPayees)                           // GET /payees
 	group.GET("/details/:relation_id", handler.GetPayeeDetails) // GET /payees/details/:relation_id
 	group.GET("/:relation_id/acc_details", handler.GetPayeeAccountDetails) // GET /payees/:relation_id/acc_details - Lightweight account details
-	group.PATCH("/:relation_id/status", handler.UpdatePayeeStatus) // PATCH /payees/:relation_id/status - Toggle active status
-	group.DELETE("/:payee_id/accounts/:account_id", handler.DeactivatePayee) // DELETE /payees/:id/accounts/:id (kept for now)
+	group.PATCH("/:relation_id/status", handler.UpdatePayeeStatus, middleware.TurnstileMiddleware()) // PATCH /payees/:relation_id/status - Toggle active status
+	// TODO: wrongly implemented, path is suppsoed to update the payee details
+	// TODO: Delete is supposed to deactivate
+	// TODO: frontend is calling PATCH to deactivate, need to FIX IT !
+	group.DELETE("/:payee_id/accounts/:account_id", handler.DeactivatePayee, middleware.TurnstileMiddleware()) // DELETE /payees/:id/accounts/:id (kept for now)
 
 	// Employee remuneration document upload endpoints
 	group.GET("/remuneration/upload-url", handler.GetRemunerationDocumentUploadURL)         // GET /payees/remuneration/upload-url?relation_id=xxx
