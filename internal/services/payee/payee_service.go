@@ -218,10 +218,28 @@ func (s *PayeeService) onboardVendor(ctx context.Context, req payee.OnboardPayee
 	var bankAccount *payee.PayeeBankAccount
 
 	if existingAccount != nil {
-		s.logger.InfoWith("Bank account already exists, reusing Castler beneficiary ID",
+		s.logger.InfoWith("Bank account already exists globally, checking if business already has this account",
 			"existing_account_id", existingAccount.AccountID,
 			"castler_beneficiary_id", existingAccount.CastlerBeneficiaryID)
-		// Reuse the existing account (with its Castler beneficiary ID)
+
+		// ANTI-FRAUD CHECK: Ensure this business doesn't already have this account
+		// This prevents same account being used for multiple payees within one business
+		accountExists, err := s.businessPayeeRelationRepo.AccountExistsForBusiness(ctx, req.BusinessID, existingAccount.AccountID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to check account existence for business: %w", err)
+		}
+
+		if accountExists {
+			s.logger.ErrorWith("Vendor onboarding rejected - account already exists for this business",
+				"business_id", req.BusinessID,
+				"account_id", existingAccount.AccountID)
+			return nil, fmt.Errorf("this bank account is already registered with another payee in your business")
+		}
+
+		// Account exists globally but NOT for this business - safe to reuse
+		s.logger.InfoWith("Account not found for this business, reusing Castler beneficiary ID",
+			"business_id", req.BusinessID,
+			"castler_beneficiary_id", existingAccount.CastlerBeneficiaryID)
 		bankAccount = existingAccount
 	} else {
 		s.logger.InfoWith("Bank account not found, initiating penny drop verification")
@@ -814,10 +832,28 @@ func (s *PayeeService) onboardEmployee(ctx context.Context, req payee.OnboardPay
 	}
 
 	if existingAccount != nil {
-		s.logger.InfoWith("Bank account already exists, reusing Castler beneficiary ID",
+		s.logger.InfoWith("Bank account already exists globally, checking if business already has this account",
 			"existing_account_id", existingAccount.AccountID,
 			"castler_beneficiary_id", existingAccount.CastlerBeneficiaryID)
-		// Reuse the existing account (with its Castler beneficiary ID)
+
+		// ANTI-FRAUD CHECK: Ensure this business doesn't already have this account
+		// This prevents same account being used for multiple payees within one business
+		accountExists, err := s.businessPayeeRelationRepo.AccountExistsForBusiness(ctx, req.BusinessID, existingAccount.AccountID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to check account existence for business: %w", err)
+		}
+
+		if accountExists {
+			s.logger.ErrorWith("Employee onboarding rejected - account already exists for this business",
+				"business_id", req.BusinessID,
+				"account_id", existingAccount.AccountID)
+			return nil, fmt.Errorf("this bank account is already registered with another payee in your business")
+		}
+
+		// Account exists globally but NOT for this business - safe to reuse
+		s.logger.InfoWith("Account not found for this business, reusing Castler beneficiary ID",
+			"business_id", req.BusinessID,
+			"castler_beneficiary_id", existingAccount.CastlerBeneficiaryID)
 		bankAccount = existingAccount
 	} else {
 		// Step 4: Perform penny drop verification (only for new accounts)
@@ -834,15 +870,62 @@ func (s *PayeeService) onboardEmployee(ctx context.Context, req payee.OnboardPay
 			"account_type", bankData.AccountType,
 			"rrn", bankData.RRN)
 
-		// Step 4.1: Money rotation check (anti-fraud)
+		// Step 4.1: Validate account holder name against provided names
+		// For employees, we check if bank's name matches either:
+		// 1. The provided account_holder_name (what user claims is on account)
+		// 2. The employee's full_name (in case of name variations)
+		s.logger.InfoWith("Validating account holder name against employee names",
+			"bank_account_holder", bankData.AccountHolderName,
+			"provided_account_holder", employee.AccountHolderName,
+			"employee_full_name", employee.FullName)
+
+		// Define similarity threshold (0.7 = 70% match required)
+		const nameSimilarityThreshold = 0.7
+
+		// Check similarity against provided account holder name
+		accountHolderScore := utils.FuzzyMatch(bankData.AccountHolderName, employee.AccountHolderName)
+		fullNameScore := utils.FuzzyMatch(bankData.AccountHolderName, employee.FullName)
+
+		// Use the higher score
+		maxScore := accountHolderScore
+		matchedAgainst := "provided_account_holder_name"
+		if fullNameScore > accountHolderScore {
+			maxScore = fullNameScore
+			matchedAgainst = "employee_full_name"
+		}
+
+		s.logger.InfoWith("Name similarity check completed",
+			"account_holder_score", accountHolderScore,
+			"full_name_score", fullNameScore,
+			"max_score", maxScore,
+			"matched_against", matchedAgainst,
+			"threshold", nameSimilarityThreshold)
+
+		if maxScore < nameSimilarityThreshold {
+			s.logger.ErrorWith("Employee onboarding rejected - name mismatch",
+				"bank_account_holder", bankData.AccountHolderName,
+				"provided_account_holder", employee.AccountHolderName,
+				"employee_full_name", employee.FullName,
+				"similarity_score", maxScore,
+				"threshold", nameSimilarityThreshold)
+			return nil, fmt.Errorf("bank account holder name '%s' does not match provided names (similarity: %.2f%%, threshold: %.2f%%)",
+				bankData.AccountHolderName, maxScore*100, nameSimilarityThreshold*100)
+		}
+
+		s.logger.InfoWith("Name validation passed",
+			"score", maxScore,
+			"matched_against", matchedAgainst)
+
+		// Step 4.2: Money rotation check (anti-fraud)
 		if err := s.checkMoneyRotation(ctx, req.BusinessID, bankData.AccountHolderName); err != nil {
 			return nil, err
 		}
 
+		// Step 4.3: Onboard to Castler using the ACTUAL bank account holder name (from bank verification)
 		s.logger.InfoWith("Onboarding payee to Castler")
 		castlerPayeeResp, err := s.castlerClient.OnboardPayeeToCastler(
 			ctx,
-			req.DisplayName,
+			bankData.AccountHolderName, // Use actual bank account holder name, not display_name
 			req.ContactEmail,
 			req.ContactPhone,
 			employee.AccountNumber,
@@ -855,28 +938,16 @@ func (s *PayeeService) onboardEmployee(ctx context.Context, req payee.OnboardPay
 		s.logger.InfoWith("Castler onboarding successful",
 			"castler_payee_id", castlerPayeeResp.Result)
 
-		// // Step 5: Cross-verification (employee name vs bank account holder name)
-		// s.logger.DebugWith("Cross-verifying employee name with bank account holder name")
-		// // Mock cross-verification for now
-		// crossVerifyStatus = payee.VerificationStatusSuccess
-		// s.logger.InfoWith("Cross-verification completed successfully")
-
-		// // Fail fast: Abort if cross-verification failed
-		// if crossVerifyStatus != payee.VerificationStatusSuccess {
-		// 	s.logger.ErrorWith("Cross-verification failed, aborting onboarding", "status", crossVerifyStatus)
-		// 	return nil, fmt.Errorf("cross-verification failed: employee name does not match bank account holder name")
-		// }
-
 		// Prepare bank account entity (will be created in transaction)
-		// At this point, all verifications have passed
+		// At this point, all verifications have passed (name validation + money rotation)
 		now := time.Now()
 		bankAccount = &payee.PayeeBankAccount{
 			AccountNumber:           employee.AccountNumber,
 			AccountNumberHash:       accountHash,
 			IFSCCode:                employee.IFSCCode,
-			AccountHolderName:       employee.AccountHolderName,
-			BankName:                employee.BankName,   // Use bank name from frontend IFSC check
-			BranchName:              employee.BranchName, // Use branch name from frontend IFSC check
+			AccountHolderName:       bankData.AccountHolderName, // Use verified name from bank, not user-provided
+			BankName:                employee.BankName,          // Use bank name from frontend IFSC check
+			BranchName:              employee.BranchName,        // Use branch name from frontend IFSC check
 			AccountType:             accountType,
 			AccountLabel:            employee.AccountLabel,
 			IsActive:                true,
@@ -885,7 +956,12 @@ func (s *PayeeService) onboardEmployee(ctx context.Context, req payee.OnboardPay
 			BankVerificationStatus:  payee.VerificationStatusSuccess,
 			CrossVerificationStatus: payee.VerificationStatusSuccess,
 			VerifiedAt:              &now,
-			VerificationData:        map[string]any{"test": "test"}, // TODO: Store actual verification data
+			VerificationData: map[string]any{
+				"rrn":                    bankData.RRN,
+				"verified_account_holder": bankData.AccountHolderName,
+				"verified_account_type":   bankData.AccountType,
+				"verification_date":       now,
+			},
 		}
 	}
 
