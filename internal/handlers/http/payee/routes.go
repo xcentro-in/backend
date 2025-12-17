@@ -5,7 +5,6 @@ import (
 	"xcentro.in/internal/core/auth"
 	"xcentro.in/internal/middleware"
 	payeeSvc "xcentro.in/internal/services/payee"
-	"xcentro.in/internal/shared/ratelimiter"
 	"xcentro.in/internal/shared/logger"
 )
 
@@ -14,9 +13,7 @@ func RegisterPayeeRoutes(group *echo.Group, payeeService *payeeSvc.PayeeService,
 	handler := NewPayeeHandler(payeeService, logger.GetDefault())
 
 	// Apply JWT middleware to all payee routes
-	group.Use(middleware.JWTMiddleware(authService))
-	group.Use(ratelimiter.MiddlewareDefault())
-
+	
 	// Payee management endpoints
 	group.POST("", handler.OnboardPayee, middleware.TurnstileMiddleware())                       // POST /payees
 	group.GET("", handler.GetPayees)                           // GET /payees

@@ -216,7 +216,7 @@ func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group
 	invoiceGroup.GET("/download", invoiceUserHandler.DownloadInvoice)
 
 	// Register JWT-protected routes (authenticated user operations)
-	payment.RegisterPaymentRoutes(processPaymentGroup, paymentService, paymentSourceService, walletService, authSvc, voucherRepository, stateChangeRepository, businessPayeeRelationRepo, storedCardRepository, bankAccountRepository, logger.GetDefault())
+	payment.RegisterPaymentRoutes(processPaymentGroup, paymentService, paymentSourceService, walletService, authSvc, voucherRepository, stateChangeRepository, businessPayeeRelationRepo, storedCardRepository, bankAccountRepository, businessUserRelRepo, clients.GetRedisClient(), logger.GetDefault())
 
 	walletGroup := group.Group("/wallet")
 	payment.RegisterWalletRoutes(walletGroup, paymentService, paymentSourceService, walletService, authSvc, storedCardRepository, businessUserRelRepo, clients.rcache, logger.GetDefault())
@@ -246,12 +246,16 @@ func registerV1UserRoutes(clients *externalClients, cfg *config.Config, group *e
 
 func registerV1PayeeRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
 	factory := &serviceFactory{clients, cfg}
-	_, _, _, _, _, busSvc, authSvc := factory.createCoreServices(nil)
+	_, _, _, businessUserRelationRepo, _, busSvc, authSvc := factory.createCoreServices(nil)
 
 	payeeFactory := payeeSvc.NewPayeeServiceFactory(clients.db, clients.txManager, busSvc, cfg)
 	payeeService := payeeFactory.NewPayeeService()
 
 	payeeGroup := group.Group("/payees")
+	payeeGroup.Use(middleware.JWTMiddleware(authSvc))
+	payeeGroup.Use(middleware.BusinessAccessMiddleware(businessUserRelationRepo, clients.GetRedisClient()))
+	payeeGroup.Use(ratelimiter.MiddlewareDefault())
+
 	payee.RegisterPayeeRoutes(payeeGroup, payeeService, authSvc)
 }
 

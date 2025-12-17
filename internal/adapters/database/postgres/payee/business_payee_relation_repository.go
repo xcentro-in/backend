@@ -518,6 +518,35 @@ func (r *PgBusinessPayeeRelationRepository) RelationExists(ctx context.Context, 
 	return exists, nil
 }
 
+// AccountExistsForBusiness checks if a bank account is already used by any payee in this business
+// This prevents fraud where the same account appears multiple times for different payees within one business
+func (r *PgBusinessPayeeRelationRepository) AccountExistsForBusiness(ctx context.Context, businessID, accountID string) (bool, error) {
+	query := `
+		SELECT EXISTS(
+			SELECT 1
+			FROM xcentro.business_payee_relation
+			WHERE business_id = $1 AND account_id = $2
+		)
+	`
+
+	var exists bool
+	err := r.querier.QueryRow(ctx, query, businessID, accountID).Scan(&exists)
+	if err != nil {
+		r.logger.ErrorWith("failed to check if account exists for business",
+			"error", err,
+			"business_id", businessID,
+			"account_id", accountID)
+		return false, fmt.Errorf("failed to check if account exists for business: %w", err)
+	}
+
+	r.logger.DebugWith("account existence check completed",
+		"business_id", businessID,
+		"account_id", accountID,
+		"exists", exists)
+
+	return exists, nil
+}
+
 // GetPayeeCount returns the count of active payees for a business
 func (r *PgBusinessPayeeRelationRepository) GetPayeeCount(ctx context.Context, businessID string) (int, error) {
 	query := `

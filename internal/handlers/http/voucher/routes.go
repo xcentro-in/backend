@@ -16,6 +16,7 @@ func RegisterVoucherRoutes(group *echo.Group, voucherService voucherSvc.VoucherS
 	handler := NewVoucherHandler(voucherService, logger.GetDefault())
 
 	group.Use(middleware.JWTMiddleware(authService))
+	group.Use(middleware.BusinessAccessMiddleware(businessUserRelRepo, rclient))
 	group.Use(middleware.BusinessRolesMiddleware(businessUserRelRepo, rclient))
 	group.Use(ratelimiter.MiddlewareDefault())
 

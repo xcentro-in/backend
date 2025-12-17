@@ -1391,12 +1391,15 @@ func RegisterPaymentRoutes(
 	payeeRelationRepo payeeCore.BusinessPayeeRelationRepository,
 	storedCardRepo payment.StoredCardRepository,
 	bankAccountRepo payment.BankAccountRepository,
+	businessUserRelRepo business.BusinessUserRelationRepository,
+	rclient *redis_client.RedisClient,
 	log *logger.Logger,
 ) {
 	handler := NewPaymentHandler(paymentService, paymentSourceService, walletService, voucherRepo, stateChangeRepo, payeeRelationRepo, storedCardRepo, bankAccountRepo, log)
 
 	// Apply JWT middleware to all payment routes
 	group.Use(middleware.JWTMiddleware(authService))
+	group.Use(middleware.BusinessAccessMiddleware(businessUserRelRepo, rclient))
 	group.Use(ratelimiter.MiddlewareDefault())
 
 	// Core payment operations
@@ -1423,8 +1426,8 @@ func RegisterWalletRoutes(group *echo.Group, paymentService *payments.PaymentSer
 	group.Use(ratelimiter.MiddlewareDefault())
 
 	// Wallet operations
-	group.GET("", handler.FetchWallet)                            // GET /wallet - fetch wallet with inactive cards
-	group.POST("/add_source", handler.AddPaymentSource)           // POST /wallet/add_source - add new payment source
+	group.GET("", handler.FetchWallet)                                                                                                // GET /wallet - fetch wallet with inactive cards
+	group.POST("/add_source", handler.AddPaymentSource)                                                                               // POST /wallet/add_source - add new payment source
 	group.PATCH("/cards/:card_id/status", handler.UpdateCardStatus, middleware.BusinessRolesMiddleware(businessUserRelRepo, rclient)) // PATCH /wallet/cards/:card_id/status - toggle card active/inactive (owner only)
 }
 
@@ -1810,19 +1813,19 @@ func (h *PaymentHandler) RetryPayment(c echo.Context) error {
 		"status":  "success",
 		"message": "Payment retry initiated successfully",
 		"data": map[string]any{
-			"payment_id":            retryResponse.PaymentID,
-			"original_payment_id":   req.OriginalPaymentID,
-			"status":                string(retryResponse.Status),
-			"amount":                retryResponse.Amount,
-			"total_amount":          retryResponse.TotalAmount,
-			"fee_amount":            retryResponse.FeeAmount,
-			"currency":              string(retryResponse.Currency),
-			"payment_method":        string(retryResponse.PaymentMethod),
-			"gateway_used":          string(retryResponse.GatewayUsed),
-			"redirect_url":          retryResponse.RedirectURL,
-			"created_at":            retryResponse.CreatedAt.Format("2006-01-02T15:04:05Z"),
-			"is_retry":              true,
-			"retry_count":           1,
+			"payment_id":          retryResponse.PaymentID,
+			"original_payment_id": req.OriginalPaymentID,
+			"status":              string(retryResponse.Status),
+			"amount":              retryResponse.Amount,
+			"total_amount":        retryResponse.TotalAmount,
+			"fee_amount":          retryResponse.FeeAmount,
+			"currency":            string(retryResponse.Currency),
+			"payment_method":      string(retryResponse.PaymentMethod),
+			"gateway_used":        string(retryResponse.GatewayUsed),
+			"redirect_url":        retryResponse.RedirectURL,
+			"created_at":          retryResponse.CreatedAt.Format("2006-01-02T15:04:05Z"),
+			"is_retry":            true,
+			"retry_count":         1,
 		},
 	}
 
