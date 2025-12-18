@@ -1257,13 +1257,8 @@ func (h *PaymentHandler) GetPaymentSourcesWithFees(c echo.Context) error {
 	}
 
 	// Validate business_id
-	if req.BusinessID == "" {
-		h.logger.Warn("business_id is missing in request")
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "missing_business_id",
-			"message": "business_id is required in request body",
-		})
-	}
+	businessID := c.Request().Header.Get("X-Business-ID")
+	req.BusinessID = businessID
 
 	// Round base amount to nearest integer (paise)
 	baseAmountInt := int64(req.BaseAmount + 0.5) // Round to nearest int64
