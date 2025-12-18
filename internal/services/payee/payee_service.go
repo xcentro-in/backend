@@ -64,6 +64,9 @@ type PayeeService struct {
 	// S3 configuration for document uploads
 	s3Config *config.S3Config
 
+	// Validation configuration
+	validationConfig *config.PayeeValidationConfig
+
 	// Logger
 	logger *logger.Logger
 }
@@ -87,6 +90,7 @@ func NewPayeeService(
 	txManager client.TxManager,
 	businessService business.BusinessService,
 	s3Config *config.S3Config,
+	validationConfig *config.PayeeValidationConfig,
 	logger *logger.Logger,
 ) *PayeeService {
 	return &PayeeService{
@@ -107,6 +111,7 @@ func NewPayeeService(
 		txManager:                  txManager,
 		businessService:            businessService,
 		s3Config:                   s3Config,
+		validationConfig:           validationConfig,
 		logger:                     logger,
 	}
 }
@@ -263,8 +268,8 @@ func (s *PayeeService) onboardVendor(ctx context.Context, req payee.OnboardPayee
 			"account_type", bankData.AccountType,
 			"rrn", bankData.RRN)
 
-		// Step 5.1: Validate account holder name against GSTIN names (if vendor is new)
-		if needsVendorCreation && gstResp != nil {
+		// Step 5.1: Validate account holder name against GSTIN names (if vendor is new and strict validation enabled)
+		if s.validationConfig.StrictValidationEnabled && needsVendorCreation && gstResp != nil {
 			// Define similarity threshold (0.7 = 70% match required)
 			const nameSimilarityThreshold = 0.7
 
@@ -277,6 +282,10 @@ func (s *PayeeService) onboardVendor(ctx context.Context, req payee.OnboardPayee
 			if err != nil {
 				return nil, fmt.Errorf("name validation failed: %w", err)
 			}
+		} else if !s.validationConfig.StrictValidationEnabled {
+			s.logger.WarnWith("Strict validation DISABLED - skipping GSTIN name validation",
+				"bank_account_holder", bankData.AccountHolderName,
+				"gstin", vendor.GSTIN)
 		}
 
 		// Step 6: Money rotation check (anti-fraud)
@@ -870,51 +879,57 @@ func (s *PayeeService) onboardEmployee(ctx context.Context, req payee.OnboardPay
 			"account_type", bankData.AccountType,
 			"rrn", bankData.RRN)
 
-		// Step 4.1: Validate account holder name against provided names
+		// Step 4.1: Validate account holder name against provided names (if strict validation enabled)
 		// For employees, we check if bank's name matches either:
 		// 1. The provided account_holder_name (what user claims is on account)
 		// 2. The employee's full_name (in case of name variations)
-		s.logger.InfoWith("Validating account holder name against employee names",
-			"bank_account_holder", bankData.AccountHolderName,
-			"provided_account_holder", employee.AccountHolderName,
-			"employee_full_name", employee.FullName)
-
-		// Define similarity threshold (0.7 = 70% match required)
-		const nameSimilarityThreshold = 0.7
-
-		// Check similarity against provided account holder name
-		accountHolderScore := utils.FuzzyMatch(bankData.AccountHolderName, employee.AccountHolderName)
-		fullNameScore := utils.FuzzyMatch(bankData.AccountHolderName, employee.FullName)
-
-		// Use the higher score
-		maxScore := accountHolderScore
-		matchedAgainst := "provided_account_holder_name"
-		if fullNameScore > accountHolderScore {
-			maxScore = fullNameScore
-			matchedAgainst = "employee_full_name"
-		}
-
-		s.logger.InfoWith("Name similarity check completed",
-			"account_holder_score", accountHolderScore,
-			"full_name_score", fullNameScore,
-			"max_score", maxScore,
-			"matched_against", matchedAgainst,
-			"threshold", nameSimilarityThreshold)
-
-		if maxScore < nameSimilarityThreshold {
-			s.logger.ErrorWith("Employee onboarding rejected - name mismatch",
+		if s.validationConfig.StrictValidationEnabled {
+			s.logger.InfoWith("Validating account holder name against employee names (strict mode)",
 				"bank_account_holder", bankData.AccountHolderName,
 				"provided_account_holder", employee.AccountHolderName,
-				"employee_full_name", employee.FullName,
-				"similarity_score", maxScore,
-				"threshold", nameSimilarityThreshold)
-			return nil, fmt.Errorf("bank account holder name '%s' does not match provided names (similarity: %.2f%%, threshold: %.2f%%)",
-				bankData.AccountHolderName, maxScore*100, nameSimilarityThreshold*100)
-		}
+				"employee_full_name", employee.FullName)
 
-		s.logger.InfoWith("Name validation passed",
-			"score", maxScore,
-			"matched_against", matchedAgainst)
+			// Define similarity threshold (0.7 = 70% match required)
+			const nameSimilarityThreshold = 0.7
+
+			// Check similarity against provided account holder name
+			accountHolderScore := utils.FuzzyMatch(bankData.AccountHolderName, employee.AccountHolderName)
+			fullNameScore := utils.FuzzyMatch(bankData.AccountHolderName, employee.FullName)
+
+			// Use the higher score
+			maxScore := accountHolderScore
+			matchedAgainst := "provided_account_holder_name"
+			if fullNameScore > accountHolderScore {
+				maxScore = fullNameScore
+				matchedAgainst = "employee_full_name"
+			}
+
+			s.logger.InfoWith("Name similarity check completed",
+				"account_holder_score", accountHolderScore,
+				"full_name_score", fullNameScore,
+				"max_score", maxScore,
+				"matched_against", matchedAgainst,
+				"threshold", nameSimilarityThreshold)
+
+			if maxScore < nameSimilarityThreshold {
+				s.logger.ErrorWith("Employee onboarding rejected - name mismatch",
+					"bank_account_holder", bankData.AccountHolderName,
+					"provided_account_holder", employee.AccountHolderName,
+					"employee_full_name", employee.FullName,
+					"similarity_score", maxScore,
+					"threshold", nameSimilarityThreshold)
+				return nil, fmt.Errorf("bank account holder name '%s' does not match provided names (similarity: %.2f%%, threshold: %.2f%%)",
+					bankData.AccountHolderName, maxScore*100, nameSimilarityThreshold*100)
+			}
+
+			s.logger.InfoWith("Name validation passed",
+				"score", maxScore,
+				"matched_against", matchedAgainst)
+		} else {
+			s.logger.WarnWith("Strict validation DISABLED - skipping account holder name validation",
+				"bank_account_holder", bankData.AccountHolderName,
+				"provided_account_holder", employee.AccountHolderName)
+		}
 
 		// Step 4.2: Money rotation check (anti-fraud)
 		if err := s.checkMoneyRotation(ctx, req.BusinessID, bankData.AccountHolderName); err != nil {
@@ -1375,7 +1390,15 @@ func (s *PayeeService) maskAccountNumber(accountNumber string) string {
 // name against the business's proprietors (from GST data) and directors (from CID data).
 // This prevents scenarios where business owners create fake vendors with their own bank accounts.
 func (s *PayeeService) checkMoneyRotation(ctx context.Context, businessID string, payeeAccountHolderName string) error {
-	s.logger.InfoWith("Performing money rotation check",
+	// Skip money rotation check if strict validation is disabled
+	if !s.validationConfig.StrictValidationEnabled {
+		s.logger.WarnWith("Strict validation DISABLED - skipping money rotation check",
+			"business_id", businessID,
+			"account_holder", payeeAccountHolderName)
+		return nil
+	}
+
+	s.logger.InfoWith("Performing money rotation check (strict mode)",
 		"business_id", businessID,
 		"account_holder", payeeAccountHolderName)
 
