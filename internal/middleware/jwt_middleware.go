@@ -57,8 +57,9 @@ func JWTMiddleware(authService auth.AuthService) echo.MiddlewareFunc {
 				})
 			}
 
-			// Set userID in context for downstream handlers
+			// Set userID and sessionID in context for downstream handlers
 			c.Set("userId", claims.Subject)
+			c.Set("sessionId", claims.SessionID)
 
 			// Continue to next handler
 			return next(c)

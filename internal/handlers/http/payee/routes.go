@@ -5,15 +5,18 @@ import (
 	"xcentro.in/internal/core/auth"
 	"xcentro.in/internal/middleware"
 	payeeSvc "xcentro.in/internal/services/payee"
+	"xcentro.in/internal/shared/httputil"
 	"xcentro.in/internal/shared/logger"
 )
 
 // RegisterPayeeRoutes registers all payee-related routes
-func RegisterPayeeRoutes(group *echo.Group, payeeService *payeeSvc.PayeeService, authService auth.AuthService) {
+func RegisterPayeeRoutes(group *echo.Group, payeeService *payeeSvc.PayeeService, authService auth.AuthService, cookieManager *httputil.CookieManager) {
 	handler := NewPayeeHandler(payeeService, logger.GetDefault())
 
-	// Apply JWT middleware to all payee routes
-	
+	// Apply CSRF middleware to all payee routes (JWT and BusinessAccess already applied in cmd/api/routes.go)
+	group.Use(middleware.CSRFMiddleware(cookieManager))
+
+
 	// Payee management endpoints
 	group.POST("", handler.OnboardPayee, middleware.TurnstileMiddleware())                       // POST /payees
 	group.GET("", handler.GetPayees)                           // GET /payees

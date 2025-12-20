@@ -20,6 +20,7 @@ import (
 	"xcentro.in/internal/handlers/http/common"
 	"xcentro.in/internal/middleware"
 	"xcentro.in/internal/services/payments"
+	"xcentro.in/internal/shared/httputil"
 	"xcentro.in/internal/shared/logger"
 	"xcentro.in/internal/shared/ratelimiter"
 )
@@ -1388,13 +1389,15 @@ func RegisterPaymentRoutes(
 	bankAccountRepo payment.BankAccountRepository,
 	businessUserRelRepo business.BusinessUserRelationRepository,
 	rclient *redis_client.RedisClient,
+	cookieManager *httputil.CookieManager,
 	log *logger.Logger,
 ) {
 	handler := NewPaymentHandler(paymentService, paymentSourceService, walletService, voucherRepo, stateChangeRepo, payeeRelationRepo, storedCardRepo, bankAccountRepo, log)
 
-	// Apply JWT middleware to all payment routes
+	// Apply JWT, BusinessAccess, and CSRF middleware to all payment routes
 	group.Use(middleware.JWTMiddleware(authService))
 	group.Use(middleware.BusinessAccessMiddleware(businessUserRelRepo, rclient))
+	group.Use(middleware.CSRFMiddleware(cookieManager))
 	group.Use(ratelimiter.MiddlewareDefault())
 
 	// Core payment operations
@@ -1412,12 +1415,13 @@ func RegisterPaymentRoutes(
 }
 
 // RegisterWalletRoutes registers all wallet management routes
-func RegisterWalletRoutes(group *echo.Group, paymentService *payments.PaymentService, paymentSourceService *payments.PaymentSourceService, walletService business_rules.WalletService, authService auth.AuthService, storedCardRepo payment.StoredCardRepository, businessUserRelRepo business.BusinessUserRelationRepository, rclient *redis_client.RedisClient, log *logger.Logger) {
+func RegisterWalletRoutes(group *echo.Group, paymentService *payments.PaymentService, paymentSourceService *payments.PaymentSourceService, walletService business_rules.WalletService, authService auth.AuthService, storedCardRepo payment.StoredCardRepository, businessUserRelRepo business.BusinessUserRelationRepository, rclient *redis_client.RedisClient, cookieManager *httputil.CookieManager, log *logger.Logger) {
 	// Wallet routes need storedCardRepo for card status updates
 	handler := NewPaymentHandler(paymentService, paymentSourceService, walletService, nil, nil, nil, storedCardRepo, nil, log)
 
-	// Apply JWT middleware to all wallet routes
+	// Apply JWT and CSRF middleware to all wallet routes
 	group.Use(middleware.JWTMiddleware(authService))
+	group.Use(middleware.CSRFMiddleware(cookieManager))
 	group.Use(ratelimiter.MiddlewareDefault())
 
 	// Wallet operations

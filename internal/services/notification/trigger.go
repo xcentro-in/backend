@@ -8,6 +8,7 @@ import (
 
 	"xcentro.in/internal/adapters/database/postgres/client"
 	"xcentro.in/internal/core/notification"
+	"xcentro.in/internal/shared/logger"
 )
 
 // Global notification trigger (singleton pattern)
@@ -71,7 +72,7 @@ func TriggerAsync(ctx context.Context, payload notification.NotificationEventPay
 	go func() {
 		if err := Trigger(ctx, payload); err != nil {
 			// Log error but don't fail (fire and forget)
-			fmt.Printf("Failed to trigger notification (async): %v\n", err)
+			logger.Errorf("Failed to trigger notification (async): %v", err)
 		}
 	}()
 }

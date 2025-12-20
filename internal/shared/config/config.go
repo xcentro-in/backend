@@ -8,6 +8,7 @@ import (
 
 	"github.com/ilyakaznacheev/cleanenv"
 	"xcentro.in/internal/adapters/database/postgres/client"
+	"xcentro.in/internal/shared/logger"
 )
 
 // Config holds the application configuration.
@@ -365,7 +366,7 @@ func Load(path string) (Config, error) {
 	var err error
 
 	if err = cleanenv.ReadConfig(path, &cfg); err != nil {
-		fmt.Printf("error reading config file: %v\n", err)
+		logger.Warnf("error reading config file: %v", err)
 		if err = cleanenv.ReadEnv(&cfg); err != nil {
 			return cfg, fmt.Errorf("read env: %w", err)
 		}

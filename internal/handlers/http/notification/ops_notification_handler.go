@@ -6,6 +6,8 @@ import (
 	"github.com/labstack/echo/v4"
 	"xcentro.in/internal/core/auth"
 	coreNotification "xcentro.in/internal/core/notification"
+	"xcentro.in/internal/middleware"
+	"xcentro.in/internal/shared/httputil"
 	"xcentro.in/internal/shared/logger"
 	"xcentro.in/internal/shared/validator"
 )
@@ -27,12 +29,13 @@ func NewOpsNotificationHandler(notificationService coreNotification.Notification
 }
 
 // RegisterOpsNotificationRoutes registers all ops dashboard notification routes
-func RegisterOpsNotificationRoutes(e *echo.Group, notificationService coreNotification.NotificationService, authService auth.AuthService) {
-	handler := NewOpsNotificationHandler(notificationService, authService)
+func RegisterOpsNotificationRoutes(e *echo.Group, notificationService coreNotification.NotificationService, cookieManager *httputil.CookieManager) {
+	handler := NewOpsNotificationHandler(notificationService, nil)
 
 	notificationGroup := e.Group("/notification")
 
-	// Bulk trigger endpoint
+	// POST routes (require CSRF middleware)
+	notificationGroup.Use(middleware.CSRFMiddleware(cookieManager))
 	notificationGroup.POST("/trigger", handler.TriggerNotifications)
 }
 

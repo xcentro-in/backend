@@ -1,6 +1,9 @@
 package httputil
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"net/http"
 	"time"
 
@@ -14,6 +17,7 @@ type CookieManager struct {
 	refreshTokenPath string // Base path for refresh token cookies (/v1/auth or /ops/v1/auth)
 	accessTokenName  string // Cookie name for access token (access_token or ops_access_token)
 	refreshTokenName string // Cookie name for refresh token (refresh_token or ops_refresh_token)
+	csrfTokenName    string // Cookie name for CSRF token (csrf_token or ops_csrf_token)
 }
 
 // NewCookieManager creates a new cookie manager for regular API (path: /v1/auth)
@@ -23,6 +27,7 @@ func NewCookieManager(cfg *config.Config) *CookieManager {
 		refreshTokenPath: "/v1/auth",
 		accessTokenName:  "access_token",
 		refreshTokenName: "refresh_token",
+		csrfTokenName:    "csrf_token",
 	}
 }
 
@@ -33,6 +38,7 @@ func NewOpsCookieManager(cfg *config.Config) *CookieManager {
 		refreshTokenPath: "/ops/v1/auth",
 		accessTokenName:  "ops_access_token",
 		refreshTokenName: "ops_refresh_token",
+		csrfTokenName:    "ops_csrf_token",
 	}
 }
 
@@ -120,8 +126,60 @@ func (cm *CookieManager) ClearRefreshTokenCookie(c echo.Context) {
 	c.SetCookie(cookie)
 }
 
-// ClearAllAuthCookies clears both access and refresh token cookies
+// ClearAllAuthCookies clears all authentication cookies (access, refresh, and CSRF tokens)
 func (cm *CookieManager) ClearAllAuthCookies(c echo.Context) {
 	cm.ClearAccessTokenCookie(c)
 	cm.ClearRefreshTokenCookie(c)
+	cm.ClearCSRFTokenCookie(c)
+}
+
+// GenerateCSRFToken generates a CSRF token using HMAC(session_id, JWT_SECRET)
+// Uses RawURLEncoding (no padding) to avoid issues with '=' being stripped from cookies
+func (cm *CookieManager) GenerateCSRFToken(sessionID string) string {
+	h := hmac.New(sha256.New, []byte(cm.config.JWT.SecretKey))
+	h.Write([]byte(sessionID))
+	return base64.RawURLEncoding.EncodeToString(h.Sum(nil))
+}
+
+// SetCSRFTokenCookie sets the CSRF token cookie (readable by JavaScript)
+// MaxAge matches refresh token expiry (720h / 30 days)
+func (cm *CookieManager) SetCSRFTokenCookie(c echo.Context, csrfToken string) {
+	maxAge := int(cm.config.JWT.RefreshTokenExpiry.Seconds())
+	cookie := &http.Cookie{
+		Name:     cm.csrfTokenName,
+		Value:    csrfToken,
+		Path:     "/",
+		HttpOnly: false, // JavaScript needs to read this
+		Secure:   cm.config.Cookie.Secure,
+		SameSite: cm.getSameSiteMode(),
+		MaxAge:   maxAge,
+	}
+	if cm.config.Cookie.Domain != "" {
+		cookie.Domain = cm.config.Cookie.Domain
+	}
+	c.SetCookie(cookie)
+}
+
+// ClearCSRFTokenCookie clears the CSRF token cookie
+func (cm *CookieManager) ClearCSRFTokenCookie(c echo.Context) {
+	cookie := &http.Cookie{
+		Name:     cm.csrfTokenName,
+		Value:    "",
+		Path:     "/",
+		HttpOnly: false,
+		Secure:   cm.config.Cookie.Secure,
+		SameSite: cm.getSameSiteMode(),
+		MaxAge:   -1,
+		Expires:  time.Unix(0, 0),
+	}
+	if cm.config.Cookie.Domain != "" {
+		cookie.Domain = cm.config.Cookie.Domain
+	}
+	c.SetCookie(cookie)
+}
+
+// ValidateCSRFToken validates the CSRF token from request header against session ID
+func (cm *CookieManager) ValidateCSRFToken(sessionID, providedToken string) bool {
+	expectedToken := cm.GenerateCSRFToken(sessionID)
+	return hmac.Equal([]byte(expectedToken), []byte(providedToken))
 }

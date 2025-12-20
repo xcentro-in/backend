@@ -148,14 +148,14 @@ type BusinessOnboardingStatusDTO struct {
 
 // InitiateOnboardingRequest represents the request to initiate business onboarding
 type InitiateOnboardingRequest struct {
-	Name  string `json:"name" validate:"required"`
+	Name  string `json:"name" validate:"required,business_name,min=2,max=200"`
 	GSTIN string `json:"gstin" validate:"required,gstin"`
 }
 
 // InviteUserRequest represents the request to invite a user to a business
 type InviteUserRequest struct {
 	Email  string          `json:"email" validate:"required,email"`
-	Name   string          `json:"name" validate:"required"`
+	Name   string          `json:"name" validate:"required,person_name,min=2,max=100"`
 	Mobile string          `json:"mobile" validate:"required,phone_in"` // Mobile number for OTP verification
 	Role   shared.UserRole `json:"role" validate:"required"`
 }

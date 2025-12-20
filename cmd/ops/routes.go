@@ -29,6 +29,7 @@ import (
 	userSvc "xcentro.in/internal/services/user"
 	"xcentro.in/internal/services/verification"
 	"xcentro.in/internal/shared/config"
+	"xcentro.in/internal/shared/httputil"
 	"xcentro.in/internal/shared/logger"
 	"xcentro.in/internal/shared/utils"
 )
@@ -40,7 +41,7 @@ type serviceFactory struct {
 }
 
 // registerOpsBusinessRoutes registers ops dashboard business routes
-func registerOpsBusinessRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
+func registerOpsBusinessRoutes(clients *externalClients, cfg *config.Config, group *echo.Group, cookieManager *httputil.CookieManager) {
 	// Create repositories
 	businessRepo := business.NewPgBusinessRepository(clients.db)
 	businessUserRelRepo := business.NewPgBusinessUserRelationRepository(clients.db)
@@ -59,11 +60,11 @@ func registerOpsBusinessRoutes(clients *externalClients, cfg *config.Config, gro
 	)
 
 	// Register routes
-	businessHandler.RegisterOpsBusinessRoutes(group, businessService, nil)
+	businessHandler.RegisterOpsBusinessRoutes(group, businessService, cookieManager)
 }
 
 // registerOpsNotificationRoutes registers ops dashboard notification routes
-func registerOpsNotificationRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
+func registerOpsNotificationRoutes(clients *externalClients, cfg *config.Config, group *echo.Group, cookieManager *httputil.CookieManager) {
 	// Create notification repositories
 	eventRepo := notificationRepo.NewPgNotificationEventRepository(clients.db)
 	userNotifRepo := notificationRepo.NewPgUserNotificationRepository(clients.db)
@@ -80,7 +81,7 @@ func registerOpsNotificationRoutes(clients *externalClients, cfg *config.Config,
 	)
 
 	// Register routes
-	notificationHandler.RegisterOpsNotificationRoutes(group, notificationService, nil)
+	notificationHandler.RegisterOpsNotificationRoutes(group, notificationService, cookieManager)
 }
 
 // registerOpsAuthRoutes registers ops dashboard authentication routes and returns the auth service
@@ -110,7 +111,7 @@ func registerOpsAuthRoutes(clients *externalClients, cfg *config.Config, group *
 }
 
 // registerOpsUserRoutes registers ops dashboard user routes
-func registerOpsUserRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
+func registerOpsUserRoutes(clients *externalClients, cfg *config.Config, group *echo.Group, cookieManager *httputil.CookieManager) {
 	// Create user repository
 	userRepository := userRepo.NewPgUserRepository(clients.db)
 
@@ -135,7 +136,7 @@ func registerOpsUserRoutes(clients *externalClients, cfg *config.Config, group *
 	)
 
 	// Register routes
-	userHandler.RegisterOpsUserRoutes(group, userService, nil)
+	userHandler.RegisterOpsUserRoutes(group, userService, cookieManager)
 }
 
 // registerOpsCollectionRoutes registers ops dashboard collection (payment) routes
@@ -225,22 +226,26 @@ func registerOpsV1Routes(s *opsDashboardServer) {
 	clients := &s.meta.clients
 	cfg := &s.meta.config
 
+	// Create ops cookie manager (for CSRF tokens)
+	opsCookieManager := httputil.NewOpsCookieManager(cfg)
+
 	// Register auth routes (public - login, callback, refresh) and get auth service
 	opsAuthService := registerOpsAuthRoutes(clients, cfg, v1)
 
-	// Create protected group with JWT middleware for all ops routes
+	// Create protected group with only JWT middleware (CSRF applied per handler as needed)
 	protectedGroup := v1.Group("")
 	protectedGroup.Use(middleware.OpsJWTMiddleware(opsAuthService, cfg))
 
-	// Register all protected route groups with JWT middleware
-	opsAuthHandler.RegisterOpsUserRoutes(protectedGroup, opsAuthService) // User profile endpoint
-	registerOpsBusinessRoutes(clients, cfg, protectedGroup)              // Business management
-	registerOpsNotificationRoutes(clients, cfg, protectedGroup)          // Notifications
-	registerOpsUserRoutes(clients, cfg, protectedGroup)                  // User management
-	registerOpsPayoutRoutes(clients, cfg, protectedGroup)                // Payouts
-	registerOpsCollectionRoutes(clients, cfg, protectedGroup)            // Collections/Payments
-	registerOpsFeeRulesRoutes(clients, cfg, protectedGroup)              // Fee rules
-	registerOpsInvoiceRoutes(clients, cfg, protectedGroup)               // Invoices
+	// Register all protected route groups
+	// Routes will apply CSRF middleware internally for state-changing operations
+	opsAuthHandler.RegisterOpsUserRoutes(protectedGroup, opsAuthService, opsCookieManager) // User profile endpoint
+	registerOpsBusinessRoutes(clients, cfg, protectedGroup, opsCookieManager)              // Business management
+	registerOpsNotificationRoutes(clients, cfg, protectedGroup, opsCookieManager)          // Notifications
+	registerOpsUserRoutes(clients, cfg, protectedGroup, opsCookieManager)                  // User management
+	registerOpsPayoutRoutes(clients, cfg, protectedGroup)                                  // Payouts
+	registerOpsCollectionRoutes(clients, cfg, protectedGroup)                              // Collections/Payments
+	registerOpsFeeRulesRoutes(clients, cfg, protectedGroup)                                // Fee rules
+	registerOpsInvoiceRoutes(clients, cfg, protectedGroup)                                 // Invoices
 }
 
 func initializeNotificationTrigger(clients *externalClients) {

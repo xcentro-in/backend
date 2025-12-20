@@ -8,6 +8,7 @@ import (
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 	"golang.org/x/oauth2"
 	redis "xcentro.in/internal/adapters/cache/redis/client"
 	"xcentro.in/internal/adapters/database/postgres/client"
@@ -191,6 +192,9 @@ func (s *OpsAuthService) HandleCallback(
 	// NOT the OIDC refresh token expiry (which is typically much longer - 90 days)
 	refreshTokenExpiry := s.jwtConfig.RefreshTokenExpiry
 
+	// Generate session ID upfront so it can be included in JWT tokens
+	sessionID := uuid.New().String()
+
 	// Use transaction to ensure atomicity of user creation + session creation
 	var internalAccessToken, internalRefreshToken string
 
@@ -203,15 +207,15 @@ func (s *OpsAuthService) HandleCallback(
 			return fmt.Errorf("failed to create/update ops user: %w", createErr)
 		}
 
-		// Generate our internal tokens (use OID as subject)
-		// Access token: includes roles for authorization
-		internalAccessToken, createErr = s.generateToken(oid, roles, accessTokenExpiry)
+		// Generate our internal tokens (use OID as subject, include session ID)
+		// Access token: includes sessionID and roles for authorization
+		internalAccessToken, createErr = s.generateToken(oid, sessionID, roles, accessTokenExpiry)
 		if createErr != nil {
 			return fmt.Errorf("failed to generate internal access token: %w", createErr)
 		}
 
-		// Refresh token: minimal claims (just OID)
-		internalRefreshToken, createErr = s.generateToken(oid, nil, refreshTokenExpiry)
+		// Refresh token: minimal claims (OID and sessionID)
+		internalRefreshToken, createErr = s.generateToken(oid, sessionID, nil, refreshTokenExpiry)
 		if createErr != nil {
 			return fmt.Errorf("failed to generate internal refresh token: %w", createErr)
 		}
@@ -219,11 +223,12 @@ func (s *OpsAuthService) HandleCallback(
 		// Hash internal refresh token for storage
 		refreshTokenHash := security.HashToken(internalRefreshToken)
 
-		// Store session with encrypted OIDC refresh token within transaction
+		// Store session with encrypted OIDC refresh token and pre-generated session ID
 		expiresAt := time.Now().Add(refreshTokenExpiry)
 		txOpsSessionRepo := s.opsSessionRepo.WithTx(tx)
-		_, createErr = txOpsSessionRepo.CreateSession(
+		createErr = txOpsSessionRepo.CreateSession(
 			ctx,
+			sessionID,
 			oid,
 			refreshTokenHash,
 			encryptedOIDCRefreshToken,
@@ -261,6 +266,7 @@ func (s *OpsAuthService) RefreshAccessToken(ctx context.Context, refreshToken st
 	}
 
 	opsUserID := claims.Subject
+	sessionID := claims.SessionID
 	refreshTokenHash := security.HashToken(refreshToken)
 
 	// Get session from database
@@ -360,8 +366,8 @@ func (s *OpsAuthService) RefreshAccessToken(ctx context.Context, refreshToken st
 		accessTokenExpiry = microsoftTokenExpiry
 	}
 
-	// Generate new internal access token with updated roles
-	newAccessToken, err := s.generateToken(oid, newRoles, accessTokenExpiry)
+	// Generate new internal access token with updated roles and session ID
+	newAccessToken, err := s.generateToken(oid, sessionID, newRoles, accessTokenExpiry)
 	if err != nil {
 		return "", fmt.Errorf("failed to generate new access token: %w", err)
 	}
@@ -391,9 +397,10 @@ func (s *OpsAuthService) ValidateAccessToken(tokenString string) (*opsauth.OpsJW
 		return nil, err
 	}
 
-	// Convert to OpsJWTClaims (only OID and roles)
+	// Convert to OpsJWTClaims (OID, session ID, and roles)
 	opsClaims := &opsauth.OpsJWTClaims{
 		Subject:   claims.Subject, // OID from Entra
+		SessionID: claims.SessionID,
 		Roles:     claims.Roles,
 		IssuedAt:  claims.IssuedAt.Unix(),
 		ExpiresAt: claims.ExpiresAt.Unix(),
@@ -429,20 +436,22 @@ func (s *OpsAuthService) GetUserProfile(ctx context.Context, opsUserID string) (
 // For security, only include minimum required data: user ID (sub) and roles
 type customClaims struct {
 	jwt.RegisteredClaims
-	Roles []string `json:"roles,omitempty"`
+	SessionID string   `json:"session_id,omitempty"`
+	Roles     []string `json:"roles,omitempty"`
 }
 
 // generateToken creates an internal JWT token (access or refresh)
-// Only includes: sub (OID), roles, exp, iat
+// Only includes: sub (OID), sessionID, roles, exp, iat
 // Email/name can be fetched from database if needed
-func (s *OpsAuthService) generateToken(opsUserID string, roles []string, expiry time.Duration) (string, error) {
+func (s *OpsAuthService) generateToken(opsUserID string, sessionID string, roles []string, expiry time.Duration) (string, error) {
 	claims := customClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			Subject:   opsUserID, // OID from Entra
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(expiry)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 		},
-		Roles: roles,
+		SessionID: sessionID,
+		Roles:     roles,
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)

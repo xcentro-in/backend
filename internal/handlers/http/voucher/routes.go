@@ -7,16 +7,18 @@ import (
 	"xcentro.in/internal/core/business"
 	"xcentro.in/internal/middleware"
 	voucherSvc "xcentro.in/internal/services/voucher"
+	"xcentro.in/internal/shared/httputil"
 	"xcentro.in/internal/shared/ratelimiter"
 	"xcentro.in/internal/shared/logger"
 )
 
 // RegisterVoucherRoutes registers all voucher-related routes
-func RegisterVoucherRoutes(group *echo.Group, voucherService voucherSvc.VoucherService, authService auth.AuthService, businessUserRelRepo business.BusinessUserRelationRepository, rclient *redisClient.RedisClient) {
+func RegisterVoucherRoutes(group *echo.Group, voucherService voucherSvc.VoucherService, authService auth.AuthService, businessUserRelRepo business.BusinessUserRelationRepository, rclient *redisClient.RedisClient, cookieManager *httputil.CookieManager) {
 	handler := NewVoucherHandler(voucherService, logger.GetDefault())
 
 	group.Use(middleware.JWTMiddleware(authService))
 	group.Use(middleware.BusinessAccessMiddleware(businessUserRelRepo, rclient))
+	group.Use(middleware.CSRFMiddleware(cookieManager))
 	group.Use(middleware.BusinessRolesMiddleware(businessUserRelRepo, rclient))
 	group.Use(ratelimiter.MiddlewareDefault())
 

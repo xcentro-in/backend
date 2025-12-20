@@ -37,9 +37,9 @@ type DBConfig struct {
 
 // NewPgxDB creates a new PGX database connection pool
 func NewPgxDB(ctx context.Context, config DBConfig) (*PgxDB, error) {
-	// Build connection string
+	// Build connection string with explicit UTC timezone
 	dsn := fmt.Sprintf(
-		"host=%s port=%d dbname=%s user=%s password=%s sslmode=%s search_path=%s",
+		"host=%s port=%d dbname=%s user=%s password=%s sslmode=%s search_path=%s timezone=UTC",
 		config.Host,
 		config.Port,
 		config.Database,

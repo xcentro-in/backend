@@ -53,6 +53,7 @@ import (
 	"xcentro.in/internal/services/verification"
 	voucherSvc "xcentro.in/internal/services/voucher"
 	"xcentro.in/internal/shared/config"
+	"xcentro.in/internal/shared/httputil"
 	"xcentro.in/internal/shared/logger"
 	"xcentro.in/internal/shared/ratelimiter"
 	"xcentro.in/internal/shared/utils"
@@ -116,7 +117,7 @@ func (f *serviceFactory) createCoreServices(verificationSvc *verification.Docume
 	return
 }
 
-func registerV1AuthRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
+func registerV1AuthRoutes(clients *externalClients, cfg *config.Config, group *echo.Group, cookieManager *httputil.CookieManager) {
 	factory := &serviceFactory{clients, cfg}
 	verificationSvc, err := verification.NewDocumentVerificationService()
 	if err != nil {
@@ -124,7 +125,7 @@ func registerV1AuthRoutes(clients *externalClients, cfg *config.Config, group *e
 	}
 
 	_, _, _, _, _, busSvc, authSvc := factory.createCoreServices(verificationSvc)
-	auth.RegisterAuthRoutes(group, authSvc, busSvc, cfg)
+	auth.RegisterAuthRoutes(group, authSvc, busSvc, cfg, cookieManager)
 
 	// Feature Flags
 	featureFlagsRepository := featureFlagsRepo.NewPgFeatureFlagsRepository(clients.db, clients.rcache)
@@ -135,7 +136,7 @@ func registerV1AuthRoutes(clients *externalClients, cfg *config.Config, group *e
 	authGroup.GET("/feature-flags", featureFlagsHandlerInstance.GetFeatureFlags)
 }
 
-func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
+func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group *echo.Group, cookieManager *httputil.CookieManager) {
 	factory := &serviceFactory{clients, cfg}
 
 	paymentRepository := paymentRepo.NewPgPaymentRepository(clients.db, cfg.BankAccountEncryption.EncryptionKey)
@@ -213,16 +214,17 @@ func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group
 	invoiceGroup := group.Group("/invoices")
 	invoiceUserHandler := invoiceHandler.NewInvoiceHandler(invoiceService, pdfGenerator)
 	invoiceGroup.Use(middleware.JWTMiddleware(authSvc))
+	invoiceGroup.Use(middleware.CSRFMiddleware(cookieManager))
 	invoiceGroup.GET("/download", invoiceUserHandler.DownloadInvoice)
 
 	// Register JWT-protected routes (authenticated user operations)
-	payment.RegisterPaymentRoutes(processPaymentGroup, paymentService, paymentSourceService, walletService, authSvc, voucherRepository, stateChangeRepository, businessPayeeRelationRepo, storedCardRepository, bankAccountRepository, businessUserRelRepo, clients.GetRedisClient(), logger.GetDefault())
+	payment.RegisterPaymentRoutes(processPaymentGroup, paymentService, paymentSourceService, walletService, authSvc, voucherRepository, stateChangeRepository, businessPayeeRelationRepo, storedCardRepository, bankAccountRepository, businessUserRelRepo, clients.rcache, cookieManager, logger.GetDefault())
 
 	walletGroup := group.Group("/wallet")
-	payment.RegisterWalletRoutes(walletGroup, paymentService, paymentSourceService, walletService, authSvc, storedCardRepository, businessUserRelRepo, clients.rcache, logger.GetDefault())
+	payment.RegisterWalletRoutes(walletGroup, paymentService, paymentSourceService, walletService, authSvc, storedCardRepository, businessUserRelRepo, clients.rcache, cookieManager, logger.GetDefault())
 }
 
-func registerV1BusinessRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
+func registerV1BusinessRoutes(clients *externalClients, cfg *config.Config, group *echo.Group, cookieManager *httputil.CookieManager) {
 	factory := &serviceFactory{clients, cfg}
 	verificationSvc, err := verification.NewDocumentVerificationService()
 	if err != nil {
@@ -230,10 +232,10 @@ func registerV1BusinessRoutes(clients *externalClients, cfg *config.Config, grou
 	}
 
 	_, _, _, businessUserRelRepo, userService, busSvc, authSvc := factory.createCoreServices(verificationSvc)
-	businessHandler.RegisterBusinessRoutes(group, busSvc, authSvc, userService, &cfg.S3, businessUserRelRepo, clients.rcache)
+	businessHandler.RegisterBusinessRoutes(group, busSvc, authSvc, userService, &cfg.S3, businessUserRelRepo, clients.rcache, cookieManager)
 }
 
-func registerV1UserRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
+func registerV1UserRoutes(clients *externalClients, cfg *config.Config, group *echo.Group, cookieManager *httputil.CookieManager) {
 	factory := &serviceFactory{clients, cfg}
 	verificationSvc, err := verification.NewDocumentVerificationService()
 	if err != nil {
@@ -241,10 +243,10 @@ func registerV1UserRoutes(clients *externalClients, cfg *config.Config, group *e
 	}
 
 	_, _, _, businessUserRelRepo, userService, _, authSvc := factory.createCoreServices(verificationSvc)
-	userHandler.RegisterUserRoutes(group, userService, authSvc, businessUserRelRepo, clients.rcache, cfg)
+	userHandler.RegisterUserRoutes(group, userService, authSvc, businessUserRelRepo, clients.rcache, cfg, cookieManager)
 }
 
-func registerV1PayeeRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
+func registerV1PayeeRoutes(clients *externalClients, cfg *config.Config, group *echo.Group, cookieManager *httputil.CookieManager) {
 	factory := &serviceFactory{clients, cfg}
 	_, _, _, businessUserRelationRepo, _, busSvc, authSvc := factory.createCoreServices(nil)
 
@@ -253,13 +255,13 @@ func registerV1PayeeRoutes(clients *externalClients, cfg *config.Config, group *
 
 	payeeGroup := group.Group("/payees")
 	payeeGroup.Use(middleware.JWTMiddleware(authSvc))
-	payeeGroup.Use(middleware.BusinessAccessMiddleware(businessUserRelationRepo, clients.GetRedisClient()))
+	payeeGroup.Use(middleware.BusinessAccessMiddleware(businessUserRelationRepo, clients.rcache))
 	payeeGroup.Use(ratelimiter.MiddlewareDefault())
 
-	payee.RegisterPayeeRoutes(payeeGroup, payeeService, authSvc)
+	payee.RegisterPayeeRoutes(payeeGroup, payeeService, authSvc, cookieManager)
 }
 
-func registerV1VoucherRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
+func registerV1VoucherRoutes(clients *externalClients, cfg *config.Config, group *echo.Group, cookieManager *httputil.CookieManager) {
 	factory := &serviceFactory{clients, cfg}
 	_, _, _, businessUserRelRepo, _, _, authSvc := factory.createCoreServices(nil)
 
@@ -271,10 +273,10 @@ func registerV1VoucherRoutes(clients *externalClients, cfg *config.Config, group
 	voucherService := voucherSvc.NewVoucherService(voucherRepository, queueRepository, voucherCoreService, businessPayeeRelationRepo, notificationEventRepo, logger.GetDefault())
 
 	voucherGroup := group.Group("/vouchers")
-	voucherHandler.RegisterVoucherRoutes(voucherGroup, voucherService, authSvc, businessUserRelRepo, clients.rcache)
+	voucherHandler.RegisterVoucherRoutes(voucherGroup, voucherService, authSvc, businessUserRelRepo, clients.rcache, cookieManager)
 }
 
-func registerV1PayoutRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
+func registerV1PayoutRoutes(clients *externalClients, cfg *config.Config, group *echo.Group, cookieManager *httputil.CookieManager) {
 	transferRepository := payoutRepo.NewPostgresPayoutTransferRepository(clients.db)
 	paymentRepository := paymentRepo.NewPgPaymentRepository(clients.db, cfg.BankAccountEncryption.EncryptionKey)
 	stateChangeRepository := paymentRepo.NewPostgresPaymentStateChangeRepository(clients.db)
@@ -291,7 +293,7 @@ func registerV1PayoutRoutes(clients *externalClients, cfg *config.Config, group 
 	// See cmd/ops/routes.go -> registerOpsPayoutRoutes() for all payout operations endpoints
 }
 
-func registerV1BatchPaymentRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
+func registerV1BatchPaymentRoutes(clients *externalClients, cfg *config.Config, group *echo.Group, cookieManager *httputil.CookieManager) {
 	factory := &serviceFactory{clients, cfg}
 	_, _, _, _, _, _, authSvc := factory.createCoreServices(nil)
 
@@ -325,6 +327,7 @@ func registerV1BatchPaymentRoutes(clients *externalClients, cfg *config.Config, 
 	// Routes
 	batchGroup := group.Group("/batch_payments")
 	batchGroup.Use(middleware.JWTMiddleware(authSvc))
+	batchGroup.Use(middleware.CSRFMiddleware(cookieManager))
 	batchGroup.Use(ratelimiter.MiddlewareDefault())
 
 	batchGroup.POST("/upload", handler.UploadCSV)
@@ -334,7 +337,7 @@ func registerV1BatchPaymentRoutes(clients *externalClients, cfg *config.Config, 
 	batchGroup.GET("/template", handler.DownloadSampleCSV) // Download sample CSV template
 }
 
-func registerV1NotificationRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
+func registerV1NotificationRoutes(clients *externalClients, cfg *config.Config, group *echo.Group, cookieManager *httputil.CookieManager) {
 	factory := &serviceFactory{clients, cfg}
 
 	userNotifRepo := notificationRepo.NewPgUserNotificationRepository(clients.db)
@@ -343,10 +346,10 @@ func registerV1NotificationRoutes(clients *externalClients, cfg *config.Config, 
 	notifService := notificationService.NewUserFacingNotificationService(eventRepo, userNotifRepo, prefsRepo, clients.txManager, clients.rcache.Client, logger.GetDefault())
 
 	_, _, _, _, _, _, authSvc := factory.createCoreServices(nil)
-	notificationHandler.RegisterNotificationRoutes(group, notifService, authSvc)
+	notificationHandler.RegisterNotificationRoutes(group, notifService, authSvc, cookieManager)
 }
 
-func registerV1DashboardRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
+func registerV1DashboardRoutes(clients *externalClients, cfg *config.Config, group *echo.Group, cookieManager *httputil.CookieManager) {
 	factory := &serviceFactory{clients, cfg}
 
 	// Create dashboard repository
@@ -362,6 +365,7 @@ func registerV1DashboardRoutes(clients *externalClients, cfg *config.Config, gro
 	_, _, _, _, _, _, authSvc := factory.createCoreServices(nil)
 
 	group.Use(middleware.JWTMiddleware(authSvc))
+	group.Use(middleware.CSRFMiddleware(cookieManager))
 	group.Use(ratelimiter.MiddlewareDefault())
 
 	// Register route with JWT middleware
@@ -378,16 +382,19 @@ func registerV1Routes(s *xcentroServer) {
 	clients := &s.meta.clients
 	cfg := &s.meta.config
 
-	registerV1AuthRoutes(clients, cfg, v1)
-	registerV1PaymentRoutes(clients, cfg, v1)
-	registerV1UserRoutes(clients, cfg, v1)
-	registerV1BusinessRoutes(clients, cfg, v1)
-	registerV1PayeeRoutes(clients, cfg, v1)
-	registerV1VoucherRoutes(clients, cfg, v1)
-	registerV1PayoutRoutes(clients, cfg, v1)
-	registerV1BatchPaymentRoutes(clients, cfg, v1)
-	registerV1NotificationRoutes(clients, cfg, v1)
-	registerV1DashboardRoutes(clients, cfg, v1)
+	// Create a single CookieManager instance for all routes
+	cookieManager := httputil.NewCookieManager(cfg)
+
+	registerV1AuthRoutes(clients, cfg, v1, cookieManager)
+	registerV1PaymentRoutes(clients, cfg, v1, cookieManager)
+	registerV1UserRoutes(clients, cfg, v1, cookieManager)
+	registerV1BusinessRoutes(clients, cfg, v1, cookieManager)
+	registerV1PayeeRoutes(clients, cfg, v1, cookieManager)
+	registerV1VoucherRoutes(clients, cfg, v1, cookieManager)
+	registerV1PayoutRoutes(clients, cfg, v1, cookieManager)
+	registerV1BatchPaymentRoutes(clients, cfg, v1, cookieManager)
+	registerV1NotificationRoutes(clients, cfg, v1, cookieManager)
+	registerV1DashboardRoutes(clients, cfg, v1, cookieManager)
 }
 
 func initializeNotificationTrigger(db client.DB) {
