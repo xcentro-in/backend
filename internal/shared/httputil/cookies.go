@@ -5,10 +5,12 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/labstack/echo/v4"
 	"xcentro.in/internal/shared/config"
+	"xcentro.in/internal/shared/logger"
 )
 
 // CookieManager handles setting and clearing authentication cookies
@@ -18,6 +20,30 @@ type CookieManager struct {
 	accessTokenName  string // Cookie name for access token (access_token or ops_access_token)
 	refreshTokenName string // Cookie name for refresh token (refresh_token or ops_refresh_token)
 	csrfTokenName    string // Cookie name for CSRF token (csrf_token or ops_csrf_token)
+	csrfDomain       string // Domain for CSRF cookie (extracted from FRONTEND_URL)
+}
+
+// extractDomainFromURL extracts the hostname from a URL for cookie domain
+// Examples:
+//   - "http://localhost:3000" → "localhost"
+//   - "https://app.xcentro.in" → "app.xcentro.in"
+//   - "https://staging-app.xcentro.in:8080" → "staging-app.xcentro.in"
+//
+// NOTE: Cookie Domain attribute does NOT support ports - only hostname
+// The browser will automatically match cookies across different ports on the same hostname
+func extractDomainFromURL(urlStr string) string {
+	if urlStr == "" {
+		return ""
+	}
+
+	// Parse URL
+	parsedURL, err := url.Parse(urlStr)
+	if err != nil {
+		return ""
+	}
+
+	// Return only hostname (browser ignores ports in cookie Domain)
+	return parsedURL.Hostname()
 }
 
 // NewCookieManager creates a new cookie manager for regular API (path: /v1/auth)
@@ -28,6 +54,7 @@ func NewCookieManager(cfg *config.Config) *CookieManager {
 		accessTokenName:  "access_token",
 		refreshTokenName: "refresh_token",
 		csrfTokenName:    "csrf_token",
+		csrfDomain:       extractDomainFromURL(cfg.Frontend.URL),
 	}
 }
 
@@ -39,6 +66,7 @@ func NewOpsCookieManager(cfg *config.Config) *CookieManager {
 		accessTokenName:  "ops_access_token",
 		refreshTokenName: "ops_refresh_token",
 		csrfTokenName:    "ops_csrf_token",
+		csrfDomain:       extractDomainFromURL(cfg.Frontend.URL),
 	}
 }
 
@@ -141,22 +169,38 @@ func (cm *CookieManager) GenerateCSRFToken(sessionID string) string {
 	return base64.RawURLEncoding.EncodeToString(h.Sum(nil))
 }
 
-// SetCSRFTokenCookie sets the CSRF token cookie (readable by JavaScript)
+// SetCSRFTokenCookie sets the CSRF token cookie (readable by JavaScript from FRONTEND_URL only)
 // MaxAge matches refresh token expiry (720h / 30 days)
+//
+// SECURITY: Domain is set to the frontend's hostname (from FRONTEND_URL config)
+// This ensures:
+//  1. Only JavaScript from the configured frontend can read this cookie
+//  2. API and OPS dashboards can have separate CSRF tokens for their respective frontends
+//  3. Malicious sites cannot read the cookie (Same-Origin Policy protection)
+//
+// Example configurations:
+//   - API: FRONTEND_URL=https://app.xcentro.in → Domain=app.xcentro.in
+//   - OPS: FRONTEND_URL=https://ops.xcentro.in → Domain=ops.xcentro.in
+//   - Local: FRONTEND_URL=http://localhost:3000 → Domain=localhost
 func (cm *CookieManager) SetCSRFTokenCookie(c echo.Context, csrfToken string) {
 	maxAge := int(cm.config.JWT.RefreshTokenExpiry.Seconds())
 	cookie := &http.Cookie{
 		Name:     cm.csrfTokenName,
 		Value:    csrfToken,
 		Path:     "/",
-		HttpOnly: false, // JavaScript needs to read this
+		HttpOnly: false, // Frontend JavaScript needs to read this to send in X-CSRF-Token header
 		Secure:   cm.config.Cookie.Secure,
 		SameSite: cm.getSameSiteMode(),
 		MaxAge:   maxAge,
 	}
-	if cm.config.Cookie.Domain != "" {
-		cookie.Domain = cm.config.Cookie.Domain
+
+	// Set Domain to frontend's hostname (extracted from FRONTEND_URL)
+	// This restricts cookie access to only the configured frontend domain
+	if cm.csrfDomain != "" {
+		logger.GetDefault().InfoWith("Printing csrf token#######", cm.csrfDomain)
+		cookie.Domain = cm.csrfDomain
 	}
+
 	c.SetCookie(cookie)
 }
 
@@ -172,9 +216,13 @@ func (cm *CookieManager) ClearCSRFTokenCookie(c echo.Context) {
 		MaxAge:   -1,
 		Expires:  time.Unix(0, 0),
 	}
-	if cm.config.Cookie.Domain != "" {
-		cookie.Domain = cm.config.Cookie.Domain
+
+	// Must match the Domain used when setting the cookie
+	if cm.csrfDomain != "" {
+		logger.GetDefault().InfoWith("Printing csrf token#######", cm.csrfDomain)
+		cookie.Domain = cm.csrfDomain
 	}
+
 	c.SetCookie(cookie)
 }
 
