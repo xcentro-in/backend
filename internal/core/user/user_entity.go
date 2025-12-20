@@ -39,7 +39,7 @@ type User struct {
 // InitiateOnboardingDTO represents the request payload for initiating user onboarding
 // User KYC is independent of business - identity verification only
 type InitiateOnboardingDTO struct {
-	Name       string `json:"name" validate:"required"`
+	Name       string `json:"name" validate:"required,person_name,min=2,max=100"`
 	DOB        string `json:"dob" validate:"required"` // Format: YYYY-MM-DD
 	TaxID      string `json:"taxId" validate:"required,pan"`
 	NationalID string `json:"nationalId" validate:"required,aadhaar"`

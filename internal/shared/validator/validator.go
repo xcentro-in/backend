@@ -27,8 +27,13 @@ func NewCustomValidator() *CustomValidator {
 	v.RegisterValidation("cin", validateCIN)
 	v.RegisterValidation("phone_in", validateIndianPhone)
 	v.RegisterValidation("strong_password", validateStrongPassword)
-
 	v.RegisterValidation("ifsc", validateIFSC)
+
+	// Register character type validators
+	v.RegisterValidation("business_name", validateBusinessName)
+	v.RegisterValidation("person_name", validatePersonName)
+	v.RegisterValidation("safe_text", validateSafeText)
+	v.RegisterValidation("oauth_code", validateOAuthCode)
 
 	return &CustomValidator{validator: v}
 }
@@ -51,6 +56,12 @@ func (cv *CustomValidator) Validate(i interface{}) error {
 		return err
 	}
 	return nil
+}
+
+// Var validates a single variable against validation tags
+// This allows handlers to validate individual values like headers, query params, etc.
+func (cv *CustomValidator) Var(field interface{}, tag string) error {
+	return cv.validator.Var(field, tag)
 }
 
 // ValidationError represents validation errors
@@ -110,6 +121,16 @@ func getErrorMessage(err validator.FieldError) string {
 		return fmt.Sprintf("%s must be less than %s", field, err.Param())
 	case "ifsc":
 		return fmt.Sprintf("%s must be a valid IFSC code (format: ABCD0123456)", field)
+	case "business_name":
+		return fmt.Sprintf("%s can only contain letters, numbers, spaces, and .,&()'-/@#", field)
+	case "person_name":
+		return fmt.Sprintf("%s can only contain letters, spaces, and .-'", field)
+	case "safe_text":
+		return fmt.Sprintf("%s contains invalid characters", field)
+	case "oauth_code":
+		return fmt.Sprintf("%s must be a valid OAuth authorization code", field)
+	case "uuid":
+		return fmt.Sprintf("%s must be a valid UUID", field)
 	default:
 		return fmt.Sprintf("%s is invalid", field)
 	}
@@ -172,6 +193,54 @@ func validateIFSC(fl validator.FieldLevel) bool {
 	// IFSC format: 4 bank code letters + 1 zero + 6 branch code alphanumeric
 	ifscRegex := regexp.MustCompile(`^[A-Z]{4}0[A-Z0-9]{6}$`)
 	return ifscRegex.MatchString(ifsc)
+}
+
+// validateBusinessName validates business name format
+// Allows: Letters, numbers, spaces, and .,&()'-/@#
+// Note: Input is already trimmed by TrimStrings() before validation
+func validateBusinessName(fl validator.FieldLevel) bool {
+	name := fl.Field().String()
+	// Business name: alphanumeric + spaces + extended punctuation
+	nameRegex := regexp.MustCompile(`^[A-Za-z0-9\s.,&()'\-/@#]+$`)
+	return nameRegex.MatchString(name)
+}
+
+// validatePersonName validates person/user name format
+// Allows: Letters, spaces, and basic punctuation (.-')
+// Note: Input is already trimmed by TrimStrings() before validation
+func validatePersonName(fl validator.FieldLevel) bool {
+	name := fl.Field().String()
+	// Person name: letters + spaces + basic punctuation
+	nameRegex := regexp.MustCompile(`^[A-Za-z\s.\-']+$`)
+	return nameRegex.MatchString(name)
+}
+
+// validateSafeText validates text fields for general safe input
+// Prevents common injection patterns while allowing most characters
+// Blocks: <, >, NULL bytes, and control characters (except newline/tab/CR)
+// Note: Input is already trimmed by TrimStrings() before validation
+func validateSafeText(fl validator.FieldLevel) bool {
+	text := fl.Field().String()
+	// Block angle brackets, NULL bytes, and control characters
+	for _, char := range text {
+		if char == '<' || char == '>' || char == 0 || (char < 32 && char != '\n' && char != '\r' && char != '\t') {
+			return false
+		}
+	}
+	return true
+}
+
+// validateOAuthCode validates OAuth2 authorization code format
+// Allows: Alphanumeric characters and ._- (common in OAuth codes)
+// Length: 20-512 characters (RFC 6749 compliant)
+// Note: Input is already trimmed by TrimStrings() before validation
+func validateOAuthCode(fl validator.FieldLevel) bool {
+	code := fl.Field().String()
+	if len(code) < 20 || len(code) > 512 {
+		return false
+	}
+	codeRegex := regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+	return codeRegex.MatchString(code)
 }
 
 // TrimStrings trims all string fields in a struct (recursively)

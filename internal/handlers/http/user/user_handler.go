@@ -8,6 +8,7 @@ import (
 	"xcentro.in/internal/core/user"
 	"xcentro.in/internal/middleware"
 	"xcentro.in/internal/shared/config"
+	"xcentro.in/internal/shared/httputil"
 	"xcentro.in/internal/shared/logger"
 	"xcentro.in/internal/shared/ratelimiter"
 	"xcentro.in/internal/shared/types"
@@ -28,15 +29,16 @@ func NewUserHandler(userService user.UserService, authService auth.AuthService) 
 	}
 }
 
-func RegisterUserRoutes(e *echo.Group, userService user.UserService, authService auth.AuthService, businessUserRelRepo coreBusiness.BusinessUserRelationRepository, rclient *redisClient.RedisClient, cfg *config.Config) {
+func RegisterUserRoutes(e *echo.Group, userService user.UserService, authService auth.AuthService, businessUserRelRepo coreBusiness.BusinessUserRelationRepository, rclient *redisClient.RedisClient, cfg *config.Config, cookieManager *httputil.CookieManager) {
 	handler := NewUserHandler(userService, authService)
 	aadhaarHandler := NewAadhaarCallbackHandler(userService, cfg)
 
 	userGroup := e.Group("/user")
 
-	// Protected routes (JWT middleware first, then rate limiter can use user ID)
+	// Protected routes (JWT and CSRF middleware first, then rate limiter can use user ID)
 	protectedUser := userGroup.Group("")
 	protectedUser.Use(middleware.JWTMiddleware(authService))
+	protectedUser.Use(middleware.CSRFMiddleware(cookieManager))
 	protectedUser.Use(ratelimiter.MiddlewareDefault())
 
 	// User onboarding endpoints

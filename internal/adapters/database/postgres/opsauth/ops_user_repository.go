@@ -64,7 +64,7 @@ func (r *PgOpsUserRepository) CreateOrUpdateUser(ctx context.Context, oid, email
 func (r *PgOpsUserRepository) GetUserByID(ctx context.Context, userID string) (*opsauth.OpsUser, error) {
 	query := `
 		SELECT id, name, email, roles, status,
-		       created_at::text, updated_at::text
+		       created_at::text, COALESCE(updated_at::text, '')
 		FROM xcentro.ops_user_table
 		WHERE id = $1
 	`
@@ -100,7 +100,7 @@ func (r *PgOpsUserRepository) GetUserByID(ctx context.Context, userID string) (*
 func (r *PgOpsUserRepository) GetUserByEmail(ctx context.Context, email string) (*opsauth.OpsUser, error) {
 	query := `
 		SELECT id, name, email, roles, status,
-		       created_at::text, updated_at::text
+		       created_at::text, COALESCE(updated_at::text, '')
 		FROM xcentro.ops_user_table
 		WHERE email = $1
 	`

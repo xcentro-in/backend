@@ -1218,20 +1218,19 @@ func (s *BusinessServiceImpl) VerifyKYB(ctx context.Context, bid string, notes s
 		return err
 	}
 
-	// Trigger notification if notes are present and owner found
-	if notes != "" && ownerUserID != "" {
-		go func() {
-			bgCtx := context.Background()
-			message := "Your business KYB verification has been approved!"
-			if notes != "" {
-				message += " Notes: " + notes
-			}
+	// Trigger notification to owner using multicast mode with owner role
+	go func() {
+		bgCtx := context.Background()
+		message := "Your business KYB verification has been approved!"
+		if notes != "" {
+			message += " Notes: " + notes
+		}
 
-			if err := notification.TriggerUnicast(bgCtx, bid, ownerUserID, "kyb_verified", "KYB Verified", message, coreNotification.EntityReferences{}, nil); err != nil {
-				s.logger.Errorf("Failed to trigger KYB verification notification: %v", err)
-			}
-		}()
-	}
+		// Use multicast targeting owner role
+		if err := notification.TriggerMulticast(bgCtx, bid, "kyb_verified", "KYB Verified", message, "owner", nil, coreNotification.EntityReferences{}, nil); err != nil {
+			s.logger.Errorf("Failed to trigger KYB verification notification: %v", err)
+		}
+	}()
 
 	return nil
 }
@@ -1252,6 +1251,32 @@ func (s *BusinessServiceImpl) OpsUpdateUserRole(ctx context.Context, bid string,
 		invalidationKeys := keys.InvalidateUserRoles(userID)
 		if err := s.rclient.Delete(bgCtx, invalidationKeys...); err != nil {
 			s.logger.Warnf("Failed to invalidate user roles cache for user %s: %v", userID, err)
+		}
+	}()
+
+	// Trigger notification to owner about user role approval
+	go func() {
+		bgCtx := context.Background()
+
+		// Get user details for notification message
+		userDetails, err := s.userRepo.GetUserByID(bgCtx, userID)
+		if err != nil {
+			s.logger.Warnf("Failed to get user details for notification: %v", err)
+			return
+		}
+
+		// Prepare notification message
+		roleName := strings.ToLower(string(role))
+		message := fmt.Sprintf("User %s has been approved with role: %s", userDetails.Email, roleName)
+		if userDetails.Name != "" {
+			message = fmt.Sprintf("User %s (%s) has been approved with role: %s", userDetails.Name, userDetails.Email, roleName)
+		}
+
+		// Use multicast targeting owner role
+		if err := notification.TriggerMulticast(bgCtx, bid, "user_role_approved", "User Approved", message, "owner", nil, coreNotification.EntityReferences{
+			UserID: &userID,
+		}, nil); err != nil {
+			s.logger.Errorf("Failed to trigger user role approval notification: %v", err)
 		}
 	}()
 

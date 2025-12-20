@@ -8,7 +8,7 @@ import (
 // SessionRepository defines database operations for refresh token sessions
 type SessionRepository interface {
 	// CreateSession creates a new refresh token session with device information
-	CreateSession(ctx context.Context, userID, tokenHash string, expiresAt time.Time, userAgent string, deviceType string, deviceVersion int) (string, error)
+	CreateSession(ctx context.Context, sessionID string, userID string, tokenHash string, expiresAt time.Time, userAgent string, deviceType string, deviceVersion int) error
 
 	// GetSessionByTokenHash retrieves a session by user ID and refresh token hash
 	GetSessionByTokenHash(ctx context.Context, userID, tokenHash string) (*Session, error)

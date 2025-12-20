@@ -3,6 +3,7 @@ package business
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/labstack/echo/v4"
 	redisClient "xcentro.in/internal/adapters/cache/redis/client"
@@ -12,6 +13,7 @@ import (
 	"xcentro.in/internal/core/user"
 	"xcentro.in/internal/middleware"
 	"xcentro.in/internal/shared/config"
+	"xcentro.in/internal/shared/httputil"
 	"xcentro.in/internal/shared/logger"
 	"xcentro.in/internal/shared/ratelimiter"
 	"xcentro.in/internal/shared/types"
@@ -53,12 +55,13 @@ func (h *BusinessHandler) getRequesterRoleForBusiness(c echo.Context, businessID
 	return "", fmt.Errorf("you don't have access to this business")
 }
 
-func RegisterBusinessRoutes(e *echo.Group, businessService business.BusinessService, authService auth.AuthService, userService user.UserService, s3Config *config.S3Config, businessUserRelRepo business.BusinessUserRelationRepository, rclient *redisClient.RedisClient) {
+func RegisterBusinessRoutes(e *echo.Group, businessService business.BusinessService, authService auth.AuthService, userService user.UserService, s3Config *config.S3Config, businessUserRelRepo business.BusinessUserRelationRepository, rclient *redisClient.RedisClient, cookieManager *httputil.CookieManager) {
 	handler := NewBusinessHandler(businessService, authService, userService, s3Config)
 
 	businessGroup := e.Group("/business")
-	// Apply middleware to the business group (JWT first, then rate limiter, then business roles)
+	// Apply middleware to the business group (JWT, CSRF, rate limiter, then business roles)
 	businessGroup.Use(middleware.JWTMiddleware(authService))
+	businessGroup.Use(middleware.CSRFMiddleware(cookieManager))
 	businessGroup.Use(ratelimiter.MiddlewareDefault())
 	businessGroup.Use(middleware.BusinessRolesMiddleware(businessUserRelRepo, rclient))
 
@@ -329,12 +332,23 @@ func (h *BusinessHandler) GetOnboardingStatus(c echo.Context) error {
 // GetBusinessDetails retrieves business details for display in UI
 func (h *BusinessHandler) GetBusinessDetails(c echo.Context) error {
 	// Read BusinessID from X-Business-ID header
-	businessID := c.Request().Header.Get("X-Business-ID")
+	businessID := strings.TrimSpace(c.Request().Header.Get("X-Business-ID"))
 	if businessID == "" {
 		return c.JSON(400, map[string]interface{}{
 			"error":   "MISSING_BUSINESS_ID",
 			"message": "X-Business-ID header is required",
 		})
+	}
+
+	// Validate UUID format
+	if v, ok := c.Echo().Validator.(*customValidator.CustomValidator); ok {
+		if err := v.Var(businessID, "required,uuid"); err != nil {
+			h.logger.Errorf("Invalid business ID format: %s", businessID)
+			return c.JSON(400, map[string]interface{}{
+				"error":   "INVALID_BUSINESS_ID",
+				"message": "X-Business-ID must be a valid UUID",
+			})
+		}
 	}
 
 	// Get requester's role for this business
@@ -365,12 +379,23 @@ func (h *BusinessHandler) GetBusinessDetails(c echo.Context) error {
 // InviteUser invites a user to a business (only admin/owner can invite)
 func (h *BusinessHandler) InviteUser(c echo.Context) error {
 	// Read BusinessID from X-Business-ID header
-	businessID := c.Request().Header.Get("X-Business-ID")
+	businessID := strings.TrimSpace(c.Request().Header.Get("X-Business-ID"))
 	if businessID == "" {
 		return c.JSON(400, map[string]interface{}{
 			"error":   "MISSING_BUSINESS_ID",
 			"message": "X-Business-ID header is required",
 		})
+	}
+
+	// Validate UUID format
+	if v, ok := c.Echo().Validator.(*customValidator.CustomValidator); ok {
+		if err := v.Var(businessID, "required,uuid"); err != nil {
+			h.logger.Errorf("Invalid business ID format: %s", businessID)
+			return c.JSON(400, map[string]interface{}{
+				"error":   "INVALID_BUSINESS_ID",
+				"message": "X-Business-ID must be a valid UUID",
+			})
+		}
 	}
 
 	// Parse request
@@ -443,12 +468,23 @@ func (h *BusinessHandler) InviteUser(c echo.Context) error {
 // ListBusinessUsers lists all users associated with a business (only admin/owner can access)
 func (h *BusinessHandler) ListBusinessUsers(c echo.Context) error {
 	// Read BusinessID from X-Business-ID header
-	businessID := c.Request().Header.Get("X-Business-ID")
+	businessID := strings.TrimSpace(c.Request().Header.Get("X-Business-ID"))
 	if businessID == "" {
 		return c.JSON(400, map[string]interface{}{
 			"error":   "MISSING_BUSINESS_ID",
 			"message": "X-Business-ID header is required",
 		})
+	}
+
+	// Validate UUID format
+	if v, ok := c.Echo().Validator.(*customValidator.CustomValidator); ok {
+		if err := v.Var(businessID, "required,uuid"); err != nil {
+			h.logger.Errorf("Invalid business ID format: %s", businessID)
+			return c.JSON(400, map[string]interface{}{
+				"error":   "INVALID_BUSINESS_ID",
+				"message": "X-Business-ID must be a valid UUID",
+			})
+		}
 	}
 
 	// Get requester's role for this business
@@ -479,12 +515,23 @@ func (h *BusinessHandler) ListBusinessUsers(c echo.Context) error {
 // UpdateBusinessUser updates a user's role in a business (only admin/owner can update)
 func (h *BusinessHandler) UpdateBusinessUser(c echo.Context) error {
 	// Read BusinessID from X-Business-ID header
-	businessID := c.Request().Header.Get("X-Business-ID")
+	businessID := strings.TrimSpace(c.Request().Header.Get("X-Business-ID"))
 	if businessID == "" {
 		return c.JSON(400, map[string]interface{}{
 			"error":   "MISSING_BUSINESS_ID",
 			"message": "X-Business-ID header is required",
 		})
+	}
+
+	// Validate UUID format
+	if v, ok := c.Echo().Validator.(*customValidator.CustomValidator); ok {
+		if err := v.Var(businessID, "required,uuid"); err != nil {
+			h.logger.Errorf("Invalid business ID format: %s", businessID)
+			return c.JSON(400, map[string]interface{}{
+				"error":   "INVALID_BUSINESS_ID",
+				"message": "X-Business-ID must be a valid UUID",
+			})
+		}
 	}
 
 	// Parse request
@@ -542,12 +589,23 @@ func (h *BusinessHandler) UpdateBusinessUser(c echo.Context) error {
 // RemoveBusinessUser removes a user from a business (only admin/owner can remove)
 func (h *BusinessHandler) RemoveBusinessUser(c echo.Context) error {
 	// Read BusinessID from X-Business-ID header
-	businessID := c.Request().Header.Get("X-Business-ID")
+	businessID := strings.TrimSpace(c.Request().Header.Get("X-Business-ID"))
 	if businessID == "" {
 		return c.JSON(400, map[string]interface{}{
 			"error":   "MISSING_BUSINESS_ID",
 			"message": "X-Business-ID header is required",
 		})
+	}
+
+	// Validate UUID format
+	if v, ok := c.Echo().Validator.(*customValidator.CustomValidator); ok {
+		if err := v.Var(businessID, "required,uuid"); err != nil {
+			h.logger.Errorf("Invalid business ID format: %s", businessID)
+			return c.JSON(400, map[string]interface{}{
+				"error":   "INVALID_BUSINESS_ID",
+				"message": "X-Business-ID must be a valid UUID",
+			})
+		}
 	}
 
 	// Parse request

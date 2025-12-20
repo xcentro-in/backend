@@ -65,9 +65,10 @@ func OpsJWTMiddleware(authService opsauth.OpsAuthService, cfg *config.Config) ec
 			}
 
 			// Set ops user context for downstream handlers
-			// Only OID and roles are in the token (for security)
+			// Only OID, sessionID, and roles are in the token (for security)
 			// Email/name should be fetched from database if needed
 			c.Set("opsUserId", claims.Subject)
+			c.Set("sessionId", claims.SessionID)
 			c.Set("opsUserRoles", claims.Roles)
 
 			// Continue to next handler

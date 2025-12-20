@@ -30,9 +30,22 @@ check_postgres_running() {
 # Create database users
 create_users() {
     print_info "Creating PostgreSQL users..."
-    
+
     # Create the SQL commands for user creation
     local sql_commands=$(cat <<SQL
+-- Create xcentro schema for application
+CREATE SCHEMA IF NOT EXISTS xcentro;
+
+-- Install Extensions
+CREATE EXTENSION IF NOT EXISTS pg_stat_statements SCHEMA xcentro;
+CREATE EXTENSION IF NOT EXISTS pgstattuple SCHEMA xcentro;
+CREATE EXTENSION IF NOT EXISTS pgaudit SCHEMA xcentro;
+
+-- Install pg_cron in its default 'cron' schema so background workers can find it
+CREATE EXTENSION IF NOT EXISTS pg_cron;
+
+-- CREATE EXTENSION IF NOT EXISTS pgcrypto SCHEMA xcentro;
+
 -- Create owner user (full database permissions)
 DO \$\$
 BEGIN
@@ -61,12 +74,13 @@ ALTER DATABASE ${POSTGRES_DB} OWNER TO ${DB_OWNER_USER};
 -- Grant permissions to owner user (full access)
 GRANT ALL PRIVILEGES ON DATABASE ${POSTGRES_DB} TO ${DB_OWNER_USER};
 
--- Create xcentro schema for application
-CREATE SCHEMA IF NOT EXISTS xcentro;
+-- Set Schema Ownership
 ALTER SCHEMA xcentro OWNER TO ${DB_OWNER_USER};
 
--- Create pgcrypto extension in the xcentro schema
--- CREATE EXTENSION IF NOT EXISTS pgcrypto SCHEMA xcentro;
+-- Grant permissions to owner user on cron schema
+GRANT USAGE ON SCHEMA cron TO ${DB_OWNER_USER};
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA cron TO ${DB_OWNER_USER};
+GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA cron TO ${DB_OWNER_USER};
 
 -- Grant permissions to read-write user (for application)
 GRANT CONNECT ON DATABASE ${POSTGRES_DB} TO ${DB_RW_USER};
@@ -84,6 +98,9 @@ GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA xcentro TO ${DB_RW_USER};
 ALTER DEFAULT PRIVILEGES FOR ROLE ${DB_OWNER_USER} IN SCHEMA xcentro GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO ${DB_RW_USER};
 ALTER DEFAULT PRIVILEGES FOR ROLE ${DB_OWNER_USER} IN SCHEMA xcentro GRANT USAGE, SELECT ON SEQUENCES TO ${DB_RW_USER};
 ALTER DEFAULT PRIVILEGES FOR ROLE ${DB_OWNER_USER} IN SCHEMA xcentro GRANT EXECUTE ON FUNCTIONS TO ${DB_RW_USER};
+
+-- Fix search path so users land in the right schema
+ALTER DATABASE ${POSTGRES_DB} SET search_path TO "\$user", xcentro;
 
 -- Example: How owner creates RW users for backends (replace with actual values)
 -- CREATE ROLE <backend_name>_rw WITH LOGIN PASSWORD '<secure_password>';
@@ -119,6 +136,12 @@ show_user_info() {
     print_info "Created schemas:"
     echo -e "${GREEN}• xcentro:${NC} Main application schema (owned by ${DB_OWNER_USER})"
     echo
+    print_info "Installed extensions:"
+    echo -e "${GREEN}• pg_stat_statements:${NC} Query performance statistics"
+    echo -e "${GREEN}• pgstattuple:${NC} Tuple-level statistics"
+    echo -e "${GREEN}• pgaudit:${NC} Audit logging"
+    echo -e "${GREEN}• pg_cron:${NC} Job scheduling"
+    echo
     print_info "Connection examples:"
     echo "  • Connect as owner: ./connect-postgres.sh owner"
     echo "  • Connect as rw: ./connect-postgres.sh rw"
@@ -143,13 +166,13 @@ show_user_info() {
 
 main() {
     print_header
-    
+
     print_info "Setting up PostgreSQL users for XCentro database..."
-    
+
     check_postgres_running
     create_users
     show_user_info
-    
+
     echo
     print_success "PostgreSQL user setup completed!"
 }
