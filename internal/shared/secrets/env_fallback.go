@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 
+	"github.com/joho/godotenv"
 	"xcentro.in/internal/shared/logger"
 )
 
@@ -20,8 +21,17 @@ func NewEnvSecretsManager() SecretsManager {
 }
 
 // LoadAllSecrets reads all secrets from environment variables
+// Attempts to load .env.local first (for local development convenience)
 func (m *envSecretsManager) LoadAllSecrets(ctx context.Context) (map[string]string, error) {
 	m.log.Warn("Loading secrets from environment variables (FALLBACK MODE - not recommended for production)")
+
+	// Try to load .env.local file if it exists (for local development convenience)
+	if _, err := os.Stat(".env.local"); err == nil {
+		m.log.Info("Loading secrets from .env.local file")
+		if err := godotenv.Load(".env.local"); err != nil {
+			m.log.WarnWith("Failed to load .env.local file, using environment variables only", "error", err.Error())
+		}
+	}
 
 	secrets := map[string]string{
 		KeyJWTSecret:               os.Getenv("JWT_SECRET_KEY"),
