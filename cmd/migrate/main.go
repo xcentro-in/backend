@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"time"
 
 	"xcentro.in/internal/adapters/database/postgres/migrations"
 	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/logger"
+	"xcentro.in/internal/shared/secrets"
 )
 
 func main() {
@@ -21,19 +23,43 @@ func main() {
 	)
 	flag.Parse()
 
-	// Load configuration
-	cfg, err := config.Load(".env")
+	log := logger.GetDefault()
+	ctx := context.Background()
+
+	// Initialize secrets manager
+	useFallback, _ := strconv.ParseBool(os.Getenv("SECRETS_USE_FALLBACK"))
+	secretsMgr, err := secrets.NewSecretsManager(secrets.Config{
+		AWSRegion:    os.Getenv("AWS_REGION"),
+		SecretName:   os.Getenv("AWS_SECRET_NAME"),
+		UseCache:     true,
+		CacheTTL:     15 * time.Minute,
+		UseFallback:  useFallback,
+		AWSAccessKey: os.Getenv("AWS_ACCESS_KEY_ID"),
+		AWSSecretKey: os.Getenv("AWS_SECRET_ACCESS_KEY"),
+	})
+	if err != nil {
+		fmt.Printf("Failed to initialize secrets manager: %v\n", err)
+		os.Exit(1)
+	}
+	defer secretsMgr.Close()
+
+	// Load all secrets
+	secretsMap, err := secretsMgr.LoadAllSecrets(ctx)
+	if err != nil {
+		fmt.Printf("Failed to load secrets: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Load configuration with secrets
+	cfg, err := config.LoadWithSecrets(".env", secretsMap)
 	if err != nil {
 		fmt.Printf("Failed to load configuration: %v\n", err)
 		os.Exit(1)
 	}
-
-	log := logger.GetDefault()
+	log.Info("Config loaded successfully with secrets")
 
 	// Initialize migration service
 	migrationService := migrations.NewMigrationService(*path, cfg.MigrationDatabase)
-
-	ctx := context.Background()
 
 	// Execute migration action
 	switch *action {
