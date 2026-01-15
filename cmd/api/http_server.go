@@ -172,14 +172,16 @@ func (s *xcentroServer) loadConfig() {
 		AWSSecretKey: os.Getenv("AWS_SECRET_ACCESS_KEY"),
 	})
 	if err != nil {
-		s.log.Fatalf("Failed to initialize secrets manager: %v", err)
+		s.log.Errorf("Failed to initialize secrets manager: %v", err)
+		panic(err)
 	}
 	defer secretsMgr.Close()
 
 	// Load all secrets
 	secretsMap, err := secretsMgr.LoadAllSecrets(ctx)
 	if err != nil {
-		s.log.Fatalf("Failed to load secrets: %v", err)
+		s.log.Errorf("Failed to load secrets: %v", err)
+		panic(err)
 	}
 
 	// Load config with secrets injected

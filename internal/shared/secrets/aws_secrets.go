@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -72,8 +71,8 @@ func NewAWSSecretsManager(cfg Config) (SecretsManager, error) {
 	// Initialize cache if enabled
 	if cfg.UseCache {
 		cacheConfig := secretcache.CacheConfig{
-			MaxCacheSize: 10, // Small cache, we only have one secret
-			CacheItemTTL: cfg.CacheTTL,
+			MaxCacheSize: 10,                    // Small cache, we only have one secret
+			CacheItemTTL: int64(cfg.CacheTTL),   // Convert time.Duration to int64 nanoseconds
 		}
 
 		cache, err := secretcache.New(
@@ -107,7 +106,8 @@ func (m *awsSecretsManager) LoadAllSecrets(ctx context.Context) (map[string]stri
 		secretString, err = m.cache.GetSecretString(m.secretName)
 	} else {
 		m.log.DebugWith("Fetching secret from AWS Secrets Manager", "secret_name", m.secretName)
-		result, err := m.client.GetSecretValue(ctx, &secretsmanager.GetSecretValueInput{
+		var result *secretsmanager.GetSecretValueOutput
+		result, err = m.client.GetSecretValue(ctx, &secretsmanager.GetSecretValueInput{
 			SecretId: aws.String(m.secretName),
 		})
 		if err != nil {
