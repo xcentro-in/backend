@@ -71,4 +71,7 @@ const (
 
 	KeyOpsOAuthClientSecret     = "ops_oauth_client_secret"
 	KeyTurnstileSecretKey       = "turnstile_secret_key"
+
+	KeyFast2SMSAPIKey           = "fast2sms_api_key"
+	KeyTruthscreenPassword      = "truthscreen_password"
 )

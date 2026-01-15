@@ -512,6 +512,14 @@ func injectSecrets(cfg *Config, secrets map[string]string) {
 	if val, ok := secrets["turnstile_secret_key"]; ok && val != "" {
 		cfg.Turnstile.SecretKey = val
 	}
+
+	// SMS & KYC/KYB Services
+	if val, ok := secrets["fast2sms_api_key"]; ok && val != "" {
+		cfg.SMS.APIKey = val
+	}
+	if val, ok := secrets["truthscreen_password"]; ok && val != "" {
+		cfg.AuthBridge.Password = val
+	}
 }
 
 // MustLoad loads configuration once and exits on failure.

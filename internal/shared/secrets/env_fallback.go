@@ -71,6 +71,9 @@ func (m *envSecretsManager) LoadAllSecrets(ctx context.Context) (map[string]stri
 
 		KeyOpsOAuthClientSecret:    os.Getenv("OPS_OAUTH_CLIENT_SECRET"),
 		KeyTurnstileSecretKey:      os.Getenv("TURNSTILE_SECRET_KEY"),
+
+		KeyFast2SMSAPIKey:          os.Getenv("FAST2SMS_API_KEY"),
+		KeyTruthscreenPassword:     os.Getenv("TRUTHSCREEN_PASSWORD"),
 	}
 
 	// Count non-empty secrets
