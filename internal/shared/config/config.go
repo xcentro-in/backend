@@ -378,10 +378,166 @@ func Load(path string) (Config, error) {
 	return cfg, err
 }
 
+// LoadWithSecrets reads configuration from file/env and injects secrets from AWS Secrets Manager.
+// This is the recommended way to load configuration in production.
+func LoadWithSecrets(path string, secrets map[string]string) (Config, error) {
+	var cfg Config
+	var err error
+
+	// First load configuration from file/env (non-sensitive values)
+	if err = cleanenv.ReadConfig(path, &cfg); err != nil {
+		logger.Warnf("error reading config file: %v", err)
+		if err = cleanenv.ReadEnv(&cfg); err != nil {
+			return cfg, fmt.Errorf("read env: %w", err)
+		}
+	}
+
+	// Set hardcoded payout configuration (not configurable via env)
+	cfg.Payout = NewPayoutConfig()
+
+	// Inject secrets from AWS Secrets Manager (overrides env vars)
+	injectSecrets(&cfg, secrets)
+
+	return cfg, err
+}
+
+// injectSecrets injects secrets from AWS Secrets Manager into the config struct.
+// Only injects non-empty values to allow environment variable overrides for local development.
+func injectSecrets(cfg *Config, secrets map[string]string) {
+	// JWT & Authentication
+	if val, ok := secrets["jwt_secret_key"]; ok && val != "" {
+		cfg.JWT.SecretKey = val
+	}
+	if val, ok := secrets["bcrypt_pepper"]; ok && val != "" {
+		cfg.Bcrypt.Pepper = val
+	}
+
+	// Encryption Keys
+	if val, ok := secrets["bank_account_encryption_key"]; ok && val != "" {
+		cfg.BankAccountEncryption.EncryptionKey = val
+	}
+	if val, ok := secrets["ops_token_encryption_key"]; ok && val != "" {
+		cfg.OpsTokenEncryption.EncryptionKey = val
+	}
+	if val, ok := secrets["rate_limiter_hmac_secret"]; ok && val != "" {
+		cfg.RateLimiter.HMACSecret = val
+	}
+
+	// Database & Cache
+	if val, ok := secrets["db_password"]; ok && val != "" {
+		cfg.Database.Password = val
+	}
+	if val, ok := secrets["db_migration_password"]; ok && val != "" {
+		cfg.MigrationDatabase.Password = val
+	}
+	if val, ok := secrets["redis_password"]; ok && val != "" {
+		cfg.Rcache.Password = val
+	}
+
+	// AWS Services
+	if val, ok := secrets["s3_access_key"]; ok && val != "" {
+		cfg.S3.AccessKey = val
+	}
+	if val, ok := secrets["s3_secret_key"]; ok && val != "" {
+		cfg.S3.SecretKey = val
+	}
+	if val, ok := secrets["ses_access_key"]; ok && val != "" {
+		cfg.SES.AccessKey = val
+	}
+	if val, ok := secrets["ses_secret_key"]; ok && val != "" {
+		cfg.SES.SecretKey = val
+	}
+
+	// JioPay Gateway
+	if val, ok := secrets["jiopay_api_key"]; ok && val != "" {
+		cfg.JioPay.APIKey = val
+	}
+	if val, ok := secrets["jiopay_app_id"]; ok && val != "" {
+		cfg.JioPay.AppID = val
+	}
+	if val, ok := secrets["jiopay_encryption_key"]; ok && val != "" {
+		cfg.JioPay.EncryptionKey = val
+	}
+	if val, ok := secrets["jiopay_webhook_secret"]; ok && val != "" {
+		cfg.JioPay.WebhookSecret = val
+	}
+
+	// Easebuzz Gateway
+	if val, ok := secrets["easebuzz_merchant_key"]; ok && val != "" {
+		cfg.Easebuzz.MerchantKey = val
+	}
+	if val, ok := secrets["easebuzz_salt"]; ok && val != "" {
+		cfg.Easebuzz.Salt = val
+	}
+	if val, ok := secrets["easebuzz_api_key"]; ok && val != "" {
+		cfg.Easebuzz.APIKey = val
+	}
+	if val, ok := secrets["easebuzz_merchant_token_id"]; ok && val != "" {
+		cfg.Easebuzz.MerchantTokenID = val
+	}
+	if val, ok := secrets["easebuzz_encryption_key"]; ok && val != "" {
+		cfg.Easebuzz.EncryptionKey = val
+	}
+	if val, ok := secrets["easebuzz_encryption_iv"]; ok && val != "" {
+		cfg.Easebuzz.EncryptionIV = val
+	}
+	if val, ok := secrets["easebuzz_webhook_secret"]; ok && val != "" {
+		cfg.Easebuzz.WebhookSecret = val
+	}
+
+	// Castler Payout Provider
+	if val, ok := secrets["castler_api_key"]; ok && val != "" {
+		cfg.Castler.APIKey = val
+	}
+	if val, ok := secrets["castler_secret_key"]; ok && val != "" {
+		cfg.Castler.SecretKey = val
+	}
+	if val, ok := secrets["castler_webhook_secret"]; ok && val != "" {
+		cfg.Castler.WebhookSecret = val
+	}
+	if val, ok := secrets["castler_encryption_key"]; ok && val != "" {
+		cfg.Castler.EncryptionKey = val
+	}
+	if val, ok := secrets["castler_encryption_iv"]; ok && val != "" {
+		cfg.Castler.EncryptionIV = val
+	}
+	if val, ok := secrets["castler_escrow_id"]; ok && val != "" {
+		cfg.Castler.EscrowID = val
+	}
+
+	// Ops OAuth & Security
+	if val, ok := secrets["ops_oauth_client_secret"]; ok && val != "" {
+		cfg.OpsOAuth.ClientSecret = val
+	}
+	if val, ok := secrets["turnstile_secret_key"]; ok && val != "" {
+		cfg.Turnstile.SecretKey = val
+	}
+
+	// SMS & KYC/KYB Services
+	if val, ok := secrets["fast2sms_api_key"]; ok && val != "" {
+		cfg.SMS.APIKey = val
+	}
+	if val, ok := secrets["truthscreen_password"]; ok && val != "" {
+		cfg.AuthBridge.Password = val
+	}
+}
+
 // MustLoad loads configuration once and exits on failure.
 func MustLoad(path string) Config {
 	once.Do(func() {
 		loadedCfg, loadErr = Load(path)
+	})
+	if loadErr != nil {
+		log.Fatalf("configuration error: %v", loadErr)
+	}
+	return loadedCfg
+}
+
+// MustLoadWithSecrets loads configuration with secrets once and exits on failure.
+// This is the recommended way to load configuration in production.
+func MustLoadWithSecrets(path string, secrets map[string]string) Config {
+	once.Do(func() {
+		loadedCfg, loadErr = LoadWithSecrets(path, secrets)
 	})
 	if loadErr != nil {
 		log.Fatalf("configuration error: %v", loadErr)
