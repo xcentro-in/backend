@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/joho/godotenv"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	redis "xcentro.in/internal/adapters/cache/redis/client"
@@ -159,6 +160,12 @@ func buildSecureConfig(env, frontendURL string) middleware.SecureConfig {
 
 func (s *xcentroServer) loadConfig() {
 	ctx := context.Background()
+
+	// Load .env file into environment variables
+	// This must happen BEFORE secrets manager initialization
+	if err := godotenv.Load(".env"); err != nil {
+		s.log.Warnf("Failed to load .env file: %v (will use existing environment variables)", err)
+	}
 
 	// Initialize secrets manager
 	useFallback, _ := strconv.ParseBool(os.Getenv("SECRETS_USE_FALLBACK"))

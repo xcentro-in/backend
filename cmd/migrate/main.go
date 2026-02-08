@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/joho/godotenv"
 	"xcentro.in/internal/adapters/database/postgres/migrations"
 	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/logger"
@@ -25,6 +26,11 @@ func main() {
 
 	log := logger.GetDefault()
 	ctx := context.Background()
+
+	// Load .env file into environment variables
+	if err := godotenv.Load(".env"); err != nil {
+		log.Warnf("Failed to load .env file: %v (will use existing environment variables)", err)
+	}
 
 	// Initialize secrets manager
 	useFallback, _ := strconv.ParseBool(os.Getenv("SECRETS_USE_FALLBACK"))

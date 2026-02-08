@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/joho/godotenv"
 	"xcentro.in/internal/adapters/database/postgres/client"
 	payeeRepo "xcentro.in/internal/adapters/database/postgres/payee"
 	paymentRepo "xcentro.in/internal/adapters/database/postgres/payment"
@@ -25,6 +26,11 @@ func main() {
 	log.Println("Starting Payout Worker...")
 
 	ctx := context.Background()
+
+	// Load .env file into environment variables
+	if err := godotenv.Load(".env"); err != nil {
+		log.Printf("Failed to load .env file: %v (will use existing environment variables)", err)
+	}
 
 	// Initialize secrets manager
 	useFallback, _ := strconv.ParseBool(os.Getenv("SECRETS_USE_FALLBACK"))

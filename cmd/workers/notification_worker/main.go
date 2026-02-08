@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/joho/godotenv"
 	"github.com/redis/go-redis/v9"
 	"xcentro.in/internal/adapters/database/postgres/business"
 	"xcentro.in/internal/adapters/database/postgres/client"
@@ -26,6 +27,11 @@ import (
 
 func main() {
 	ctx := context.Background()
+
+	// Load .env file into environment variables
+	if err := godotenv.Load(".env"); err != nil {
+		log.Printf("Failed to load .env file: %v (will use existing environment variables)", err)
+	}
 
 	// Initialize secrets manager
 	useFallback, _ := strconv.ParseBool(os.Getenv("SECRETS_USE_FALLBACK"))
