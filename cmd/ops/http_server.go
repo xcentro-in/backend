@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"os"
 	"os/signal"
@@ -77,13 +78,13 @@ type opsDashboardServer struct {
 	meta serverMetaData
 }
 
-func NewOpsDashboardServer() *opsDashboardServer {
+func NewOpsDashboardServer(envFile string) *opsDashboardServer {
 	server := &opsDashboardServer{
 		echo: echo.New(),
 		log:  logger.GetDefault(), // Temporary default, will be replaced after config load
 	}
 
-	server.loadConfig()
+	server.loadConfig(envFile)
 	server.initializeLogger() // Initialize logger with config values
 	server.registerValidator()
 	server.registerGlobalMiddleware()
@@ -162,12 +163,12 @@ func buildSecureConfig(env, frontendURL string) middleware.SecureConfig {
 	}
 }
 
-func (s *opsDashboardServer) loadConfig() {
+func (s *opsDashboardServer) loadConfig(envFile string) {
 	ctx := context.Background()
 
 	// Load .env file into environment variables
-	if err := godotenv.Load(".env"); err != nil {
-		s.log.Warnf("Failed to load .env file: %v (will use existing environment variables)", err)
+	if err := godotenv.Load(envFile); err != nil {
+		s.log.Warnf("Failed to load %s file: %v (will use existing environment variables)", envFile, err)
 	}
 
 	// Initialize secrets manager
@@ -194,8 +195,9 @@ func (s *opsDashboardServer) loadConfig() {
 		panic(err)
 	}
 
-	// Load config with secrets injected (in dev, Air sources ops.env before running)
-	cfg, err := config.LoadWithSecrets("ops.env", secretsMap)
+	// Load config with secrets injected (uses same .env as main API)
+	// Port is differentiated via SERVER_PORT environment variable (default 8889 for ops)
+	cfg, err := config.LoadWithSecrets(envFile, secretsMap)
 	if err != nil {
 		s.log.Errorf("Failed to load config: %v", err)
 		panic(err)
@@ -342,7 +344,11 @@ func (s *opsDashboardServer) stop() {
 }
 
 func main() {
-	server := NewOpsDashboardServer()
+	// Parse command line flags
+	var envFile = flag.String("env", ".env", "Path to environment file (default: .env)")
+	flag.Parse()
+
+	server := NewOpsDashboardServer(*envFile)
 
 	// Setup graceful shutdown
 	sigChan := make(chan os.Signal, 1)

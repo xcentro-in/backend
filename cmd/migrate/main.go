@@ -21,6 +21,7 @@ func main() {
 		action  = flag.String("action", "up", "Migration action: up, down, version, goto, force")
 		version = flag.String("version", "", "Target version (for goto/force actions)")
 		path    = flag.String("path", "internal/adapters/database/postgres/migrations/sql", "Path to migration files")
+		envFile = flag.String("env", ".env", "Path to environment file (default: .env)")
 	)
 	flag.Parse()
 
@@ -28,8 +29,8 @@ func main() {
 	ctx := context.Background()
 
 	// Load .env file into environment variables
-	if err := godotenv.Load(".env"); err != nil {
-		log.Warnf("Failed to load .env file: %v (will use existing environment variables)", err)
+	if err := godotenv.Load(*envFile); err != nil {
+		log.Warnf("Failed to load %s file: %v (will use existing environment variables)", *envFile, err)
 	}
 
 	// Initialize secrets manager
@@ -57,7 +58,7 @@ func main() {
 	}
 
 	// Load configuration with secrets
-	cfg, err := config.LoadWithSecrets(".env", secretsMap)
+	cfg, err := config.LoadWithSecrets(*envFile, secretsMap)
 	if err != nil {
 		fmt.Printf("Failed to load configuration: %v\n", err)
 		os.Exit(1)

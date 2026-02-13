@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"os"
 	"os/signal"
@@ -72,13 +73,13 @@ type xcentroServer struct {
 	meta serverMetaData
 }
 
-func NewXcentroServer() *xcentroServer {
+func NewXcentroServer(envFile string) *xcentroServer {
 	server := &xcentroServer{
 		echo: echo.New(),
 		log:  logger.GetDefault(), // Temporary default, will be replaced after config load
 	}
 
-	server.loadConfig()
+	server.loadConfig(envFile)
 	server.initializeLogger() // Initialize logger with config values
 	server.registerValidator()
 	server.registerGlobalMiddleware()
@@ -158,13 +159,13 @@ func buildSecureConfig(env, frontendURL string) middleware.SecureConfig {
 	}
 }
 
-func (s *xcentroServer) loadConfig() {
+func (s *xcentroServer) loadConfig(envFile string) {
 	ctx := context.Background()
 
 	// Load .env file into environment variables
 	// This must happen BEFORE secrets manager initialization
-	if err := godotenv.Load(".env"); err != nil {
-		s.log.Warnf("Failed to load .env file: %v (will use existing environment variables)", err)
+	if err := godotenv.Load(envFile); err != nil {
+		s.log.Warnf("Failed to load %s file: %v (will use existing environment variables)", envFile, err)
 	}
 
 	// Initialize secrets manager
@@ -192,7 +193,7 @@ func (s *xcentroServer) loadConfig() {
 	}
 
 	// Load config with secrets injected
-	cfg := config.MustLoadWithSecrets(".env", secretsMap)
+	cfg := config.MustLoadWithSecrets(envFile, secretsMap)
 	s.log.Info("Config loaded successfully with secrets")
 	s.meta.config = cfg
 }
@@ -333,7 +334,11 @@ func (s *xcentroServer) stop() {
 }
 
 func main() {
-	server := NewXcentroServer()
+	// Parse command line flags
+	var envFile = flag.String("env", ".env", "Path to environment file (default: .env)")
+	flag.Parse()
+
+	server := NewXcentroServer(*envFile)
 
 	// Setup graceful shutdown
 	sigChan := make(chan os.Signal, 1)

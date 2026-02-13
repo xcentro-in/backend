@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"flag"
 	"log"
 	"os"
 	"os/signal"
@@ -25,11 +26,15 @@ import (
 func main() {
 	log.Println("Starting Payout Worker...")
 
+	// Parse command line flags
+	var envFile = flag.String("env", ".env", "Path to environment file (default: .env)")
+	flag.Parse()
+
 	ctx := context.Background()
 
 	// Load .env file into environment variables
-	if err := godotenv.Load(".env"); err != nil {
-		log.Printf("Failed to load .env file: %v (will use existing environment variables)", err)
+	if err := godotenv.Load(*envFile); err != nil {
+		log.Printf("Failed to load %s file: %v (will use existing environment variables)", *envFile, err)
 	}
 
 	// Initialize secrets manager
@@ -55,7 +60,7 @@ func main() {
 	}
 
 	// Load configuration with secrets
-	cfg, err := config.LoadWithSecrets(".env", secretsMap)
+	cfg, err := config.LoadWithSecrets(*envFile, secretsMap)
 	if err != nil {
 		log.Fatalf("Failed to load configuration: %v", err)
 	}
