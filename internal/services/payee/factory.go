@@ -98,14 +98,15 @@ func (f *PayeeServiceFactory) NewPayeeService() *PayeeService {
 		payeeEmployeeRepo,
 		payeeBankAccountRepo,
 		businessPayeeRelationRepo,
-		payoutProvider,      // payout provider (mock or real based on config)
-		castlerClient,       // castler client (mock or real based on config)
-		docVerificationSvc,  // document verification (AuthBridge for GST/PAN)
-		bankVerificationSvc, // bank verification (mock or real based on config)
+		payoutProvider,              // payout provider (mock or real based on config)
+		castlerClient,               // castler client (mock or real based on config)
+		docVerificationSvc,          // document verification (AuthBridge for GST/PAN)
+		bankVerificationSvc,         // bank verification (mock or real based on config)
 		crossVerificationSvc,
 		f.txManager,
 		f.businessService,
-		&f.config.S3,        // S3 configuration for document uploads
-		log,                 // logger instance
+		&f.config.S3,                // S3 configuration for document uploads
+		&f.config.PayeeValidation,   // payee validation configuration (enable/disable strict checks)
+		log,                         // logger instance
 	)
 }

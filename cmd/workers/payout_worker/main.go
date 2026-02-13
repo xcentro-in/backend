@@ -2,12 +2,15 @@ package main
 
 import (
 	"context"
+	"flag"
 	"log"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
+	"github.com/joho/godotenv"
 	"xcentro.in/internal/adapters/database/postgres/client"
 	payeeRepo "xcentro.in/internal/adapters/database/postgres/payee"
 	paymentRepo "xcentro.in/internal/adapters/database/postgres/payment"
@@ -16,19 +19,53 @@ import (
 	"xcentro.in/internal/adapters/external/payout/factory"
 	"xcentro.in/internal/services/payout"
 	"xcentro.in/internal/shared/config"
+	"xcentro.in/internal/shared/secrets"
 	"xcentro.in/internal/workers"
 )
 
 func main() {
 	log.Println("Starting Payout Worker...")
 
-	// Load configuration
-	cfg, err := config.Load(".env")
+	// Parse command line flags
+	var envFile = flag.String("env", ".env", "Path to environment file (default: .env)")
+	flag.Parse()
+
+	ctx := context.Background()
+
+	// Load .env file into environment variables
+	if err := godotenv.Load(*envFile); err != nil {
+		log.Printf("Failed to load %s file: %v (will use existing environment variables)", *envFile, err)
+	}
+
+	// Initialize secrets manager
+	useFallback, _ := strconv.ParseBool(os.Getenv("SECRETS_USE_FALLBACK"))
+	secretsMgr, err := secrets.NewSecretsManager(secrets.Config{
+		AWSRegion:    os.Getenv("AWS_REGION"),
+		SecretName:   os.Getenv("AWS_SECRET_NAME"),
+		UseCache:     true,
+		CacheTTL:     15 * time.Minute,
+		UseFallback:  useFallback,
+		AWSAccessKey: os.Getenv("AWS_ACCESS_KEY_ID"),
+		AWSSecretKey: os.Getenv("AWS_SECRET_ACCESS_KEY"),
+	})
+	if err != nil {
+		log.Fatalf("Failed to initialize secrets manager: %v", err)
+	}
+	defer secretsMgr.Close()
+
+	// Load all secrets
+	secretsMap, err := secretsMgr.LoadAllSecrets(ctx)
+	if err != nil {
+		log.Fatalf("Failed to load secrets: %v", err)
+	}
+
+	// Load configuration with secrets
+	cfg, err := config.LoadWithSecrets(*envFile, secretsMap)
 	if err != nil {
 		log.Fatalf("Failed to load configuration: %v", err)
 	}
 
-	log.Println("Configuration loaded successfully")
+	log.Println("Configuration loaded successfully with secrets")
 
 	// Initialize database connection
 	db, err := client.NewPgxDB(context.Background(), cfg.Database.ToDBConfig())

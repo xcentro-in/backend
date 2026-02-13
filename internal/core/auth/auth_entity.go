@@ -39,9 +39,10 @@ type Session struct {
 	DeviceVersion    int       `json:"deviceVersion"`
 }
 
-// CustomClaims extends JWT registered claims with device information
+// CustomClaims extends JWT registered claims with device information and session ID
 type CustomClaims struct {
 	jwt.RegisteredClaims
+	SessionID     string `json:"session_id"`
 	DeviceType    string `json:"device_type"`
 	DeviceVersion int    `json:"device_version"`
 }

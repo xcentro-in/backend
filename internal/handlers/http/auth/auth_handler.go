@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"strings"
 
 	"github.com/labstack/echo/v4"
 	"xcentro.in/internal/core/auth"
@@ -19,20 +20,20 @@ func placeHolderFn(c echo.Context) error { return c.String(200, "Not Implemented
 // AuthHandler handles HTTP requests for authentication
 // Delegates all business logic to AuthService
 type AuthHandler struct {
-	authService   auth.AuthService
+	authService     auth.AuthService
 	businessService business.BusinessService
-	cookieManager *httputil.CookieManager
+	cookieManager   *httputil.CookieManager
 }
 
 func NewAuthHandler(authService auth.AuthService, businessService business.BusinessService, cfg *config.Config) *AuthHandler {
 	return &AuthHandler{
-		authService:   authService,
+		authService:     authService,
 		businessService: businessService,
-		cookieManager: httputil.NewCookieManager(cfg),
+		cookieManager:   httputil.NewCookieManager(cfg),
 	}
 }
 
-func RegisterAuthRoutes(e *echo.Group, authService auth.AuthService, businessService business.BusinessService, cfg *config.Config) {
+func RegisterAuthRoutes(e *echo.Group, authService auth.AuthService, businessService business.BusinessService, cfg *config.Config, cookieManager *httputil.CookieManager) {
 	authHandler := NewAuthHandler(authService, businessService, cfg)
 
 	authGroup := e.Group("/auth")
@@ -40,29 +41,30 @@ func RegisterAuthRoutes(e *echo.Group, authService auth.AuthService, businessSer
 	// Public routes (rate limiter runs first since no JWT)
 	publicAuth := authGroup.Group("")
 	publicAuth.Use(ratelimiter.MiddlewareDefault())
-	publicAuth.POST("/login", authHandler.HandleLogin)
-	publicAuth.POST("/signup", authHandler.HandleSignup)
+	publicAuth.POST("/login", authHandler.HandleLogin, middleware.TurnstileMiddleware())
+	publicAuth.POST("/signup", authHandler.HandleSignup, middleware.TurnstileMiddleware())
 	publicAuth.POST("/refresh", authHandler.HandleRefreshToken)
 	publicAuth.POST("/logout", authHandler.HandleLogout)
 	publicAuth.GET("/forgot-password", authHandler.HandleForgotPassword)
-	publicAuth.POST("/reset-password", authHandler.HandleResetPassword)
-	publicAuth.POST("/reset-password-with-otp", authHandler.HandleResetPasswordWithOTP)
-	publicAuth.POST("/send-invite-otp", authHandler.HandleSendInviteOTP)
-	publicAuth.POST("/verify-email", authHandler.HandleVerifyEmail)
-	publicAuth.POST("/verify-email-with-mobile", authHandler.HandleVerifyEmailWithMobile)
-	publicAuth.POST("/verify-mobile-otp", authHandler.HandleVerifyMobileOTP)
-	publicAuth.POST("/resend-verification", authHandler.HandleResendEmailVerification)
+	publicAuth.POST("/reset-password", authHandler.HandleResetPassword, middleware.TurnstileMiddleware())
+	publicAuth.POST("/reset-password-with-otp", authHandler.HandleResetPasswordWithOTP, middleware.TurnstileMiddleware())
+	publicAuth.POST("/send-invite-otp", authHandler.HandleSendInviteOTP, middleware.TurnstileMiddleware())
+	publicAuth.POST("/verify-email", authHandler.HandleVerifyEmail, middleware.TurnstileMiddleware())
+	publicAuth.POST("/verify-email-with-mobile", authHandler.HandleVerifyEmailWithMobile, middleware.TurnstileMiddleware())
+	publicAuth.POST("/verify-mobile-otp", authHandler.HandleVerifyMobileOTP, middleware.TurnstileMiddleware())
+	publicAuth.POST("/resend-verification", authHandler.HandleResendEmailVerification, middleware.TurnstileMiddleware())
 
-	// Protected routes (JWT middleware first, then rate limiter can use user ID)
+	// Protected routes (JWT and CSRF middleware first, then rate limiter can use user ID)
 	protectedAuth := authGroup.Group("")
 	protectedAuth.Use(middleware.JWTMiddleware(authService))
+	protectedAuth.Use(middleware.CSRFMiddleware(cookieManager))
 	protectedAuth.Use(ratelimiter.MiddlewareDefault())
 	protectedAuth.POST("/revoke", authHandler.HandleRevokeToken)
 	protectedAuth.POST("/revoke-all", authHandler.HandleRevokeAllTokens)
-	protectedAuth.POST("/generate-mobile-otp", authHandler.HandleGenerateMobileOTP)
-	protectedAuth.POST("/change-password", authHandler.HandleChangePassword)
-	protectedAuth.POST("/send-mobile-update-otp", authHandler.HandleSendMobileUpdateOTP)
-	protectedAuth.POST("/verify-mobile-update", authHandler.HandleVerifyMobileUpdate)
+	protectedAuth.POST("/generate-mobile-otp", authHandler.HandleGenerateMobileOTP, middleware.TurnstileMiddleware())
+	protectedAuth.POST("/change-password", authHandler.HandleChangePassword, middleware.TurnstileMiddleware())
+	protectedAuth.POST("/send-mobile-update-otp", authHandler.HandleSendMobileUpdateOTP, middleware.TurnstileMiddleware())
+	protectedAuth.POST("/verify-mobile-update", authHandler.HandleVerifyMobileUpdate, middleware.TurnstileMiddleware())
 	protectedAuth.GET("/onboarding-status", authHandler.HandleGetBusinessOnboardingFlags)
 
 	// OAuth sub group
@@ -169,6 +171,17 @@ func (ah AuthHandler) HandleLogin(c echo.Context) error {
 	ah.cookieManager.SetAccessTokenCookie(c, response.AccessToken)
 	ah.cookieManager.SetRefreshTokenCookie(c, response.RefreshToken)
 
+	// Extract session ID from access token to generate CSRF token
+	claims, err := ah.authService.ValidateAccessToken(response.AccessToken)
+	if err != nil {
+		logger.Errorf("Failed to validate access token for CSRF generation: %v", err)
+		// Don't fail login, CSRF will be validated on next request
+	} else {
+		// Generate and set CSRF token cookie
+		csrfToken := ah.cookieManager.GenerateCSRFToken(claims.SessionID)
+		ah.cookieManager.SetCSRFTokenCookie(c, csrfToken)
+	}
+
 	return c.JSON(200, map[string]any{
 		"message": "Login successful",
 		"data": map[string]any{
@@ -187,9 +200,15 @@ func (ah AuthHandler) HandleRefreshToken(c echo.Context) error {
 		return c.JSON(401, map[string]any{"message": "Refresh token cookie required", "data": nil})
 	}
 
-	refreshToken := cookie.Value
+	refreshToken := strings.TrimSpace(cookie.Value)
 	if refreshToken == "" {
 		return c.JSON(401, map[string]any{"message": "Refresh token is empty", "data": nil})
+	}
+
+	// Validate token format (minimal sanity check - service layer handles full validation)
+	if len(refreshToken) < 20 {
+		logger.Errorf("Refresh token too short: %d characters", len(refreshToken))
+		return c.JSON(401, map[string]any{"message": "Invalid refresh token format", "data": nil})
 	}
 
 	// Delegate to service
@@ -320,9 +339,17 @@ func (ah AuthHandler) HandleLogout(c echo.Context) error {
 // Sends a password reset email with token link
 func (ah AuthHandler) HandleForgotPassword(c echo.Context) error {
 	// Get email from query parameter
-	email := c.QueryParam("email")
+	email := strings.TrimSpace(c.QueryParam("email"))
 	if email == "" {
 		return c.JSON(400, map[string]any{"message": "Email is required", "data": nil})
+	}
+
+	// Validate email format
+	if v, ok := c.Echo().Validator.(*customValidator.CustomValidator); ok {
+		if err := v.Var(email, "required,email"); err != nil {
+			logger.Errorf("Invalid email format: %s", email)
+			return c.JSON(400, map[string]any{"message": "Invalid email format", "data": nil})
+		}
 	}
 
 	// Delegate to service (always returns success to prevent email enumeration)
@@ -450,12 +477,23 @@ func (ah AuthHandler) HandleChangePassword(c echo.Context) error {
 // HandleGetBusinessOnboardingFlags retrieves the onboarding status flags for a business.
 func (ah AuthHandler) HandleGetBusinessOnboardingFlags(c echo.Context) error {
 	// Get businessID from header
-	businessID := c.Request().Header.Get("X-Business-ID")
+	businessID := strings.TrimSpace(c.Request().Header.Get("X-Business-ID"))
 	if businessID == "" {
 		return c.JSON(400, map[string]interface{}{
 			"error":   "MISSING_BUSINESS_ID",
 			"message": "X-Business-ID header is required",
 		})
+	}
+
+	// Validate UUID format
+	if v, ok := c.Echo().Validator.(*customValidator.CustomValidator); ok {
+		if err := v.Var(businessID, "required,uuid"); err != nil {
+			logger.Errorf("Invalid business ID format: %s", businessID)
+			return c.JSON(400, map[string]interface{}{
+				"error":   "INVALID_BUSINESS_ID",
+				"message": "X-Business-ID must be a valid UUID",
+			})
+		}
 	}
 
 	status, err := ah.businessService.GetBusinessOnboardingFlags(c.Request().Context(), businessID)

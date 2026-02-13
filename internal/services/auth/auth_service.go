@@ -2,11 +2,11 @@ package auth
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 	redis "xcentro.in/internal/adapters/cache/redis/client"
 	"xcentro.in/internal/adapters/cache/redis/keys"
@@ -72,14 +72,15 @@ func NewAuthService(
 	}
 }
 
-// generateToken creates a JWT token with device information
-func (s *AuthService) generateToken(userID string, deviceType string, deviceVersion int, expiry time.Duration) (string, error) {
+// generateToken creates a JWT token with device information and session ID
+func (s *AuthService) generateToken(userID string, sessionID string, deviceType string, deviceVersion int, expiry time.Duration) (string, error) {
 	claims := auth.CustomClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			Subject:   userID,
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(expiry)),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
 		},
+		SessionID:     sessionID,
 		DeviceType:    deviceType,
 		DeviceVersion: deviceVersion,
 	}
@@ -92,14 +93,14 @@ func (s *AuthService) generateToken(userID string, deviceType string, deviceVers
 	return signedToken, nil
 }
 
-// generateAccessToken creates a new short-lived access token with device information
-func (s *AuthService) generateAccessToken(userID string, deviceType string, deviceVersion int) (string, error) {
-	return s.generateToken(userID, deviceType, deviceVersion, s.config.AccessTokenExpiry)
+// generateAccessToken creates a new short-lived access token with device information and session ID
+func (s *AuthService) generateAccessToken(userID string, sessionID string, deviceType string, deviceVersion int) (string, error) {
+	return s.generateToken(userID, sessionID, deviceType, deviceVersion, s.config.AccessTokenExpiry)
 }
 
-// generateRefreshToken creates a new long-lived refresh token with device information
-func (s *AuthService) generateRefreshToken(userID string, deviceType string, deviceVersion int) (string, error) {
-	return s.generateToken(userID, deviceType, deviceVersion, s.config.RefreshTokenExpiry)
+// generateRefreshToken creates a new long-lived refresh token with device information and session ID
+func (s *AuthService) generateRefreshToken(userID string, sessionID string, deviceType string, deviceVersion int) (string, error) {
+	return s.generateToken(userID, sessionID, deviceType, deviceVersion, s.config.RefreshTokenExpiry)
 }
 
 // CreateTokenPair creates a new access and refresh token pair with device session management
@@ -126,6 +127,9 @@ func (s *AuthService) CreateTokenPair(ctx context.Context, userID, userAgent str
 	default:
 		maxSessions = 3 // Fallback
 	}
+
+	// Generate session ID upfront so it can be included in JWT tokens
+	sessionID := uuid.New().String()
 
 	// Use transaction to ensure atomicity
 	err = s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
@@ -161,13 +165,13 @@ func (s *AuthService) CreateTokenPair(ctx context.Context, userID, userAgent str
 			}
 		}
 
-		// Generate tokens with device information
-		accessToken, err = s.generateAccessToken(userID, deviceType, currentVersion)
+		// Generate tokens with device information and session ID
+		accessToken, err = s.generateAccessToken(userID, sessionID, deviceType, currentVersion)
 		if err != nil {
 			return err
 		}
 
-		refreshToken, err = s.generateRefreshToken(userID, deviceType, currentVersion)
+		refreshToken, err = s.generateRefreshToken(userID, sessionID, deviceType, currentVersion)
 		if err != nil {
 			return err
 		}
@@ -175,9 +179,10 @@ func (s *AuthService) CreateTokenPair(ctx context.Context, userID, userAgent str
 		// Hash the refresh token for storage
 		tokenHash := security.HashToken(refreshToken)
 
-		// Store refresh token session in database with device info
-		_, err = txSessionRepo.CreateSession(
+		// Store refresh token session in database with device info and pre-generated session ID
+		err = txSessionRepo.CreateSession(
 			ctx,
+			sessionID,
 			userID,
 			tokenHash,
 			time.Now().Add(s.config.RefreshTokenExpiry),
@@ -219,6 +224,7 @@ func (s *AuthService) RefreshAccessToken(ctx context.Context, refreshToken strin
 	}
 
 	userID := claims.Subject
+	sessionID := claims.SessionID
 	deviceType := claims.DeviceType
 	deviceVersion := claims.DeviceVersion
 	tokenHash := security.HashToken(refreshToken)
@@ -268,8 +274,8 @@ func (s *AuthService) RefreshAccessToken(ctx context.Context, refreshToken strin
 		logger.Warnf("Failed to update last used: %v", err)
 	}
 
-	// Generate new access token with same device info
-	return s.generateAccessToken(userID, deviceType, deviceVersion)
+	// Generate new access token with same device info and session ID
+	return s.generateAccessToken(userID, sessionID, deviceType, deviceVersion)
 }
 
 // RevokeRefreshToken revokes a specific refresh token (logout from one session)
@@ -408,147 +414,6 @@ func (s *AuthService) ValidateAccessTokenWithVersion(ctx context.Context, tokenS
 	}
 
 	return claims, nil
-}
-
-// ValidateAccessTokenWithVersionAndRoles validates token, checks device version, and fetches user roles
-// Uses Redis pipeline for efficient single network call, with DB fallback for cache misses
-// This is the most efficient method for middleware that needs both validation and roles
-// Returns: claims, roles (as interface{}), error
-func (s *AuthService) ValidateAccessTokenWithVersionAndRoles(ctx context.Context, tokenString string) (*auth.CustomClaims, interface{}, error) {
-	// Parse and validate token structure
-	claims, err := s.parseAndValidateToken(tokenString)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	userID := claims.Subject
-	deviceType := claims.DeviceType
-	deviceVersion := claims.DeviceVersion
-
-	// Prepare Redis keys
-	versionKey := keys.User.DeviceVersion(userID, deviceType)
-	rolesKey := keys.Business.UserRoles(userID)
-
-	// Use Redis pipeline to fetch both in one network call
-	pipe := s.rclient.Client.Pipeline()
-	versionCmd := pipe.Get(ctx, versionKey)
-	rolesCmd := pipe.Get(ctx, rolesKey)
-	_, err = pipe.Exec(ctx)
-
-	var cachedVersion int
-	var userRoles []*business.BusinessUserRelation
-	versionCacheHit := false
-	rolesCacheHit := false
-
-	// Check version result
-	if versionCmd.Err() == nil {
-		cachedVersion, _ = versionCmd.Int()
-		versionCacheHit = true
-	}
-
-	// Check roles result
-	if rolesCmd.Err() == nil {
-		if rolesJSON := rolesCmd.Val(); rolesJSON != "" {
-			if err := json.Unmarshal([]byte(rolesJSON), &userRoles); err == nil {
-				rolesCacheHit = true
-			}
-		}
-	}
-
-	// If both are in cache, validate version and return
-	if versionCacheHit && rolesCacheHit {
-		if cachedVersion != deviceVersion {
-			logger.Warnf("Device version mismatch for user %s device %s: token=%d, current=%d", userID, deviceType, deviceVersion, cachedVersion)
-			return nil, nil, fmt.Errorf("SESSION_INVALIDATED")
-		}
-		return claims, userRoles, nil
-	}
-
-	// Cache miss for one or both - fetch from DB
-	logger.Infof("Cache miss - fetching version and/or roles from DB for user %s", userID)
-
-	var dbVersion int
-	var dbRoles interface{}
-
-	// If BOTH version and roles are cache misses, use combined query (1 DB call)
-	if !versionCacheHit && !rolesCacheHit {
-		logger.Infof("Both cache misses - using combined query for user %s", userID)
-		var rolesData interface{}
-		dbVersion, rolesData, err = s.deviceVersionRepo.GetDeviceVersionWithRoles(ctx, userID, deviceType)
-		if err != nil {
-			logger.Errorf("Failed to get device version and roles from DB: %v", err)
-			return nil, nil, fmt.Errorf("failed to validate session")
-		}
-
-		// Convert []map[string]interface{} to []*business.BusinessUserRelation
-		if roleMaps, ok := rolesData.([]map[string]interface{}); ok {
-			convertedRoles := make([]*business.BusinessUserRelation, 0, len(roleMaps))
-			for _, roleMap := range roleMaps {
-				rel := &business.BusinessUserRelation{
-					UserID:       getString(roleMap, "userid"),
-					BID:          getString(roleMap, "bid"),
-					Role:         shared.UserRole(getString(roleMap, "role")),
-					RoleClaim:    shared.UserRole(getString(roleMap, "roleClaim")),
-					AddedAt:      getString(roleMap, "addedAt"),
-					KybInitiated: getBool(roleMap, "kybInitiated"),
-					KycNeeded:    getBool(roleMap, "kycNeeded"),
-					Timestamp:    getString(roleMap, "timestamp"),
-				}
-				convertedRoles = append(convertedRoles, rel)
-			}
-			dbRoles = convertedRoles
-		} else {
-			dbRoles = []*business.BusinessUserRelation{}
-		}
-	} else {
-		// Partial cache hit - fetch only what's missing
-		if !versionCacheHit {
-			dbVersion, err = s.deviceVersionRepo.GetDeviceVersion(ctx, userID, deviceType)
-			if err != nil {
-				logger.Errorf("Failed to get device version from DB: %v", err)
-				return nil, nil, fmt.Errorf("failed to validate session")
-			}
-		} else {
-			dbVersion = cachedVersion
-		}
-
-		if !rolesCacheHit {
-			rolesFromDB, err := s.businessUserRelRepo.FindByUser(ctx, userID)
-			if err != nil {
-				logger.Warnf("Failed to fetch user roles from DB: %v", err)
-				dbRoles = []*business.BusinessUserRelation{} // Empty slice on error
-			} else {
-				dbRoles = rolesFromDB
-			}
-		} else {
-			dbRoles = userRoles
-		}
-	}
-
-	// Validate device version
-	if dbVersion != deviceVersion {
-		logger.Warnf("Device version mismatch for user %s device %s: token=%d, current=%d", userID, deviceType, deviceVersion, dbVersion)
-		return nil, nil, fmt.Errorf("SESSION_INVALIDATED")
-	}
-
-	// Cache the results asynchronously (fire-and-forget)
-	go func() {
-		bgCtx := context.Background()
-
-		if !versionCacheHit {
-			if err := s.rclient.Client.Set(bgCtx, versionKey, dbVersion, keys.TTLDeviceVersion).Err(); err != nil {
-				logger.Warnf("Failed to cache device version: %v", err)
-			}
-		}
-
-		if !rolesCacheHit {
-			if err := s.rclient.SetJSON(bgCtx, rolesKey, dbRoles, keys.TTLUserRoles); err != nil {
-				logger.Warnf("Failed to cache user roles: %v", err)
-			}
-		}
-	}()
-
-	return claims, dbRoles, nil
 }
 
 // parseAndValidateToken is a helper to parse and validate any JWT token
@@ -701,25 +566,6 @@ func (s *AuthService) GetRedisClient() *redis.RedisClient {
 	return s.rclient
 }
 
-// Helper functions for map value extraction
-func getString(m map[string]interface{}, key string) string {
-	if val, ok := m[key]; ok && val != nil {
-		if str, ok := val.(string); ok {
-			return str
-		}
-	}
-	return ""
-}
-
-func getBool(m map[string]interface{}, key string) bool {
-	if val, ok := m[key]; ok && val != nil {
-		if b, ok := val.(bool); ok {
-			return b
-		}
-	}
-	return false
-}
-
 // Signup handles complete user registration flow
 func (s *AuthService) Signup(ctx context.Context, email, password string) (*auth.SignupResponse, error) {
 	logger.Info("Processing signup for email: %s", email)
@@ -858,8 +704,8 @@ func (s *AuthService) SendPasswordResetEmail(ctx context.Context, emailAddr stri
 	// Hash the token before storing in database
 	hashedToken := security.HashTokenWithPepper(resetToken, s.bcryptConfig.Pepper)
 
-	// Calculate timestamps - 1 hour expiry for password reset
-	now := time.Now()
+	// Calculate timestamps - 1 hour expiry for password reset (IMPORTANT: Use UTC)
+	now := time.Now().UTC()
 	expiresAt := now.Add(1 * time.Hour)
 
 	// Create verification code record
@@ -872,6 +718,9 @@ func (s *AuthService) SendPasswordResetEmail(ctx context.Context, emailAddr stri
 		Used:          false,
 		RetryAttempts: 0,
 	}
+
+	logger.Debugf("Creating password reset code: user_id=%s, expires_at=%s (UTC), duration=1h",
+		userObj.Id, expiresAt.Format(time.RFC3339))
 
 	// Store verification code in database
 	if err := s.userRepo.CreateVerificationCode(ctx, verificationCode); err != nil {
@@ -1063,8 +912,8 @@ func (s *AuthService) SendEmailVerification(ctx context.Context, userID string) 
 	// Hash the token before storing in database (SECURITY: Never store plaintext tokens)
 	hashedToken := security.HashTokenWithPepper(verificationToken, s.bcryptConfig.Pepper)
 
-	// Calculate proper timestamps
-	now := time.Now()
+	// Calculate proper timestamps (IMPORTANT: Use UTC to avoid timezone issues)
+	now := time.Now().UTC()
 	expiresAt := now.Add(24 * time.Hour) // 24 hour expiry for email verification
 
 	// Create verification code record with 24 hour expiry
@@ -1077,6 +926,9 @@ func (s *AuthService) SendEmailVerification(ctx context.Context, userID string) 
 		Used:          false,
 		RetryAttempts: 0,
 	}
+
+	logger.Debugf("Creating email verification code: user_id=%s, expires_at=%s (UTC), duration=24h",
+		userID, expiresAt.Format(time.RFC3339))
 
 	// Store verification code in database
 	if err := s.userRepo.CreateVerificationCode(ctx, verificationCode); err != nil {
@@ -1156,15 +1008,22 @@ func (s *AuthService) VerifyEmailWithToken(ctx context.Context, userID, token, s
 			return fmt.Errorf("verification token already used")
 		}
 
-		// Check if token is expired
+		// Check if token is expired (use UTC for consistency)
 		expiresAt, err := time.Parse(time.RFC3339, verificationCode.ExpiresAt)
 		if err != nil {
 			return fmt.Errorf("invalid expiration time format")
 		}
+		expiresAt = expiresAt.UTC() // Ensure UTC timezone
 
-		if time.Now().After(expiresAt) {
+		nowUTC := time.Now().UTC()
+		if nowUTC.After(expiresAt) {
+			logger.Warnf("Email verification token expired: user_id=%s, expires_at=%s, current_time=%s, age=%v",
+				userID, expiresAt.Format(time.RFC3339), nowUTC.Format(time.RFC3339), nowUTC.Sub(expiresAt))
 			return fmt.Errorf("verification token has expired")
 		}
+
+		logger.Debugf("Email verification token valid: user_id=%s, expires_at=%s, current_time=%s, remaining=%v",
+			userID, expiresAt.Format(time.RFC3339), nowUTC.Format(time.RFC3339), expiresAt.Sub(nowUTC))
 
 		// Mark verification code as used
 		if err := txUserRepo.MarkVerificationCodeAsUsed(ctx, verificationCode.ID); err != nil {
@@ -1550,10 +1409,17 @@ func (s *AuthService) ResetPasswordWithMobileOTP(ctx context.Context, userID, to
 		if err != nil {
 			return fmt.Errorf("invalid expiration time format")
 		}
+		resetExpiresAt = resetExpiresAt.UTC() // Ensure UTC timezone
 
-		if time.Now().After(resetExpiresAt) {
+		nowUTC := time.Now().UTC()
+		if nowUTC.After(resetExpiresAt) {
+			logger.Warnf("Password reset token expired: user_id=%s, expires_at=%s, current_time=%s, age=%v",
+				userID, resetExpiresAt.Format(time.RFC3339), nowUTC.Format(time.RFC3339), nowUTC.Sub(resetExpiresAt))
 			return fmt.Errorf("reset token has expired")
 		}
+
+		logger.Debugf("Password reset token valid: user_id=%s, expires_at=%s, current_time=%s, remaining=%v",
+			userID, resetExpiresAt.Format(time.RFC3339), nowUTC.Format(time.RFC3339), resetExpiresAt.Sub(nowUTC))
 
 		// Verify mobile OTP
 		otpCode, err := txUserRepo.GetVerificationCodeByUserIDAndCode(ctx, userID, hashedOTP, shared.MobileVerification)

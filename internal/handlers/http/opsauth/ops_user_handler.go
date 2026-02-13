@@ -3,6 +3,7 @@ package opsauth
 import (
 	"github.com/labstack/echo/v4"
 	"xcentro.in/internal/core/opsauth"
+	"xcentro.in/internal/shared/httputil"
 	"xcentro.in/internal/shared/logger"
 )
 
@@ -41,11 +42,12 @@ func (h *OpsUserHandler) HandleGetProfile(c echo.Context) error {
 }
 
 // RegisterOpsUserRoutes registers ops user routes (all routes require JWT authentication)
-func RegisterOpsUserRoutes(e *echo.Group, authService opsauth.OpsAuthService) {
+func RegisterOpsUserRoutes(e *echo.Group, authService opsauth.OpsAuthService, cookieManager *httputil.CookieManager) {
 	handler := NewOpsUserHandler(authService)
 
 	userGroup := e.Group("/user")
 
 	// Protected routes (require JWT middleware)
+	// GET requests don't need CSRF middleware
 	userGroup.GET("/profile", handler.HandleGetProfile)
 }

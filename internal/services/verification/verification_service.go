@@ -45,7 +45,6 @@ type PANCOMData struct {
 	EntityType     string                 `json:"entity_type"`
 	Status         string                 `json:"status"`
 	PANCOMResponse map[string]interface{} `json:"pan_com_response"`
-	PANGSTResponse map[string]interface{} `json:"pan_gst_response"`
 }
 
 // CINData represents the verified CIN information
@@ -132,14 +131,11 @@ func (s *DocumentVerificationService) VerifyGSTIN(ctx context.Context, gstin str
 }
 
 // VerifyPANCOM verifies a PAN (Company) and returns comprehensive information
-// This method makes two API calls:
-// 1. PAN_COM API for comprehensive PAN details
-// 2. PAN_GST API to get GST numbers associated with the PAN
 func (s *DocumentVerificationService) VerifyPANCOM(ctx context.Context, pan string, transID string) (*PANCOMData, error) {
 	s.logger.Infof("Verifying PAN (Company): %s with transID: %s", pan, transID)
 
-	// First API call: PAN_COM
-	panComReq := authbridge.NewPANRequest(pan, transID)
+	// PAN_COM API call for comprehensive PAN details
+	panComReq := authbridge.NewPANCOMRequest(pan, transID)
 	panComResult, err := s.authBridgeClient.SearchDocument(panComReq)
 	if err != nil {
 		s.logger.Errorf("PAN_COM verification failed: %v", err)
@@ -158,22 +154,10 @@ func (s *DocumentVerificationService) VerifyPANCOM(ctx context.Context, pan stri
 		return nil, fmt.Errorf("PAN verification failed: %s (status code: %.0f)", errorMsg, status)
 	}
 
-	// Second API call: PAN_GST
-	panGSTReq := authbridge.NewPANGSTRequest(pan, transID+"-gst")
-	panGSTResult, err := s.authBridgeClient.SearchDocument(panGSTReq)
-	if err != nil {
-		s.logger.Warnf("PAN_GST verification failed for %s: %v", pan, err)
-		// Don't fail the entire request if PAN_GST fails, just log the warning
-		panGSTResult = map[string]interface{}{
-			"error": err.Error(),
-		}
-	}
-
 	// Extract relevant fields
 	data := &PANCOMData{
 		PAN:            pan,
 		PANCOMResponse: panComResult,
-		PANGSTResponse: panGSTResult,
 	}
 
 	// TODO: Parse and validate response fields once AuthBridge response structure is stable
@@ -343,6 +327,16 @@ func (s *DocumentVerificationService) VerifyPANAadhaar(ctx context.Context, pan 
 		}
 		s.logger.Errorf("PAN-Aadhaar verification failed for PAN %s: status=%v, message=%s", pan, status, errorMsg)
 		return nil, fmt.Errorf("PAN-Aadhaar verification failed: %s (status code: %.0f)", errorMsg, status)
+	}
+
+	// COMPLIANCE: Remove Aadhaar number from response before storing in database
+	// Navigate to msg.pan_aadhaar_linking and remove the aadhaar field
+	if msgData, ok := result["msg"].(map[string]interface{}); ok {
+		if panAadhaarData, ok := msgData["pan_aadhaar_linking"].(map[string]interface{}); ok {
+			// Remove the aadhaar field for compliance
+			delete(panAadhaarData, "aadhaar")
+			s.logger.Info("Removed Aadhaar number from response for compliance")
+		}
 	}
 
 	s.logger.Infof("PAN-Aadhaar link verification successful for PAN: %s", pan)

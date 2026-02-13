@@ -8,7 +8,7 @@ import (
 // SessionRepository defines database operations for refresh token sessions
 type SessionRepository interface {
 	// CreateSession creates a new refresh token session with device information
-	CreateSession(ctx context.Context, userID, tokenHash string, expiresAt time.Time, userAgent string, deviceType string, deviceVersion int) (string, error)
+	CreateSession(ctx context.Context, sessionID string, userID string, tokenHash string, expiresAt time.Time, userAgent string, deviceType string, deviceVersion int) error
 
 	// GetSessionByTokenHash retrieves a session by user ID and refresh token hash
 	GetSessionByTokenHash(ctx context.Context, userID, tokenHash string) (*Session, error)
@@ -39,9 +39,6 @@ type SessionRepository interface {
 type DeviceVersionRepository interface {
 	// GetDeviceVersion retrieves the current version for a user's device type
 	GetDeviceVersion(ctx context.Context, userID string, deviceType string) (int, error)
-
-	// GetDeviceVersionWithRoles retrieves device version and user roles in a single query
-	GetDeviceVersionWithRoles(ctx context.Context, userID string, deviceType string) (int, interface{}, error)
 
 	// IncrementDeviceVersion increments the version for a user's device type and returns new version
 	IncrementDeviceVersion(ctx context.Context, userID string, deviceType string) (int, error)

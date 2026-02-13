@@ -6,6 +6,8 @@ import (
 	"github.com/labstack/echo/v4"
 	"xcentro.in/internal/core/auth"
 	"xcentro.in/internal/core/user"
+	"xcentro.in/internal/middleware"
+	"xcentro.in/internal/shared/httputil"
 	"xcentro.in/internal/shared/logger"
 	"xcentro.in/internal/shared/validator"
 )
@@ -27,20 +29,20 @@ func NewOpsUserHandler(userService user.UserService, authService auth.AuthServic
 }
 
 // RegisterOpsUserRoutes registers all ops dashboard user routes
-func RegisterOpsUserRoutes(e *echo.Group, userService user.UserService, authService auth.AuthService) {
-	handler := NewOpsUserHandler(userService, authService)
+func RegisterOpsUserRoutes(e *echo.Group, userService user.UserService, cookieManager *httputil.CookieManager) {
+	handler := NewOpsUserHandler(userService, nil)
 
 	userGroup := e.Group("/user")
 
-	// User search endpoint
+	// GET routes (no CSRF needed)
 	userGroup.GET("/search", handler.SearchUsers)
-
-	// User details endpoint
 	userGroup.GET("/:user_id", handler.GetUserDetails)
 
-	// Ops verification endpoints
-	userGroup.POST("/:user_id/reload-pan", handler.ReloadUserPANData)
-	userGroup.POST("/:user_id/kyc-action", handler.KYCAction)
+	// POST routes (require CSRF middleware)
+	protectedGroup := userGroup.Group("")
+	protectedGroup.Use(middleware.CSRFMiddleware(cookieManager))
+	protectedGroup.POST("/:user_id/reload-pan", handler.ReloadUserPANData)
+	protectedGroup.POST("/:user_id/kyc-action", handler.KYCAction)
 }
 
 // SearchUsers handles GET /users/search?business_id=biz-123&business_id=biz-456&q=john

@@ -22,6 +22,7 @@ jobs:
       packages: write
 
     strategy:
+      fail-fast: false
       matrix:
         include:
           - dockerfile: Dockerfile.api
@@ -33,9 +34,9 @@ jobs:
           - dockerfile: Dockerfile.notification_worker
             image-suffix: notification-worker
             context: .
-          - dockerfile: Dockerfile.payout_worker
-            image-suffix: payout-worker
-            context: .
+          # - dockerfile: Dockerfile.payout_worker
+          #   image-suffix: payout-worker
+          #   context: .
           - dockerfile: Dockerfile.migrate
             image-suffix: migrate
             context: .

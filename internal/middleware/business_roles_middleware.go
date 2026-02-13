@@ -24,12 +24,6 @@ func BusinessRolesMiddleware(
 
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
-			// Check if roles are already set by JWT middleware (optimization)
-			if existingRoles := c.Get("userRoles"); existingRoles != nil {
-				// Roles already fetched by JWT middleware, skip redundant fetch
-				return next(c)
-			}
-
 			userID := c.Get("userId").(string)
 			ctx := c.Request().Context()
 

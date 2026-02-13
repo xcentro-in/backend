@@ -9,7 +9,7 @@ import (
 )
 
 // JWTMiddleware creates a middleware that validates JWT access tokens from cookies
-// Uses optimized Redis pipeline to fetch both device version and user roles in one network call
+// and validates device version for session management (cached in Redis)
 func JWTMiddleware(authService auth.AuthService) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
@@ -30,9 +30,9 @@ func JWTMiddleware(authService auth.AuthService) echo.MiddlewareFunc {
 				})
 			}
 
-			// Validate token with device version check and fetch roles (uses Redis pipeline)
-			// This performs ONE Redis network call to fetch both version and roles
-			claims, roles, err := authService.ValidateAccessTokenWithVersionAndRoles(c.Request().Context(), tokenString)
+			// Validate token with device version check (for session management)
+			// Device version is cached in Redis for performance
+			claims, err := authService.ValidateAccessTokenWithVersion(c.Request().Context(), tokenString)
 			if err != nil {
 				// Check if it's an expiration error
 				if errors.Is(err, jwt.ErrTokenExpired) {
@@ -57,9 +57,9 @@ func JWTMiddleware(authService auth.AuthService) echo.MiddlewareFunc {
 				})
 			}
 
-			// Set userID and roles in context for downstream handlers
+			// Set userID and sessionID in context for downstream handlers
 			c.Set("userId", claims.Subject)
-			c.Set("userRoles", roles)
+			c.Set("sessionId", claims.SessionID)
 
 			// Continue to next handler
 			return next(c)

@@ -7,9 +7,9 @@ import (
 
 // OpsSessionRepository defines database operations for ops user sessions
 type OpsSessionRepository interface {
-	// CreateSession creates a new ops user session
+	// CreateSession creates a new ops user session with pre-generated session ID
 	// oidcRefreshToken should already be encrypted before calling this
-	CreateSession(ctx context.Context, opsUserID, refreshTokenHash, oidcRefreshToken string, expiresAt time.Time, userAgent string) (string, error)
+	CreateSession(ctx context.Context, sessionID string, opsUserID string, refreshTokenHash string, oidcRefreshToken string, expiresAt time.Time, userAgent string) error
 
 	// GetSessionByTokenHash retrieves a session by ops user ID and refresh token hash
 	GetSessionByTokenHash(ctx context.Context, opsUserID, refreshTokenHash string) (*OpsSession, error)

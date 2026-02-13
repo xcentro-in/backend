@@ -26,44 +26,44 @@ func (r *PgOpsSessionRepository) WithTx(tx interface{}) opsauth.OpsSessionReposi
 
 func (r *PgOpsSessionRepository) CreateSession(
 	ctx context.Context,
+	sessionID string,
 	opsUserID string,
 	refreshTokenHash string,
 	oidcRefreshToken string,
 	expiresAt time.Time,
 	userAgent string,
-) (string, error) {
-	logger.Infof("Creating ops session for user: %s", opsUserID)
+) error {
+	logger.Infof("Creating ops session for user: %s with session ID: %s", opsUserID, sessionID)
 
 	query := `
 		INSERT INTO xcentro.ops_session_table (
+			session_id,
 			ops_user_id,
 			refresh_token_hash,
 			oidc_refresh_token,
 			expires_at,
 			user_agent
 		)
-		VALUES ($1, $2, $3, $4, $5)
-		RETURNING session_id
+		VALUES ($1, $2, $3, $4, $5, $6)
 	`
-
-	var sessionID string
-	err := r.querier.QueryRow(
+	_, err := r.querier.Exec(
 		ctx,
 		query,
+		sessionID,
 		opsUserID,
 		refreshTokenHash,
 		oidcRefreshToken,
 		expiresAt,
 		userAgent,
-	).Scan(&sessionID)
+	)
 
 	if err != nil {
 		logger.Errorf("Failed to create ops session: %v", err)
-		return "", fmt.Errorf("failed to create ops session: %w", err)
+		return fmt.Errorf("failed to create ops session: %w", err)
 	}
 
 	logger.Infof("Ops session created successfully: session_id=%s", sessionID)
-	return sessionID, nil
+	return nil
 }
 
 func (r *PgOpsSessionRepository) GetSessionByTokenHash(

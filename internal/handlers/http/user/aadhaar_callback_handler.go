@@ -1,7 +1,9 @@
 package user
 
 import (
+	"encoding/base64"
 	"net/http"
+	"strings"
 
 	"github.com/labstack/echo/v4"
 	"xcentro.in/internal/core/user"
@@ -44,12 +46,24 @@ func (h *AadhaarCallbackHandler) HandleRedirectCallback(c echo.Context) error {
 	csp := utils.GenerateCSPHeader(nonce)
 	c.Response().Header().Set("Content-Security-Policy", csp)
 
-	// Log all query parameters
+	// Sanitize and log query parameters (prevent log injection)
 	log.Info("Aadhaar callback received")
-	log.Info("Query parameters:")
-	for key, values := range c.QueryParams() {
-		for _, value := range values {
-			log.Infof("  %s: %s", key, value)
+	queryParams := c.QueryParams()
+	if len(queryParams) == 0 {
+		log.Warn("No query parameters received in Aadhaar callback")
+	} else {
+		log.Info("Query parameters:")
+		for key, values := range queryParams {
+			for _, value := range values {
+				// Sanitize for logging: trim, limit length, remove newlines
+				sanitized := strings.TrimSpace(value)
+				if len(sanitized) > 500 {
+					sanitized = sanitized[:500] + "...[truncated]"
+				}
+				sanitized = strings.ReplaceAll(sanitized, "\n", "")
+				sanitized = strings.ReplaceAll(sanitized, "\r", "")
+				log.Infof("  %s: %s", key, sanitized)
+			}
 		}
 	}
 
@@ -89,10 +103,24 @@ func (h *AadhaarCallbackHandler) HandleWebhook(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid request format"})
 	}
 
-	// Validate input
+	// Trim and validate input
+	req.ResponseData = strings.TrimSpace(req.ResponseData)
+
 	if req.ResponseData == "" {
 		log.Error("Empty response data in webhook request")
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Missing response data"})
+	}
+
+	// Validate length (max 50KB)
+	if len(req.ResponseData) > 50000 {
+		log.Errorf("Response data too large: %d bytes", len(req.ResponseData))
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Response data too large"})
+	}
+
+	// Validate base64 format
+	if !isValidBase64(req.ResponseData) {
+		log.Error("Invalid base64 format in response data")
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid response data format"})
 	}
 
 	// Call service method to process the webhook
@@ -103,3 +131,12 @@ func (h *AadhaarCallbackHandler) HandleWebhook(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]string{"status": "success"})
 }
 
+// isValidBase64 validates if a string is valid base64 format
+func isValidBase64(s string) bool {
+	_, err := base64.StdEncoding.DecodeString(s)
+	if err != nil {
+		// Try URL encoding as fallback
+		_, err = base64.URLEncoding.DecodeString(s)
+	}
+	return err == nil
+}

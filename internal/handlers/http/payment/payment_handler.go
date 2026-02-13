@@ -20,6 +20,7 @@ import (
 	"xcentro.in/internal/handlers/http/common"
 	"xcentro.in/internal/middleware"
 	"xcentro.in/internal/services/payments"
+	"xcentro.in/internal/shared/httputil"
 	"xcentro.in/internal/shared/logger"
 	"xcentro.in/internal/shared/ratelimiter"
 )
@@ -1257,13 +1258,8 @@ func (h *PaymentHandler) GetPaymentSourcesWithFees(c echo.Context) error {
 	}
 
 	// Validate business_id
-	if req.BusinessID == "" {
-		h.logger.Warn("business_id is missing in request")
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "missing_business_id",
-			"message": "business_id is required in request body",
-		})
-	}
+	businessID := c.Request().Header.Get("X-Business-ID")
+	req.BusinessID = businessID
 
 	// Round base amount to nearest integer (paise)
 	baseAmountInt := int64(req.BaseAmount + 0.5) // Round to nearest int64
@@ -1391,22 +1387,27 @@ func RegisterPaymentRoutes(
 	payeeRelationRepo payeeCore.BusinessPayeeRelationRepository,
 	storedCardRepo payment.StoredCardRepository,
 	bankAccountRepo payment.BankAccountRepository,
+	businessUserRelRepo business.BusinessUserRelationRepository,
+	rclient *redis_client.RedisClient,
+	cookieManager *httputil.CookieManager,
 	log *logger.Logger,
 ) {
 	handler := NewPaymentHandler(paymentService, paymentSourceService, walletService, voucherRepo, stateChangeRepo, payeeRelationRepo, storedCardRepo, bankAccountRepo, log)
 
-	// Apply JWT middleware to all payment routes
+	// Apply JWT, BusinessAccess, and CSRF middleware to all payment routes
 	group.Use(middleware.JWTMiddleware(authService))
+	group.Use(middleware.BusinessAccessMiddleware(businessUserRelRepo, rclient))
+	group.Use(middleware.CSRFMiddleware(cookieManager))
 	group.Use(ratelimiter.MiddlewareDefault())
 
 	// Core payment operations
-	group.POST("/get_fee_rules", handler.GetFeeRules)
-	group.POST("/tokenize", handler.Tokenize)
-	group.POST("/make_payment", handler.MakePayment)
-	group.POST("/retry", handler.RetryPayment) // Retry failed/pending payment
+	group.POST("/get_fee_rules", handler.GetFeeRules, middleware.TurnstileMiddleware())
+	group.POST("/tokenize", handler.Tokenize, middleware.TurnstileMiddleware())
+	group.POST("/make_payment", handler.MakePayment, middleware.TurnstileMiddleware())
+	group.POST("/retry", handler.RetryPayment, middleware.TurnstileMiddleware()) // Retry failed/pending payment
 
 	// Phase 10: Payment source selection with context-aware fees
-	group.POST("/get_payment_sources_with_fees", handler.GetPaymentSourcesWithFees)
+	group.POST("/get_payment_sources_with_fees", handler.GetPaymentSourcesWithFees, middleware.TurnstileMiddleware())
 
 	// Payment list and details for dashboard/history
 	group.GET("/list", handler.GetPaymentList)
@@ -1414,17 +1415,18 @@ func RegisterPaymentRoutes(
 }
 
 // RegisterWalletRoutes registers all wallet management routes
-func RegisterWalletRoutes(group *echo.Group, paymentService *payments.PaymentService, paymentSourceService *payments.PaymentSourceService, walletService business_rules.WalletService, authService auth.AuthService, storedCardRepo payment.StoredCardRepository, businessUserRelRepo business.BusinessUserRelationRepository, rclient *redis_client.RedisClient, log *logger.Logger) {
+func RegisterWalletRoutes(group *echo.Group, paymentService *payments.PaymentService, paymentSourceService *payments.PaymentSourceService, walletService business_rules.WalletService, authService auth.AuthService, storedCardRepo payment.StoredCardRepository, businessUserRelRepo business.BusinessUserRelationRepository, rclient *redis_client.RedisClient, cookieManager *httputil.CookieManager, log *logger.Logger) {
 	// Wallet routes need storedCardRepo for card status updates
 	handler := NewPaymentHandler(paymentService, paymentSourceService, walletService, nil, nil, nil, storedCardRepo, nil, log)
 
-	// Apply JWT middleware to all wallet routes
+	// Apply JWT and CSRF middleware to all wallet routes
 	group.Use(middleware.JWTMiddleware(authService))
+	group.Use(middleware.CSRFMiddleware(cookieManager))
 	group.Use(ratelimiter.MiddlewareDefault())
 
 	// Wallet operations
-	group.GET("", handler.FetchWallet)                            // GET /wallet - fetch wallet with inactive cards
-	group.POST("/add_source", handler.AddPaymentSource)           // POST /wallet/add_source - add new payment source
+	group.GET("", handler.FetchWallet)                                                                                                // GET /wallet - fetch wallet with inactive cards
+	group.POST("/add_source", handler.AddPaymentSource)                                                                               // POST /wallet/add_source - add new payment source
 	group.PATCH("/cards/:card_id/status", handler.UpdateCardStatus, middleware.BusinessRolesMiddleware(businessUserRelRepo, rclient)) // PATCH /wallet/cards/:card_id/status - toggle card active/inactive (owner only)
 }
 
@@ -1810,19 +1812,19 @@ func (h *PaymentHandler) RetryPayment(c echo.Context) error {
 		"status":  "success",
 		"message": "Payment retry initiated successfully",
 		"data": map[string]any{
-			"payment_id":            retryResponse.PaymentID,
-			"original_payment_id":   req.OriginalPaymentID,
-			"status":                string(retryResponse.Status),
-			"amount":                retryResponse.Amount,
-			"total_amount":          retryResponse.TotalAmount,
-			"fee_amount":            retryResponse.FeeAmount,
-			"currency":              string(retryResponse.Currency),
-			"payment_method":        string(retryResponse.PaymentMethod),
-			"gateway_used":          string(retryResponse.GatewayUsed),
-			"redirect_url":          retryResponse.RedirectURL,
-			"created_at":            retryResponse.CreatedAt.Format("2006-01-02T15:04:05Z"),
-			"is_retry":              true,
-			"retry_count":           1,
+			"payment_id":          retryResponse.PaymentID,
+			"original_payment_id": req.OriginalPaymentID,
+			"status":              string(retryResponse.Status),
+			"amount":              retryResponse.Amount,
+			"total_amount":        retryResponse.TotalAmount,
+			"fee_amount":          retryResponse.FeeAmount,
+			"currency":            string(retryResponse.Currency),
+			"payment_method":      string(retryResponse.PaymentMethod),
+			"gateway_used":        string(retryResponse.GatewayUsed),
+			"redirect_url":        retryResponse.RedirectURL,
+			"created_at":          retryResponse.CreatedAt.Format("2006-01-02T15:04:05Z"),
+			"is_retry":            true,
+			"retry_count":         1,
 		},
 	}
 

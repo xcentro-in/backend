@@ -29,21 +29,19 @@ func (r *PgSessionRepository) WithTx(tx interface{}) auth.SessionRepository {
 	}
 }
 
-// CreateSession creates a new refresh token session with device information
-func (r *PgSessionRepository) CreateSession(ctx context.Context, userID, tokenHash string, expiresAt time.Time, userAgent string, deviceType string, deviceVersion int) (string, error) {
+// CreateSession creates a new refresh token session with device information and pre-generated session ID
+func (r *PgSessionRepository) CreateSession(ctx context.Context, sessionID string, userID string, tokenHash string, expiresAt time.Time, userAgent string, deviceType string, deviceVersion int) error {
 	query := `
-		INSERT INTO xcentro.user_tokens (user_id, refresh_token_hash, expires_at, user_agent, device_type, device_version)
-		VALUES ($1, $2, $3, $4, $5, $6)
-		RETURNING session_id
+		INSERT INTO xcentro.user_tokens (session_id, user_id, refresh_token_hash, expires_at, user_agent, device_type, device_version)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
 	`
 
-	var sessionID string
-	err := r.querier.QueryRow(ctx, query, userID, tokenHash, expiresAt, userAgent, deviceType, deviceVersion).Scan(&sessionID)
+	_, err := r.querier.Exec(ctx, query, sessionID, userID, tokenHash, expiresAt, userAgent, deviceType, deviceVersion)
 	if err != nil {
-		return "", fmt.Errorf("failed to create session: %w", err)
+		return fmt.Errorf("failed to create session: %w", err)
 	}
 
-	return sessionID, nil
+	return nil
 }
 
 // GetSessionByTokenHash retrieves a session by user ID and refresh token hash

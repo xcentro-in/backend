@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:18-trixie
+    image: ghcr.io/xcentro-in/infra/postgres:main-cfdeee5
     container_name: xcentro-postgres
     restart: unless-stopped
     environment:
@@ -10,7 +10,11 @@ services:
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
-      - pg_data:/var/lib/postgresql/
+      # Standard Postgres data path
+      - postgres_data:/var/lib/postgresql/
+      # Configs
+      - ./custom.conf:/etc/postgresql/custom.conf:ro
+    command: ["postgres", "-c", "config_file=/etc/postgresql/custom.conf"]
 
   redis:
     image: redis:8-bookworm
@@ -28,5 +32,5 @@ services:
       - ./redis-entrypoint.sh:/usr/local/etc/redis/redis-entrypoint.sh:ro
 
 volumes:
-  pg_data:
+  postgres_data:
   redis_data:

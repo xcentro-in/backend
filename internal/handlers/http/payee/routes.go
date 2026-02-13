@@ -5,25 +5,28 @@ import (
 	"xcentro.in/internal/core/auth"
 	"xcentro.in/internal/middleware"
 	payeeSvc "xcentro.in/internal/services/payee"
-	"xcentro.in/internal/shared/ratelimiter"
+	"xcentro.in/internal/shared/httputil"
 	"xcentro.in/internal/shared/logger"
 )
 
 // RegisterPayeeRoutes registers all payee-related routes
-func RegisterPayeeRoutes(group *echo.Group, payeeService *payeeSvc.PayeeService, authService auth.AuthService) {
+func RegisterPayeeRoutes(group *echo.Group, payeeService *payeeSvc.PayeeService, authService auth.AuthService, cookieManager *httputil.CookieManager) {
 	handler := NewPayeeHandler(payeeService, logger.GetDefault())
 
-	// Apply JWT middleware to all payee routes
-	group.Use(middleware.JWTMiddleware(authService))
-	group.Use(ratelimiter.MiddlewareDefault())
+	// Apply CSRF middleware to all payee routes (JWT and BusinessAccess already applied in cmd/api/routes.go)
+	group.Use(middleware.CSRFMiddleware(cookieManager))
+
 
 	// Payee management endpoints
-	group.POST("", handler.OnboardPayee)                       // POST /payees
+	group.POST("", handler.OnboardPayee, middleware.TurnstileMiddleware())                       // POST /payees
 	group.GET("", handler.GetPayees)                           // GET /payees
 	group.GET("/details/:relation_id", handler.GetPayeeDetails) // GET /payees/details/:relation_id
 	group.GET("/:relation_id/acc_details", handler.GetPayeeAccountDetails) // GET /payees/:relation_id/acc_details - Lightweight account details
-	group.PATCH("/:relation_id/status", handler.UpdatePayeeStatus) // PATCH /payees/:relation_id/status - Toggle active status
-	group.DELETE("/:payee_id/accounts/:account_id", handler.DeactivatePayee) // DELETE /payees/:id/accounts/:id (kept for now)
+	group.PATCH("/:relation_id/status", handler.UpdatePayeeStatus, middleware.TurnstileMiddleware()) // PATCH /payees/:relation_id/status - Toggle active status
+	// TODO: wrongly implemented, path is suppsoed to update the payee details
+	// TODO: Delete is supposed to deactivate
+	// TODO: frontend is calling PATCH to deactivate, need to FIX IT !
+	group.DELETE("/:payee_id/accounts/:account_id", handler.DeactivatePayee, middleware.TurnstileMiddleware()) // DELETE /payees/:id/accounts/:id (kept for now)
 
 	// Employee remuneration document upload endpoints
 	group.GET("/remuneration/upload-url", handler.GetRemunerationDocumentUploadURL)         // GET /payees/remuneration/upload-url?relation_id=xxx

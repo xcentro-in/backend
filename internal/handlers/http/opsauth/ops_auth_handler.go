@@ -15,17 +15,17 @@ import (
 
 // OpsAuthHandler handles OAuth2/OIDC authentication requests for ops dashboard
 type OpsAuthHandler struct {
-	authService    opsauth.OpsAuthService
-	cookieManager  *httputil.CookieManager
-	frontendURL    string
+	authService   opsauth.OpsAuthService
+	cookieManager *httputil.CookieManager
+	frontendURL   string
 }
 
 // NewOpsAuthHandler creates a new ops authentication handler
 func NewOpsAuthHandler(authService opsauth.OpsAuthService, cfg *config.Config) *OpsAuthHandler {
 	return &OpsAuthHandler{
-		authService:    authService,
-		cookieManager:  httputil.NewOpsCookieManager(cfg),
-		frontendURL:    cfg.Frontend.URL,
+		authService:   authService,
+		cookieManager: httputil.NewOpsCookieManager(cfg),
+		frontendURL:   cfg.Frontend.URL,
 	}
 }
 
@@ -68,7 +68,7 @@ func (h *OpsAuthHandler) HandleLogin(c echo.Context) error {
 func (h *OpsAuthHandler) HandleCallback(c echo.Context) error {
 	logger.Info("Processing OAuth2 callback")
 
-	// Get and validate code parameter
+	// Get authorization code (will be validated by Entra ID when exchanged for tokens)
 	code := strings.TrimSpace(c.QueryParam("code"))
 	if code == "" {
 		logger.Error("Missing authorization code")
@@ -82,11 +82,17 @@ func (h *OpsAuthHandler) HandleCallback(c echo.Context) error {
 		return c.JSON(400, map[string]any{"message": "Missing state parameter", "data": nil})
 	}
 
+	// Validate state length (CSRF protection requires sufficient entropy)
+	if len(state) < 32 || len(state) > 500 {
+		logger.Errorf("Invalid state parameter length: %d", len(state))
+		return c.JSON(400, map[string]any{"message": "Invalid state parameter format", "data": nil})
+	}
+
 	// Verify state for CSRF protection
 	stateCookie, err := c.Cookie("oauth_state")
 	if err != nil || stateCookie.Value != state {
-		logger.Errorf("Invalid state parameter: %v", err)
-		return c.JSON(400, map[string]any{"message": "Invalid state parameter", "data": nil})
+		logger.Errorf("Invalid state parameter - CSRF check failed: %v", err)
+		return c.JSON(400, map[string]any{"message": "Invalid state parameter - CSRF check failed", "data": nil})
 	}
 
 	// Clear state cookie
@@ -110,6 +116,17 @@ func (h *OpsAuthHandler) HandleCallback(c echo.Context) error {
 	// Set authentication cookies
 	h.cookieManager.SetAccessTokenCookie(c, response.AccessToken)
 	h.cookieManager.SetRefreshTokenCookie(c, response.RefreshToken)
+
+	// Extract session ID from access token to generate CSRF token
+	claims, err := h.authService.ValidateAccessToken(response.AccessToken)
+	if err != nil {
+		logger.Errorf("Failed to validate access token for CSRF generation: %v", err)
+		// Don't fail authentication, CSRF will be validated on next request
+	} else {
+		// Generate and set CSRF token cookie
+		csrfToken := h.cookieManager.GenerateCSRFToken(claims.SessionID)
+		h.cookieManager.SetCSRFTokenCookie(c, csrfToken)
+	}
 
 	// Redirect to ops dashboard root page
 	logger.Info("OAuth callback successful, redirecting to ops dashboard")
@@ -136,6 +153,15 @@ func (h *OpsAuthHandler) HandleRefresh(c echo.Context) error {
 		return c.JSON(401, map[string]any{
 			"error":   "MISSING_REFRESH_TOKEN",
 			"message": "Refresh token is empty",
+		})
+	}
+
+	// Validate token format (minimal sanity check - service layer handles full validation)
+	if len(refreshToken) < 20 {
+		logger.Errorf("Refresh token too short: %d characters", len(refreshToken))
+		return c.JSON(401, map[string]any{
+			"error":   "INVALID_REFRESH_TOKEN",
+			"message": "Invalid refresh token format",
 		})
 	}
 

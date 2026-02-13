@@ -176,6 +176,7 @@ type BusinessPayeeRelationRepository interface {
 
 	// Checks
 	RelationExists(ctx context.Context, businessID, payeeID, accountID string) (bool, error)
+	AccountExistsForBusiness(ctx context.Context, businessID, accountID string) (bool, error)
 
 	// Aggregations
 	GetPayeeCount(ctx context.Context, businessID string) (int, error)

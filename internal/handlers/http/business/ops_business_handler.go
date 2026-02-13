@@ -7,6 +7,8 @@ import (
 	"xcentro.in/internal/core/auth"
 	"xcentro.in/internal/core/business"
 	"xcentro.in/internal/core/shared"
+	"xcentro.in/internal/middleware"
+	"xcentro.in/internal/shared/httputil"
 	"xcentro.in/internal/shared/logger"
 	"xcentro.in/internal/shared/validator"
 )
@@ -28,24 +30,22 @@ func NewOpsBusinessHandler(businessService business.BusinessService, authService
 }
 
 // RegisterOpsBusinessRoutes registers all ops dashboard business routes
-func RegisterOpsBusinessRoutes(e *echo.Group, businessService business.BusinessService, authService auth.AuthService) {
-	handler := NewOpsBusinessHandler(businessService, authService)
+func RegisterOpsBusinessRoutes(e *echo.Group, businessService business.BusinessService, cookieManager *httputil.CookieManager) {
+	handler := NewOpsBusinessHandler(businessService, nil)
 
 	businessGroup := e.Group("/business")
 
-	// Endpoint 1: Paginated list of businesses
+	// GET routes (no CSRF needed)
 	businessGroup.GET("", handler.ListBusinesses)
-
-	// Endpoint 2: Search businesses
 	businessGroup.GET("/search", handler.SearchBusinesses)
-
-	// Endpoint 3: Get single business details
 	businessGroup.GET("/:bid", handler.GetBusinessDetails)
 
-	// Ops verification endpoints
-	businessGroup.POST("/:bid/reload-data", handler.ReloadBusinessData)
-	businessGroup.POST("/:bid/kyb-action", handler.KYBAction)
-	businessGroup.POST("/:bid/user-action", handler.UpdateUserRole)
+	// POST routes (require CSRF middleware)
+	protectedGroup := businessGroup.Group("")
+	protectedGroup.Use(middleware.CSRFMiddleware(cookieManager))
+	protectedGroup.POST("/:bid/reload-data", handler.ReloadBusinessData)
+	protectedGroup.POST("/:bid/kyb-action", handler.KYBAction)
+	protectedGroup.POST("/:bid/user-action", handler.UpdateUserRole)
 }
 
 // ListBusinesses handles GET /businesses?page=1&limit=20
