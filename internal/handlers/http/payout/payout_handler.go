@@ -99,7 +99,7 @@ func (h *PayoutHandler) GetTransferDetails(c echo.Context) error {
 		h.logger.ErrorWith("Transfer not found", "transfer_id", transferID, "error", err)
 		return c.JSON(http.StatusNotFound, map[string]interface{}{
 			"error":   "transfer_not_found",
-			"message": err.Error(),
+			"message": "Transfer not found",
 		})
 	}
 
@@ -124,7 +124,7 @@ func (h *PayoutHandler) GetWebhookHistory(c echo.Context) error {
 		h.logger.ErrorWith("Transfer not found", "transfer_id", transferID, "error", err)
 		return c.JSON(http.StatusNotFound, map[string]interface{}{
 			"error":   "transfer_not_found",
-			"message": err.Error(),
+			"message": "Transfer not found",
 		})
 	}
 
@@ -162,7 +162,7 @@ func (h *PayoutHandler) GetTimeoutTransfers(c echo.Context) error {
 		h.logger.ErrorWith("Failed to fetch timeout transfers", "error", err)
 		return c.JSON(http.StatusInternalServerError, map[string]interface{}{
 			"error":   "failed_to_fetch_timeouts",
-			"message": err.Error(),
+			"message": "Failed to retrieve timeout transfers",
 		})
 	}
 
@@ -211,7 +211,7 @@ func (h *PayoutHandler) MarkCompletedManually(c echo.Context) error {
 			"error", err)
 		return c.JSON(http.StatusInternalServerError, map[string]interface{}{
 			"error":   "failed_to_mark_completed",
-			"message": err.Error(),
+			"message": "Failed to mark transfer as completed",
 		})
 	}
 
@@ -256,7 +256,7 @@ func (h *PayoutHandler) GetConfig(c echo.Context) error {
 		h.logger.ErrorWith("Config not found", "error", err)
 		return c.JSON(http.StatusNotFound, map[string]interface{}{
 			"error":   "config_not_found",
-			"message": err.Error(),
+			"message": "Configuration not found",
 		})
 	}
 
@@ -291,7 +291,7 @@ func (h *PayoutHandler) UpdateConfig(c echo.Context) error {
 		h.logger.ErrorWith("Failed to update config", "error", err)
 		return c.JSON(http.StatusInternalServerError, map[string]interface{}{
 			"error":   "failed_to_update_config",
-			"message": err.Error(),
+			"message": "Failed to update configuration",
 		})
 	}
 
@@ -332,7 +332,7 @@ func (h *PayoutHandler) CreateConfig(c echo.Context) error {
 		h.logger.ErrorWith("Failed to create config", "error", err)
 		return c.JSON(http.StatusInternalServerError, map[string]interface{}{
 			"error":   "failed_to_create_config",
-			"message": err.Error(),
+			"message": "Failed to create configuration",
 		})
 	}
 
@@ -398,7 +398,7 @@ func (h *PayoutHandler) InitiatePayoutManually(c echo.Context) error {
 		h.logger.ErrorWith("Failed to initiate payout", "error", err)
 		return c.JSON(http.StatusInternalServerError, map[string]interface{}{
 			"error":   "failed_to_initiate_payout",
-			"message": err.Error(),
+			"message": "Failed to initiate payout",
 		})
 	}
 

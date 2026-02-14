@@ -709,9 +709,11 @@ func (h *VoucherHandler) handleError(c echo.Context, err error) error {
 		})
 	default:
 		// Internal server error for unexpected errors
+		// Log the actual error for debugging
+		h.logger.ErrorWith("Unexpected error", "error", err)
 		return c.JSON(http.StatusInternalServerError, map[string]any{
 			"error":   "internal_server_error",
-			"message": err.Error(),
+			"message": "An internal server error occurred",
 		})
 	}
 }
@@ -790,7 +792,7 @@ func (h *VoucherHandler) GetVouchersByPayee(c echo.Context) error {
 		h.logger.ErrorWith("Get vouchers by payee failed", "error", err)
 		return c.JSON(http.StatusInternalServerError, map[string]any{
 			"error":   "fetch_failed",
-			"message": err.Error(),
+			"message": "Failed to retrieve vouchers for payee",
 		})
 	}
 
@@ -956,7 +958,7 @@ func (h *VoucherHandler) RequestApproval(c echo.Context) error {
 		h.logger.ErrorWith("Failed to process approval request", "error", err)
 		return c.JSON(http.StatusInternalServerError, map[string]any{
 			"error":   "SERVICE_ERROR",
-			"message": err.Error(),
+			"message": "Failed to process approval request",
 		})
 	}
 
@@ -1017,7 +1019,7 @@ func (h *VoucherHandler) GetApprovalInbox(c echo.Context) error {
 		h.logger.ErrorWith("Failed to get approval inbox", "error", err)
 		return c.JSON(http.StatusInternalServerError, map[string]any{
 			"error":   "SERVICE_ERROR",
-			"message": err.Error(),
+			"message": "Failed to retrieve approval inbox",
 		})
 	}
 
@@ -1049,7 +1051,7 @@ func (h *VoucherHandler) GetApprovalInboxCounts(c echo.Context) error {
 		h.logger.ErrorWith("Failed to get approval inbox counts", "error", err)
 		return c.JSON(http.StatusInternalServerError, map[string]any{
 			"error":   "SERVICE_ERROR",
-			"message": err.Error(),
+			"message": "Failed to retrieve approval inbox counts",
 		})
 	}
 
@@ -1127,7 +1129,7 @@ func (h *VoucherHandler) BatchApproveVouchers(c echo.Context) error {
 		h.logger.ErrorWith("Failed to batch approve vouchers", "error", err)
 		return c.JSON(http.StatusInternalServerError, map[string]any{
 			"error":   "SERVICE_ERROR",
-			"message": err.Error(),
+			"message": "Failed to batch approve vouchers",
 		})
 	}
 
@@ -1205,7 +1207,7 @@ func (h *VoucherHandler) GetUnpaidBills(c echo.Context) error {
 		h.logger.ErrorWith("Failed to fetch unpaid bills", "error", err)
 		return c.JSON(http.StatusInternalServerError, map[string]any{
 			"error":   "SERVICE_ERROR",
-			"message": err.Error(),
+			"message": "Failed to retrieve unpaid bills",
 		})
 	}
 
@@ -1235,7 +1237,7 @@ func (h *VoucherHandler) GetVoucherCounts(c echo.Context) error {
 		h.logger.ErrorWith("Failed to get voucher counts", "error", err)
 		return c.JSON(http.StatusInternalServerError, map[string]any{
 			"error":   "SERVICE_ERROR",
-			"message": err.Error(),
+			"message": "Failed to retrieve voucher counts",
 		})
 	}
 
@@ -1285,7 +1287,7 @@ func (h *VoucherHandler) GetVoucherActivity(c echo.Context) error {
 
 		return c.JSON(http.StatusInternalServerError, map[string]any{
 			"error":   "SERVICE_ERROR",
-			"message": err.Error(),
+			"message": "Failed to retrieve voucher activity",
 		})
 	}
 
@@ -1335,7 +1337,7 @@ func (h *VoucherHandler) GetVoucherPaymentDetails(c echo.Context) error {
 
 		return c.JSON(http.StatusInternalServerError, map[string]any{
 			"error":   "SERVICE_ERROR",
-			"message": err.Error(),
+			"message": "Failed to retrieve voucher payment details",
 		})
 	}
 
@@ -1404,7 +1406,7 @@ func (h *VoucherHandler) GetCalendarView(c echo.Context) error {
 		h.logger.ErrorWith("Failed to get calendar view", "error", err)
 		return c.JSON(http.StatusInternalServerError, map[string]any{
 			"error":   "SERVICE_ERROR",
-			"message": err.Error(),
+			"message": "Failed to retrieve calendar view",
 		})
 	}
 

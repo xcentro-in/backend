@@ -101,7 +101,7 @@ func (h *BusinessHandler) UploadKYBDocuments(c echo.Context) error {
 		h.logger.Errorf("Error getting upload URL: %v", err)
 		return c.JSON(500, map[string]interface{}{
 			"error":   "INTERNAL_ERROR",
-			"message": err.Error(),
+			"message": "Failed to generate upload URL",
 		})
 	}
 
@@ -122,7 +122,7 @@ func (h *BusinessHandler) ConfirmKYBDocumentsUpload(c echo.Context) error {
 		h.logger.Errorf("Error confirming upload: %v", err)
 		return c.JSON(500, map[string]interface{}{
 			"error":   "INTERNAL_ERROR",
-			"message": err.Error(),
+			"message": "Failed to confirm document upload",
 		})
 	}
 
@@ -700,9 +700,10 @@ func (h *BusinessHandler) handleBusinessError(c echo.Context, err error) error {
 		}
 	}
 
-	// Generic error
+	// Generic error - log the actual error for debugging
+	h.logger.Errorf("Unexpected error: %v", err)
 	return c.JSON(500, map[string]interface{}{
 		"error":   "INTERNAL_ERROR",
-		"message": err.Error(),
+		"message": "An internal server error occurred",
 	})
 }
