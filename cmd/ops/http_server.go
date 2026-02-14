@@ -2,12 +2,15 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
+	"github.com/joho/godotenv"
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 	redis "xcentro.in/internal/adapters/cache/redis/client"
@@ -21,6 +24,7 @@ import (
 	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/logger"
 	"xcentro.in/internal/shared/ratelimiter"
+	"xcentro.in/internal/shared/secrets"
 	customValidator "xcentro.in/internal/shared/validator"
 )
 
@@ -74,13 +78,13 @@ type opsDashboardServer struct {
 	meta serverMetaData
 }
 
-func NewOpsDashboardServer() *opsDashboardServer {
+func NewOpsDashboardServer(envFile string) *opsDashboardServer {
 	server := &opsDashboardServer{
 		echo: echo.New(),
 		log:  logger.GetDefault(), // Temporary default, will be replaced after config load
 	}
 
-	server.loadConfig()
+	server.loadConfig(envFile)
 	server.initializeLogger() // Initialize logger with config values
 	server.registerValidator()
 	server.registerGlobalMiddleware()
@@ -159,14 +163,46 @@ func buildSecureConfig(env, frontendURL string) middleware.SecureConfig {
 	}
 }
 
-func (s *opsDashboardServer) loadConfig() {
-	// Load from environment variables (in dev, Air sources ops.env before running)
-	cfg, err := config.Load("ops.env")
+func (s *opsDashboardServer) loadConfig(envFile string) {
+	ctx := context.Background()
+
+	// Load .env file into environment variables
+	if err := godotenv.Load(envFile); err != nil {
+		s.log.Warnf("Failed to load %s file: %v (will use existing environment variables)", envFile, err)
+	}
+
+	// Initialize secrets manager
+	useFallback, _ := strconv.ParseBool(os.Getenv("SECRETS_USE_FALLBACK"))
+	secretsMgr, err := secrets.NewSecretsManager(secrets.Config{
+		AWSRegion:    os.Getenv("AWS_REGION"),
+		SecretName:   os.Getenv("AWS_SECRET_NAME"),
+		UseCache:     true,
+		CacheTTL:     15 * time.Minute,
+		UseFallback:  useFallback,
+		AWSAccessKey: os.Getenv("AWS_ACCESS_KEY_ID"),
+		AWSSecretKey: os.Getenv("AWS_SECRET_ACCESS_KEY"),
+	})
+	if err != nil {
+		s.log.Errorf("Failed to initialize secrets manager: %v", err)
+		panic(err)
+	}
+	defer secretsMgr.Close()
+
+	// Load all secrets
+	secretsMap, err := secretsMgr.LoadAllSecrets(ctx)
+	if err != nil {
+		s.log.Errorf("Failed to load secrets: %v", err)
+		panic(err)
+	}
+
+	// Load config with secrets injected (uses same .env as main API)
+	// Port is differentiated via SERVER_PORT environment variable (default 8889 for ops)
+	cfg, err := config.LoadWithSecrets(envFile, secretsMap)
 	if err != nil {
 		s.log.Errorf("Failed to load config: %v", err)
 		panic(err)
 	}
-	s.log.Info("Config loaded successfully")
+	s.log.Info("Config loaded successfully with secrets")
 	s.meta.config = cfg
 }
 
@@ -308,7 +344,11 @@ func (s *opsDashboardServer) stop() {
 }
 
 func main() {
-	server := NewOpsDashboardServer()
+	// Parse command line flags
+	var envFile = flag.String("env", ".env", "Path to environment file (default: .env)")
+	flag.Parse()
+
+	server := NewOpsDashboardServer(*envFile)
 
 	// Setup graceful shutdown
 	sigChan := make(chan os.Signal, 1)

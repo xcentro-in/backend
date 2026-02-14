@@ -2,13 +2,16 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
+	"github.com/joho/godotenv"
 	"github.com/redis/go-redis/v9"
 	"xcentro.in/internal/adapters/database/postgres/business"
 	"xcentro.in/internal/adapters/database/postgres/client"
@@ -19,12 +22,46 @@ import (
 	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/logger"
 	"xcentro.in/internal/shared/ratelimiter"
+	"xcentro.in/internal/shared/secrets"
 	"xcentro.in/internal/workers"
 )
 
 func main() {
-	// Load configuration
-	cfg, err := config.Load(".env")
+	// Parse command line flags
+	var envFile = flag.String("env", ".env", "Path to environment file (default: .env)")
+	flag.Parse()
+
+	ctx := context.Background()
+
+	// Load .env file into environment variables
+	if err := godotenv.Load(*envFile); err != nil {
+		log.Printf("Failed to load %s file: %v (will use existing environment variables)", *envFile, err)
+	}
+
+	// Initialize secrets manager
+	useFallback, _ := strconv.ParseBool(os.Getenv("SECRETS_USE_FALLBACK"))
+	secretsMgr, err := secrets.NewSecretsManager(secrets.Config{
+		AWSRegion:    os.Getenv("AWS_REGION"),
+		SecretName:   os.Getenv("AWS_SECRET_NAME"),
+		UseCache:     true,
+		CacheTTL:     15 * time.Minute,
+		UseFallback:  useFallback,
+		AWSAccessKey: os.Getenv("AWS_ACCESS_KEY_ID"),
+		AWSSecretKey: os.Getenv("AWS_SECRET_ACCESS_KEY"),
+	})
+	if err != nil {
+		log.Fatalf("Failed to initialize secrets manager: %v", err)
+	}
+	defer secretsMgr.Close()
+
+	// Load all secrets
+	secretsMap, err := secretsMgr.LoadAllSecrets(ctx)
+	if err != nil {
+		log.Fatalf("Failed to load secrets: %v", err)
+	}
+
+	// Load configuration with secrets
+	cfg, err := config.LoadWithSecrets(*envFile, secretsMap)
 	if err != nil {
 		log.Fatalf("Failed to load configuration: %v", err)
 	}

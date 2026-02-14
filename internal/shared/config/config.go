@@ -47,7 +47,7 @@ type Config struct {
 
 // JWTSecretConfig holds JWT secret configuration.
 type JWTSecretConfig struct {
-	SecretKey          string        `json:"secret_key" env:"JWT_SECRET_KEY" env-required:"true"`
+	SecretKey          string        `json:"secret_key" env:"JWT_SECRET_KEY"` // Injected from AWS Secrets Manager
 	AccessTokenExpiry  time.Duration `json:"access_token_expiry" env:"JWT_ACCESS_TOKEN_EXPIRY" env-default:"1h"`
 	RefreshTokenExpiry time.Duration `json:"refresh_token_expiry" env:"JWT_REFRESH_TOKEN_EXPIRY" env-default:"720h"` // 30 days
 	MaxWebSessions     int           `json:"max_web_sessions" env:"JWT_MAX_WEB_SESSIONS" env-default:"3"`
@@ -57,7 +57,7 @@ type JWTSecretConfig struct {
 // BcryptConfig holds bcrypt password hashing configuration.
 type BcryptConfig struct {
 	Cost   int    `json:"cost" env:"BCRYPT_COST" env-default:"12"`
-	Pepper string `json:"-" env:"BCRYPT_PEPPER" env-required:"true"`
+	Pepper string `json:"-" env:"BCRYPT_PEPPER"` // Injected from AWS Secrets Manager
 }
 
 // CookieConfig holds cookie configuration for authentication.
@@ -105,7 +105,7 @@ type SESConfig struct {
 
 // SMSConfig holds Fast2SMS configuration.
 type SMSConfig struct {
-	APIKey           string        `json:"-" env:"FAST2SMS_API_KEY" env-required:"true"`                                         // Fast2SMS API key (sensitive)
+	APIKey           string        `json:"-" env:"FAST2SMS_API_KEY"` // Injected from AWS Secrets Manager
 	SenderID         string        `json:"sender_id" env:"FAST2SMS_SENDER_ID" env-default:"XCNTRO"`                              // Sender ID (DLT approved)
 	Endpoint         string        `json:"endpoint" env:"FAST2SMS_ENDPOINT" env-default:"https://www.fast2sms.com/dev/bulkV2"`   // Fast2SMS API endpoint
 	OTPExpiryMinutes int           `json:"otp_expiry_minutes" env:"SMS_OTP_EXPIRY_MINUTES" env-default:"10"`                     // OTP expiry in minutes
@@ -212,7 +212,7 @@ type DatabaseConfig struct {
 	Port            int           `json:"port" env:"DB_PORT" env-default:"5432"`
 	Database        string        `json:"database" env:"DB_NAME" env-default:"xcentro"`
 	Username        string        `json:"username" env:"DB_USER" env-default:"postgres"`
-	Password        string        `json:"-" env:"DB_PASSWORD" env-required:"true"` // no weak default
+	Password        string        `json:"-" env:"DB_PASSWORD"` // Injected from AWS Secrets Manager
 	Schema          string        `json:"schema" env:"DB_SCHEMA" env-default:"xcentro"`
 	MaxConnections  int32         `json:"max_connections" env:"DB_MAX_CONNECTIONS" env-default:"25"`
 	MinConnections  int32         `json:"min_connections" env:"DB_MIN_CONNECTIONS" env-default:"5"`
@@ -227,7 +227,7 @@ type MigrationDatabaseConfig struct {
 	Port     int    `json:"port" env:"DB_PORT" env-default:"5432"`
 	Database string `json:"database" env:"DB_NAME" env-default:"xcentro"`
 	Username string `json:"username" env:"DB_MIGRATION_USER" env-default:"postgres"`
-	Password string `json:"-" env:"DB_MIGRATION_PASSWORD" env-required:"true"` // no weak default
+	Password string `json:"-" env:"DB_MIGRATION_PASSWORD"` // Injected from AWS Secrets Manager
 	Schema   string `json:"schema" env:"DB_SCHEMA" env-default:"xcentro"`
 	SSLMode  string `json:"ssl_mode" env:"DB_SSL_MODE" env-default:"disable"`
 }
@@ -282,7 +282,7 @@ type AutoPayoutWorkerConfig struct {
 
 // BankAccountEncryptionConfig holds bank account encryption configuration for PCI DSS compliance.
 type BankAccountEncryptionConfig struct {
-	EncryptionKey string `json:"-" env:"BANK_ACCOUNT_ENCRYPTION_KEY" env-required:"true"` // AES-256-GCM key (sensitive, 32 bytes recommended)
+	EncryptionKey string `json:"-" env:"BANK_ACCOUNT_ENCRYPTION_KEY"` // Injected from AWS Secrets Manager (AES-256-GCM, 32 bytes)
 }
 
 // PayeeValidationConfig holds configuration for payee onboarding validation checks.
@@ -293,7 +293,7 @@ type PayeeValidationConfig struct {
 // AuthBridgeConfig holds AuthBridge/TruthScreen document verification service configuration.
 type AuthBridgeConfig struct {
 	Username string `json:"username" env:"TRUTHSCREEN_USERNAME" env-required:"true"` // AuthBridge/TruthScreen username
-	Password string `json:"-" env:"TRUTHSCREEN_PASSWORD" env-required:"true"`        // AuthBridge/TruthScreen password (sensitive)
+	Password string `json:"-" env:"TRUTHSCREEN_PASSWORD"` // Injected from AWS Secrets Manager
 	UseMock  bool   `json:"use_mock" env:"AUTHBRIDGE_USE_MOCK" env-default:"false"`  // Use mock responses instead of real API calls
 }
 
@@ -311,7 +311,7 @@ type LoggerConfig struct {
 // OpsOAuthConfig holds OAuth2/OIDC configuration for ops dashboard authentication.
 type OpsOAuthConfig struct {
 	ClientID       string `json:"client_id" env:"OPS_OAUTH_CLIENT_ID" env-required:"true"`         // Office365 Application (client) ID
-	ClientSecret   string `json:"-" env:"OPS_OAUTH_CLIENT_SECRET" env-required:"true"`             // Office365 Client secret (sensitive)
+	ClientSecret   string `json:"-" env:"OPS_OAUTH_CLIENT_SECRET"` // Injected from AWS Secrets Manager
 	RedirectURL    string `json:"redirect_url" env:"OPS_OAUTH_REDIRECT_URL" env-required:"true"`   // OAuth callback URL (e.g., https://ops.xcentro.in/ops/v1/auth/callback)
 	TenantID       string `json:"tenant_id" env:"OPS_OAUTH_TENANT_ID" env-default:"organizations"` // Office365 Tenant ID (default: organizations for multi-tenant)
 	SkipValidation bool   `json:"skip_validation" env:"OPS_OAUTH_SKIP_VALIDATION" env-default:"false"` // Skip OAuth token validation in middleware (dev/testing only)
@@ -319,7 +319,7 @@ type OpsOAuthConfig struct {
 
 // OpsTokenEncryptionConfig holds encryption configuration for storing OIDC tokens.
 type OpsTokenEncryptionConfig struct {
-	EncryptionKey string `json:"-" env:"OPS_TOKEN_ENCRYPTION_KEY" env-required:"true"` // AES-256-GCM key for encrypting OIDC refresh tokens (32 bytes)
+	EncryptionKey string `json:"-" env:"OPS_TOKEN_ENCRYPTION_KEY"` // Injected from AWS Secrets Manager (AES-256-GCM, 32 bytes)
 }
 
 // TurnstileConfig holds Cloudflare Turnstile configuration for bot protection.
@@ -331,7 +331,7 @@ type TurnstileConfig struct {
 // RateLimiterConfig holds rate limiter configuration for token-bucket algorithm.
 type RateLimiterConfig struct {
 	Enabled                      bool          `json:"enabled" env:"RATE_LIMITER_ENABLED" env-default:"true"`
-	HMACSecret                   string        `json:"-" env:"RATE_LIMITER_HMAC_SECRET" env-required:"true"` // Secret for signing device IDs
+	HMACSecret                   string        `json:"-" env:"RATE_LIMITER_HMAC_SECRET"` // Injected from AWS Secrets Manager
 	CookieName                   string        `json:"cookie_name" env:"RATE_LIMITER_COOKIE_NAME" env-default:"device_id"`
 	CookieTTL                    time.Duration `json:"cookie_ttl" env:"RATE_LIMITER_COOKIE_TTL" env-default:"720h"` // 30 days
 	DeviceCreationThrottlePerIP  int           `json:"device_creation_throttle_per_ip" env:"RATE_LIMITER_DEVICE_CREATION_THROTTLE_PER_IP" env-default:"50"`
@@ -378,10 +378,166 @@ func Load(path string) (Config, error) {
 	return cfg, err
 }
 
+// LoadWithSecrets reads configuration from file/env and injects secrets from AWS Secrets Manager.
+// This is the recommended way to load configuration in production.
+func LoadWithSecrets(path string, secrets map[string]string) (Config, error) {
+	var cfg Config
+	var err error
+
+	// First load configuration from file/env (non-sensitive values)
+	if err = cleanenv.ReadConfig(path, &cfg); err != nil {
+		logger.Warnf("error reading config file: %v", err)
+		if err = cleanenv.ReadEnv(&cfg); err != nil {
+			return cfg, fmt.Errorf("read env: %w", err)
+		}
+	}
+
+	// Set hardcoded payout configuration (not configurable via env)
+	cfg.Payout = NewPayoutConfig()
+
+	// Inject secrets from AWS Secrets Manager (overrides env vars)
+	injectSecrets(&cfg, secrets)
+
+	return cfg, err
+}
+
+// injectSecrets injects secrets from AWS Secrets Manager into the config struct.
+// Only injects non-empty values to allow environment variable overrides for local development.
+func injectSecrets(cfg *Config, secrets map[string]string) {
+	// JWT & Authentication
+	if val, ok := secrets["jwt_secret_key"]; ok && val != "" {
+		cfg.JWT.SecretKey = val
+	}
+	if val, ok := secrets["bcrypt_pepper"]; ok && val != "" {
+		cfg.Bcrypt.Pepper = val
+	}
+
+	// Encryption Keys
+	if val, ok := secrets["bank_account_encryption_key"]; ok && val != "" {
+		cfg.BankAccountEncryption.EncryptionKey = val
+	}
+	if val, ok := secrets["ops_token_encryption_key"]; ok && val != "" {
+		cfg.OpsTokenEncryption.EncryptionKey = val
+	}
+	if val, ok := secrets["rate_limiter_hmac_secret"]; ok && val != "" {
+		cfg.RateLimiter.HMACSecret = val
+	}
+
+	// Database & Cache
+	if val, ok := secrets["db_password"]; ok && val != "" {
+		cfg.Database.Password = val
+	}
+	if val, ok := secrets["db_migration_password"]; ok && val != "" {
+		cfg.MigrationDatabase.Password = val
+	}
+	if val, ok := secrets["redis_password"]; ok && val != "" {
+		cfg.Rcache.Password = val
+	}
+
+	// AWS Services
+	if val, ok := secrets["s3_access_key"]; ok && val != "" {
+		cfg.S3.AccessKey = val
+	}
+	if val, ok := secrets["s3_secret_key"]; ok && val != "" {
+		cfg.S3.SecretKey = val
+	}
+	if val, ok := secrets["ses_access_key"]; ok && val != "" {
+		cfg.SES.AccessKey = val
+	}
+	if val, ok := secrets["ses_secret_key"]; ok && val != "" {
+		cfg.SES.SecretKey = val
+	}
+
+	// JioPay Gateway
+	if val, ok := secrets["jiopay_api_key"]; ok && val != "" {
+		cfg.JioPay.APIKey = val
+	}
+	if val, ok := secrets["jiopay_app_id"]; ok && val != "" {
+		cfg.JioPay.AppID = val
+	}
+	if val, ok := secrets["jiopay_encryption_key"]; ok && val != "" {
+		cfg.JioPay.EncryptionKey = val
+	}
+	if val, ok := secrets["jiopay_webhook_secret"]; ok && val != "" {
+		cfg.JioPay.WebhookSecret = val
+	}
+
+	// Easebuzz Gateway
+	if val, ok := secrets["easebuzz_merchant_key"]; ok && val != "" {
+		cfg.Easebuzz.MerchantKey = val
+	}
+	if val, ok := secrets["easebuzz_salt"]; ok && val != "" {
+		cfg.Easebuzz.Salt = val
+	}
+	if val, ok := secrets["easebuzz_api_key"]; ok && val != "" {
+		cfg.Easebuzz.APIKey = val
+	}
+	if val, ok := secrets["easebuzz_merchant_token_id"]; ok && val != "" {
+		cfg.Easebuzz.MerchantTokenID = val
+	}
+	if val, ok := secrets["easebuzz_encryption_key"]; ok && val != "" {
+		cfg.Easebuzz.EncryptionKey = val
+	}
+	if val, ok := secrets["easebuzz_encryption_iv"]; ok && val != "" {
+		cfg.Easebuzz.EncryptionIV = val
+	}
+	if val, ok := secrets["easebuzz_webhook_secret"]; ok && val != "" {
+		cfg.Easebuzz.WebhookSecret = val
+	}
+
+	// Castler Payout Provider
+	if val, ok := secrets["castler_api_key"]; ok && val != "" {
+		cfg.Castler.APIKey = val
+	}
+	if val, ok := secrets["castler_secret_key"]; ok && val != "" {
+		cfg.Castler.SecretKey = val
+	}
+	if val, ok := secrets["castler_webhook_secret"]; ok && val != "" {
+		cfg.Castler.WebhookSecret = val
+	}
+	if val, ok := secrets["castler_encryption_key"]; ok && val != "" {
+		cfg.Castler.EncryptionKey = val
+	}
+	if val, ok := secrets["castler_encryption_iv"]; ok && val != "" {
+		cfg.Castler.EncryptionIV = val
+	}
+	if val, ok := secrets["castler_escrow_id"]; ok && val != "" {
+		cfg.Castler.EscrowID = val
+	}
+
+	// Ops OAuth & Security
+	if val, ok := secrets["ops_oauth_client_secret"]; ok && val != "" {
+		cfg.OpsOAuth.ClientSecret = val
+	}
+	if val, ok := secrets["turnstile_secret_key"]; ok && val != "" {
+		cfg.Turnstile.SecretKey = val
+	}
+
+	// SMS & KYC/KYB Services
+	if val, ok := secrets["fast2sms_api_key"]; ok && val != "" {
+		cfg.SMS.APIKey = val
+	}
+	if val, ok := secrets["truthscreen_password"]; ok && val != "" {
+		cfg.AuthBridge.Password = val
+	}
+}
+
 // MustLoad loads configuration once and exits on failure.
 func MustLoad(path string) Config {
 	once.Do(func() {
 		loadedCfg, loadErr = Load(path)
+	})
+	if loadErr != nil {
+		log.Fatalf("configuration error: %v", loadErr)
+	}
+	return loadedCfg
+}
+
+// MustLoadWithSecrets loads configuration with secrets once and exits on failure.
+// This is the recommended way to load configuration in production.
+func MustLoadWithSecrets(path string, secrets map[string]string) Config {
+	once.Do(func() {
+		loadedCfg, loadErr = LoadWithSecrets(path, secrets)
 	})
 	if loadErr != nil {
 		log.Fatalf("configuration error: %v", loadErr)

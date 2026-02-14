@@ -144,21 +144,22 @@ func (cm *CookieManager) GenerateCSRFToken(sessionID string) string {
 // SetCSRFTokenCookie sets the CSRF token cookie (readable by JavaScript)
 // MaxAge matches refresh token expiry (720h / 30 days)
 //
-// SECURITY: Domain is hardcoded to .xcentro.in to allow access from all xcentro.in subdomains
-// (app.xcentro.in, staging-app.xcentro.in, ops.xcentro.in, etc.)
+// SECURITY: Domain is taken from config.Cookie.Domain (extracted from FRONTEND_URL)
+// Empty domain means browser will use current host (localhost in dev, .xcentro.in in prod)
 func (cm *CookieManager) SetCSRFTokenCookie(c echo.Context, csrfToken string) {
 	maxAge := int(cm.config.JWT.RefreshTokenExpiry.Seconds())
 	cookie := &http.Cookie{
 		Name:     cm.csrfTokenName,
 		Value:    csrfToken,
-		Domain:   ".xcentro.in", // Leading dot allows all subdomains
 		Path:     "/",
 		HttpOnly: false, // Frontend JavaScript needs to read this to send in X-CSRF-Token header
 		Secure:   cm.config.Cookie.Secure,
 		SameSite: cm.getSameSiteMode(),
 		MaxAge:   maxAge,
 	}
-
+	if cm.config.Cookie.Domain != "" {
+		cookie.Domain = cm.config.Cookie.Domain
+	}
 	c.SetCookie(cookie)
 }
 
@@ -167,7 +168,6 @@ func (cm *CookieManager) ClearCSRFTokenCookie(c echo.Context) {
 	cookie := &http.Cookie{
 		Name:     cm.csrfTokenName,
 		Value:    "",
-		Domain:   ".xcentro.in", // Must match the Domain used when setting the cookie
 		Path:     "/",
 		HttpOnly: false,
 		Secure:   cm.config.Cookie.Secure,
@@ -175,7 +175,9 @@ func (cm *CookieManager) ClearCSRFTokenCookie(c echo.Context) {
 		MaxAge:   -1,
 		Expires:  time.Unix(0, 0),
 	}
-
+	if cm.config.Cookie.Domain != "" {
+		cookie.Domain = cm.config.Cookie.Domain
+	}
 	c.SetCookie(cookie)
 }
 

@@ -883,7 +883,7 @@ func (h *PaymentHandler) handleBankAccountAddition(ctx context.Context, c echo.C
 
 		return c.JSON(http.StatusInternalServerError, map[string]any{
 			"error":   "internal_error",
-			"message": fmt.Sprintf("Failed to add bank account: %v", err),
+			"message": "Failed to add bank account",
 		})
 	}
 

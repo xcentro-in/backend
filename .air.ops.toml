@@ -2,6 +2,8 @@ root = "."
 tmp_dir = "bin"
 
 [build]
+  # Ops server uses ops.env by default
+  args_bin = ["-env", "ops.env"]
   bin = "./bin/ops"
   cmd = "go build -o ./bin/ops ./cmd/ops"
   include_ext = ["go"]

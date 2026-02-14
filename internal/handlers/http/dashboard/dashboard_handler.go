@@ -71,7 +71,6 @@ func (h *DashboardHandler) GetDashboardMetrics(c echo.Context) error {
 		return c.JSON(http.StatusInternalServerError, map[string]any{
 			"error":   "FETCH_METRICS_ERROR",
 			"message": "Failed to fetch dashboard metrics",
-			"details": err.Error(),
 		})
 	}
 

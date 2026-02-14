@@ -215,7 +215,7 @@ func (ah AuthHandler) HandleRefreshToken(c echo.Context) error {
 	accessToken, err := ah.authService.RefreshAccessToken(c.Request().Context(), refreshToken)
 	if err != nil {
 		logger.Errorf("Token refresh failed: %v", err)
-		return c.JSON(401, map[string]any{"message": err.Error(), "data": nil})
+		return c.JSON(401, map[string]any{"message": "Failed to refresh token", "data": nil})
 	}
 
 	// Set new access token cookie
