@@ -116,7 +116,7 @@ func (h *PayeeHandler) OnboardPayee(c echo.Context) error {
 		h.logger.ErrorWith("Onboarding failed", "error", err)
 		return c.JSON(http.StatusInternalServerError, map[string]any{
 			"error":   "onboarding_failed",
-			"message": err.Error(),
+			"message": "Failed to onboard payee",
 		})
 	}
 
@@ -239,7 +239,7 @@ func (h *PayeeHandler) GetPayees(c echo.Context) error {
 		h.logger.ErrorWith("Failed to fetch total count", "error", err)
 		return c.JSON(http.StatusInternalServerError, map[string]any{
 			"error":   "count_failed",
-			"message": err.Error(),
+			"message": "Failed to retrieve payee count",
 		})
 	}
 
@@ -250,7 +250,7 @@ func (h *PayeeHandler) GetPayees(c echo.Context) error {
 		h.logger.ErrorWith("Failed to fetch payees", "error", err)
 		return c.JSON(http.StatusInternalServerError, map[string]any{
 			"error":   "fetch_failed",
-			"message": err.Error(),
+			"message": "Failed to retrieve payees",
 		})
 	}
 
@@ -316,7 +316,7 @@ func (h *PayeeHandler) GetPayeeDetails(c echo.Context) error {
 		h.logger.ErrorWith("Failed to fetch payee details", "error", err)
 		return c.JSON(http.StatusNotFound, map[string]any{
 			"error":   "not_found",
-			"message": err.Error(),
+			"message": "Payee not found",
 		})
 	}
 
@@ -360,7 +360,7 @@ func (h *PayeeHandler) GetPayeeAccountDetails(c echo.Context) error {
 		h.logger.ErrorWith("Failed to fetch payee details", "error", err)
 		return c.JSON(http.StatusNotFound, map[string]any{
 			"error":   "not_found",
-			"message": err.Error(),
+			"message": "Payee not found",
 		})
 	}
 
@@ -536,7 +536,7 @@ func (h *PayeeHandler) UpdatePayee(c echo.Context) error {
 		h.logger.ErrorWith("Update failed", "error", err)
 		return c.JSON(http.StatusInternalServerError, map[string]any{
 			"error":   "update_failed",
-			"message": err.Error(),
+			"message": "Failed to update payee",
 		})
 	}
 
@@ -574,7 +574,7 @@ func (h *PayeeHandler) DeactivatePayee(c echo.Context) error {
 		h.logger.ErrorWith("Deactivation failed", "error", err)
 		return c.JSON(http.StatusInternalServerError, map[string]any{
 			"error":   "deactivation_failed",
-			"message": err.Error(),
+			"message": "Failed to deactivate payee",
 		})
 	}
 
@@ -610,7 +610,7 @@ func (h *PayeeHandler) GetVendorsForDropdown(c echo.Context) error {
 		h.logger.ErrorWith("Failed to fetch vendors", "error", err)
 		return c.JSON(http.StatusInternalServerError, map[string]any{
 			"error":   "fetch_failed",
-			"message": err.Error(),
+			"message": "Failed to retrieve vendors",
 		})
 	}
 
@@ -646,7 +646,7 @@ func (h *PayeeHandler) GetEmployeesForList(c echo.Context) error {
 		h.logger.ErrorWith("Failed to fetch employees", "error", err)
 		return c.JSON(http.StatusInternalServerError, map[string]any{
 			"error":   "fetch_failed",
-			"message": err.Error(),
+			"message": "Failed to retrieve employees",
 		})
 	}
 
@@ -692,7 +692,7 @@ func (h *PayeeHandler) GetRemunerationDocumentUploadURL(c echo.Context) error {
 		h.logger.ErrorWith("Failed to get upload URL", "error", err)
 		return c.JSON(http.StatusInternalServerError, map[string]any{
 			"error":   "upload_url_failed",
-			"message": err.Error(),
+			"message": "Failed to generate upload URL",
 		})
 	}
 
@@ -741,7 +741,7 @@ func (h *PayeeHandler) ConfirmRemunerationDocumentUpload(c echo.Context) error {
 		h.logger.ErrorWith("Failed to confirm upload", "error", err)
 		return c.JSON(http.StatusInternalServerError, map[string]any{
 			"error":   "confirm_upload_failed",
-			"message": err.Error(),
+			"message": "Failed to confirm document upload",
 		})
 	}
 
@@ -792,7 +792,7 @@ func (h *PayeeHandler) GetRemunerationDocumentDownloadURL(c echo.Context) error 
 		h.logger.ErrorWith("Failed to get download URL", "error", err)
 		return c.JSON(http.StatusInternalServerError, map[string]any{
 			"error":   "download_url_failed",
-			"message": err.Error(),
+			"message": "Failed to generate download URL",
 		})
 	}
 
