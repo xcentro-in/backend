@@ -38,6 +38,12 @@ type UserRepository interface {
 	CheckUserMobileVerified(ctx context.Context, userID string) (bool, error)
 	CheckUserEmailMobileVerified(ctx context.Context, userID string) (bool, error)
 
+	// Verification code management for rate limiting and security
+	InvalidatePreviousVerificationCodes(ctx context.Context, userID string, codeType shared.VerificationType) error
+	IncrementResendAttempts(ctx context.Context, userID string, codeType shared.VerificationType) error
+	GetResendAttemptsCount(ctx context.Context, userID string, codeType shared.VerificationType) (int, error)
+	CreateVerificationCodeWithInvalidation(ctx context.Context, code *UserVerificationCodes) error
+
 	// Aadhaar verification methods
 	UpdateAadhaarTransactionID(ctx context.Context, taxID, txnID string) error
 	GetAadhaarTransactionID(ctx context.Context, userID string) (string, error)

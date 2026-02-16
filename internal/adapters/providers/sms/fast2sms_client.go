@@ -167,7 +167,42 @@ func (c *Fast2SMSClient) sendBulkSMS(ctx context.Context, phoneNumbers []string,
 	return fast2smsResp.RequestID, nil
 }
 
+// retryWithExponentialBackoff retries an operation with exponential backoff
+// Matches the email service retry pattern for consistency
+func retryWithExponentialBackoff(ctx context.Context, maxRetries int, baseDelay time.Duration, operation func() error) error {
+	var lastErr error
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if attempt > 0 {
+			// Exponential backoff: baseDelay * 2^(attempt-1)
+			backoffDuration := baseDelay * time.Duration(1<<(attempt-1))
+
+			// Check context cancellation during backoff
+			select {
+			case <-time.After(backoffDuration):
+				// Continue with retry
+			case <-ctx.Done():
+				return fmt.Errorf("operation cancelled: %w", ctx.Err())
+			}
+
+			logger.Infof("Retrying SMS send (attempt %d/%d) after %v", attempt+1, maxRetries, backoffDuration)
+		}
+
+		lastErr = operation()
+
+		if lastErr == nil {
+			return nil // Success
+		}
+
+		// Log error but continue to retry
+		logger.Warnf("SMS send attempt %d/%d failed: %v", attempt+1, maxRetries, lastErr)
+	}
+
+	return fmt.Errorf("operation failed after %d retries: %w", maxRetries, lastErr)
+}
+
 // SendOTPSMS is a helper method to send OTP SMS with proper template selection
+// Includes built-in retry logic with exponential backoff (matches email service pattern)
 func (c *Fast2SMSClient) SendOTPSMS(ctx context.Context, phoneNumber string, otp string, otpType string) (string, error) {
 	// Select template based on OTP type
 	var templateID string
@@ -183,7 +218,15 @@ func (c *Fast2SMSClient) SendOTPSMS(ctx context.Context, phoneNumber string, otp
 	// Clean phone number
 	cleanNumber := strings.TrimPrefix(strings.TrimPrefix(phoneNumber, "+91"), "91")
 
-	return c.sendBulkSMS(ctx, []string{cleanNumber}, templateID, otp)
+	// Send with retry logic (3 attempts with exponential backoff: 100ms, 200ms, 400ms)
+	var messageID string
+	err := retryWithExponentialBackoff(ctx, 3, 100*time.Millisecond, func() error {
+		var sendErr error
+		messageID, sendErr = c.sendBulkSMS(ctx, []string{cleanNumber}, templateID, otp)
+		return sendErr
+	})
+
+	return messageID, err
 }
 
 // SendPaymentNotification sends payment success notification (future use)

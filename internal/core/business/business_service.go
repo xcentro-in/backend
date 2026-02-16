@@ -33,6 +33,7 @@ type BusinessService interface {
 	GetBusinessUsers(ctx context.Context, bid string, requesterRole shared.UserRole) ([]*BusinessUserDTO, error)
 	UpdateUserRoleInBusiness(ctx context.Context, bid string, targetUserID string, requesterRole shared.UserRole, newRole shared.UserRole) error
 	RemoveUserFromBusiness(ctx context.Context, bid string, targetUserID string, requesterRole shared.UserRole) error
+	ValidateUserInBusiness(ctx context.Context, email string, bid string) (bool, error)
 
 	// Ops dashboard methods
 	ListBusinessesPaginated(ctx context.Context, page int, limit int, kybStatus string) ([]*OpsBusinessListItem, int, error)
