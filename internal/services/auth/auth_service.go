@@ -22,6 +22,7 @@ import (
 	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/email"
 	"xcentro.in/internal/shared/logger"
+	"xcentro.in/internal/shared/ratelimiter"
 	"xcentro.in/internal/shared/security"
 )
 
@@ -41,6 +42,7 @@ type AuthService struct {
 	metrics             metrics.MetricsProvider
 	appConfig           *config.Config
 	txManager           client.TxManager
+	rateLimiter         *ratelimiter.RateLimiter
 }
 
 func NewAuthService(
@@ -69,6 +71,7 @@ func NewAuthService(
 		metrics:             clients.GetMetrics().(metrics.MetricsProvider),
 		appConfig:           cfg,
 		txManager:           clients.GetTxManager(), // Extract from clients
+		rateLimiter:         ratelimiter.GetInstance(),
 	}
 }
 
@@ -581,14 +584,49 @@ func (s *AuthService) Signup(ctx context.Context, email, password string) (*auth
 		return nil, err
 	}
 
-	// Hash password
+	// Rate limit check FIRST (prevent spam signups)
+	rateLimitKey := fmt.Sprintf("xcentro:rl:email:%s|signup", email)
+	result, err := s.rateLimiter.CheckLimitWithKey(ctx, rateLimitKey, "signup")
+	if err == nil && !result.Allowed {
+		return nil, fmt.Errorf("too many signup attempts. Please wait %s seconds before trying again", result.RetryAfterSecs)
+	}
+
+	// Check if user already exists (security: prevent enumeration)
+	existingUser, err := s.userRepo.GetUserByEmail(ctx, email)
+
+	if err == nil && existingUser != nil {
+		// User exists - handle based on verification status
+		if existingUser.EmailVerified {
+			// Verified user - silent success (prevent enumeration attack)
+			logger.Infof("Signup attempt for verified email (silent): %s", email)
+			return &auth.SignupResponse{
+				UserID:  existingUser.Id,
+				Message: "Account created successfully. Please check your email for verification link.",
+			}, nil
+		}
+
+		// Unverified user - resend verification email
+		logger.Infof("Signup attempt for unverified email (resend): %s", email)
+		go func() {
+			bgCtx := context.Background()
+			if err := s.SendEmailVerification(bgCtx, existingUser.Id); err != nil {
+				logger.Errorf("Failed to resend email verification: %v", err)
+			}
+		}()
+
+		return &auth.SignupResponse{
+			UserID:  existingUser.Id,
+			Message: "Account created successfully. Please check your email for verification link.",
+		}, nil
+	}
+
+	// New user - proceed with creation
 	hashedPassword, err := s.HashPassword(password)
 	if err != nil {
 		logger.Errorf("Failed to hash password: %v", err)
 		return nil, fmt.Errorf("failed to process password")
 	}
 
-	// Create user
 	authPayload := auth.AuthPayload{
 		Email:    email,
 		Password: hashedPassword,
@@ -597,12 +635,11 @@ func (s *AuthService) Signup(ctx context.Context, email, password string) (*auth
 	createdUser, err := s.userService.CreateUser(ctx, authPayload)
 	if err != nil {
 		logger.Errorf("Failed to create user: %v", err)
-		// Return the actual error message (e.g., "user already exists")
 		return nil, err
 	}
 
-	// Send email verification (non-blocking) - only if user was created successfully
-	userID := createdUser.Id // Capture the ID to avoid race conditions
+	// Send email verification (non-blocking)
+	userID := createdUser.Id
 	go func() {
 		bgCtx := context.Background()
 		if err := s.SendEmailVerification(bgCtx, userID); err != nil {
@@ -612,7 +649,7 @@ func (s *AuthService) Signup(ctx context.Context, email, password string) (*auth
 
 	return &auth.SignupResponse{
 		UserID:  createdUser.Id,
-		Message: "User created successfully. Please check your email for verification link.",
+		Message: "Account created successfully. Please check your email for verification link.",
 	}, nil
 }
 
@@ -690,48 +727,78 @@ func (s *AuthService) SendPasswordResetEmail(ctx context.Context, emailAddr stri
 		return fmt.Errorf("user not found")
 	}
 
-	// Generate secure verification token (32 bytes = 256 bits)
-	resetToken, err := security.GenerateSecureToken()
+	// Use transaction to atomically invalidate old tokens and create new one
+	// SECURITY: Prevents multiple valid reset tokens from existing simultaneously
+	var resetToken string
+	err = s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
+		txUserRepo := s.userRepo.WithTx(tx)
+
+		// Invalidate all previous password reset tokens for this user
+		// SECURITY: Only the latest reset link should be valid
+		if err := txUserRepo.InvalidatePreviousVerificationCodes(ctx, userObj.Id, shared.PasswordReset); err != nil {
+			logger.Errorf("Failed to invalidate previous reset tokens: %v", err)
+			// Return success to prevent information disclosure (for reset type)
+			if emailType == "reset" {
+				return nil
+			}
+			return fmt.Errorf("failed to invalidate previous tokens: %w", err)
+		}
+
+		// Generate secure verification token (32 bytes = 256 bits)
+		var genErr error
+		resetToken, genErr = security.GenerateSecureToken()
+		if genErr != nil {
+			logger.Errorf("Failed to generate reset token: %v", genErr)
+			// Return success to prevent information disclosure (for reset type)
+			if emailType == "reset" {
+				return nil
+			}
+			return fmt.Errorf("failed to generate token: %w", genErr)
+		}
+
+		// Hash the token before storing in database
+		hashedToken := security.HashTokenWithPepper(resetToken, s.bcryptConfig.Pepper)
+
+		// Calculate timestamps - 1 hour expiry for password reset (IMPORTANT: Use UTC)
+		now := time.Now().UTC()
+		expiresAt := now.Add(1 * time.Hour)
+
+		// Create verification code record
+		verificationCode := &user.UserVerificationCodes{
+			UserID:        userObj.Id,
+			Code:          hashedToken,
+			CodeType:      shared.PasswordReset,
+			ExpiresAt:     expiresAt.Format(time.RFC3339),
+			CreatedAt:     now.Format(time.RFC3339),
+			Used:          false,
+			RetryAttempts: 0,
+		}
+
+		logger.Debugf("Creating password reset code: user_id=%s, expires_at=%s (UTC), duration=1h",
+			userObj.Id, expiresAt.Format(time.RFC3339))
+
+		// Store verification code in database (within transaction)
+		if err := txUserRepo.CreateVerificationCode(ctx, verificationCode); err != nil {
+			logger.Errorf("Failed to create password reset code: %v", err)
+			// Return success to prevent information disclosure (for reset type)
+			if emailType == "reset" {
+				return nil
+			}
+			return fmt.Errorf("failed to create verification code: %w", err)
+		}
+
+		return nil
+	})
+
 	if err != nil {
-		logger.Errorf("Failed to generate reset token: %v", err)
-		// Return success to prevent information disclosure (for reset type)
+		// Transaction failed - return success for reset type (enumeration protection)
 		if emailType == "reset" {
 			return nil
 		}
-		return fmt.Errorf("failed to generate token: %w", err)
+		return err
 	}
 
-	// Hash the token before storing in database
-	hashedToken := security.HashTokenWithPepper(resetToken, s.bcryptConfig.Pepper)
-
-	// Calculate timestamps - 1 hour expiry for password reset (IMPORTANT: Use UTC)
-	now := time.Now().UTC()
-	expiresAt := now.Add(1 * time.Hour)
-
-	// Create verification code record
-	verificationCode := &user.UserVerificationCodes{
-		UserID:        userObj.Id,
-		Code:          hashedToken,
-		CodeType:      shared.PasswordReset,
-		ExpiresAt:     expiresAt.Format(time.RFC3339),
-		CreatedAt:     now.Format(time.RFC3339),
-		Used:          false,
-		RetryAttempts: 0,
-	}
-
-	logger.Debugf("Creating password reset code: user_id=%s, expires_at=%s (UTC), duration=1h",
-		userObj.Id, expiresAt.Format(time.RFC3339))
-
-	// Store verification code in database
-	if err := s.userRepo.CreateVerificationCode(ctx, verificationCode); err != nil {
-		logger.Errorf("Failed to create password reset code: %v", err)
-		// Return success to prevent information disclosure (for reset type)
-		if emailType == "reset" {
-			return nil
-		}
-		return fmt.Errorf("failed to create verification code: %w", err)
-	}
-
+	// Transaction succeeded, now send email
 	// Generate HMAC signature for uid:token
 	signature := security.GenerateHMACSignature(userObj.Id, resetToken, s.config.SecretKey)
 
@@ -783,6 +850,123 @@ func (s *AuthService) SendPasswordResetEmail(ctx context.Context, emailAddr stri
 	}
 
 	logger.Infof("Email sent successfully to %s, Message ID: %s, Type: %s", userObj.Email, messageID, emailType)
+	return nil
+}
+
+// ResendInviteEmail resends invitation email to a user (admin function)
+// Unlike SendPasswordResetEmail, this method:
+// - Validates user hasn't already activated (password not set)
+// - Invalidates previous invite tokens (in transaction)
+// - Does NOT fail-open (returns actual errors for admin feedback)
+func (s *AuthService) ResendInviteEmail(ctx context.Context, emailAddr string) error {
+	logger.Infof("Resending invitation email to: %s", emailAddr)
+
+	if emailAddr == "" {
+		return fmt.Errorf("email address is required")
+	}
+
+	// Get user details
+	userObj, err := s.userRepo.GetUserByEmail(ctx, emailAddr)
+	if err != nil || userObj == nil {
+		logger.Errorf("User not found for email: %s", emailAddr)
+		return fmt.Errorf("user not found")
+	}
+
+	// Check if user has already activated account (password is set)
+	if userObj.PwdHash != "" {
+		logger.Warnf("Cannot resend invite to activated user: %s", emailAddr)
+		return fmt.Errorf("user has already activated their account")
+	}
+
+	// Use transaction to atomically invalidate old tokens and create new one
+	var resetToken string
+	err = s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
+		txUserRepo := s.userRepo.WithTx(tx)
+
+		// Invalidate all previous password reset/invite tokens for this user
+		if err := txUserRepo.InvalidatePreviousVerificationCodes(ctx, userObj.Id, shared.PasswordReset); err != nil {
+			logger.Errorf("Failed to invalidate previous invite tokens: %v", err)
+			return fmt.Errorf("failed to invalidate previous tokens: %w", err)
+		}
+
+		// Generate secure verification token (32 bytes = 256 bits)
+		var genErr error
+		resetToken, genErr = security.GenerateSecureToken()
+		if genErr != nil {
+			logger.Errorf("Failed to generate reset token: %v", genErr)
+			return fmt.Errorf("failed to generate token: %w", genErr)
+		}
+
+		// Hash the token before storing in database
+		hashedToken := security.HashTokenWithPepper(resetToken, s.bcryptConfig.Pepper)
+
+		// Calculate timestamps - 1 hour expiry for invitation (IMPORTANT: Use UTC)
+		now := time.Now().UTC()
+		expiresAt := now.Add(1 * time.Hour)
+
+		// Create verification code record
+		verificationCode := &user.UserVerificationCodes{
+			UserID:        userObj.Id,
+			Code:          hashedToken,
+			CodeType:      shared.PasswordReset,
+			ExpiresAt:     expiresAt.Format(time.RFC3339),
+			CreatedAt:     now.Format(time.RFC3339),
+			Used:          false,
+			RetryAttempts: 0,
+		}
+
+		logger.Debugf("Creating invite code: user_id=%s, expires_at=%s (UTC), duration=1h",
+			userObj.Id, expiresAt.Format(time.RFC3339))
+
+		// Store verification code in database (within transaction)
+		if err := txUserRepo.CreateVerificationCode(ctx, verificationCode); err != nil {
+			logger.Errorf("Failed to create invite code: %v", err)
+			return fmt.Errorf("failed to create verification code: %w", err)
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return err
+	}
+
+	// Transaction succeeded, now send email
+	// Generate HMAC signature for uid:token
+	signature := security.GenerateHMACSignature(userObj.Id, resetToken, s.config.SecretKey)
+
+	// Create invitation URL with uid, token, and sig as query parameters
+	inviteURL := fmt.Sprintf("%s/set-password?uid=%s&token=%s&sig=%s",
+		s.appConfig.Frontend.URL, userObj.Id, resetToken, signature)
+
+	// Render invitation email templates
+	renderer := email.GetRenderer()
+	subject := "Welcome to xcentro - Set Your Password"
+	htmlBody, textBody, renderErr := renderer.RenderInvitation(userObj.Name, inviteURL)
+
+	if renderErr != nil {
+		logger.Errorf("Failed to render invitation email templates: %v", renderErr)
+		return fmt.Errorf("failed to render email templates: %w", renderErr)
+	}
+
+	// Create email message
+	emailMsg := &mailers.EmailMessage{
+		To:       []string{userObj.Email},
+		From:     s.appConfig.SES.DefaultFromEmail,
+		FromName: s.appConfig.SES.DefaultFromName,
+		Subject:  subject,
+		HTMLBody: htmlBody,
+		TextBody: textBody,
+	}
+
+	// Send email
+	messageID, err := s.emailService.SendEmail(ctx, emailMsg)
+	if err != nil {
+		logger.Errorf("Failed to send invitation email to %s: %v", userObj.Email, err)
+		return fmt.Errorf("failed to send email: %w", err)
+	}
+
+	logger.Infof("Invitation email resent successfully to %s, Message ID: %s", userObj.Email, messageID)
 	return nil
 }
 
@@ -930,8 +1114,8 @@ func (s *AuthService) SendEmailVerification(ctx context.Context, userID string) 
 	logger.Debugf("Creating email verification code: user_id=%s, expires_at=%s (UTC), duration=24h",
 		userID, expiresAt.Format(time.RFC3339))
 
-	// Store verification code in database
-	if err := s.userRepo.CreateVerificationCode(ctx, verificationCode); err != nil {
+	// Atomically invalidate old codes and create new one (SECURITY: prevents race conditions)
+	if err := s.userRepo.CreateVerificationCodeWithInvalidation(ctx, verificationCode); err != nil {
 		return fmt.Errorf("failed to create verification code: %w", err)
 	}
 
@@ -973,85 +1157,23 @@ func (s *AuthService) SendEmailVerification(ctx context.Context, userID string) 
 }
 
 // VerifyEmailWithToken verifies user's email using verification token with HMAC signature validation
-func (s *AuthService) VerifyEmailWithToken(ctx context.Context, userID, token, signature string) error {
-	logger.Infof("Verifying email with token for user: %s", userID)
-
-	if userID == "" || token == "" || signature == "" {
-		return fmt.Errorf("userID, token, and signature are required")
-	}
-
-	// Validate HMAC signature first (prevents tampering)
-	if !security.ValidateHMACSignature(userID, token, signature, s.config.SecretKey) {
-		logger.Errorf("Invalid HMAC signature for user: %s", userID)
-		return fmt.Errorf("invalid or tampered verification link")
-	}
-
-	// Hash the incoming token to compare with stored hash
-	hashedToken := security.HashTokenWithPepper(token, s.bcryptConfig.Pepper)
-
-	// Use transaction to ensure atomicity
-	err := s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
-		txUserRepo := s.userRepo.WithTx(tx)
-
-		// Get verification code record using userID and hashed token (faster with userID index)
-		verificationCode, err := txUserRepo.GetVerificationCodeByUserIDAndCode(ctx, userID, hashedToken, shared.EmailVerification)
-		if err != nil {
-			logger.Errorf("Failed to get verification code: %v", err)
-			return fmt.Errorf("invalid or expired verification token")
-		}
-
-		if verificationCode == nil {
-			return fmt.Errorf("verification token not found")
-		}
-
-		if verificationCode.Used {
-			return fmt.Errorf("verification token already used")
-		}
-
-		// Check if token is expired (use UTC for consistency)
-		expiresAt, err := time.Parse(time.RFC3339, verificationCode.ExpiresAt)
-		if err != nil {
-			return fmt.Errorf("invalid expiration time format")
-		}
-		expiresAt = expiresAt.UTC() // Ensure UTC timezone
-
-		nowUTC := time.Now().UTC()
-		if nowUTC.After(expiresAt) {
-			logger.Warnf("Email verification token expired: user_id=%s, expires_at=%s, current_time=%s, age=%v",
-				userID, expiresAt.Format(time.RFC3339), nowUTC.Format(time.RFC3339), nowUTC.Sub(expiresAt))
-			return fmt.Errorf("verification token has expired")
-		}
-
-		logger.Debugf("Email verification token valid: user_id=%s, expires_at=%s, current_time=%s, remaining=%v",
-			userID, expiresAt.Format(time.RFC3339), nowUTC.Format(time.RFC3339), expiresAt.Sub(nowUTC))
-
-		// Mark verification code as used
-		if err := txUserRepo.MarkVerificationCodeAsUsed(ctx, verificationCode.ID); err != nil {
-			return fmt.Errorf("failed to mark verification code as used: %w", err)
-		}
-
-		// Update user email verification status
-		if err := txUserRepo.UpdateUserEmailVerification(ctx, verificationCode.UserID, true); err != nil {
-			return fmt.Errorf("failed to update user email verification: %w", err)
-		}
-
-		return nil
-	})
-
-	if err != nil {
-		return err
-	}
-
-	logger.Infof("Email verified successfully for user: %s", userID)
-	return nil
-}
-
 // ResendEmailVerification resends email verification for a given email
 func (s *AuthService) ResendEmailVerification(ctx context.Context, email string) error {
 	logger.Infof("Resending email verification for email: %s", email)
 
 	if email == "" {
 		return fmt.Errorf("email is required")
+	}
+
+	// Rate limit check (email-scoped, fail open for UX)
+	rateLimitKey := fmt.Sprintf("xcentro:rl:email:%s|resend_email_verification", email)
+	result, err := s.rateLimiter.CheckLimitWithKey(ctx, rateLimitKey, "resend_email_verification")
+
+	if err != nil {
+		logger.Errorf("Rate limit check failed: %v", err)
+		// Fail open for UX (allow if Redis unavailable)
+	} else if !result.Allowed {
+		return fmt.Errorf("too many resend requests. Please wait %s seconds before trying again", result.RetryAfterSecs)
 	}
 
 	// Get user details
@@ -1068,8 +1190,90 @@ func (s *AuthService) ResendEmailVerification(ctx context.Context, email string)
 		return fmt.Errorf("email already verified")
 	}
 
-	// Send verification email
+	// Send verification email (will invalidate old codes)
 	return s.SendEmailVerification(ctx, userObj.Id)
+}
+
+// ResendMobileOTP resends OTP during signup flow (public endpoint, uses email to lookup user)
+func (s *AuthService) ResendMobileOTP(ctx context.Context, email string) error {
+	logger.Infof("Resending mobile OTP for email: %s", email)
+
+	if email == "" {
+		return fmt.Errorf("email is required")
+	}
+
+	// Rate limit check (email-scoped, fail closed for SMS cost control)
+	rateLimitKey := fmt.Sprintf("xcentro:rl:email:%s|resend_mobile_otp", email)
+	result, err := s.rateLimiter.CheckLimitWithKey(ctx, rateLimitKey, "resend_mobile_otp")
+
+	if err != nil || !result.Allowed {
+		if err != nil {
+			return fmt.Errorf("rate limit check failed, please try again later")
+		}
+		return fmt.Errorf("too many resend requests. Please wait %s seconds before trying again", result.RetryAfterSecs)
+	}
+
+	// Get user by email
+	userObj, err := s.userRepo.GetUserByEmail(ctx, email)
+	if err != nil || userObj == nil {
+		return fmt.Errorf("user not found")
+	}
+
+	if userObj.MobileVerified {
+		return fmt.Errorf("mobile already verified")
+	}
+
+	if userObj.Mobile == "" {
+		return fmt.Errorf("user does not have a mobile number registered")
+	}
+
+	// NOTE: Code invalidation is handled atomically in SendMobileVerificationOTP
+
+	// Increment resend attempts (analytics tracking)
+	_ = s.userRepo.IncrementResendAttempts(ctx, userObj.Id, shared.MobileVerification)
+
+	// Send new OTP (with retry logic and atomic code invalidation)
+	return s.SendMobileVerificationOTP(ctx, userObj.Id, userObj.Mobile)
+}
+
+// ResendInviteOTP resends OTP for invited users with rate limiting and signature validation
+func (s *AuthService) ResendInviteOTP(ctx context.Context, userID, token, signature string) error {
+	logger.Infof("Resending invite OTP for user: %s", userID)
+
+	// Validate HMAC signature first (ensures legitimate invite link)
+	if !security.ValidateHMACSignature(userID, token, signature, s.config.SecretKey) {
+		logger.Errorf("Invalid HMAC signature for user: %s", userID)
+		return fmt.Errorf("invalid or tampered invitation link")
+	}
+
+	// Rate limit check (user-scoped, reuses same policy as mobile OTP)
+	rateLimitKey := fmt.Sprintf("xcentro:rl:user:%s|resend_mobile_otp", userID)
+	result, err := s.rateLimiter.CheckLimitWithKey(ctx, rateLimitKey, "resend_mobile_otp")
+
+	if err != nil || !result.Allowed {
+		if err != nil {
+			return fmt.Errorf("rate limit check failed, please try again later")
+		}
+		return fmt.Errorf("too many resend requests. Please wait %s seconds before trying again", result.RetryAfterSecs)
+	}
+
+	// Fetch user to get mobile number
+	usr, err := s.userRepo.GetUserByID(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("failed to fetch user: %w", err)
+	}
+
+	if usr.Mobile == "" {
+		return fmt.Errorf("user does not have a mobile number registered")
+	}
+
+	// NOTE: Code invalidation is handled atomically in SendMobileVerificationOTP
+
+	// Increment resend attempts (analytics tracking)
+	_ = s.userRepo.IncrementResendAttempts(ctx, userID, shared.MobileVerification)
+
+	// Generate and send new OTP (with retry logic and atomic code invalidation)
+	return s.SendMobileVerificationOTP(ctx, userID, usr.Mobile)
 }
 
 // ============================================================================
@@ -1104,30 +1308,29 @@ func (s *AuthService) SendMobileVerificationOTP(ctx context.Context, userID, mob
 		RetryAttempts: 0,
 	}
 
-	if err := s.userRepo.CreateVerificationCode(ctx, verificationCode); err != nil {
+	// Atomically invalidate old codes and create new one (SECURITY: prevents race conditions)
+	if err := s.userRepo.CreateVerificationCodeWithInvalidation(ctx, verificationCode); err != nil {
 		return fmt.Errorf("failed to create verification code: %w", err)
 	}
 
-	// Send OTP via SMS using Fast2SMS
-	// Use type assertion to access Fast2SMS-specific methods
+	// Send OTP via SMS (retry logic now built into Fast2SMS library)
 	var messageID string
+	var sendErr error
+
 	if fast2smsClient, ok := s.smsService.(*sms.Fast2SMSClient); ok {
-		messageID, err = fast2smsClient.SendOTPSMS(ctx, mobileNumber, otp, "signup")
-		if err != nil {
-			logger.Errorf("Failed to send SMS OTP: %v", err)
-			return fmt.Errorf("failed to send SMS: %w", err)
-		}
+		messageID, sendErr = fast2smsClient.SendOTPSMS(ctx, mobileNumber, otp, "signup")
 	} else {
-		// Fallback to generic SendSMS (for other providers)
+		// Fallback to generic SendSMS (for other providers - no retry)
 		smsMessage := &sms.SMSMessage{
 			To:   mobileNumber,
 			Body: otp,
 		}
-		messageID, err = s.smsService.SendSMS(ctx, smsMessage)
-		if err != nil {
-			logger.Errorf("Failed to send SMS OTP: %v", err)
-			return fmt.Errorf("failed to send SMS: %w", err)
-		}
+		messageID, sendErr = s.smsService.SendSMS(ctx, smsMessage)
+	}
+
+	if sendErr != nil {
+		logger.Errorf("Failed to send SMS OTP: %v", sendErr)
+		return fmt.Errorf("failed to send SMS: %w", sendErr)
 	}
 
 	logger.Infof("SMS OTP sent successfully to %s, Message ID: %s", mobileNumber, messageID)
@@ -1142,6 +1345,17 @@ func (s *AuthService) GenerateMobileOTP(ctx context.Context, userID string) erro
 		return fmt.Errorf("userID is required")
 	}
 
+	// Rate limit check (user-scoped for authenticated users)
+	rateLimitKey := fmt.Sprintf("xcentro:rl:user:%s|resend_mobile_otp", userID)
+	result, err := s.rateLimiter.CheckLimitWithKey(ctx, rateLimitKey, "resend_mobile_otp")
+
+	if err != nil || !result.Allowed {
+		if err != nil {
+			return fmt.Errorf("rate limit check failed, please try again later")
+		}
+		return fmt.Errorf("too many resend requests. Please wait %s seconds before trying again", result.RetryAfterSecs)
+	}
+
 	// Fetch user to get mobile number
 	usr, err := s.userRepo.GetUserByID(ctx, userID)
 	if err != nil {
@@ -1152,7 +1366,12 @@ func (s *AuthService) GenerateMobileOTP(ctx context.Context, userID string) erro
 		return fmt.Errorf("user does not have a mobile number registered")
 	}
 
-	// Reuse existing SendMobileVerificationOTP method
+	// NOTE: Code invalidation is handled atomically in SendMobileVerificationOTP
+
+	// Increment resend attempts (analytics tracking)
+	_ = s.userRepo.IncrementResendAttempts(ctx, userID, shared.MobileVerification)
+
+	// Send OTP (with retry logic and atomic code invalidation)
 	return s.SendMobileVerificationOTP(ctx, userID, usr.Mobile)
 }
 
@@ -1200,7 +1419,8 @@ func (s *AuthService) SendInviteOTP(ctx context.Context, userID, token, signatur
 		RetryAttempts: 0,
 	}
 
-	if err := s.userRepo.CreateVerificationCode(ctx, verificationCode); err != nil {
+	// Atomically invalidate old codes and create new one (SECURITY: prevents race conditions)
+	if err := s.userRepo.CreateVerificationCodeWithInvalidation(ctx, verificationCode); err != nil {
 		return fmt.Errorf("failed to create verification code: %w", err)
 	}
 

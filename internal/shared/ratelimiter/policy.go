@@ -108,5 +108,69 @@ func GetBuiltInPolicies(defaultCapacity int64, defaultRefillPerSec float64, defa
 			},
 			FailClosed: true, // Fail closed to prevent SES quota violations
 		},
+
+		// Email verification resend rate limiting (industry standard: 1 per 60s + 10 per day)
+		"resend_email_verification": {
+			LogicalOperation: "and",
+			Strategies: []StrategyConfig{
+				{
+					Type: "fixed_window",
+					Config: map[string]interface{}{
+						"limit":          1.0,  // 1 request per window
+						"window_seconds": 60.0, // 60 seconds cooldown
+						"tokens":         1.0,
+					},
+				},
+				{
+					Type: "fixed_window",
+					Config: map[string]interface{}{
+						"limit":          10.0,    // 10 requests per day
+						"window_seconds": 86400.0, // 24 hours
+						"tokens":         1.0,
+					},
+				},
+			},
+			FailClosed: false, // Fail open for UX (allow if Redis unavailable)
+		},
+
+		// Mobile OTP resend rate limiting (stricter due to SMS cost: 1 per 60s + 5 per day)
+		"resend_mobile_otp": {
+			LogicalOperation: "and",
+			Strategies: []StrategyConfig{
+				{
+					Type: "fixed_window",
+					Config: map[string]interface{}{
+						"limit":          1.0,  // 1 request per window
+						"window_seconds": 60.0, // 60 seconds cooldown
+						"tokens":         1.0,
+					},
+				},
+				{
+					Type: "fixed_window",
+					Config: map[string]interface{}{
+						"limit":          5.0,     // 5 requests per day (SMS cost control)
+						"window_seconds": 86400.0, // 24 hours
+						"tokens":         1.0,
+					},
+				},
+			},
+			FailClosed: true, // Fail closed to prevent SMS cost abuse
+		},
+
+		// OTP verification attempt rate limiting (brute-force prevention: 5 attempts with refill)
+		"verify_mobile_otp": {
+			LogicalOperation: "and",
+			Strategies: []StrategyConfig{
+				{
+					Type: "token_bucket",
+					Config: map[string]interface{}{
+						"capacity":          5.0,      // 5 verification attempts
+						"refill_per_second": 0.000278, // ~1 token per hour (1/3600)
+						"requested_tokens":  1.0,
+					},
+				},
+			},
+			FailClosed: true, // Fail closed for security (prevent brute-force if Redis down)
+		},
 	}
 }

@@ -48,11 +48,12 @@ func RegisterAuthRoutes(e *echo.Group, authService auth.AuthService, businessSer
 	publicAuth.GET("/forgot-password", authHandler.HandleForgotPassword)
 	publicAuth.POST("/reset-password", authHandler.HandleResetPassword, middleware.TurnstileMiddleware())
 	publicAuth.POST("/reset-password-with-otp", authHandler.HandleResetPasswordWithOTP, middleware.TurnstileMiddleware())
-	publicAuth.POST("/send-invite-otp", authHandler.HandleSendInviteOTP, middleware.TurnstileMiddleware())
-	publicAuth.POST("/verify-email", authHandler.HandleVerifyEmail, middleware.TurnstileMiddleware())
+	publicAuth.POST("/send-invite-otp", authHandler.HandleSendInviteOTP, middleware.TurnstileMiddleware(), ratelimiter.Middleware("resend_mobile_otp"))
 	publicAuth.POST("/verify-email-with-mobile", authHandler.HandleVerifyEmailWithMobile, middleware.TurnstileMiddleware())
-	publicAuth.POST("/verify-mobile-otp", authHandler.HandleVerifyMobileOTP, middleware.TurnstileMiddleware())
-	publicAuth.POST("/resend-verification", authHandler.HandleResendEmailVerification, middleware.TurnstileMiddleware())
+	publicAuth.POST("/verify-mobile-otp", authHandler.HandleVerifyMobileOTP, middleware.TurnstileMiddleware(), ratelimiter.Middleware("verify_mobile_otp"))
+	publicAuth.POST("/resend-verification", authHandler.HandleResendEmailVerification, middleware.TurnstileMiddleware(), ratelimiter.Middleware("resend_email_verification"))
+	publicAuth.POST("/resend-mobile-otp", authHandler.HandleResendMobileOTP, middleware.TurnstileMiddleware(), ratelimiter.Middleware("resend_mobile_otp"))
+	publicAuth.POST("/resend-invite-otp", authHandler.HandleResendInviteOTP, middleware.TurnstileMiddleware(), ratelimiter.Middleware("resend_mobile_otp"))
 
 	// Protected routes (JWT and CSRF middleware first, then rate limiter can use user ID)
 	protectedAuth := authGroup.Group("")
@@ -61,7 +62,7 @@ func RegisterAuthRoutes(e *echo.Group, authService auth.AuthService, businessSer
 	protectedAuth.Use(ratelimiter.MiddlewareDefault())
 	protectedAuth.POST("/revoke", authHandler.HandleRevokeToken)
 	protectedAuth.POST("/revoke-all", authHandler.HandleRevokeAllTokens)
-	protectedAuth.POST("/generate-mobile-otp", authHandler.HandleGenerateMobileOTP, middleware.TurnstileMiddleware())
+	protectedAuth.POST("/generate-mobile-otp", authHandler.HandleGenerateMobileOTP, middleware.TurnstileMiddleware(), ratelimiter.Middleware("resend_mobile_otp"))
 	protectedAuth.POST("/change-password", authHandler.HandleChangePassword, middleware.TurnstileMiddleware())
 	protectedAuth.POST("/send-mobile-update-otp", authHandler.HandleSendMobileUpdateOTP, middleware.TurnstileMiddleware())
 	protectedAuth.POST("/verify-mobile-update", authHandler.HandleVerifyMobileUpdate, middleware.TurnstileMiddleware())
@@ -97,15 +98,19 @@ func (ah AuthHandler) HandleSignup(c echo.Context) error {
 	response, err := ah.authService.Signup(c.Request().Context(), signupReq.Email, signupReq.Password)
 	if err != nil {
 		logger.Errorf("Signup failed: %v", err)
-		// Return 400 for validation errors
+
+		// Password validation errors
 		if err.Error() == "password must be at least 8 characters long" ||
 			err.Error() == "password must contain at least one uppercase letter, one lowercase letter, one number, and one special character" {
 			return c.JSON(400, map[string]any{"message": err.Error(), "data": nil})
 		}
-		// Return 409 for duplicate user
-		if err.Error() == "user already exists" {
-			return c.JSON(409, map[string]any{"message": "User with this email already exists", "data": nil})
+
+		// Rate limit handling
+		if strings.Contains(err.Error(), "too many signup attempts") {
+			return c.JSON(429, map[string]any{"message": err.Error(), "data": nil})
 		}
+
+		// REMOVED: 409 handling - signup now handles existing users silently
 		// Return 500 for actual server errors
 		return c.JSON(500, map[string]any{"message": "Failed to create user", "data": nil})
 	}
@@ -407,13 +412,16 @@ func (ah AuthHandler) HandleGenerateMobileOTP(c echo.Context) error {
 	if err := ah.authService.GenerateMobileOTP(c.Request().Context(), userID); err != nil {
 		logger.Errorf("Failed to generate mobile OTP for user %s: %v", userID, err)
 
-		// Return 404 if user doesn't have mobile number
-		if err.Error() == "user does not have a mobile number registered" {
+		switch {
+		case err.Error() == "user does not have a mobile number registered":
 			return c.JSON(404, map[string]any{"message": "Mobile number not registered. Please update your profile.", "data": nil})
+		case strings.Contains(err.Error(), "rate limit check failed"):
+			return c.JSON(503, map[string]any{"message": "Service temporarily unavailable. Please try again in a few minutes.", "data": nil})
+		case strings.Contains(err.Error(), "too many resend requests"):
+			return c.JSON(429, map[string]any{"message": err.Error(), "data": nil})
+		default:
+			return c.JSON(500, map[string]any{"message": "Failed to send OTP", "data": nil})
 		}
-
-		// Return 500 for other errors
-		return c.JSON(500, map[string]any{"message": "Failed to send OTP", "data": nil})
 	}
 
 	return c.JSON(200, map[string]any{
@@ -508,49 +516,6 @@ func (ah AuthHandler) HandleGetBusinessOnboardingFlags(c echo.Context) error {
 	})
 }
 
-// HandleVerifyEmail verifies user's email using verification token
-func (ah AuthHandler) HandleVerifyEmail(c echo.Context) error {
-	var req auth.VerifyEmailRequest
-
-	// Bind input
-	if err := c.Bind(&req); err != nil {
-		logger.Errorf("Invalid input: %v", err)
-		return c.JSON(400, map[string]any{"message": "Invalid request payload", "data": nil})
-	}
-
-	// Validate input
-	if err := c.Validate(&req); err != nil {
-		logger.Errorf("Validation failed: %v", err)
-		if ve, ok := err.(*customValidator.ValidationError); ok {
-			return c.JSON(400, map[string]any{"message": "Validation failed", "errors": ve.Errors, "data": nil})
-		}
-		return c.JSON(400, map[string]any{"message": "Validation failed", "data": nil})
-	}
-
-	if err := ah.authService.VerifyEmailWithToken(c.Request().Context(), req.UserID, req.Token, req.Signature); err != nil {
-		logger.Errorf("Error verifying email with token: %v", err)
-
-		// Handle specific error cases
-		switch err.Error() {
-		case "verification token not found":
-			return c.JSON(404, map[string]string{"message": "Invalid verification token"})
-		case "verification token already used":
-			return c.JSON(400, map[string]string{"message": "Verification token has already been used"})
-		case "verification token has expired":
-			return c.JSON(400, map[string]string{"message": "Verification token has expired"})
-		case "invalid or tampered verification link":
-			return c.JSON(400, map[string]string{"message": "Invalid or tampered verification link"})
-		default:
-			return c.JSON(500, map[string]string{"message": "Failed to verify email"})
-		}
-	}
-
-	return c.JSON(200, map[string]interface{}{
-		"message": "Email verified successfully. You can now log in.",
-		"data":    nil,
-	})
-}
-
 // HandleResendEmailVerification resends email verification token
 func (ah AuthHandler) HandleResendEmailVerification(c echo.Context) error {
 	var req auth.ResendVerificationRequest
@@ -574,11 +539,15 @@ func (ah AuthHandler) HandleResendEmailVerification(c echo.Context) error {
 		logger.Errorf("Error resending email verification for %s: %v", req.Email, err)
 
 		// Handle specific error cases
-		switch err.Error() {
-		case "user not found":
+		switch {
+		case err.Error() == "user not found":
 			return c.JSON(404, map[string]string{"message": "User not found"})
-		case "email already verified":
+		case err.Error() == "email already verified":
 			return c.JSON(400, map[string]string{"message": "Email is already verified"})
+		case strings.Contains(err.Error(), "rate limit check failed"):
+			return c.JSON(503, map[string]any{"message": "Service temporarily unavailable. Please try again in a few minutes.", "data": nil})
+		case strings.Contains(err.Error(), "too many resend requests"):
+			return c.JSON(429, map[string]any{"message": err.Error(), "data": nil})
 		default:
 			return c.JSON(500, map[string]string{"message": "Failed to resend verification email"})
 		}
@@ -586,6 +555,51 @@ func (ah AuthHandler) HandleResendEmailVerification(c echo.Context) error {
 
 	return c.JSON(200, map[string]interface{}{
 		"message": "Verification email sent successfully. Please check your inbox.",
+		"data":    nil,
+	})
+}
+
+// HandleResendMobileOTP resends OTP during signup flow (public endpoint)
+func (ah AuthHandler) HandleResendMobileOTP(c echo.Context) error {
+	var req auth.ResendMobileOTPRequest
+
+	// Bind input
+	if err := c.Bind(&req); err != nil {
+		logger.Errorf("Invalid input: %v", err)
+		return c.JSON(400, map[string]any{"message": "Invalid request payload", "data": nil})
+	}
+
+	// Validate input
+	if err := c.Validate(&req); err != nil {
+		logger.Errorf("Validation failed: %v", err)
+		if ve, ok := err.(*customValidator.ValidationError); ok {
+			return c.JSON(400, map[string]any{"message": "Validation failed", "errors": ve.Errors, "data": nil})
+		}
+		return c.JSON(400, map[string]any{"message": "Validation failed", "data": nil})
+	}
+
+	// Call service
+	if err := ah.authService.ResendMobileOTP(c.Request().Context(), req.Email); err != nil {
+		logger.Errorf("Error resending mobile OTP for %s: %v", req.Email, err)
+
+		switch {
+		case err.Error() == "user not found":
+			return c.JSON(404, map[string]string{"message": "User not found"})
+		case err.Error() == "mobile already verified":
+			return c.JSON(400, map[string]string{"message": "Mobile is already verified"})
+		case err.Error() == "user does not have a mobile number registered":
+			return c.JSON(400, map[string]string{"message": "Mobile number not registered"})
+		case strings.Contains(err.Error(), "rate limit check failed"):
+			return c.JSON(503, map[string]any{"message": "Service temporarily unavailable. Please try again in a few minutes.", "data": nil})
+		case strings.Contains(err.Error(), "too many resend requests"):
+			return c.JSON(429, map[string]any{"message": err.Error(), "data": nil})
+		default:
+			return c.JSON(500, map[string]string{"message": "Failed to resend OTP"})
+		}
+	}
+
+	return c.JSON(200, map[string]interface{}{
+		"message": "OTP sent successfully. Please check your mobile.",
 		"data":    nil,
 	})
 }
@@ -720,6 +734,49 @@ func (ah AuthHandler) HandleSendInviteOTP(c echo.Context) error {
 
 	return c.JSON(200, map[string]any{
 		"message": "OTP sent successfully to your registered mobile number",
+		"data":    nil,
+	})
+}
+
+// HandleResendInviteOTP resends OTP for invited users (public endpoint)
+func (ah AuthHandler) HandleResendInviteOTP(c echo.Context) error {
+	var req auth.SendInviteOTPRequest // Reuse existing DTO (has userID, token, signature)
+
+	// Bind input
+	if err := c.Bind(&req); err != nil {
+		logger.Errorf("Invalid input: %v", err)
+		return c.JSON(400, map[string]any{"message": "Invalid request payload", "data": nil})
+	}
+
+	// Validate input
+	if err := c.Validate(&req); err != nil {
+		logger.Errorf("Validation failed: %v", err)
+		if ve, ok := err.(*customValidator.ValidationError); ok {
+			return c.JSON(400, map[string]any{"message": "Validation failed", "errors": ve.Errors, "data": nil})
+		}
+		return c.JSON(400, map[string]any{"message": "Validation failed", "data": nil})
+	}
+
+	// Call service
+	if err := ah.authService.ResendInviteOTP(c.Request().Context(), req.UserID, req.Token, req.Signature); err != nil {
+		logger.Errorf("Failed to resend invite OTP for user %s: %v", req.UserID, err)
+
+		switch {
+		case err.Error() == "invalid or tampered invitation link":
+			return c.JSON(403, map[string]any{"message": "Invalid invitation link", "data": nil})
+		case err.Error() == "user does not have a mobile number registered":
+			return c.JSON(404, map[string]any{"message": "Mobile number not registered", "data": nil})
+		case strings.Contains(err.Error(), "rate limit check failed"):
+			return c.JSON(503, map[string]any{"message": "Service temporarily unavailable. Please try again in a few minutes.", "data": nil})
+		case strings.Contains(err.Error(), "too many resend requests"):
+			return c.JSON(429, map[string]any{"message": err.Error(), "data": nil})
+		default:
+			return c.JSON(500, map[string]string{"message": "Failed to resend OTP"})
+		}
+	}
+
+	return c.JSON(200, map[string]interface{}{
+		"message": "OTP resent successfully to registered mobile number",
 		"data":    nil,
 	})
 }
