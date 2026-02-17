@@ -33,6 +33,7 @@ type DeviceHandler struct {
 	cookieSecure           bool
 	cookieSameSite         http.SameSite
 	cookieDomain           string
+	skipValidation         bool // Skip signature validation (dev mode only)
 	log                    *logger.Logger
 }
 
@@ -61,6 +62,7 @@ func NewDeviceHandler(
 	cookieSecure bool,
 	cookieSameSite string,
 	cookieDomain string,
+	skipValidation bool,
 ) *DeviceHandler {
 	return &DeviceHandler{
 		redis:                  redisClient,
@@ -72,6 +74,7 @@ func NewDeviceHandler(
 		cookieSecure:           cookieSecure,
 		cookieSameSite:         getSameSiteMode(cookieSameSite),
 		cookieDomain:           cookieDomain,
+		skipValidation:         skipValidation,
 		log:                    logger.GetDefault(),
 	}
 }
@@ -87,12 +90,23 @@ func (dh *DeviceHandler) EnsureDeviceID(c echo.Context) (string, bool, error) {
 		// Parse cookie value: deviceID|signature
 		parts := strings.Split(cookie.Value, "|")
 		if len(parts) != 2 {
+			// In dev mode (skip validation), try to extract deviceID anyway
+			if dh.skipValidation && len(parts) == 1 {
+				dh.log.Warnf("Invalid device cookie format from IP %s (dev mode: using raw value as deviceID)", c.RealIP())
+				return parts[0], false, nil
+			}
 			dh.log.Warnf("Invalid device cookie format from IP %s: expected 'deviceID|signature'", c.RealIP())
 			return "", false, ErrInvalidDeviceSignature
 		}
 
 		deviceID := parts[0]
 		providedSignature := parts[1]
+
+		// Skip signature verification in dev mode
+		if dh.skipValidation {
+			dh.log.Debugf("Device signature validation skipped (dev mode) for IP %s", c.RealIP())
+			return deviceID, false, nil
+		}
 
 		// Verify HMAC signature
 		if !dh.verifyDeviceSignature(deviceID, providedSignature) {

@@ -337,6 +337,7 @@ type RateLimiterConfig struct {
 	DeviceCreationThrottlePerIP  int           `json:"device_creation_throttle_per_ip" env:"RATE_LIMITER_DEVICE_CREATION_THROTTLE_PER_IP" env-default:"50"`
 	DeviceCreationThrottleWindow time.Duration `json:"device_creation_throttle_window" env:"RATE_LIMITER_DEVICE_CREATION_THROTTLE_WINDOW" env-default:"1h"`
 	InvalidSignaturePenalty      time.Duration `json:"invalid_signature_penalty" env:"RATE_LIMITER_INVALID_SIGNATURE_PENALTY" env-default:"1h"` // Penalty for tampered device signatures
+	SkipDeviceValidation         bool          `json:"skip_device_validation" env:"RATE_LIMITER_SKIP_DEVICE_VALIDATION" env-default:"false"`   // Skip device signature validation (dev mode only)
 	FailOpenByDefault            bool          `json:"fail_open_by_default" env:"RATE_LIMITER_FAIL_OPEN_BY_DEFAULT" env-default:"true"`
 	// Note: FailOpenByDefault only affects the "default" policy. Other built-in policies (login, signup, etc.) have their own hardcoded FailClosed settings
 	// Note: Token bucket TTL is hardcoded to 30 minutes in Lua script (lua_script.go line 48)

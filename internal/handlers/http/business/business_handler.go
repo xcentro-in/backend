@@ -76,8 +76,9 @@ func RegisterBusinessRoutes(e *echo.Group, businessService business.BusinessServ
 	onboardingGroup.GET("/upload", handler.UploadKYBDocuments)
 	onboardingGroup.POST("/confirm-upload", handler.ConfirmKYBDocumentsUpload, middleware.TurnstileMiddleware())
 
-	// Invite user route
+	// Invite user routes
 	businessGroup.POST("/invite-user", handler.InviteUser, middleware.TurnstileMiddleware())
+	businessGroup.POST("/resend-invite", handler.ResendInvite, middleware.TurnstileMiddleware())
 
 	// User management routes
 	businessGroup.GET("/users", handler.ListBusinessUsers)
@@ -462,6 +463,128 @@ func (h *BusinessHandler) InviteUser(c echo.Context) error {
 	return c.JSON(201, map[string]interface{}{
 		"message": "User invited successfully. Invitation email sent.",
 		"data":    response,
+	})
+}
+
+// ResendInvite resends invitation email to a user (only admin/owner)
+func (h *BusinessHandler) ResendInvite(c echo.Context) error {
+	// Read BusinessID from X-Business-ID header
+	businessID := strings.TrimSpace(c.Request().Header.Get("X-Business-ID"))
+	if businessID == "" {
+		return c.JSON(400, map[string]interface{}{
+			"error":   "MISSING_BUSINESS_ID",
+			"message": "X-Business-ID header is required",
+		})
+	}
+
+	// Validate UUID format
+	if v, ok := c.Echo().Validator.(*customValidator.CustomValidator); ok {
+		if err := v.Var(businessID, "required,uuid"); err != nil {
+			h.logger.Errorf("Invalid business ID format: %s", businessID)
+			return c.JSON(400, map[string]interface{}{
+				"error":   "INVALID_BUSINESS_ID",
+				"message": "X-Business-ID must be a valid UUID",
+			})
+		}
+	}
+
+	// Parse request
+	var req struct {
+		Email string `json:"email" validate:"required,email"`
+	}
+
+	// Bind input
+	if err := c.Bind(&req); err != nil {
+		h.logger.Errorf("Invalid input: %v", err)
+		return c.JSON(400, map[string]interface{}{
+			"error":   "INVALID_INPUT",
+			"message": "Invalid request payload",
+		})
+	}
+
+	// Validate input
+	if err := c.Validate(&req); err != nil {
+		h.logger.Errorf("Validation failed: %v", err)
+		if ve, ok := err.(*customValidator.ValidationError); ok {
+			return c.JSON(400, map[string]interface{}{
+				"error":   "VALIDATION_FAILED",
+				"message": "Validation failed",
+				"errors":  ve.Errors,
+			})
+		}
+		return c.JSON(400, map[string]interface{}{
+			"error":   "VALIDATION_FAILED",
+			"message": "Validation failed",
+		})
+	}
+
+	// Get requester's role for this business
+	requesterRole, err := h.getRequesterRoleForBusiness(c, businessID)
+	if err != nil {
+		return c.JSON(403, map[string]interface{}{
+			"error":   "FORBIDDEN",
+			"message": err.Error(),
+		})
+	}
+
+	// Authorization: Only admin or owner can resend invitations
+	if requesterRole != shared.Owner && requesterRole != shared.Admin {
+		return c.JSON(403, map[string]interface{}{
+			"error":   "FORBIDDEN",
+			"message": "Only business owner or admin can resend invitations",
+		})
+	}
+
+	// Validate user belongs to this business
+	isValid, err := h.businessService.ValidateUserInBusiness(c.Request().Context(), req.Email, businessID)
+	if err != nil {
+		h.logger.Errorf("Error validating user in business: %v", err)
+		return c.JSON(500, map[string]interface{}{
+			"error":   "INTERNAL_ERROR",
+			"message": "Failed to validate user",
+		})
+	}
+
+	if !isValid {
+		return c.JSON(404, map[string]interface{}{
+			"error":   "USER_NOT_FOUND",
+			"message": "User not found in this business",
+		})
+	}
+
+	// Resend invitation email using auth service
+	if err := h.authService.ResendInviteEmail(c.Request().Context(), req.Email); err != nil {
+		h.logger.Errorf("Error resending invitation email: %v", err)
+
+		// Check for specific error types
+		if strings.Contains(err.Error(), "user not found") {
+			return c.JSON(404, map[string]interface{}{
+				"error":   "USER_NOT_FOUND",
+				"message": "User not found",
+			})
+		}
+
+		if strings.Contains(err.Error(), "already activated") {
+			return c.JSON(400, map[string]interface{}{
+				"error":   "ALREADY_ACTIVATED",
+				"message": "User has already activated their account",
+			})
+		}
+
+		return c.JSON(500, map[string]interface{}{
+			"error":   "EMAIL_SEND_FAILED",
+			"message": "Failed to send invitation email. Please try again.",
+		})
+	}
+
+	userID := c.Get("userID").(string)
+	h.logger.Infof("Admin %s resent invitation to %s for business %s", userID, req.Email, businessID)
+
+	return c.JSON(200, map[string]interface{}{
+		"message": "Invitation email resent successfully",
+		"data": map[string]string{
+			"email": req.Email,
+		},
 	})
 }
 

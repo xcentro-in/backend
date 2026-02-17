@@ -85,15 +85,13 @@ type ChangePasswordRequest struct {
 	OTP         string `json:"otp" validate:"required,len=6,numeric"`
 }
 
-// VerifyEmailRequest represents the request to verify email with token
-type VerifyEmailRequest struct {
-	UserID    string `json:"uid" validate:"required"`
-	Token     string `json:"token" validate:"required"`
-	Signature string `json:"sig" validate:"required"`
-}
-
 // ResendVerificationRequest represents the request to resend email verification
 type ResendVerificationRequest struct {
+	Email string `json:"email" validate:"required,email"`
+}
+
+// ResendMobileOTPRequest represents the request to resend mobile OTP during signup
+type ResendMobileOTPRequest struct {
 	Email string `json:"email" validate:"required,email"`
 }
 

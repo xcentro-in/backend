@@ -838,6 +838,41 @@ func (s *BusinessServiceImpl) RemoveUserFromBusiness(ctx context.Context, bid st
 	return nil
 }
 
+// ValidateUserInBusiness checks if a user belongs to a specific business
+// Returns true if user is found in business, false otherwise
+func (s *BusinessServiceImpl) ValidateUserInBusiness(ctx context.Context, email string, bid string) (bool, error) {
+	s.logger.Debugf("Validating if user %s belongs to business %s", email, bid)
+
+	if email == "" || bid == "" {
+		return false, fmt.Errorf("email and business ID are required")
+	}
+
+	// Get user by email first
+	userObj, err := s.userRepo.GetUserByEmail(ctx, email)
+	if err != nil || userObj == nil {
+		s.logger.Debugf("User not found for email: %s", email)
+		return false, fmt.Errorf("user not found")
+	}
+
+	// Get all relations for this business
+	relations, err := s.businessUserRelRepo.FindByBusiness(ctx, bid)
+	if err != nil {
+		s.logger.Errorf("Error finding business relations: %v", err)
+		return false, fmt.Errorf("error finding business relations: %w", err)
+	}
+
+	// Check if user is in this business
+	for _, rel := range relations {
+		if rel.UserID == userObj.Id {
+			s.logger.Debugf("User %s found in business %s with role %s", email, bid, rel.Role)
+			return true, nil
+		}
+	}
+
+	s.logger.Debugf("User %s not found in business %s", email, bid)
+	return false, nil
+}
+
 // GetBusinessDetails retrieves business details for a given business ID (cached)
 // Uses middleware-injected user role to avoid DB query
 func (s *BusinessServiceImpl) GetBusinessDetails(ctx context.Context, bid string, userRole shared.UserRole) (*business.BusinessDetailsResponse, error) {
