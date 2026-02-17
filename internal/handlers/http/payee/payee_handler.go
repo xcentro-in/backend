@@ -814,3 +814,56 @@ func (h *PayeeHandler) GetRemunerationDocumentDownloadURL(c echo.Context) error 
 		},
 	})
 }
+
+// ValidateIFSC handles GET /payees/validate-ifsc/:ifsc_code
+// Validates IFSC code and returns bank details from Razorpay API
+func (h *PayeeHandler) ValidateIFSC(c echo.Context) error {
+	h.logger.InfoWith("ValidateIFSC API called")
+
+	// Bind and validate path parameter using DTO
+	var req payee.IFSCValidationRequest
+	if err := c.Bind(&req); err != nil {
+		h.logger.WarnWith("Failed to bind IFSC code", "error", err)
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "invalid_request",
+			"message": "Invalid request format",
+		})
+	}
+
+	// Validate using Echo validator (includes IFSC format validation)
+	if err := c.Validate(&req); err != nil {
+		h.logger.WarnWith("IFSC validation failed", "ifsc_code", req.IFSCCode, "error", err)
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "invalid_format",
+			"message": "Invalid IFSC format. Expected format: ABCD0123456 (4 letters + 0 + 6 alphanumeric)",
+		})
+	}
+
+	h.logger.DebugWith("Validating IFSC code", "ifsc_code", req.IFSCCode)
+
+	// Call payee service to validate IFSC (only checks if exists in Razorpay API)
+	bankDetails, err := h.payeeService.ValidateIFSC(c.Request().Context(), req.IFSCCode)
+	if err != nil {
+		h.logger.ErrorWith("IFSC validation failed", "ifsc_code", req.IFSCCode, "error", err)
+
+		// Check for specific error types
+		if err.Error() == "IFSC not found" {
+			return c.JSON(http.StatusNotFound, map[string]any{
+				"error":   "not_found",
+				"message": "IFSC code not found",
+			})
+		}
+
+		return c.JSON(http.StatusServiceUnavailable, map[string]any{
+			"error":   "external_api_failed",
+			"message": "Failed to validate IFSC code",
+		})
+	}
+
+	h.logger.InfoWith("IFSC validation successful", "ifsc_code", req.IFSCCode, "bank", bankDetails.Bank)
+
+	return c.JSON(http.StatusOK, map[string]any{
+		"status": "success",
+		"data":   bankDetails,
+	})
+}
