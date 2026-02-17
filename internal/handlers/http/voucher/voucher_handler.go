@@ -47,6 +47,36 @@ func (h *VoucherHandler) validationErrorResponse(c echo.Context, err error) erro
 	})
 }
 
+// validateVoucherDates enforces two date business rules:
+//  1. invoiceDate (when provided) must be within 2 months before or after today
+//  2. invoiceDueDate (when provided alongside invoiceDate) must be on or after invoiceDate
+//
+// Both arguments come from types.Date.ToTimePtr() so a zero/unset date arrives as nil.
+func (h *VoucherHandler) validateVoucherDates(c echo.Context, invoiceDate, invoiceDueDate *time.Time) error {
+	if invoiceDate != nil {
+		now := time.Now()
+		earliest := now.AddDate(0, -2, 0)
+		latest := now.AddDate(0, 2, 0)
+		if invoiceDate.Before(earliest) || invoiceDate.After(latest) {
+			return c.JSON(http.StatusBadRequest, map[string]any{
+				"error":   "VALIDATION_FAILED",
+				"message": "Validation failed",
+				"errors":  map[string]string{"invoiceDate": "must be within 2 months before or after today"},
+			})
+		}
+	}
+
+	if invoiceDate != nil && invoiceDueDate != nil && invoiceDueDate.Before(*invoiceDate) {
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "VALIDATION_FAILED",
+			"message": "Validation failed",
+			"errors":  map[string]string{"invoiceDueDate": "must be on or after invoice_date"},
+		})
+	}
+
+	return nil
+}
+
 // CreateDraftVoucher handles POST /vouchers/draft - Create draft voucher
 func (h *VoucherHandler) CreateDraftVoucher(c echo.Context) error {
 	h.logger.InfoWith("CreateDraftVoucher API called")
@@ -110,6 +140,18 @@ func (h *VoucherHandler) CreateDraftVoucher(c echo.Context) error {
 	if err := c.Validate(&req); err != nil {
 		h.logger.ErrorWith("Validation failed", "error", err)
 		return h.validationErrorResponse(c, err)
+	}
+
+	// Validate invoice dates
+	var invoiceDate, invoiceDueDate *time.Time
+	if req.InvoiceDate != nil {
+		invoiceDate = req.InvoiceDate.ToTimePtr()
+	}
+	if req.InvoiceDueDate != nil {
+		invoiceDueDate = req.InvoiceDueDate.ToTimePtr()
+	}
+	if err := h.validateVoucherDates(c, invoiceDate, invoiceDueDate); err != nil {
+		return err
 	}
 
 	h.logger.DebugWith("Draft voucher request",
@@ -237,6 +279,18 @@ func (h *VoucherHandler) UpdateVoucher(c echo.Context) error {
 	if err := c.Validate(&req); err != nil {
 		h.logger.ErrorWith("Validation failed", "error", err)
 		return h.validationErrorResponse(c, err)
+	}
+
+	// Validate invoice dates (only the dates present in this partial update)
+	var invoiceDate, invoiceDueDate *time.Time
+	if req.InvoiceDate != nil {
+		invoiceDate = req.InvoiceDate.ToTimePtr()
+	}
+	if req.InvoiceDueDate != nil {
+		invoiceDueDate = req.InvoiceDueDate.ToTimePtr()
+	}
+	if err := h.validateVoucherDates(c, invoiceDate, invoiceDueDate); err != nil {
+		return err
 	}
 
 	// Set voucher_id from URL path
@@ -439,6 +493,18 @@ func (h *VoucherHandler) CreateMultiVouchers(c echo.Context) error {
 	if err := c.Validate(&req); err != nil {
 		h.logger.ErrorWith("Validation failed", "error", err)
 		return h.validationErrorResponse(c, err)
+	}
+
+	// Validate invoice dates on each bill
+	for i, v := range req.Vouchers {
+		var invoiceDate *time.Time
+		if v.InvoiceDate != nil {
+			invoiceDate = v.InvoiceDate.ToTimePtr()
+		}
+		if err := h.validateVoucherDates(c, invoiceDate, nil); err != nil {
+			h.logger.ErrorWith("Invoice date validation failed", "bill_index", i)
+			return err
+		}
 	}
 
 	h.logger.DebugWith("Multi voucher request", "bill_count", len(req.Vouchers))
