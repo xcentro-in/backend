@@ -259,6 +259,12 @@ func registerV1PayeeRoutes(clients *externalClients, cfg *config.Config, group *
 	payeeGroup.Use(ratelimiter.MiddlewareDefault())
 
 	payee.RegisterPayeeRoutes(payeeGroup, payeeService, authSvc, cookieManager)
+
+	// Utility routes that don't require business context (JWT only)
+	payeeUtilGroup := group.Group("/payees")
+	payeeUtilGroup.Use(middleware.JWTMiddleware(authSvc))
+	payeeUtilGroup.Use(ratelimiter.MiddlewareDefault())
+	payee.RegisterPayeeUtilityRoutes(payeeUtilGroup, payeeService)
 }
 
 func registerV1VoucherRoutes(clients *externalClients, cfg *config.Config, group *echo.Group, cookieManager *httputil.CookieManager) {
