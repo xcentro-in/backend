@@ -6,6 +6,7 @@ import (
 	// "io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -14,6 +15,7 @@ import (
 	"xcentro.in/internal/core/voucher"
 	voucherSvc "xcentro.in/internal/services/voucher"
 	"xcentro.in/internal/shared/logger"
+	customValidator "xcentro.in/internal/shared/validator"
 )
 
 // VoucherHandler handles voucher-related HTTP requests
@@ -30,12 +32,57 @@ func NewVoucherHandler(voucherService voucherSvc.VoucherService, logger *logger.
 	}
 }
 
+// validationErrorResponse returns a structured 400 response for validation failures
+func (h *VoucherHandler) validationErrorResponse(c echo.Context, err error) error {
+	if ve, ok := err.(*customValidator.ValidationError); ok {
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "VALIDATION_FAILED",
+			"message": "Validation failed",
+			"errors":  ve.Errors,
+		})
+	}
+	return c.JSON(http.StatusBadRequest, map[string]any{
+		"error":   "VALIDATION_FAILED",
+		"message": "Validation failed",
+	})
+}
+
+// validateVoucherDates enforces two date business rules:
+//  1. invoiceDate (when provided) must be within 2 months before or after today
+//  2. invoiceDueDate (when provided alongside invoiceDate) must be on or after invoiceDate
+//
+// Both arguments come from types.Date.ToTimePtr() so a zero/unset date arrives as nil.
+func (h *VoucherHandler) validateVoucherDates(c echo.Context, invoiceDate, invoiceDueDate *time.Time) error {
+	if invoiceDate != nil {
+		now := time.Now()
+		earliest := now.AddDate(0, -2, 0)
+		latest := now.AddDate(0, 2, 0)
+		if invoiceDate.Before(earliest) || invoiceDate.After(latest) {
+			return c.JSON(http.StatusBadRequest, map[string]any{
+				"error":   "VALIDATION_FAILED",
+				"message": "Validation failed",
+				"errors":  map[string]string{"invoiceDate": "must be within 2 months before or after today"},
+			})
+		}
+	}
+
+	if invoiceDate != nil && invoiceDueDate != nil && invoiceDueDate.Before(*invoiceDate) {
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "VALIDATION_FAILED",
+			"message": "Validation failed",
+			"errors":  map[string]string{"invoiceDueDate": "must be on or after invoice_date"},
+		})
+	}
+
+	return nil
+}
+
 // CreateDraftVoucher handles POST /vouchers/draft - Create draft voucher
 func (h *VoucherHandler) CreateDraftVoucher(c echo.Context) error {
 	h.logger.InfoWith("CreateDraftVoucher API called")
 
 	// Extract business_id from X-Business-ID header
-	businessIDStr := c.Request().Header.Get("X-Business-ID")
+	businessIDStr := strings.TrimSpace(c.Request().Header.Get("X-Business-ID"))
 	if businessIDStr == "" {
 		return c.JSON(http.StatusBadRequest, map[string]any{
 			"error":   "MISSING_BUSINESS_ID",
@@ -47,8 +94,8 @@ func (h *VoucherHandler) CreateDraftVoucher(c echo.Context) error {
 	if err != nil {
 		h.logger.ErrorWith("Invalid business_id format", "error", err)
 		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "invalid_request",
-			"message": "Invalid business_id format",
+			"error":   "INVALID_BUSINESS_ID",
+			"message": "X-Business-ID must be a valid UUID",
 		})
 	}
 
@@ -85,9 +132,27 @@ func (h *VoucherHandler) CreateDraftVoucher(c echo.Context) error {
 		})
 	}
 
-	// Set businessID and userID from context
+	// Set businessID and userID from context before validation
 	req.BusinessID = businessID
 	req.UserID = userID
+
+	// Validate request body
+	if err := c.Validate(&req); err != nil {
+		h.logger.ErrorWith("Validation failed", "error", err)
+		return h.validationErrorResponse(c, err)
+	}
+
+	// Validate invoice dates
+	var invoiceDate, invoiceDueDate *time.Time
+	if req.InvoiceDate != nil {
+		invoiceDate = req.InvoiceDate.ToTimePtr()
+	}
+	if req.InvoiceDueDate != nil {
+		invoiceDueDate = req.InvoiceDueDate.ToTimePtr()
+	}
+	if err := h.validateVoucherDates(c, invoiceDate, invoiceDueDate); err != nil {
+		return err
+	}
 
 	h.logger.DebugWith("Draft voucher request",
 		"relation_id", req.RelationID,
@@ -115,17 +180,18 @@ func (h *VoucherHandler) CreateDraftVoucher(c echo.Context) error {
 func (h *VoucherHandler) ListVouchers(c echo.Context) error {
 	h.logger.InfoWith("ListVouchers API called")
 
-	// TODO: Extract business_id from JWT
-	businessIDStr := c.QueryParam("business_id")
+	businessIDStr := strings.TrimSpace(c.Request().Header.Get("X-Business-ID"))
 	if businessIDStr == "" {
-		// TODO: Extract from JWT
-		businessIDStr = "00000000-0000-0000-0000-000000000000" // Placeholder
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "MISSING_BUSINESS_ID",
+			"message": "X-Business-ID header is required",
+		})
 	}
 	businessID, err := uuid.Parse(businessIDStr)
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "invalid_business_id",
-			"message": "Invalid business ID format",
+			"error":   "INVALID_BUSINESS_ID",
+			"message": "X-Business-ID must be a valid UUID",
 		})
 	}
 
@@ -209,6 +275,24 @@ func (h *VoucherHandler) UpdateVoucher(c echo.Context) error {
 		})
 	}
 
+	// Validate request body
+	if err := c.Validate(&req); err != nil {
+		h.logger.ErrorWith("Validation failed", "error", err)
+		return h.validationErrorResponse(c, err)
+	}
+
+	// Validate invoice dates (only the dates present in this partial update)
+	var invoiceDate, invoiceDueDate *time.Time
+	if req.InvoiceDate != nil {
+		invoiceDate = req.InvoiceDate.ToTimePtr()
+	}
+	if req.InvoiceDueDate != nil {
+		invoiceDueDate = req.InvoiceDueDate.ToTimePtr()
+	}
+	if err := h.validateVoucherDates(c, invoiceDate, invoiceDueDate); err != nil {
+		return err
+	}
+
 	// Set voucher_id from URL path
 	req.VoucherID = voucherID
 
@@ -248,7 +332,7 @@ func (h *VoucherHandler) DeleteVoucher(c echo.Context) error {
 	h.logger.InfoWith("DeleteVoucher API called")
 
 	// Extract business_id from X-Business-ID header
-	businessIDStr := c.Request().Header.Get("X-Business-ID")
+	businessIDStr := strings.TrimSpace(c.Request().Header.Get("X-Business-ID"))
 	if businessIDStr == "" {
 		return c.JSON(http.StatusBadRequest, map[string]any{
 			"error":   "MISSING_BUSINESS_ID",
@@ -260,8 +344,8 @@ func (h *VoucherHandler) DeleteVoucher(c echo.Context) error {
 	if err != nil {
 		h.logger.ErrorWith("Invalid business_id format", "error", err)
 		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "invalid_request",
-			"message": "Invalid business_id format",
+			"error":   "INVALID_BUSINESS_ID",
+			"message": "X-Business-ID must be a valid UUID",
 		})
 	}
 
@@ -356,7 +440,7 @@ func (h *VoucherHandler) CreateMultiVouchers(c echo.Context) error {
 	h.logger.InfoWith("CreateMultiVouchers API called")
 
 	// Extract business_id from X-Business-ID header
-	businessIDStr := c.Request().Header.Get("X-Business-ID")
+	businessIDStr := strings.TrimSpace(c.Request().Header.Get("X-Business-ID"))
 	if businessIDStr == "" {
 		return c.JSON(http.StatusBadRequest, map[string]any{
 			"error":   "MISSING_BUSINESS_ID",
@@ -368,8 +452,8 @@ func (h *VoucherHandler) CreateMultiVouchers(c echo.Context) error {
 	if err != nil {
 		h.logger.ErrorWith("Invalid business_id format", "error", err)
 		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "invalid_request",
-			"message": "Invalid business_id format",
+			"error":   "INVALID_BUSINESS_ID",
+			"message": "X-Business-ID must be a valid UUID",
 		})
 	}
 
@@ -401,9 +485,27 @@ func (h *VoucherHandler) CreateMultiVouchers(c echo.Context) error {
 		})
 	}
 
-	// Set businessID and userID from context
+	// Set businessID and userID from context before validation
 	req.BusinessID = businessID
 	req.UserID = userID
+
+	// Validate request body (includes dive validation on each BillVoucherRequest)
+	if err := c.Validate(&req); err != nil {
+		h.logger.ErrorWith("Validation failed", "error", err)
+		return h.validationErrorResponse(c, err)
+	}
+
+	// Validate invoice dates on each bill
+	for i, v := range req.Vouchers {
+		var invoiceDate *time.Time
+		if v.InvoiceDate != nil {
+			invoiceDate = v.InvoiceDate.ToTimePtr()
+		}
+		if err := h.validateVoucherDates(c, invoiceDate, nil); err != nil {
+			h.logger.ErrorWith("Invoice date validation failed", "bill_index", i)
+			return err
+		}
+	}
 
 	h.logger.DebugWith("Multi voucher request", "bill_count", len(req.Vouchers))
 
@@ -427,16 +529,18 @@ func (h *VoucherHandler) CreateMultiVouchers(c echo.Context) error {
 func (h *VoucherHandler) GetDraftReminders(c echo.Context) error {
 	h.logger.InfoWith("GetDraftReminders API called")
 
-	// TODO: Extract business_id from JWT
-	businessIDStr := c.QueryParam("business_id")
+	businessIDStr := strings.TrimSpace(c.Request().Header.Get("X-Business-ID"))
 	if businessIDStr == "" {
-		businessIDStr = "00000000-0000-0000-0000-000000000000" // Placeholder
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "MISSING_BUSINESS_ID",
+			"message": "X-Business-ID header is required",
+		})
 	}
 	businessID, err := uuid.Parse(businessIDStr)
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "invalid_business_id",
-			"message": "Invalid business ID format",
+			"error":   "INVALID_BUSINESS_ID",
+			"message": "X-Business-ID must be a valid UUID",
 		})
 	}
 
@@ -504,8 +608,22 @@ func (h *VoucherHandler) RequestCancellation(c echo.Context) error {
 		})
 	}
 
-	// TODO: Extract user_id from JWT
-	userID := uuid.MustParse("00000000-0000-0000-0000-000000000000") // Placeholder
+	// Extract userId from JWT context
+	userIDStr, ok := c.Get("userId").(string)
+	if !ok || userIDStr == "" {
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "MISSING_USER_ID",
+			"message": "User ID not found in token",
+		})
+	}
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		h.logger.ErrorWith("Invalid user_id format", "error", err)
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "invalid_user_id",
+			"message": "Invalid user ID format",
+		})
+	}
 
 	h.logger.DebugWith("Cancellation request",
 		"voucher_id", voucherID,
@@ -567,8 +685,22 @@ func (h *VoucherHandler) ApproveCancellation(c echo.Context) error {
 		})
 	}
 
-	// TODO: Extract user_id from JWT (operations/finance user)
-	userID := uuid.MustParse("00000000-0000-0000-0000-000000000000") // Placeholder
+	// Extract userId from JWT context
+	userIDStr, ok := c.Get("userId").(string)
+	if !ok || userIDStr == "" {
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "MISSING_USER_ID",
+			"message": "User ID not found in token",
+		})
+	}
+	userID, err := uuid.Parse(userIDStr)
+	if err != nil {
+		h.logger.ErrorWith("Invalid user_id format", "error", err)
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "invalid_user_id",
+			"message": "Invalid user ID format",
+		})
+	}
 
 	h.logger.DebugWith("Approve cancellation request",
 		"voucher_id", voucherID,
@@ -742,7 +874,7 @@ func (h *VoucherHandler) GetVouchersByPayee(c echo.Context) error {
 	}
 
 	// Extract business_id from X-Business-ID header
-	businessIDStr := c.Request().Header.Get("X-Business-ID")
+	businessIDStr := strings.TrimSpace(c.Request().Header.Get("X-Business-ID"))
 	if businessIDStr == "" {
 		return c.JSON(http.StatusBadRequest, map[string]any{
 			"error":   "MISSING_BUSINESS_ID",
@@ -754,8 +886,8 @@ func (h *VoucherHandler) GetVouchersByPayee(c echo.Context) error {
 	if err != nil {
 		h.logger.ErrorWith("Invalid business_id format", "error", err)
 		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "invalid_request",
-			"message": "Invalid business_id format",
+			"error":   "INVALID_BUSINESS_ID",
+			"message": "X-Business-ID must be a valid UUID",
 		})
 	}
 
@@ -819,11 +951,17 @@ func (h *VoucherHandler) GetVoucherList(c echo.Context) error {
 	h.logger.InfoWith("GetVoucherList API called")
 
 	// Extract business_id from X-Business-ID header
-	businessID := c.Request().Header.Get("X-Business-ID")
+	businessID := strings.TrimSpace(c.Request().Header.Get("X-Business-ID"))
 	if businessID == "" {
 		return c.JSON(http.StatusBadRequest, map[string]any{
 			"error":   "MISSING_BUSINESS_ID",
 			"message": "X-Business-ID header is required",
+		})
+	}
+	if _, err := uuid.Parse(businessID); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "INVALID_BUSINESS_ID",
+			"message": "X-Business-ID must be a valid UUID",
 		})
 	}
 
@@ -901,11 +1039,17 @@ func (h *VoucherHandler) RequestApproval(c echo.Context) error {
 	}
 
 	// Extract business_id from header (for validation)
-	businessID := c.Request().Header.Get("X-Business-ID")
+	businessID := strings.TrimSpace(c.Request().Header.Get("X-Business-ID"))
 	if businessID == "" {
 		return c.JSON(http.StatusBadRequest, map[string]any{
 			"error":   "MISSING_BUSINESS_ID",
 			"message": "X-Business-ID header is required",
+		})
+	}
+	if _, err := uuid.Parse(businessID); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "INVALID_BUSINESS_ID",
+			"message": "X-Business-ID must be a valid UUID",
 		})
 	}
 
@@ -913,7 +1057,7 @@ func (h *VoucherHandler) RequestApproval(c echo.Context) error {
 	var reqBody struct {
 		ApproverUserID string `json:"approver_user_id" validate:"required,uuid"`
 		Action         string `json:"action" validate:"required,oneof=pending approved rejected request_changes"`
-		Remarks        string `json:"remarks"`
+		Remarks        string `json:"remarks" validate:"omitempty,max=500,safe_text"`
 	}
 
 	if err := c.Bind(&reqBody); err != nil {
@@ -924,17 +1068,13 @@ func (h *VoucherHandler) RequestApproval(c echo.Context) error {
 		})
 	}
 
-	// Validate action
-	action := voucher.ApprovalAction(reqBody.Action)
-	if action != voucher.ApprovalActionPending &&
-		action != voucher.ApprovalActionApproved &&
-		action != voucher.ApprovalActionRejected &&
-		action != voucher.ApprovalActionRequestChanges {
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "INVALID_ACTION",
-			"message": "Action must be one of: pending, approved, rejected, request_changes",
-		})
+	// Validate request body (ApproverUserID uuid, Action oneof)
+	if err := c.Validate(&reqBody); err != nil {
+		h.logger.ErrorWith("Validation failed", "error", err)
+		return h.validationErrorResponse(c, err)
 	}
+
+	action := voucher.ApprovalAction(reqBody.Action)
 
 	h.logger.DebugWith("Processing approval request",
 		"voucher_id", voucherID,
@@ -974,11 +1114,17 @@ func (h *VoucherHandler) GetApprovalInbox(c echo.Context) error {
 	h.logger.InfoWith("GetApprovalInbox API called")
 
 	// Extract business_id from header
-	businessID := c.Request().Header.Get("X-Business-ID")
+	businessID := strings.TrimSpace(c.Request().Header.Get("X-Business-ID"))
 	if businessID == "" {
 		return c.JSON(http.StatusBadRequest, map[string]any{
 			"error":   "MISSING_BUSINESS_ID",
 			"message": "X-Business-ID header is required",
+		})
+	}
+	if _, err := uuid.Parse(businessID); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "INVALID_BUSINESS_ID",
+			"message": "X-Business-ID must be a valid UUID",
 		})
 	}
 
@@ -1035,11 +1181,17 @@ func (h *VoucherHandler) GetApprovalInboxCounts(c echo.Context) error {
 	h.logger.InfoWith("GetApprovalInboxCounts API called")
 
 	// Extract business_id from header
-	businessID := c.Request().Header.Get("X-Business-ID")
+	businessID := strings.TrimSpace(c.Request().Header.Get("X-Business-ID"))
 	if businessID == "" {
 		return c.JSON(http.StatusBadRequest, map[string]any{
 			"error":   "MISSING_BUSINESS_ID",
 			"message": "X-Business-ID header is required",
+		})
+	}
+	if _, err := uuid.Parse(businessID); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "INVALID_BUSINESS_ID",
+			"message": "X-Business-ID must be a valid UUID",
 		})
 	}
 
@@ -1078,11 +1230,17 @@ func (h *VoucherHandler) BatchApproveVouchers(c echo.Context) error {
 	}
 
 	// Extract business_id from header
-	businessID := c.Request().Header.Get("X-Business-ID")
+	businessID := strings.TrimSpace(c.Request().Header.Get("X-Business-ID"))
 	if businessID == "" {
 		return c.JSON(http.StatusBadRequest, map[string]any{
 			"error":   "MISSING_BUSINESS_ID",
 			"message": "X-Business-ID header is required",
+		})
+	}
+	if _, err := uuid.Parse(businessID); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "INVALID_BUSINESS_ID",
+			"message": "X-Business-ID must be a valid UUID",
 		})
 	}
 
@@ -1090,7 +1248,7 @@ func (h *VoucherHandler) BatchApproveVouchers(c echo.Context) error {
 	var reqBody struct {
 		VoucherIDs   []string `json:"voucher_ids" validate:"required,min=1"`
 		ApprovedByID string   `json:"approved_by_id" validate:"required,uuid"`
-		Remarks      string   `json:"remarks"`
+		Remarks      string   `json:"remarks" validate:"omitempty,max=500,safe_text"`
 	}
 
 	if err := c.Bind(&reqBody); err != nil {
@@ -1101,12 +1259,10 @@ func (h *VoucherHandler) BatchApproveVouchers(c echo.Context) error {
 		})
 	}
 
-	// Validate voucher IDs
-	if len(reqBody.VoucherIDs) == 0 {
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "MISSING_VOUCHER_IDS",
-			"message": "At least one voucher_id is required",
-		})
+	// Validate request body (VoucherIDs min=1, ApprovedByID uuid)
+	if err := c.Validate(&reqBody); err != nil {
+		h.logger.ErrorWith("Validation failed", "error", err)
+		return h.validationErrorResponse(c, err)
 	}
 
 	h.logger.DebugWith("Processing batch approval",
@@ -1146,11 +1302,17 @@ func (h *VoucherHandler) GetUnpaidBills(c echo.Context) error {
 	h.logger.InfoWith("GetUnpaidBills API called")
 
 	// Extract business_id from header
-	businessID := c.Request().Header.Get("X-Business-ID")
+	businessID := strings.TrimSpace(c.Request().Header.Get("X-Business-ID"))
 	if businessID == "" {
 		return c.JSON(http.StatusBadRequest, map[string]any{
 			"error":   "MISSING_BUSINESS_ID",
 			"message": "X-Business-ID header is required",
+		})
+	}
+	if _, err := uuid.Parse(businessID); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "INVALID_BUSINESS_ID",
+			"message": "X-Business-ID must be a valid UUID",
 		})
 	}
 
@@ -1223,11 +1385,17 @@ func (h *VoucherHandler) GetVoucherCounts(c echo.Context) error {
 	h.logger.InfoWith("GetVoucherCounts API called")
 
 	// Extract business_id from header
-	businessID := c.Request().Header.Get("X-Business-ID")
+	businessID := strings.TrimSpace(c.Request().Header.Get("X-Business-ID"))
 	if businessID == "" {
 		return c.JSON(http.StatusBadRequest, map[string]any{
 			"error":   "MISSING_BUSINESS_ID",
 			"message": "X-Business-ID header is required",
+		})
+	}
+	if _, err := uuid.Parse(businessID); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "INVALID_BUSINESS_ID",
+			"message": "X-Business-ID must be a valid UUID",
 		})
 	}
 
@@ -1355,11 +1523,17 @@ func (h *VoucherHandler) GetCalendarView(c echo.Context) error {
 	h.logger.InfoWith("GetCalendarView API called")
 
 	// Extract business_id from X-Business-ID header
-	businessIDStr := c.Request().Header.Get("X-Business-ID")
+	businessIDStr := strings.TrimSpace(c.Request().Header.Get("X-Business-ID"))
 	if businessIDStr == "" {
 		return c.JSON(http.StatusBadRequest, map[string]any{
 			"error":   "MISSING_BUSINESS_ID",
 			"message": "X-Business-ID header is required",
+		})
+	}
+	if _, err := uuid.Parse(businessIDStr); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "INVALID_BUSINESS_ID",
+			"message": "X-Business-ID must be a valid UUID",
 		})
 	}
 
@@ -1383,6 +1557,12 @@ func (h *VoucherHandler) GetCalendarView(c echo.Context) error {
 			"message": "year must be a valid integer",
 		})
 	}
+	if year < 2000 || year > 2100 {
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "INVALID_YEAR",
+			"message": "year must be between 2000 and 2100",
+		})
+	}
 
 	month, err := strconv.Atoi(monthStr)
 	if err != nil {
@@ -1390,6 +1570,12 @@ func (h *VoucherHandler) GetCalendarView(c echo.Context) error {
 		return c.JSON(http.StatusBadRequest, map[string]any{
 			"error":   "INVALID_MONTH",
 			"message": "month must be a valid integer (1-12)",
+		})
+	}
+	if month < 1 || month > 12 {
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"error":   "INVALID_MONTH",
+			"message": "month must be between 1 and 12",
 		})
 	}
 

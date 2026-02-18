@@ -57,11 +57,17 @@ jobs:
             ./internal/adapters/external/payment/easebuzz/encryption_test.go \
             ./internal/adapters/external/payment/easebuzz/encryption.go
 
+          # Run handler input-validation tests (voucher + payee)
+          go test -v -race -coverprofile=coverage-handlers.out -covermode=atomic \
+            ./internal/handlers/http/voucher/... \
+            ./internal/handlers/http/payee/...
+
           # Merge coverage files
           echo "mode: atomic" > coverage.out
           tail -n +2 coverage-payment.out >> coverage.out
           tail -n +2 coverage-jiopay.out >> coverage.out 2>/dev/null || true
           tail -n +2 coverage-easebuzz.out >> coverage.out 2>/dev/null || true
+          tail -n +2 coverage-handlers.out >> coverage.out 2>/dev/null || true
 
       - name: Generate coverage report
         run: |
