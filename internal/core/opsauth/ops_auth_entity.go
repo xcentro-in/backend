@@ -9,8 +9,8 @@ type OpsUser struct {
 	Email     string   `json:"email"`
 	Roles     []string `json:"roles"` // Roles extracted from OIDC access token
 	Status    string   `json:"status"`
-	CreatedAt string   `json:"createdAt"`
-	UpdatedAt string   `json:"updatedAt"`
+	CreatedAt time.Time  `json:"createdAt"`
+	UpdatedAt time.Time  `json:"updatedAt"`
 }
 
 // OpsSession represents an ops user session with OIDC tokens

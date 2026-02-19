@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -64,13 +65,14 @@ func (r *PgOpsUserRepository) CreateOrUpdateUser(ctx context.Context, oid, email
 func (r *PgOpsUserRepository) GetUserByID(ctx context.Context, userID string) (*opsauth.OpsUser, error) {
 	query := `
 		SELECT id, name, email, roles, status,
-		       created_at::text, COALESCE(updated_at::text, '')
+		       created_at, updated_at
 		FROM xcentro.ops_user_table
 		WHERE id = $1
 	`
 
 	var user opsauth.OpsUser
 	var rolesJSON []byte
+	var updatedAt *time.Time
 
 	err := r.querier.QueryRow(ctx, query, userID).Scan(
 		&user.ID,
@@ -79,7 +81,7 @@ func (r *PgOpsUserRepository) GetUserByID(ctx context.Context, userID string) (*
 		&rolesJSON,
 		&user.Status,
 		&user.CreatedAt,
-		&user.UpdatedAt,
+		&updatedAt,
 	)
 
 	if err != nil {
@@ -87,6 +89,10 @@ func (r *PgOpsUserRepository) GetUserByID(ctx context.Context, userID string) (*
 			return nil, nil
 		}
 		return nil, fmt.Errorf("failed to get ops user by ID: %w", err)
+	}
+
+	if updatedAt != nil {
+		user.UpdatedAt = *updatedAt
 	}
 
 	// Unmarshal roles from JSONB
@@ -100,13 +106,14 @@ func (r *PgOpsUserRepository) GetUserByID(ctx context.Context, userID string) (*
 func (r *PgOpsUserRepository) GetUserByEmail(ctx context.Context, email string) (*opsauth.OpsUser, error) {
 	query := `
 		SELECT id, name, email, roles, status,
-		       created_at::text, COALESCE(updated_at::text, '')
+		       created_at, updated_at
 		FROM xcentro.ops_user_table
 		WHERE email = $1
 	`
 
 	var user opsauth.OpsUser
 	var rolesJSON []byte
+	var updatedAt *time.Time
 
 	err := r.querier.QueryRow(ctx, query, email).Scan(
 		&user.ID,
@@ -115,7 +122,7 @@ func (r *PgOpsUserRepository) GetUserByEmail(ctx context.Context, email string) 
 		&rolesJSON,
 		&user.Status,
 		&user.CreatedAt,
-		&user.UpdatedAt,
+		&updatedAt,
 	)
 
 	if err != nil {
@@ -123,6 +130,10 @@ func (r *PgOpsUserRepository) GetUserByEmail(ctx context.Context, email string) 
 			return nil, nil
 		}
 		return nil, fmt.Errorf("failed to get ops user by email: %w", err)
+	}
+
+	if updatedAt != nil {
+		user.UpdatedAt = *updatedAt
 	}
 
 	// Unmarshal roles from JSONB

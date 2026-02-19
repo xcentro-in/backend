@@ -52,6 +52,11 @@ type JWTSecretConfig struct {
 	RefreshTokenExpiry time.Duration `json:"refresh_token_expiry" env:"JWT_REFRESH_TOKEN_EXPIRY" env-default:"720h"` // 30 days
 	MaxWebSessions     int           `json:"max_web_sessions" env:"JWT_MAX_WEB_SESSIONS" env-default:"3"`
 	MaxMobileSessions  int           `json:"max_mobile_sessions" env:"JWT_MAX_MOBILE_SESSIONS" env-default:"5"`
+
+	// Verification token expiry durations (configurable per environment)
+	EmailVerificationExpiry time.Duration `json:"email_verification_expiry" env:"AUTH_EMAIL_VERIFICATION_EXPIRY" env-default:"24h"`
+	PasswordResetExpiry     time.Duration `json:"password_reset_expiry" env:"AUTH_PASSWORD_RESET_EXPIRY" env-default:"1h"`
+	InvitationExpiry        time.Duration `json:"invitation_expiry" env:"AUTH_INVITATION_EXPIRY" env-default:"1h"`
 }
 
 // BcryptConfig holds bcrypt password hashing configuration.
@@ -108,9 +113,8 @@ type SMSConfig struct {
 	APIKey           string        `json:"-" env:"FAST2SMS_API_KEY"` // Injected from AWS Secrets Manager
 	SenderID         string        `json:"sender_id" env:"FAST2SMS_SENDER_ID" env-default:"XCNTRO"`                              // Sender ID (DLT approved)
 	Endpoint         string        `json:"endpoint" env:"FAST2SMS_ENDPOINT" env-default:"https://www.fast2sms.com/dev/bulkV2"`   // Fast2SMS API endpoint
-	OTPExpiryMinutes int           `json:"otp_expiry_minutes" env:"SMS_OTP_EXPIRY_MINUTES" env-default:"10"`                     // OTP expiry in minutes
-	OTPLength        int           `json:"otp_length" env:"SMS_OTP_LENGTH" env-default:"6"`                                      // OTP length (default 6 digits)
-	OTPExpiry        time.Duration `json:"otp_expiry" env:"SMS_OTP_EXPIRY" env-default:"10m"`                                    // Calculated from OTPExpiryMinutes
+	OTPLength int           `json:"otp_length" env:"SMS_OTP_LENGTH" env-default:"6"`   // OTP length (default 6 digits)
+	OTPExpiry time.Duration `json:"otp_expiry" env:"SMS_OTP_EXPIRY" env-default:"10m"` // OTP validity window
 }
 
 // CastlerConfig holds Castler payout provider configuration.

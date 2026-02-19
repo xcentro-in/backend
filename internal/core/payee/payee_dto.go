@@ -372,3 +372,32 @@ type PayeeAccountDetails struct {
 	BankName           string `json:"bank_name"`
 	IFSCCode           string `json:"ifsc_code"`
 }
+
+// ############################################################################
+// # IFSC Validation (For GET /payees/validate-ifsc/:ifsc_code)
+// ############################################################################
+
+// IFSCValidationRequest represents the request for IFSC validation (from URL path parameter)
+type IFSCValidationRequest struct {
+	IFSCCode string `param:"ifsc_code" validate:"required,ifsc"`
+}
+
+// IFSCValidationResponse represents the response from IFSC validation
+type IFSCValidationResponse struct {
+	IFSC    string              `json:"ifsc"`
+	Bank    string              `json:"bank"`
+	Branch  string              `json:"branch"`
+	Address string              `json:"address"`
+	City    string              `json:"city"`
+	Contact string              `json:"contact"`
+	MICR    string              `json:"micr"`
+	Features IFSCBankFeatures   `json:"features"`
+}
+
+// IFSCBankFeatures represents bank features
+type IFSCBankFeatures struct {
+	RTGS bool `json:"rtgs"`
+	NEFT bool `json:"neft"`
+	IMPS bool `json:"imps"`
+	UPI  bool `json:"upi"`
+}

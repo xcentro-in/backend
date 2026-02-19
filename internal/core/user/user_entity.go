@@ -1,14 +1,18 @@
 package user
 
-import "xcentro.in/internal/core/shared"
+import (
+	"time"
+
+	"xcentro.in/internal/core/shared"
+)
 
 type UserVerificationCodes struct {
 	ID            string                  `json:"id"`
 	UserID        string                  `json:"userId"`
 	Code          string                  `json:"code"`
 	CodeType      shared.VerificationType `json:"codeType"`
-	ExpiresAt     string                  `json:"expiresAt"`
-	CreatedAt     string                  `json:"createdAt"`
+	ExpiresAt     time.Time               `json:"expiresAt"`
+	CreatedAt     time.Time               `json:"createdAt"`
 	Used          bool                    `json:"used"`
 	RetryAttempts uint8                   `json:"retryAttempts"`
 }

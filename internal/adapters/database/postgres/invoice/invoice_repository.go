@@ -80,7 +80,7 @@ func (r *PgInvoiceRepository) GetInvoiceByID(ctx context.Context, invoiceID int6
 
 	query := `
 		SELECT invoice_id, payment_id, invoice_number, gstin_supplier, gstin_recipient,
-		       invoice_date, irn, irn_ack_no, COALESCE(irn_ack_date::text, ''), irn_status,
+		       invoice_date, irn, irn_ack_no, irn_ack_date, irn_status,
 		       qr_code, filing_status, description, sac_code,
 		       taxable_value, gst_rate, gst_amount, total_amount,
 		       created_at, updated_at
@@ -89,7 +89,7 @@ func (r *PgInvoiceRepository) GetInvoiceByID(ctx context.Context, invoiceID int6
 	`
 
 	var inv invoice.Invoice
-	var irnAckDateStr string
+	var irnAckDate *time.Time
 
 	err := r.querier.QueryRow(ctx, query, invoiceID).Scan(
 		&inv.InvoiceID,
@@ -100,7 +100,7 @@ func (r *PgInvoiceRepository) GetInvoiceByID(ctx context.Context, invoiceID int6
 		&inv.InvoiceDate,
 		&inv.IRN,
 		&inv.IRNAckNo,
-		&irnAckDateStr,
+		&irnAckDate,
 		&inv.IRNStatus,
 		&inv.QRCode,
 		&inv.FilingStatus,
@@ -121,13 +121,7 @@ func (r *PgInvoiceRepository) GetInvoiceByID(ctx context.Context, invoiceID int6
 		return nil, fmt.Errorf("failed to get invoice by ID: %w", err)
 	}
 
-	// Parse IRN ack date if present
-	if irnAckDateStr != "" {
-		parsedTime, err := time.Parse(time.RFC3339, irnAckDateStr)
-		if err == nil {
-			inv.IRNAckDate = &parsedTime
-		}
-	}
+	inv.IRNAckDate = irnAckDate
 
 	return &inv, nil
 }
@@ -138,7 +132,7 @@ func (r *PgInvoiceRepository) GetInvoiceByPaymentID(ctx context.Context, payment
 
 	query := `
 		SELECT invoice_id, payment_id, invoice_number, gstin_supplier, gstin_recipient,
-		       invoice_date, irn, irn_ack_no, COALESCE(irn_ack_date::text, ''), irn_status,
+		       invoice_date, irn, irn_ack_no, irn_ack_date, irn_status,
 		       qr_code, filing_status, description, sac_code,
 		       taxable_value, gst_rate, gst_amount, total_amount,
 		       created_at, updated_at
@@ -147,7 +141,7 @@ func (r *PgInvoiceRepository) GetInvoiceByPaymentID(ctx context.Context, payment
 	`
 
 	var inv invoice.Invoice
-	var irnAckDateStr string
+	var irnAckDate *time.Time
 
 	err := r.querier.QueryRow(ctx, query, paymentID).Scan(
 		&inv.InvoiceID,
@@ -158,7 +152,7 @@ func (r *PgInvoiceRepository) GetInvoiceByPaymentID(ctx context.Context, payment
 		&inv.InvoiceDate,
 		&inv.IRN,
 		&inv.IRNAckNo,
-		&irnAckDateStr,
+		&irnAckDate,
 		&inv.IRNStatus,
 		&inv.QRCode,
 		&inv.FilingStatus,
@@ -179,13 +173,7 @@ func (r *PgInvoiceRepository) GetInvoiceByPaymentID(ctx context.Context, payment
 		return nil, fmt.Errorf("failed to get invoice by payment ID: %w", err)
 	}
 
-	// Parse IRN ack date if present
-	if irnAckDateStr != "" {
-		parsedTime, err := time.Parse(time.RFC3339, irnAckDateStr)
-		if err == nil {
-			inv.IRNAckDate = &parsedTime
-		}
-	}
+	inv.IRNAckDate = irnAckDate
 
 	return &inv, nil
 }
@@ -269,7 +257,7 @@ func (r *PgInvoiceRepository) ListInvoices(ctx context.Context, filter *invoice.
 	offset := (filter.Page - 1) * filter.PageSize
 	dataQuery := fmt.Sprintf(`
 		SELECT invoice_id, payment_id, invoice_number, gstin_supplier, gstin_recipient,
-		       invoice_date, irn, irn_ack_no, COALESCE(irn_ack_date::text, ''), irn_status,
+		       invoice_date, irn, irn_ack_no, irn_ack_date, irn_status,
 		       qr_code, filing_status, description, sac_code,
 		       taxable_value, gst_rate, gst_amount, total_amount,
 		       created_at, updated_at
@@ -290,7 +278,7 @@ func (r *PgInvoiceRepository) ListInvoices(ctx context.Context, filter *invoice.
 	invoices := []invoice.Invoice{}
 	for rows.Next() {
 		var inv invoice.Invoice
-		var irnAckDateStr string
+		var irnAckDate *time.Time
 
 		err := rows.Scan(
 			&inv.InvoiceID,
@@ -301,7 +289,7 @@ func (r *PgInvoiceRepository) ListInvoices(ctx context.Context, filter *invoice.
 			&inv.InvoiceDate,
 			&inv.IRN,
 			&inv.IRNAckNo,
-			&irnAckDateStr,
+			&irnAckDate,
 			&inv.IRNStatus,
 			&inv.QRCode,
 			&inv.FilingStatus,
@@ -319,13 +307,7 @@ func (r *PgInvoiceRepository) ListInvoices(ctx context.Context, filter *invoice.
 			return nil, 0, fmt.Errorf("failed to scan invoice: %w", err)
 		}
 
-		// Parse IRN ack date if present
-		if irnAckDateStr != "" {
-			parsedTime, err := time.Parse(time.RFC3339, irnAckDateStr)
-			if err == nil {
-				inv.IRNAckDate = &parsedTime
-			}
-		}
+		inv.IRNAckDate = irnAckDate
 
 		invoices = append(invoices, inv)
 	}
