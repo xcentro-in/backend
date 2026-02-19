@@ -24,6 +24,7 @@ import (
 	"xcentro.in/internal/shared/logger"
 	"xcentro.in/internal/shared/ratelimiter"
 	"xcentro.in/internal/shared/security"
+	"xcentro.in/internal/shared/timeutil"
 )
 
 type AuthService struct {
@@ -188,7 +189,7 @@ func (s *AuthService) CreateTokenPair(ctx context.Context, userID, userAgent str
 			sessionID,
 			userID,
 			tokenHash,
-			time.Now().Add(s.config.RefreshTokenExpiry),
+			timeutil.ExpiryFromNow(s.config.RefreshTokenExpiry),
 			userAgent,
 			deviceType,
 			currentVersion,
@@ -483,12 +484,7 @@ func (s *AuthService) ChangePassword(ctx context.Context, userID, oldPassword, n
 		}
 
 		// Check OTP expiry
-		expiresAt, err := time.Parse(time.RFC3339, verificationCode.ExpiresAt)
-		if err != nil {
-			return fmt.Errorf("invalid expiration time format")
-		}
-
-		if time.Now().After(expiresAt) {
+		if timeutil.IsExpired(verificationCode.ExpiresAt) {
 			return fmt.Errorf("OTP has expired")
 		}
 
@@ -759,23 +755,19 @@ func (s *AuthService) SendPasswordResetEmail(ctx context.Context, emailAddr stri
 		// Hash the token before storing in database
 		hashedToken := security.HashTokenWithPepper(resetToken, s.bcryptConfig.Pepper)
 
-		// Calculate timestamps - 1 hour expiry for password reset (IMPORTANT: Use UTC)
-		now := time.Now().UTC()
-		expiresAt := now.Add(1 * time.Hour)
-
 		// Create verification code record
 		verificationCode := &user.UserVerificationCodes{
 			UserID:        userObj.Id,
 			Code:          hashedToken,
 			CodeType:      shared.PasswordReset,
-			ExpiresAt:     expiresAt.Format(time.RFC3339),
-			CreatedAt:     now.Format(time.RFC3339),
+			ExpiresAt:     timeutil.ExpiryFromNow(s.config.PasswordResetExpiry),
+			CreatedAt:     timeutil.NowUTC(),
 			Used:          false,
 			RetryAttempts: 0,
 		}
 
-		logger.Debugf("Creating password reset code: user_id=%s, expires_at=%s (UTC), duration=1h",
-			userObj.Id, expiresAt.Format(time.RFC3339))
+		logger.Debugf("Creating password reset code: user_id=%s, expires_at=%s (UTC), duration=%s",
+			userObj.Id, verificationCode.ExpiresAt.Format(time.RFC3339), s.config.PasswordResetExpiry)
 
 		// Store verification code in database (within transaction)
 		if err := txUserRepo.CreateVerificationCode(ctx, verificationCode); err != nil {
@@ -900,23 +892,19 @@ func (s *AuthService) ResendInviteEmail(ctx context.Context, emailAddr string) e
 		// Hash the token before storing in database
 		hashedToken := security.HashTokenWithPepper(resetToken, s.bcryptConfig.Pepper)
 
-		// Calculate timestamps - 1 hour expiry for invitation (IMPORTANT: Use UTC)
-		now := time.Now().UTC()
-		expiresAt := now.Add(1 * time.Hour)
-
 		// Create verification code record
 		verificationCode := &user.UserVerificationCodes{
 			UserID:        userObj.Id,
 			Code:          hashedToken,
 			CodeType:      shared.PasswordReset,
-			ExpiresAt:     expiresAt.Format(time.RFC3339),
-			CreatedAt:     now.Format(time.RFC3339),
+			ExpiresAt:     timeutil.ExpiryFromNow(s.config.InvitationExpiry),
+			CreatedAt:     timeutil.NowUTC(),
 			Used:          false,
 			RetryAttempts: 0,
 		}
 
-		logger.Debugf("Creating invite code: user_id=%s, expires_at=%s (UTC), duration=1h",
-			userObj.Id, expiresAt.Format(time.RFC3339))
+		logger.Debugf("Creating invite code: user_id=%s, expires_at=%s (UTC), duration=%s",
+			userObj.Id, verificationCode.ExpiresAt.Format(time.RFC3339), s.config.InvitationExpiry)
 
 		// Store verification code in database (within transaction)
 		if err := txUserRepo.CreateVerificationCode(ctx, verificationCode); err != nil {
@@ -1024,12 +1012,7 @@ func (s *AuthService) ResetPasswordWithToken(ctx context.Context, userID, token,
 		}
 
 		// Check if token is expired
-		expiresAt, err := time.Parse(time.RFC3339, verificationCode.ExpiresAt)
-		if err != nil {
-			return fmt.Errorf("invalid expiration time format")
-		}
-
-		if time.Now().After(expiresAt) {
+		if timeutil.IsExpired(verificationCode.ExpiresAt) {
 			return fmt.Errorf("reset token has expired")
 		}
 
@@ -1096,23 +1079,19 @@ func (s *AuthService) SendEmailVerification(ctx context.Context, userID string) 
 	// Hash the token before storing in database (SECURITY: Never store plaintext tokens)
 	hashedToken := security.HashTokenWithPepper(verificationToken, s.bcryptConfig.Pepper)
 
-	// Calculate proper timestamps (IMPORTANT: Use UTC to avoid timezone issues)
-	now := time.Now().UTC()
-	expiresAt := now.Add(24 * time.Hour) // 24 hour expiry for email verification
-
-	// Create verification code record with 24 hour expiry
+	// Create verification code record
 	verificationCode := &user.UserVerificationCodes{
 		UserID:        userID,
 		Code:          hashedToken, // Store hashed version, not plaintext
 		CodeType:      shared.EmailVerification,
-		ExpiresAt:     expiresAt.Format(time.RFC3339),
-		CreatedAt:     now.Format(time.RFC3339),
+		ExpiresAt:     timeutil.ExpiryFromNow(s.config.EmailVerificationExpiry),
+		CreatedAt:     timeutil.NowUTC(),
 		Used:          false,
 		RetryAttempts: 0,
 	}
 
-	logger.Debugf("Creating email verification code: user_id=%s, expires_at=%s (UTC), duration=24h",
-		userID, expiresAt.Format(time.RFC3339))
+	logger.Debugf("Creating email verification code: user_id=%s, expires_at=%s (UTC), duration=%s",
+		userID, verificationCode.ExpiresAt.Format(time.RFC3339), s.config.EmailVerificationExpiry)
 
 	// Atomically invalidate old codes and create new one (SECURITY: prevents race conditions)
 	if err := s.userRepo.CreateVerificationCodeWithInvalidation(ctx, verificationCode); err != nil {
@@ -1302,8 +1281,8 @@ func (s *AuthService) SendMobileVerificationOTP(ctx context.Context, userID, mob
 		UserID:        userID,
 		Code:          hashedOTP,
 		CodeType:      shared.MobileVerification,
-		ExpiresAt:     time.Now().Add(s.smsConfig.OTPExpiry).Format(time.RFC3339),
-		CreatedAt:     time.Now().Format(time.RFC3339),
+		ExpiresAt:     timeutil.ExpiryFromNow(s.smsConfig.OTPExpiry),
+		CreatedAt:     timeutil.NowUTC(),
 		Used:          false,
 		RetryAttempts: 0,
 	}
@@ -1413,8 +1392,8 @@ func (s *AuthService) SendInviteOTP(ctx context.Context, userID, token, signatur
 		UserID:        userID,
 		Code:          hashedOTP,
 		CodeType:      shared.MobileVerification,
-		ExpiresAt:     time.Now().Add(s.smsConfig.OTPExpiry).Format(time.RFC3339),
-		CreatedAt:     time.Now().Format(time.RFC3339),
+		ExpiresAt:     timeutil.ExpiryFromNow(s.smsConfig.OTPExpiry),
+		CreatedAt:     timeutil.NowUTC(),
 		Used:          false,
 		RetryAttempts: 0,
 	}
@@ -1482,12 +1461,7 @@ func (s *AuthService) VerifyEmailWithMobile(ctx context.Context, userID, token, 
 		}
 
 		// Check expiry
-		expiresAt, err := time.Parse(time.RFC3339, verificationCode.ExpiresAt)
-		if err != nil {
-			return fmt.Errorf("invalid expiration time format")
-		}
-
-		if time.Now().After(expiresAt) {
+		if timeutil.IsExpired(verificationCode.ExpiresAt) {
 			return fmt.Errorf("verification token has expired")
 		}
 
@@ -1551,12 +1525,7 @@ func (s *AuthService) VerifyMobileOTP(ctx context.Context, userID, otp string) e
 		}
 
 		// Check expiry
-		expiresAt, err := time.Parse(time.RFC3339, verificationCode.ExpiresAt)
-		if err != nil {
-			return fmt.Errorf("invalid expiration time format")
-		}
-
-		if time.Now().After(expiresAt) {
+		if timeutil.IsExpired(verificationCode.ExpiresAt) {
 			return fmt.Errorf("OTP has expired")
 		}
 
@@ -1625,21 +1594,14 @@ func (s *AuthService) ResetPasswordWithMobileOTP(ctx context.Context, userID, to
 			return fmt.Errorf("reset token already used")
 		}
 
-		resetExpiresAt, err := time.Parse(time.RFC3339, resetCode.ExpiresAt)
-		if err != nil {
-			return fmt.Errorf("invalid expiration time format")
-		}
-		resetExpiresAt = resetExpiresAt.UTC() // Ensure UTC timezone
-
-		nowUTC := time.Now().UTC()
-		if nowUTC.After(resetExpiresAt) {
-			logger.Warnf("Password reset token expired: user_id=%s, expires_at=%s, current_time=%s, age=%v",
-				userID, resetExpiresAt.Format(time.RFC3339), nowUTC.Format(time.RFC3339), nowUTC.Sub(resetExpiresAt))
+		if timeutil.IsExpired(resetCode.ExpiresAt) {
+			logger.Warnf("Password reset token expired: user_id=%s, expires_at=%s",
+				userID, resetCode.ExpiresAt.Format(time.RFC3339))
 			return fmt.Errorf("reset token has expired")
 		}
 
-		logger.Debugf("Password reset token valid: user_id=%s, expires_at=%s, current_time=%s, remaining=%v",
-			userID, resetExpiresAt.Format(time.RFC3339), nowUTC.Format(time.RFC3339), resetExpiresAt.Sub(nowUTC))
+		logger.Debugf("Password reset token valid: user_id=%s, expires_at=%s, remaining=%v",
+			userID, resetCode.ExpiresAt.Format(time.RFC3339), time.Until(resetCode.ExpiresAt))
 
 		// Verify mobile OTP
 		otpCode, err := txUserRepo.GetVerificationCodeByUserIDAndCode(ctx, userID, hashedOTP, shared.MobileVerification)
@@ -1652,12 +1614,7 @@ func (s *AuthService) ResetPasswordWithMobileOTP(ctx context.Context, userID, to
 			return fmt.Errorf("OTP already used")
 		}
 
-		otpExpiresAt, err := time.Parse(time.RFC3339, otpCode.ExpiresAt)
-		if err != nil {
-			return fmt.Errorf("invalid expiration time format")
-		}
-
-		if time.Now().After(otpExpiresAt) {
+		if timeutil.IsExpired(otpCode.ExpiresAt) {
 			return fmt.Errorf("OTP has expired")
 		}
 
@@ -1728,12 +1685,7 @@ func (s *AuthService) VerifyAndUpdateMobile(ctx context.Context, userID, newMobi
 		}
 
 		// Check expiry
-		expiresAt, err := time.Parse(time.RFC3339, verificationCode.ExpiresAt)
-		if err != nil {
-			return fmt.Errorf("invalid expiration time format")
-		}
-
-		if time.Now().After(expiresAt) {
+		if timeutil.IsExpired(verificationCode.ExpiresAt) {
 			return fmt.Errorf("OTP has expired")
 		}
 

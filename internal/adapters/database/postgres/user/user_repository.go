@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -590,15 +589,14 @@ func (r *PgUserRepository) GetVerificationCodeByCode(ctx context.Context, hashed
 	`
 
 	var vc user.UserVerificationCodes
-	var expiresAt, createdAt time.Time
 
 	err := r.querier.QueryRow(ctx, query, hashedCode, codeType).Scan(
 		&vc.ID,
 		&vc.UserID,
 		&vc.Code,
 		&vc.CodeType,
-		&expiresAt,
-		&createdAt,
+		&vc.ExpiresAt,
+		&vc.CreatedAt,
 		&vc.Used,
 		&vc.RetryAttempts,
 	)
@@ -609,10 +607,6 @@ func (r *PgUserRepository) GetVerificationCodeByCode(ctx context.Context, hashed
 		}
 		return nil, fmt.Errorf("failed to get verification code: %w", err)
 	}
-
-	// Convert time.Time to string format
-	vc.ExpiresAt = expiresAt.Format(time.RFC3339)
-	vc.CreatedAt = createdAt.Format(time.RFC3339)
 
 	return &vc, nil
 }
@@ -649,15 +643,14 @@ func (r *PgUserRepository) GetVerificationCodeByUserIDAndCode(ctx context.Contex
 	`
 
 	var vc user.UserVerificationCodes
-	var expiresAt, createdAt time.Time
 
 	err := r.querier.QueryRow(ctx, query, userID, hashedCode, codeType).Scan(
 		&vc.ID,
 		&vc.UserID,
 		&vc.Code,
 		&vc.CodeType,
-		&expiresAt,
-		&createdAt,
+		&vc.ExpiresAt,
+		&vc.CreatedAt,
 		&vc.Used,
 		&vc.RetryAttempts,
 	)
@@ -668,10 +661,6 @@ func (r *PgUserRepository) GetVerificationCodeByUserIDAndCode(ctx context.Contex
 		}
 		return nil, fmt.Errorf("failed to get verification code: %w", err)
 	}
-
-	// Convert time.Time to string format
-	vc.ExpiresAt = expiresAt.Format(time.RFC3339)
-	vc.CreatedAt = createdAt.Format(time.RFC3339)
 
 	return &vc, nil
 }

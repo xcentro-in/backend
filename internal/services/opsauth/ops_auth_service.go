@@ -17,6 +17,7 @@ import (
 	"xcentro.in/internal/shared/crypto"
 	"xcentro.in/internal/shared/logger"
 	"xcentro.in/internal/shared/security"
+	"xcentro.in/internal/shared/timeutil"
 )
 
 // OpsAuthService implements OAuth2/OIDC authentication for ops dashboard users
@@ -224,7 +225,7 @@ func (s *OpsAuthService) HandleCallback(
 		refreshTokenHash := security.HashToken(internalRefreshToken)
 
 		// Store session with encrypted OIDC refresh token and pre-generated session ID
-		expiresAt := time.Now().Add(refreshTokenExpiry)
+		expiresAt := timeutil.ExpiryFromNow(refreshTokenExpiry)
 		txOpsSessionRepo := s.opsSessionRepo.WithTx(tx)
 		createErr = txOpsSessionRepo.CreateSession(
 			ctx,
@@ -279,7 +280,7 @@ func (s *OpsAuthService) RefreshAccessToken(ctx context.Context, refreshToken st
 	}
 
 	// Check if session is expired
-	if time.Now().After(session.ExpiresAt) {
+	if timeutil.IsExpired(session.ExpiresAt) {
 		return "", fmt.Errorf("authentication failed")
 	}
 
