@@ -2,8 +2,19 @@ package keys
 
 import (
 	"fmt"
+	"math/rand/v2"
 	"time"
 )
+
+// WithJitter returns a TTL with ±10% random jitter to prevent synchronized cache expiry
+// (thundering herd) where many keys set at the same time would all expire simultaneously.
+func WithJitter(ttl time.Duration) time.Duration {
+	jitter := time.Duration(rand.N(int64(ttl) / 5)) // 0–20% of TTL
+	if rand.N(2) == 0 {
+		return ttl - jitter/2 // subtract up to 10%
+	}
+	return ttl + jitter/2 // add up to 10%
+}
 
 // TTL constants for different cache types
 const (

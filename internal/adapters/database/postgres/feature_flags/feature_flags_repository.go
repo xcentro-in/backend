@@ -89,7 +89,7 @@ func (r *PgFeatureFlagsRepository) GetAll(ctx context.Context) (feature_flags.Fe
 	if len(flags) > 0 {
 		go func() {
 			bgCtx := context.Background()
-			if err := r.redisClient.SetJSON(bgCtx, cacheKey, flags, keys.TTLFeatureFlags); err != nil {
+			if err := r.redisClient.SetJSON(bgCtx, cacheKey, flags, keys.WithJitter(keys.TTLFeatureFlags)); err != nil {
 				r.logger.WarnWith("Failed to cache feature flags", "error", err)
 			}
 		}()

@@ -382,6 +382,10 @@ func registerV1Routes(s *xcentroServer) {
 	v1 := s.echo.Group("/v1")
 
 	v1.GET("/health", func(c echo.Context) error {
+		if err := s.meta.clients.db.Ping(c.Request().Context()); err != nil {
+			logger.GetDefault().Errorf("Health check failed: %v", err)
+			return c.JSON(503, map[string]string{"status": "degraded"})
+		}
 		return c.JSON(200, map[string]string{"status": "ok"})
 	})
 

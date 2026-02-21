@@ -29,11 +29,22 @@ func NewRedisClient(cfg config.RedisConfig) (*RedisClient, error) {
 		},
 	})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	if err := rdb.Ping(ctx).Err(); err != nil {
-		return nil, fmt.Errorf("failed to connect to Redis: %w", err)
+	// Test connection with exponential backoff (1s, 2s, 4s, 8s, 16s)
+	const maxAttempts = 5
+	var pingErr error
+	for i := range maxAttempts {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		pingErr = rdb.Ping(ctx).Err()
+		cancel()
+		if pingErr == nil {
+			break
+		}
+		wait := time.Duration(1<<uint(i)) * time.Second
+		logger.Infof("Redis ping failed (attempt %d/%d), retrying in %s: %v", i+1, maxAttempts, wait, pingErr)
+		time.Sleep(wait)
+	}
+	if pingErr != nil {
+		return nil, fmt.Errorf("failed to connect to Redis after %d attempts: %w", maxAttempts, pingErr)
 	}
 
 	logger.Info("Connected to Redis successfully")

@@ -210,7 +210,7 @@ func (s *UserServiceImpl) GetUserProfile(ctx context.Context, userID string) (*u
 	// Cache profile asynchronously (fire-and-forget)
 	go func() {
 		bgCtx := context.Background()
-		if err := s.rclient.SetJSON(bgCtx, cacheKey, profile, keys.TTLUserProfile); err != nil {
+		if err := s.rclient.SetJSON(bgCtx, cacheKey, profile, keys.WithJitter(keys.TTLUserProfile)); err != nil {
 			s.logger.Warnf("Failed to cache user profile: %v", err)
 		}
 	}()

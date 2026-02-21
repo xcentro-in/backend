@@ -56,7 +56,7 @@ func BusinessRolesMiddleware(
 				// Update cache asynchronously with all roles (fire-and-forget)
 				go func() {
 					bgCtx := context.Background()
-					if err := rclient.SetJSON(bgCtx, cacheKey, rel, keys.TTLUserRoles); err != nil {
+					if err := rclient.SetJSON(bgCtx, cacheKey, rel, keys.WithJitter(keys.TTLUserRoles)); err != nil {
 						log.Warnf("Failed to cache user roles: %v", err)
 					}
 				}()

@@ -259,7 +259,11 @@ func registerRouters(s *opsDashboardServer) {
 
 	// Public health check route (no authentication required)
 	s.echo.GET("/ops/health", func(c echo.Context) error {
-		return c.JSON(200, map[string]string{"status": "ok", "service": "ops-dashboard"})
+		if err := s.meta.clients.db.Ping(c.Request().Context()); err != nil {
+			logger.GetDefault().Errorf("Health check failed: %v", err)
+			return c.JSON(503, map[string]string{"status": "degraded"})
+		}
+		return c.JSON(200, map[string]string{"status": "ok"})
 	})
 
 	registerOpsV1Routes(s)

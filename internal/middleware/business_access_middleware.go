@@ -124,7 +124,7 @@ func checkUserBusinessAccess(
 	if len(relations) > 0 {
 		go func() {
 			bgCtx := context.Background()
-			if err := rclient.SetJSON(bgCtx, cacheKey, relations, keys.TTLUserRoles); err != nil {
+			if err := rclient.SetJSON(bgCtx, cacheKey, relations, keys.WithJitter(keys.TTLUserRoles)); err != nil {
 				log.Warnf("Failed to cache user relations: %v", err)
 			}
 		}()

@@ -915,7 +915,7 @@ func (s *BusinessServiceImpl) GetBusinessDetails(ctx context.Context, bid string
 			BusinessType: response.BusinessType,
 			// UserRole is NOT cached - it's per-user
 		}
-		if err := s.rclient.SetJSON(bgCtx, cacheKey, cacheData, keys.TTLBusinessDetails); err != nil {
+		if err := s.rclient.SetJSON(bgCtx, cacheKey, cacheData, keys.WithJitter(keys.TTLBusinessDetails)); err != nil {
 			s.logger.Warnf("Failed to cache business details: %v", err)
 		}
 	}()
