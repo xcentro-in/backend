@@ -21,6 +21,7 @@ import (
 	"xcentro.in/internal/services/verification"
 	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/logger"
+	"xcentro.in/internal/shared/timeutil"
 	"xcentro.in/internal/shared/utils"
 )
 
@@ -535,7 +536,7 @@ func (s *PayeeService) onboardGSTPayee(ctx context.Context, req payee.OnboardPay
 			"financial_year", gst.FinancialYear)
 
 		// Check if it's still valid
-		if time.Now().After(existingVA.ValidUntil) {
+		if timeutil.IsExpired(existingVA.ValidUntil) {
 			s.logger.WarnWith("Existing virtual account expired, will create new one")
 			needsVirtualAccountCreation = true
 		} else {
