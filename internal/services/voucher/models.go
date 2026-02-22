@@ -25,7 +25,7 @@ type CreateDraftVoucherRequest struct {
 	// Amounts (all in paise)
 	GrossAmount    int64   `json:"gross_amount" validate:"required,gt=0"`
 	NetAmount      int64   `json:"net_amount" validate:"required,gt=0"`
-	Currency       string  `json:"currency" validate:"required,oneof=INR USD"` // Default: INR
+	Currency       string  `json:"currency" validate:"omitempty,oneof=INR USD"` // Default: INR
 	GSTAmount      int64   `json:"gst_amount" validate:"gte=0"`
 	GSTRate        float64 `json:"gst_rate,omitempty"`
 	CGSTAmount     int64   `json:"cgst_amount,omitempty" validate:"gte=0"`

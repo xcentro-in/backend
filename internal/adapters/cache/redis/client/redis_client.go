@@ -44,7 +44,8 @@ func NewRedisClient(cfg config.RedisConfig) (*RedisClient, error) {
 		time.Sleep(wait)
 	}
 	if pingErr != nil {
-		return nil, fmt.Errorf("failed to connect to Redis after %d attempts: %w", maxAttempts, pingErr)
+		logger.Warnf("Redis unavailable after %d attempts: %v (starting without Redis — cache features degraded)", maxAttempts, pingErr)
+		return &RedisClient{Client: rdb}, nil
 	}
 
 	logger.Info("Connected to Redis successfully")
