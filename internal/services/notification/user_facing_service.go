@@ -87,7 +87,7 @@ func (s *UserFacingNotificationService) GetPreferences(ctx context.Context, user
 	// Set cache for next time
 	prefsJSON, err := json.Marshal(prefs)
 	if err == nil {
-		if err := s.redisClient.Set(ctx, cacheKey, prefsJSON, keys.TTLNotificationPreferences).Err(); err != nil {
+		if err := s.redisClient.Set(ctx, cacheKey, prefsJSON, keys.WithJitter(keys.TTLNotificationPreferences)).Err(); err != nil {
 			s.logger.Warnf("Failed to cache preferences for user %s: %v", userID, err)
 		}
 	}

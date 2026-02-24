@@ -1000,8 +1000,10 @@ func (h *PaymentHandler) validatePaymentRequest(req *MakePaymentRequest) error {
 		return fmt.Errorf("amount must be greater than 0")
 	}
 
-	// Validate currency
-	if req.Currency != "INR" && req.Currency != "USD" {
+	// Validate currency, default to INR if not provided
+	if req.Currency == "" {
+		req.Currency = "INR"
+	} else if req.Currency != "INR" && req.Currency != "USD" {
 		return fmt.Errorf("currency must be INR or USD")
 	}
 

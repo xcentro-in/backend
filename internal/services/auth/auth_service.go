@@ -260,7 +260,7 @@ func (s *AuthService) RefreshAccessToken(ctx context.Context, refreshToken strin
 		// Cache the version for future requests
 		go func() {
 			bgCtx := context.Background()
-			if err := s.rclient.Client.Set(bgCtx, cacheKey, dbVersion, keys.TTLDeviceVersion).Err(); err != nil {
+			if err := s.rclient.Client.Set(bgCtx, cacheKey, dbVersion, keys.WithJitter(keys.TTLDeviceVersion)).Err(); err != nil {
 				logger.Warnf("Failed to cache device version: %v", err)
 			}
 		}()
@@ -411,7 +411,7 @@ func (s *AuthService) ValidateAccessTokenWithVersion(ctx context.Context, tokenS
 		// Cache the version for future requests
 		go func() {
 			bgCtx := context.Background()
-			if err := s.rclient.Client.Set(bgCtx, cacheKey, dbVersion, keys.TTLDeviceVersion).Err(); err != nil {
+			if err := s.rclient.Client.Set(bgCtx, cacheKey, dbVersion, keys.WithJitter(keys.TTLDeviceVersion)).Err(); err != nil {
 				logger.Warnf("Failed to cache device version: %v", err)
 			}
 		}()

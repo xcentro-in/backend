@@ -62,18 +62,34 @@ func NewNotificationWorker(
 	}
 }
 
+// backoffInterval returns the poll interval scaled by 2^consecutive errors, capped at 5 minutes.
+func backoffInterval(base time.Duration, consecutive int) time.Duration {
+	if consecutive == 0 {
+		return base
+	}
+	shift := consecutive
+	if shift > 5 {
+		shift = 5
+	}
+	d := base * time.Duration(1<<uint(shift))
+	if d > 5*time.Minute {
+		return 5 * time.Minute
+	}
+	return d
+}
+
 // RunFanout executes fanout worker pool with its own poll interval
 func (w *NotificationWorker) RunFanout(ctx context.Context) error {
-	ticker := time.NewTicker(time.Duration(w.fanoutPollInterval) * time.Second)
-	defer ticker.Stop()
+	base := time.Duration(w.fanoutPollInterval) * time.Second
+	consecutiveErrors := 0
 
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
-
-		case <-ticker.C:
+		case <-time.After(backoffInterval(base, consecutiveErrors)):
 			var wg sync.WaitGroup
+			var hasError bool
 			for i := 0; i < w.fanoutWorkerCount; i++ {
 				wg.Add(1)
 				go func(workerID int) {
@@ -81,28 +97,34 @@ func (w *NotificationWorker) RunFanout(ctx context.Context) error {
 					processedCount, err := w.fanoutService.ProcessPendingEvents(ctx, w.fanoutBatchSize)
 					if err != nil {
 						fmt.Printf("Fanout worker %d error: %v\n", workerID, err)
+						hasError = true
 					} else if processedCount > 0 {
 						fmt.Printf("Fanout worker %d: processed %d events\n", workerID, processedCount)
 					}
 				}(i + 1)
 			}
 			wg.Wait()
+			if hasError {
+				consecutiveErrors++
+			} else {
+				consecutiveErrors = 0
+			}
 		}
 	}
 }
 
 // RunDispatch executes dispatch worker pool with its own poll interval
 func (w *NotificationWorker) RunDispatch(ctx context.Context) error {
-	ticker := time.NewTicker(time.Duration(w.dispatchPollInterval) * time.Second)
-	defer ticker.Stop()
+	base := time.Duration(w.dispatchPollInterval) * time.Second
+	consecutiveErrors := 0
 
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
-
-		case <-ticker.C:
+		case <-time.After(backoffInterval(base, consecutiveErrors)):
 			var wg sync.WaitGroup
+			var hasError bool
 			for i := 0; i < w.emailDispatchWorkerCount; i++ {
 				wg.Add(1)
 				go func(workerID int) {
@@ -110,12 +132,18 @@ func (w *NotificationWorker) RunDispatch(ctx context.Context) error {
 					sentCount, err := w.dispatchService.ProcessEmailDispatches(ctx, w.dispatchBatchSize)
 					if err != nil {
 						fmt.Printf("Dispatch worker %d error: %v\n", workerID, err)
+						hasError = true
 					} else if sentCount > 0 {
 						fmt.Printf("Dispatch worker %d: sent %d emails\n", workerID, sentCount)
 					}
 				}(i + 1)
 			}
 			wg.Wait()
+			if hasError {
+				consecutiveErrors++
+			} else {
+				consecutiveErrors = 0
+			}
 		}
 	}
 }
@@ -123,16 +151,16 @@ func (w *NotificationWorker) RunDispatch(ctx context.Context) error {
 // RunRecovery executes recovery goroutine pool in a separate ticker loop
 // This runs less frequently than the main worker (every recoveryIntervalSeconds)
 func (w *NotificationWorker) RunRecovery(ctx context.Context) error {
-	ticker := time.NewTicker(time.Duration(w.recoveryIntervalSeconds) * time.Second)
-	defer ticker.Stop()
+	base := time.Duration(w.recoveryIntervalSeconds) * time.Second
+	consecutiveErrors := 0
 
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
-
-		case <-ticker.C:
+		case <-time.After(backoffInterval(base, consecutiveErrors)):
 			var wg sync.WaitGroup
+			var hasError bool
 			for i := 0; i < w.recoveryWorkerCount; i++ {
 				wg.Add(1)
 				go func(workerID int) {
@@ -140,12 +168,18 @@ func (w *NotificationWorker) RunRecovery(ctx context.Context) error {
 					recovered, deleted, err := w.recoveryService.ProcessRecoveryAndCleanup(ctx)
 					if err != nil {
 						fmt.Printf("Recovery worker %d error: %v\n", workerID, err)
+						hasError = true
 					} else if recovered > 0 || deleted > 0 {
 						fmt.Printf("Recovery worker %d: recovered %d, deleted %d\n", workerID, recovered, deleted)
 					}
 				}(i + 1)
 			}
 			wg.Wait()
+			if hasError {
+				consecutiveErrors++
+			} else {
+				consecutiveErrors = 0
+			}
 		}
 	}
 }

@@ -84,7 +84,7 @@ func main() {
 	})
 
 	if err := redisClient.Ping(context.Background()).Err(); err != nil {
-		log.Fatalf("Failed to connect to Redis: %v", err)
+		log.Printf("Warning: Redis unavailable at startup: %v (worker will start — fanout will use DB fallback for preferences)", err)
 	}
 	defer redisClient.Close()
 
