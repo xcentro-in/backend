@@ -12,7 +12,7 @@ import (
 // OnboardPayeeRequest represents a polymorphic request to onboard a new payee
 // The PayeeType field determines which type-specific fields are required
 type OnboardPayeeRequest struct {
-	BusinessID string    `json:"-"` // Our customer (extracted from X-Business-ID header)
+	BusinessID string    `json:"-"` // Our customer (extracted from bid claim in JWT context)
 	AddedBy    string    `json:"-"` // User who is adding this payee (extracted from JWT context)
 	PayeeType  PayeeType `json:"payee_type"` // Type discriminator: vendor, gst_payment, biller, employee
 
@@ -106,7 +106,7 @@ type OnboardPayeeResponse struct {
 
 // UpdateRelationRequest represents a request to update customer-payee relationship metadata
 type UpdateRelationRequest struct {
-	BusinessID string `json:"-"` // Our customer (extracted from X-Business-ID header)
+	BusinessID string `json:"-"` // Our customer (extracted from bid claim in JWT context)
 	PayeeID    string `json:"payee_id"`
 	AccountID  string `json:"account_id"`
 
@@ -121,7 +121,7 @@ type UpdateRelationRequest struct {
 
 // UpdatePayeeStatusRequest represents a request to toggle payee active status
 type UpdatePayeeStatusRequest struct {
-	BusinessID string `json:"-"` // Our customer (extracted from X-Business-ID header)
+	BusinessID string `json:"-"` // Our customer (extracted from bid claim in JWT context)
 	RelationID string `json:"-"` // Extracted from URL path parameter
 	IsActive   bool   `json:"is_active"`
 }

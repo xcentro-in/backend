@@ -10,8 +10,8 @@ import (
 
 // CreateDraftVoucherRequest represents the request to create a draft voucher
 type CreateDraftVoucherRequest struct {
-	// Business context (populated from X-Business-ID header and JWT)
-	BusinessID uuid.UUID `json:"-"` // Populated from X-Business-ID header
+	// Business context (populated from JWT context)
+	BusinessID uuid.UUID `json:"-"` // Populated from bid claim in JWT context
 	UserID     uuid.UUID `json:"-"` // Populated from JWT token (created_by)
 
 	// Payee reference (simplified with surrogate key)
@@ -243,7 +243,7 @@ type VoucherListSummary struct {
 
 // CreateMultiVouchersRequest represents request to create multiple vouchers for multi-bill payment
 type CreateMultiVouchersRequest struct {
-	BusinessID uuid.UUID            `json:"-"` // Populated from X-Business-ID header
+	BusinessID uuid.UUID            `json:"-"` // Populated from bid claim in JWT context
 	UserID     uuid.UUID            `json:"-"` // Populated from JWT token
 	Vouchers   []BillVoucherRequest `json:"vouchers" validate:"required,min=1,dive"`
 }
@@ -325,7 +325,7 @@ type ApproveCancellationResponse struct {
 
 // GetVouchersByPayeeRequest represents request to get vouchers for a specific payee
 type GetVouchersByPayeeRequest struct {
-	BusinessID uuid.UUID `json:"business_id"` // From X-Business-ID header
+	BusinessID uuid.UUID `json:"business_id"` // From bid claim in JWT context
 	RelationID uuid.UUID `json:"relation_id"` // From path parameter
 	Page       int       `json:"page"`        // Page number (1-based)
 	PageSize   int       `json:"page_size"`   // Items per page

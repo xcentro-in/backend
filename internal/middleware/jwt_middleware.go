@@ -60,6 +60,18 @@ func JWTMiddleware(authService auth.AuthService) echo.MiddlewareFunc {
 			// Set userID and sessionID in context for downstream handlers
 			c.Set("userId", claims.Subject)
 			c.Set("sessionId", claims.SessionID)
+			c.Set("bid", claims.Bid)              // from CustomClaims.Bid — empty string if token predates Phase 3
+			c.Set("role", claims.Role)            // from CustomClaims.Role — empty string if token predates Phase 3
+			c.Set("kyc_status", claims.KycStatus) // from CustomClaims.KycStatus — empty string if token predates this change
+			c.Set("kyc_needed", claims.KycNeeded) // from CustomClaims.KycNeeded — false if token predates this change
+
+			// Enforce KYC verification requirement
+			if claims.KycNeeded && claims.KycStatus != "completed" && claims.KycStatus != "verified" {
+				return c.JSON(403, map[string]any{
+					"error":   "KYC_REQUIRED",
+					"message": "Please complete KYC verification to access this resource",
+				})
+			}
 
 			// Continue to next handler
 			return next(c)

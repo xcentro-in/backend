@@ -8,7 +8,7 @@ import (
 
 type AuthService interface {
 	// JWT and token management
-	CreateTokenPair(ctx context.Context, userID, userAgent string, deviceType string) (accessToken, refreshToken string, err error)
+	CreateTokenPair(ctx context.Context, userID, userAgent string, deviceType string, kycStatus string) (accessToken, refreshToken string, err error)
 	RefreshAccessToken(ctx context.Context, refreshToken string) (string, error)
 	RevokeRefreshToken(ctx context.Context, userID, refreshToken string) error
 	RevokeAllUserTokens(ctx context.Context, userID string) error
@@ -21,7 +21,10 @@ type AuthService interface {
 
 	// High-level auth operations
 	Signup(ctx context.Context, email, password string) (*SignupResponse, error)
-	Login(ctx context.Context, email, password, userAgent, deviceType string) (*LoginResponse, error)
+	Login(ctx context.Context, email, password, userAgent, deviceType string) (*UnifiedLoginResponse, error)
+	BuildUnifiedLoginResponse(ctx context.Context, userID string) (*UnifiedLoginResponse, error)
+	SwitchBusiness(ctx context.Context, accessToken, newBid string) (*SwitchBusinessResponse, string, error)
+	VerifySession(ctx context.Context, userID string) (*VerifySessionResponse, error)
 
 	// Password reset
 	SendPasswordResetEmail(ctx context.Context, email string, emailType string) error

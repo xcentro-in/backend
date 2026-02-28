@@ -76,8 +76,8 @@ func NewAuthService(
 	}
 }
 
-// generateToken creates a JWT token with device information and session ID
-func (s *AuthService) generateToken(userID string, sessionID string, deviceType string, deviceVersion int, expiry time.Duration) (string, error) {
+// generateToken creates a JWT token with device information, session ID, and optional business context
+func (s *AuthService) generateToken(userID string, sessionID string, deviceType string, deviceVersion int, bid string, role string, kycStatus string, kycNeeded bool, expiry time.Duration) (string, error) {
 	claims := auth.CustomClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			Subject:   userID,
@@ -87,6 +87,10 @@ func (s *AuthService) generateToken(userID string, sessionID string, deviceType 
 		SessionID:     sessionID,
 		DeviceType:    deviceType,
 		DeviceVersion: deviceVersion,
+		Bid:           bid,
+		Role:          role,
+		KycStatus:     kycStatus,
+		KycNeeded:     kycNeeded,
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	signedToken, err := token.SignedString([]byte(s.config.SecretKey))
@@ -99,16 +103,16 @@ func (s *AuthService) generateToken(userID string, sessionID string, deviceType 
 
 // generateAccessToken creates a new short-lived access token with device information and session ID
 func (s *AuthService) generateAccessToken(userID string, sessionID string, deviceType string, deviceVersion int) (string, error) {
-	return s.generateToken(userID, sessionID, deviceType, deviceVersion, s.config.AccessTokenExpiry)
+	return s.generateToken(userID, sessionID, deviceType, deviceVersion, "", "", "", false, s.config.AccessTokenExpiry)
 }
 
 // generateRefreshToken creates a new long-lived refresh token with device information and session ID
 func (s *AuthService) generateRefreshToken(userID string, sessionID string, deviceType string, deviceVersion int) (string, error) {
-	return s.generateToken(userID, sessionID, deviceType, deviceVersion, s.config.RefreshTokenExpiry)
+	return s.generateToken(userID, sessionID, deviceType, deviceVersion, "", "", "", false, s.config.RefreshTokenExpiry)
 }
 
 // CreateTokenPair creates a new access and refresh token pair with device session management
-func (s *AuthService) CreateTokenPair(ctx context.Context, userID, userAgent string, deviceType string) (accessToken, refreshToken string, err error) {
+func (s *AuthService) CreateTokenPair(ctx context.Context, userID, userAgent string, deviceType string, kycStatus string) (accessToken, refreshToken string, err error) {
 	// Default to web if no device type provided (backward compatibility)
 	if deviceType == "" {
 		deviceType = string(shared.DeviceWeb)
@@ -117,6 +121,24 @@ func (s *AuthService) CreateTokenPair(ctx context.Context, userID, userAgent str
 	// Validate device type
 	if !shared.ValidateDeviceType(deviceType) {
 		return "", "", fmt.Errorf("invalid device type: %s", deviceType)
+	}
+
+	// Fetch active_bid and role from DB so the access token is immediately usable.
+	activeBid := ""
+	activeBidRole := ""
+	activeBidKycNeeded := false
+	if freshUser, fetchErr := s.userRepo.GetUserByID(ctx, userID); fetchErr != nil {
+		logger.Warnf("CreateTokenPair: failed to fetch user %s for bid/role: %v — issuing token with empty bid/role", userID, fetchErr)
+	} else if freshUser != nil {
+		activeBid = freshUser.ActiveBid
+		if activeBid != "" {
+			if rel, relErr := s.businessUserRelRepo.FindByUserAndBusiness(ctx, userID, activeBid); relErr != nil {
+				logger.Warnf("CreateTokenPair: failed to fetch role for user %s bid %s: %v — issuing token with empty role", userID, activeBid, relErr)
+			} else if rel != nil {
+				activeBidRole = string(rel.Role)
+				activeBidKycNeeded = rel.KycNeeded
+			}
+		}
 	}
 
 	var currentVersion int
@@ -169,8 +191,11 @@ func (s *AuthService) CreateTokenPair(ctx context.Context, userID, userAgent str
 			}
 		}
 
-		// Generate tokens with device information and session ID
-		accessToken, err = s.generateAccessToken(userID, sessionID, deviceType, currentVersion)
+		// Generate tokens with device information and session ID.
+		// Access token includes active_bid, role, kycStatus, kycNeeded fetched from DB so the
+		// cookie token is immediately usable without a separate refresh call.
+		// Refresh token uses empty claims (re-fetched on each access token issue).
+		accessToken, err = s.generateToken(userID, sessionID, deviceType, currentVersion, activeBid, activeBidRole, kycStatus, activeBidKycNeeded, s.config.AccessTokenExpiry)
 		if err != nil {
 			return err
 		}
@@ -278,8 +303,111 @@ func (s *AuthService) RefreshAccessToken(ctx context.Context, refreshToken strin
 		logger.Warnf("Failed to update last used: %v", err)
 	}
 
-	// Generate new access token with same device info and session ID
-	return s.generateAccessToken(userID, sessionID, deviceType, deviceVersion)
+	// Re-fetch active_bid, role, kyc_status, and kyc_needed from DB to avoid stale JWT claims (AUTH-05)
+	freshUser, fetchErr := s.userRepo.GetUserByID(ctx, userID)
+	if fetchErr != nil {
+		logger.Errorf("RefreshAccessToken: failed to fetch user %s: %v", userID, fetchErr)
+		return "", fmt.Errorf("failed to validate session")
+	}
+	if freshUser == nil {
+		logger.Warnf("RefreshAccessToken: user %s not found — account deleted", userID)
+		return "", fmt.Errorf("user not found")
+	}
+
+	activeBid := freshUser.ActiveBid
+	kycStatus := string(freshUser.KycStatus)
+	role := ""
+	kycNeeded := false
+	if activeBid != "" {
+		rel, relErr := s.businessUserRelRepo.FindByUserAndBusiness(ctx, userID, activeBid)
+		if relErr != nil {
+			logger.Errorf("RefreshAccessToken: relation not found for user %s bid %s: %v", userID, activeBid, relErr)
+			return "", fmt.Errorf("failed to validate session")
+		}
+		role = string(rel.Role)
+		if role == "" || role == string(shared.None) {
+			logger.Warnf("RefreshAccessToken: user %s has no assigned role in business %s (role=%q) — denying refresh", userID, activeBid, role)
+			return "", fmt.Errorf("no role assigned")
+		}
+		kycNeeded = rel.KycNeeded
+	}
+
+	// Generate new access token with re-fetched bid/role/kyc_status/kyc_needed
+	return s.generateToken(userID, sessionID, deviceType, deviceVersion, activeBid, role, kycStatus, kycNeeded, s.config.AccessTokenExpiry)
+}
+
+// SwitchBusiness validates that the requesting user (identified via accessToken claims)
+// belongs to newBid, issues a new access token on the same session with updated bid/role,
+// and persists active_bid to DB (non-fatal on DB write failure).
+//
+// Returns: (*SwitchBusinessResponse, newAccessToken string, error)
+// Error cases:
+//   - Invalid/expired accessToken → error (handler: 401)
+//   - User is not a member of newBid → error "user is not a member of this business" (handler: 403)
+//   - Business lookup failure → error (handler: 500)
+func (s *AuthService) SwitchBusiness(ctx context.Context, accessToken, newBid string) (*auth.SwitchBusinessResponse, string, error) {
+	// 1. Parse access token to extract session claims (sessionID, deviceType, deviceVersion, userID)
+	//    Using the same parseAndValidateToken as RefreshAccessToken — access token is a signed JWT.
+	claims, err := s.parseAndValidateToken(accessToken)
+	if err != nil {
+		logger.Warnf("SwitchBusiness: invalid access token: %v", err)
+		return nil, "", fmt.Errorf("invalid access token")
+	}
+	userID := claims.Subject
+	sessionID := claims.SessionID
+	deviceType := claims.DeviceType
+	deviceVersion := claims.DeviceVersion
+
+	// 2. Check membership: any error (including pgx.ErrNoRows wrapping) means access denied.
+	//    FindByUserAndBusiness also returns role and kyc_needed — no additional lookup required.
+	rel, err := s.businessUserRelRepo.FindByUserAndBusiness(ctx, userID, newBid)
+	if err != nil {
+		// Do NOT log at Errorf — this is expected for unauthorized attempts.
+		logger.Warnf("SwitchBusiness: user %s is not a member of business %s: %v", userID, newBid, err)
+		return nil, "", fmt.Errorf("user is not a member of this business")
+	}
+
+	// 3. Fetch business details for kyb_status in response.
+	//    Fatal: if we can't get kyb_status we can't return a valid response body.
+	biz, err := s.businessService.GetBusiness(ctx, newBid)
+	if err != nil {
+		logger.Errorf("SwitchBusiness: failed to fetch business %s: %v", newBid, err)
+		return nil, "", fmt.Errorf("failed to fetch business details")
+	}
+
+	// 4. Issue new access token with updated bid/role on the SAME session.
+	//    CRITICAL: use generateToken (not CreateTokenPair) — switch-business does not create a new session.
+	//    CRITICAL: do not re-set CSRF token — CSRF = HMAC(sessionID, secret); sessionID unchanged.
+	//    Re-fetch kyc_status from DB so it is always current.
+	kycStatus := ""
+	if freshUser, fetchErr := s.userRepo.GetUserByID(ctx, userID); fetchErr != nil {
+		logger.Warnf("SwitchBusiness: failed to fetch kyc_status for user %s: %v — issuing token with empty kyc_status", userID, fetchErr)
+	} else if freshUser != nil {
+		kycStatus = string(freshUser.KycStatus)
+	}
+	newToken, err := s.generateToken(
+		userID, sessionID, deviceType, deviceVersion,
+		newBid, string(rel.Role), kycStatus, rel.KycNeeded,
+		s.config.AccessTokenExpiry,
+	)
+	if err != nil {
+		logger.Errorf("SwitchBusiness: failed to issue new token for user %s: %v", userID, err)
+		return nil, "", fmt.Errorf("failed to issue new token")
+	}
+
+	// 5. Persist active_bid to DB. Non-fatal: token was already issued; a transient DB
+	//    failure should not undo the switch. Matches pattern in BuildUnifiedLoginResponse.
+	if dbErr := s.userRepo.SetActiveBid(ctx, userID, newBid); dbErr != nil {
+		logger.Warnf("SwitchBusiness: failed to persist active_bid for user %s bid %s: %v — continuing", userID, newBid, dbErr)
+	}
+
+	resp := &auth.SwitchBusinessResponse{
+		Bid:       newBid,
+		Role:      string(rel.Role),
+		KybStatus: string(biz.KybStatus),
+		KycNeeded: rel.KycNeeded,
+	}
+	return resp, newToken, nil
 }
 
 // RevokeRefreshToken revokes a specific refresh token (logout from one session)
@@ -650,7 +778,7 @@ func (s *AuthService) Signup(ctx context.Context, email, password string) (*auth
 }
 
 // Login handles complete login flow with token pair generation
-func (s *AuthService) Login(ctx context.Context, email, password, userAgent, deviceType string) (*auth.LoginResponse, error) {
+func (s *AuthService) Login(ctx context.Context, email, password, userAgent, deviceType string) (*auth.UnifiedLoginResponse, error) {
 	logger.Info("Processing login for email: %s, device: %s", email, deviceType)
 
 	// Validate input
@@ -681,8 +809,8 @@ func (s *AuthService) Login(ctx context.Context, email, password, userAgent, dev
 		return nil, fmt.Errorf("invalid email or password")
 	}
 
-	// Create token pair with device information
-	accessToken, refreshToken, err := s.CreateTokenPair(ctx, userObj.Id, userAgent, deviceType)
+	// Create token pair with device information; embed kyc_status in access token
+	accessToken, refreshToken, err := s.CreateTokenPair(ctx, userObj.Id, userAgent, deviceType, string(userObj.KycStatus))
 	if err != nil {
 		logger.Errorf("Failed to create token pair: %v", err)
 		return nil, fmt.Errorf("failed to create authentication tokens")
@@ -690,11 +818,139 @@ func (s *AuthService) Login(ctx context.Context, email, password, userAgent, dev
 
 	s.metrics.Counter(ctx, "auth.loginsucess", 1, metrics.MetricLabels{"Test": "Check"})
 
-	return &auth.LoginResponse{
-		AccessToken:  accessToken,
-		RefreshToken: refreshToken,
-	}, nil
+	unifiedResp, err := s.BuildUnifiedLoginResponse(ctx, userObj.Id)
+	if err != nil {
+		logger.Errorf("Failed to build unified login response for user %s: %v", userObj.Id, err)
+		// Non-fatal: fall back to minimal response (tokens only, no context)
+		return &auth.UnifiedLoginResponse{
+			AccessToken:  accessToken,
+			RefreshToken: refreshToken,
+			User:         &auth.UnifiedUserProfile{Id: userObj.Id, Email: userObj.Email},
+			Businesses:   []*auth.UnifiedBusinessInfo{},
+			ActiveBid:    "",
+		}, nil
+	}
+	unifiedResp.AccessToken = accessToken
+	unifiedResp.RefreshToken = refreshToken
+	return unifiedResp, nil
+}
 
+// BuildUnifiedLoginResponse assembles the full unified login response for a given user:
+// user profile, all business relations, active_bid, and onboarding flags for the active business.
+func (s *AuthService) BuildUnifiedLoginResponse(ctx context.Context, userID string) (*auth.UnifiedLoginResponse, error) {
+	// 1. Fetch user record (has ActiveBid from Phase 1 migration)
+	userObj, err := s.userRepo.GetUserByID(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch user: %w", err)
+	}
+
+	// 2. Fetch all business relations for this user
+	relations, err := s.businessUserRelRepo.FindByUser(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch business relations: %w", err)
+	}
+
+	// 3. For each relation, fetch business details and assemble UnifiedBusinessInfo
+	businesses := make([]*auth.UnifiedBusinessInfo, 0, len(relations))
+	for _, rel := range relations {
+		biz, err := s.businessService.GetBusiness(ctx, rel.BID)
+		if err != nil {
+			logger.Warnf("BuildUnifiedLoginResponse: failed to fetch business %s for user %s: %v — skipping", rel.BID, userID, err)
+			continue // skip businesses that can't be fetched; don't fail entire login
+		}
+		businesses = append(businesses, &auth.UnifiedBusinessInfo{
+			Bid:       rel.BID,
+			Name:      biz.Name,
+			Role:      string(rel.Role),
+			KybStatus: string(biz.KybStatus),
+			KycNeeded: rel.KycNeeded,
+		})
+	}
+
+	// 4. Determine active_bid: from user_table.active_bid, fallback to first business, else ""
+	activeBid := userObj.ActiveBid
+	if activeBid == "" && len(businesses) > 0 {
+		activeBid = businesses[0].Bid
+	}
+
+	// 5. Compute onboarding flags for active business only
+	hasAddedPaymentMethod := false
+	hasAddedVendor := false
+	hasCreatedFirstPayment := false
+	if activeBid != "" {
+		flags, err := s.businessService.GetBusinessOnboardingFlags(ctx, activeBid)
+		if err != nil {
+			logger.Warnf("BuildUnifiedLoginResponse: failed to get onboarding flags for bid %s: %v — defaulting to false", activeBid, err)
+		} else if flags != nil {
+			hasAddedPaymentMethod = flags.HasAddedPaymentMethod
+			hasAddedVendor = flags.HasAddedVendor
+			hasCreatedFirstPayment = flags.HasCreatedFirstPayment
+		}
+	}
+
+	return &auth.UnifiedLoginResponse{
+		User: &auth.UnifiedUserProfile{
+			Id:                     userObj.Id,
+			Name:                   userObj.Name,
+			Email:                  userObj.Email,
+			Mobile:                 userObj.Mobile,
+			KycStatus:              string(userObj.KycStatus),
+			HasAddedPaymentMethod:  hasAddedPaymentMethod,
+			HasAddedVendor:         hasAddedVendor,
+			HasCreatedFirstPayment: hasCreatedFirstPayment,
+		},
+		Businesses: businesses,
+		ActiveBid:  activeBid,
+	}, nil
+}
+
+// VerifySession returns full session context for the authenticated user.
+// Used by the frontend on every app load/refresh to hydrate the session state.
+// KYB visibility rule: non-owners and non-initiators always see kyb_status="completed"
+// so that onboarding guards reject them without leaking actual KYB state.
+func (s *AuthService) VerifySession(ctx context.Context, userID string) (*auth.VerifySessionResponse, error) {
+	userObj, err := s.userRepo.GetUserByID(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch user: %w", err)
+	}
+
+	relations, err := s.businessUserRelRepo.FindByUser(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch relations: %w", err)
+	}
+
+	businesses := make([]*auth.UnifiedBusinessInfo, 0, len(relations))
+	for _, rel := range relations {
+		biz, err := s.businessService.GetBusiness(ctx, rel.BID)
+		if err != nil {
+			logger.Warnf("VerifySession: failed to fetch business %s: %v — skipping", rel.BID, err)
+			continue
+		}
+		kybStatus := string(biz.KybStatus)
+		// Non-owners and non-initiators always see "completed" to prevent onboarding access
+		if !rel.KybInitiated && rel.Role != shared.Owner {
+			kybStatus = string(shared.KYBCompleted)
+		}
+		businesses = append(businesses, &auth.UnifiedBusinessInfo{
+			Bid:       rel.BID,
+			Name:      biz.Name,
+			Role:      string(rel.Role),
+			KybStatus: kybStatus,
+			KycNeeded: rel.KycNeeded,
+		})
+	}
+
+	activeBid := userObj.ActiveBid
+	if activeBid == "" && len(businesses) > 0 {
+		activeBid = businesses[0].Bid
+	}
+
+	return &auth.VerifySessionResponse{
+		UID:        userObj.Id,
+		KycStatus:  string(userObj.KycStatus),
+		Businesses: businesses,
+		ActiveBid:  activeBid,
+	}, nil
 }
 
 // ============================================================================
@@ -1322,17 +1578,6 @@ func (s *AuthService) GenerateMobileOTP(ctx context.Context, userID string) erro
 
 	if userID == "" {
 		return fmt.Errorf("userID is required")
-	}
-
-	// Rate limit check (user-scoped for authenticated users)
-	rateLimitKey := fmt.Sprintf("xcentro:rl:user:%s|resend_mobile_otp", userID)
-	result, err := s.rateLimiter.CheckLimitWithKey(ctx, rateLimitKey, "resend_mobile_otp")
-
-	if err != nil || !result.Allowed {
-		if err != nil {
-			return fmt.Errorf("rate limit check failed, please try again later")
-		}
-		return fmt.Errorf("too many resend requests. Please wait %s seconds before trying again", result.RetryAfterSecs)
 	}
 
 	// Fetch user to get mobile number

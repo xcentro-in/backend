@@ -38,6 +38,8 @@ type UserServiceImpl struct {
 	config              *config.Config
 	rclient             *redisClient.RedisClient
 	logger              *logger.Logger
+	// authService is used for token revocation after KYC state changes (wired in Plan 05-07)
+	authService auth.AuthService
 	// metrics can be added here when needed: metrics metrics.MetricsProvider
 }
 
@@ -61,8 +63,16 @@ func NewUserService(
 		config:              cfg,
 		rclient:             clients.GetRedisClient(), // Extract from clients
 		logger:              logger.GetDefault(),
+		// authService is nil until SetAuthService is called after circular dep resolution
 		// When needed: metrics: clients.GetMetrics().(metrics.MetricsProvider),
 	}
+}
+
+// SetAuthService wires in the auth service for token revocation after KYC state changes.
+// Called from the DI wiring layer (routes.go) after the auth service is created,
+// because authService depends on UserService — breaking the circular dependency.
+func (s *UserServiceImpl) SetAuthService(authSvc auth.AuthService) {
+	s.authService = authSvc
 }
 
 // maskAadhaar masks Aadhaar number, showing only last 4 digits
@@ -506,6 +516,10 @@ func (s *UserServiceImpl) CompleteOnboarding(ctx context.Context, userID, busine
 		return fmt.Errorf("failed to fetch user business relations: %w", err)
 	}
 
+	// targetBusinessID is hoisted to function scope so it can be read after the transaction
+	// for setting active_bid (Flows 2 & 3). Empty string in Flow 1 (invited, no specific biz).
+	var targetBusinessID string
+
 	// Execute onboarding based on flow type
 	err = s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
 		txBusinessUserRelRepo := s.businessUserRelRepo.WithTx(tx)
@@ -545,7 +559,6 @@ func (s *UserServiceImpl) CompleteOnboarding(ctx context.Context, userID, busine
 			}
 
 			// Resolve target business ID
-			var targetBusinessID string
 			if businessID != "" {
 				targetBusinessID = businessID
 			} else if gstin != "" {
@@ -607,6 +620,19 @@ func (s *UserServiceImpl) CompleteOnboarding(ctx context.Context, userID, busine
 
 	if err != nil {
 		return err
+	}
+
+	// Set active_bid after successful KYC completion.
+	// Preserve existing active_bid (invited user set via InviteUserToBusiness);
+	// otherwise use the business from this KYC flow (empty for Flow 1 with no specific biz).
+	activeBidToSet := userData.ActiveBid
+	if activeBidToSet == "" {
+		activeBidToSet = targetBusinessID
+	}
+	if activeBidToSet != "" {
+		if dbErr := s.userRepo.SetActiveBid(ctx, userID, activeBidToSet); dbErr != nil {
+			s.logger.Warnf("CompleteOnboarding: failed to set active_bid for user %s: %v — continuing", userID, dbErr)
+		}
 	}
 
 	// Invalidate user cache after successful KYC completion
@@ -1042,14 +1068,24 @@ func (s *UserServiceImpl) RejectKYC(ctx context.Context, userID string, notes st
 		return err
 	}
 
-	// Invalidate user cache after KYC rejection
-	go func() {
-		bgCtx := context.Background()
-		invalidationKeys := keys.InvalidateUser(userID)
-		if err := s.rclient.Delete(bgCtx, invalidationKeys...); err != nil {
-			s.logger.Warnf("Failed to invalidate user cache after KYC rejection: %v", err)
+	// Revoke all tokens for the rejected user — their role was reset to 'none'
+	if s.authService != nil {
+		if revokeErr := s.authService.RevokeAllUserTokens(ctx, userID); revokeErr != nil {
+			s.logger.Errorf("Failed to revoke tokens for user %s after KYC rejection: %v", userID, revokeErr)
+			// Non-fatal
 		}
-	}()
+	}
+
+	// Invalidate user cache after KYC rejection
+	if s.rclient != nil {
+		go func() {
+			bgCtx := context.Background()
+			invalidationKeys := keys.InvalidateUser(userID)
+			if err := s.rclient.Delete(bgCtx, invalidationKeys...); err != nil {
+				s.logger.Warnf("Failed to invalidate user cache after KYC rejection: %v", err)
+			}
+		}()
+	}
 
 	// Trigger notification if notes are present (unicast to the user)
 	if notes != "" {

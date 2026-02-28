@@ -167,3 +167,4 @@ local/
 # Air hot reload
 tmp/
 build-errors*.log
+.claude

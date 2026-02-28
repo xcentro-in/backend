@@ -8,10 +8,12 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/labstack/echo/v4"
 	redisClient "xcentro.in/internal/adapters/cache/redis/client"
 	"xcentro.in/internal/adapters/cache/redis/keys"
 	"xcentro.in/internal/adapters/database/postgres/client"
 	"xcentro.in/internal/adapters/providers/fileupload"
+	coreAuth "xcentro.in/internal/core/auth"
 	"xcentro.in/internal/core/business"
 	coreNotification "xcentro.in/internal/core/notification"
 	"xcentro.in/internal/core/payment"
@@ -38,6 +40,8 @@ type BusinessServiceImpl struct {
 	s3Config            *config.S3Config
 	externalClients     sharedClients.ExternalClients // Store full clients interface for S3 access
 	logger              *logger.Logger
+	// authService is used for token revocation after role changes (wired in Plan 05-07)
+	authService coreAuth.AuthService
 }
 
 // NewBusinessService creates a new business service with dependency injection
@@ -68,7 +72,15 @@ func NewBusinessService(
 		s3Config:            &cfg.S3,
 		externalClients:     clients, // Store full clients interface
 		logger:              logger.GetDefault(),
+		// authService is nil until SetAuthService is called after circular dep resolution
 	}
+}
+
+// SetAuthService wires in the auth service for token revocation after role changes.
+// Called from the DI wiring layer (routes.go) after the auth service is created,
+// because authService depends on BusinessService — breaking the circular dependency.
+func (s *BusinessServiceImpl) SetAuthService(authSvc coreAuth.AuthService) {
+	s.authService = authSvc
 }
 
 func (s *BusinessServiceImpl) UpdateBusinessRoleClaim(ctx context.Context, uid, bid string, roleClaim shared.UserRole) error {
@@ -80,15 +92,6 @@ func (s *BusinessServiceImpl) UpdateBusinessRoleClaim(ctx context.Context, uid, 
 	if err != nil {
 		return fmt.Errorf("error updating role claim: %w", err)
 	}
-
-	// Invalidate user roles cache after successful update
-	go func() {
-		bgCtx := context.Background()
-		invalidationKeys := keys.InvalidateUserRoles(uid)
-		if err := s.rclient.Delete(bgCtx, invalidationKeys...); err != nil {
-			s.logger.Warnf("Failed to invalidate user roles cache for user %s: %v", uid, err)
-		}
-	}()
 
 	return nil
 }
@@ -108,10 +111,17 @@ func (s *BusinessServiceImpl) UpdateBusinessDeedDocumentKey(ctx context.Context,
 }
 
 // GetKYBDocumentUploadURL generates a presigned S3 URL for KYB document upload
-func (s *BusinessServiceImpl) GetKYBDocumentUploadURL(ctx context.Context, userRoles []*business.BusinessUserRelation) (string, error) {
-	// Authorization: User must have exactly one role with KYB initiated
-	if !(len(userRoles) == 1 && userRoles[0].KybInitiated) {
-		return "", fmt.Errorf("kyb completed or unauthorized")
+func (s *BusinessServiceImpl) GetKYBDocumentUploadURL(c echo.Context, ctx context.Context) (string, error) {
+	bid, _ := c.Get("bid").(string)
+	if bid == "" {
+		return "", fmt.Errorf("no business context")
+	}
+	uid, _ := c.Get("userId").(string)
+
+	// Authorization: Verify user has KYB initiated for this business
+	relation, err := s.businessUserRelRepo.FindByUserAndBusiness(ctx, uid, bid)
+	if err != nil || !relation.KybInitiated {
+		return "", fmt.Errorf("KYB not initiated for this business")
 	}
 
 	// Create S3 client
@@ -121,7 +131,7 @@ func (s *BusinessServiceImpl) GetKYBDocumentUploadURL(ctx context.Context, userR
 	}
 
 	// Generate presigned upload URL business/<business_id>/kyb/business_deed.pdf
-	key := fmt.Sprintf("business/%s/kyb/business_deed.pdf", userRoles[0].BID)
+	key := fmt.Sprintf("business/%s/kyb/business_deed.pdf", bid)
 	url, _, err := fileuploader.GetPresignedUploadURL(ctx, "application/pdf", key, 15*time.Minute)
 	if err != nil {
 		return "", fmt.Errorf("failed to get presigned upload URL: %w", err)
@@ -131,10 +141,17 @@ func (s *BusinessServiceImpl) GetKYBDocumentUploadURL(ctx context.Context, userR
 }
 
 // ConfirmKYBDocumentUpload confirms the S3 upload and updates the database
-func (s *BusinessServiceImpl) ConfirmKYBDocumentUpload(ctx context.Context, userRoles []*business.BusinessUserRelation) (string, error) {
-	// Authorization: User must have exactly one role with KYB initiated
-	if !(len(userRoles) == 1 && userRoles[0].KybInitiated) {
-		return "", fmt.Errorf("kyb completed or unauthorized")
+func (s *BusinessServiceImpl) ConfirmKYBDocumentUpload(c echo.Context, ctx context.Context) (string, error) {
+	bid, _ := c.Get("bid").(string)
+	if bid == "" {
+		return "", fmt.Errorf("no business context")
+	}
+	uid, _ := c.Get("userId").(string)
+
+	// Authorization: Verify user has KYB initiated for this business
+	relation, err := s.businessUserRelRepo.FindByUserAndBusiness(ctx, uid, bid)
+	if err != nil || !relation.KybInitiated {
+		return "", fmt.Errorf("KYB not initiated for this business")
 	}
 
 	// Create S3 client
@@ -144,14 +161,14 @@ func (s *BusinessServiceImpl) ConfirmKYBDocumentUpload(ctx context.Context, user
 	}
 
 	// Confirm upload and get file URL
-	key := fmt.Sprintf("business/%s/kyb/business_deed.pdf", userRoles[0].BID)
+	key := fmt.Sprintf("business/%s/kyb/business_deed.pdf", bid)
 	fileurl, err := fileuploader.ConfirmUpload(ctx, key, 15*time.Minute)
 	if err != nil {
 		return "", fmt.Errorf("failed to confirm upload: %w", err)
 	}
 
 	// Update database with document key
-	err = s.UpdateBusinessDeedDocumentKey(ctx, userRoles[0].BID, key)
+	err = s.UpdateBusinessDeedDocumentKey(ctx, bid, key)
 	if err != nil {
 		return "", fmt.Errorf("failed to update business deed document key: %w", err)
 	}
@@ -317,48 +334,59 @@ func (s *BusinessServiceImpl) InitiateOnboarding(ctx context.Context, uid string
 
 // CompleteKYB completes the KYB process with business type and optionally CIN
 // PAN (ITID) is already set during InitiateOnboarding
-func (s *BusinessServiceImpl) CompleteKYB(ctx context.Context, uid string, userRoles []*business.BusinessUserRelation, req *business.CompleteKYBRequest) (*business.CompleteKYBResponse, error) {
+func (s *BusinessServiceImpl) CompleteKYB(c echo.Context, ctx context.Context, uid string, req *business.CompleteKYBRequest) (*business.CompleteKYBResponse, error) {
 	s.logger.Infof("Completing KYB for user %s, BID %s", uid, req.BID)
 
 	// ============================================================================
 	// PHASE 1: Validation and External API Calls (OUTSIDE TRANSACTION)
 	// ============================================================================
 
-	// Step 1: Validate inputs (ITID is optional now, already set in init)
-	if req.BID == "" || req.BusinessType == "" {
-		return nil, types.NewInvalidInputError("bid or businessType", "bid and businessType are required")
+	// Step 1: Resolve BID — may be empty if JWT was issued before business creation (onboarding flow)
+	bid := req.BID
+	if bid == "" {
+		// JWT bid missing — look up user's kyb-initiated business from DB
+		relations, err := s.businessUserRelRepo.FindByUser(ctx, uid)
+		if err != nil || len(relations) == 0 {
+			return nil, types.ErrUnauthorizedKYB
+		}
+		for _, r := range relations {
+			if r.KybInitiated {
+				bid = r.BID
+				break
+			}
+		}
+		if bid == "" {
+			return nil, types.ErrKYBNotInitiated
+		}
+		req.BID = bid // propagate resolved BID for rest of the function
 	}
 
-	// Step 2: Trim optional fields
+	// Step 2: Validate required inputs
+	if req.BusinessType == "" {
+		return nil, types.NewInvalidInputError("businessType", "businessType is required")
+	}
+
+	// Step 3: Trim optional fields
 	req.BusinessModel = strings.TrimSpace(req.BusinessModel)
 	req.BusinessTurnover = strings.TrimSpace(req.BusinessTurnover)
 
-	// Step 3: Validate business type
+	// Step 4: Validate business type
 	if !shared.IsValidBusinessType(req.BusinessType) {
 		return nil, types.NewInvalidBusinessTypeError(string(req.BusinessType))
 	}
 
-	// Step 3: Check if CIN is required but missing
+	// Step 5: Check if CIN is required but missing
 	if shared.RequiresCIN(req.BusinessType) && req.CID == "" {
 		return nil, types.NewInvalidInputError("cid", fmt.Sprintf("CIN is required for business type: %s", req.BusinessType))
 	}
 
-	// Step 4: Verify user is authorized for this business (using middleware-injected roles)
-	authorized := false
-	kybInitiated := false
-	for _, rel := range userRoles {
-		if rel.BID == req.BID {
-			authorized = true
-			kybInitiated = rel.KybInitiated
-			break
-		}
-	}
-
-	if !authorized {
+	// Step 6: Verify user is authorized for this business
+	relation, err := s.businessUserRelRepo.FindByUserAndBusiness(ctx, uid, bid)
+	if err != nil {
 		return nil, types.ErrUnauthorizedKYB
 	}
 
-	if !kybInitiated {
+	if !relation.KybInitiated {
 		return nil, types.ErrKYBNotInitiated
 	}
 
@@ -405,7 +433,7 @@ func (s *BusinessServiceImpl) CompleteKYB(ctx context.Context, uid string, userR
 
 	var requiresDeed bool
 
-	err := s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
+	err = s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
 		txBusinessRepo := s.businessRepo.WithTx(tx)
 
 		// Step 6: Check if KYB already completed (CRITICAL READ - must be in transaction)
@@ -469,6 +497,11 @@ func (s *BusinessServiceImpl) CompleteKYB(ctx context.Context, uid string, userR
 
 	// Business details cache will expire via TTL (10 minutes)
 
+	// Set active_bid for the KYB initiator so they land in the right business context.
+	if dbErr := s.userRepo.SetActiveBid(ctx, uid, req.BID); dbErr != nil {
+		s.logger.Warnf("CompleteKYB: failed to set active_bid for user %s: %v — continuing", uid, dbErr)
+	}
+
 	return &business.CompleteKYBResponse{
 		BID:                req.BID,
 		KYBStatus:          shared.KYBCompleted,
@@ -478,31 +511,37 @@ func (s *BusinessServiceImpl) CompleteKYB(ctx context.Context, uid string, userR
 }
 
 // GetOnboardingStatus retrieves the current KYB onboarding status for a user
-func (s *BusinessServiceImpl) GetOnboardingStatus(ctx context.Context, uid string, userRoles []*business.BusinessUserRelation) (*business.OnboardingStatusResponse, error) {
+func (s *BusinessServiceImpl) GetOnboardingStatus(c echo.Context, ctx context.Context, uid string) (*business.OnboardingStatusResponse, error) {
 	s.logger.Infof("Fetching onboarding status for user %s", uid)
 
-	// If roles not provided by middleware, fetch from DB (e.g., during login flow)
-	var relations []*business.BusinessUserRelation
-	if userRoles == nil {
-		var err error
-		relations, err = s.businessUserRelRepo.FindByUser(ctx, uid)
+	bid, _ := c.Get("bid").(string)
+
+	// If bid not present in JWT context, fetch all user relations from DB
+	var rel *business.BusinessUserRelation
+	if bid == "" {
+		relations, err := s.businessUserRelRepo.FindByUser(ctx, uid)
 		if err != nil {
 			return nil, fmt.Errorf("error fetching user relations: %w", err)
 		}
+		// If no relations, user hasn't started onboarding
+		if len(relations) == 0 {
+			return &business.OnboardingStatusResponse{
+				KYBStatus:    shared.KYBNotStarted,
+				KYBInitiated: false,
+			}, nil
+		}
+		rel = relations[0]
 	} else {
-		relations = userRoles
+		// bid present — look up the specific relation
+		r, err := s.businessUserRelRepo.FindByUserAndBusiness(ctx, uid, bid)
+		if err != nil {
+			return &business.OnboardingStatusResponse{
+				KYBStatus:    shared.KYBNotStarted,
+				KYBInitiated: false,
+			}, nil
+		}
+		rel = r
 	}
-
-	// If no relations, user hasn't started onboarding
-	if len(relations) == 0 {
-		return &business.OnboardingStatusResponse{
-			KYBStatus:    shared.KYBNotStarted,
-			KYBInitiated: false,
-		}, nil
-	}
-
-	// Get the first (and should be only) business relation
-	rel := relations[0]
 
 	// SECURITY: Only return onboarding status for business where user initiated KYB
 	// Invited users (kyb_initiated=false) should not see onboarding details
@@ -607,6 +646,15 @@ func (s *BusinessServiceImpl) InviteUserToBusiness(ctx context.Context, bid stri
 			return fmt.Errorf("failed to add user to business: %w", err)
 		}
 
+		// Set active_bid only for newly created users so they land in this business context after onboarding.
+		// Skip for existing users — they already have an active business context and we must not override it.
+		txUserRepo := s.userRepo.WithTx(tx)
+		if createdUser.ActiveBid == "" {
+			if dbErr := txUserRepo.SetActiveBid(ctx, createdUser.Id, bid); dbErr != nil {
+				s.logger.Warnf("InviteUserToBusiness: failed to set active_bid for invited user %s: %v — continuing", createdUser.Id, dbErr)
+			}
+		}
+
 		// Notify admins and above about new user addition
 		if err := notification.TriggerMulticast(ctx, bid, coreNotification.EventUserInvited, "New User Added",
 			fmt.Sprintf("A new user has been added to the business with role: %s", role),
@@ -636,15 +684,6 @@ func (s *BusinessServiceImpl) InviteUserToBusiness(ctx context.Context, bid stri
 
 	// Note: Invitation email should be sent by the caller (handler) after this succeeds
 
-	// Invalidate user roles cache (outside transaction)
-	go func() {
-		bgCtx := context.Background()
-		invalidationKeys := keys.InvalidateUserRoles(response.UserID)
-		if err := s.rclient.Delete(bgCtx, invalidationKeys...); err != nil {
-			s.logger.Warnf("Failed to invalidate user roles cache for user %s: %v", response.UserID, err)
-		}
-	}()
-
 	return response, nil
 }
 
@@ -664,15 +703,6 @@ func (s *BusinessServiceImpl) AddUserToBusiness(ctx context.Context, relation *b
 		s.logger.Errorf("Failed to trigger user invited notification: %v", err)
 		// Don't fail the operation if notification trigger fails
 	}
-
-	// Invalidate user roles cache after successful addition
-	go func() {
-		bgCtx := context.Background()
-		invalidationKeys := keys.InvalidateUserRoles(relation.UserID)
-		if err := s.rclient.Delete(bgCtx, invalidationKeys...); err != nil {
-			s.logger.Warnf("Failed to invalidate user roles cache for user %s: %v", relation.UserID, err)
-		}
-	}()
 
 	return nil
 }
@@ -762,14 +792,13 @@ func (s *BusinessServiceImpl) UpdateUserRoleInBusiness(ctx context.Context, bid 
 		return err
 	}
 
-	// Invalidate user roles cache after successful update (outside transaction)
-	go func() {
-		bgCtx := context.Background()
-		invalidationKeys := keys.InvalidateUserRoles(targetUserID)
-		if err := s.rclient.Delete(bgCtx, invalidationKeys...); err != nil {
-			s.logger.Warnf("Failed to invalidate user roles cache for user %s: %v", targetUserID, err)
+	// Revoke all tokens for the affected user — their role changed
+	if s.authService != nil {
+		if revokeErr := s.authService.RevokeAllUserTokens(ctx, targetUserID); revokeErr != nil {
+			s.logger.Errorf("Failed to revoke tokens for user %s after role update: %v", targetUserID, revokeErr)
+			// Non-fatal: role change still succeeds; tokens expire naturally within 15 min
 		}
-	}()
+	}
 
 	s.logger.Infof("Successfully updated user %s role to %s in business %s", targetUserID, newRole, bid)
 	return nil
@@ -825,14 +854,13 @@ func (s *BusinessServiceImpl) RemoveUserFromBusiness(ctx context.Context, bid st
 		return err
 	}
 
-	// Invalidate user roles cache after successful removal (outside transaction)
-	go func() {
-		bgCtx := context.Background()
-		invalidationKeys := keys.InvalidateUserRoles(targetUserID)
-		if err := s.rclient.Delete(bgCtx, invalidationKeys...); err != nil {
-			s.logger.Warnf("Failed to invalidate user roles cache for user %s: %v", targetUserID, err)
+	// Revoke all tokens for the affected user — they were removed from the business
+	if s.authService != nil {
+		if revokeErr := s.authService.RevokeAllUserTokens(ctx, targetUserID); revokeErr != nil {
+			s.logger.Errorf("Failed to revoke tokens for user %s after business removal: %v", targetUserID, revokeErr)
+			// Non-fatal: removal still succeeds; tokens expire naturally within 15 min
 		}
-	}()
+	}
 
 	s.logger.Infof("Successfully removed user %s from business %s", targetUserID, bid)
 	return nil
@@ -1008,7 +1036,6 @@ func (s *BusinessServiceImpl) UpdateOnboardingStatus(ctx context.Context, bid st
 		s.logger.Warnf("Failed to invalidate business onboarding status cache for BID %s: %v", bid, err)
 	}
 
-
 	return nil
 }
 
@@ -1160,13 +1187,34 @@ func (s *BusinessServiceImpl) RejectKYB(ctx context.Context, bid string, notes s
 			return err
 		}
 
-		// 2. Set owner role to NULL (database NULL)
-		if err := txBusinessUserRelRepo.SetOwnerRoleToNull(ctx, bid); err != nil {
-			// It's OK if no owner exists
-			s.logger.Warnf("No owner found for business %s: %v", bid, err)
+		// 2. Set owner and kyb_initiator roles to NULL
+		if err := txBusinessUserRelRepo.SetOwnerAndKYBInitiatorRoleToNull(ctx, bid); err != nil {
+			s.logger.Warnf("No owner/KYB initiator found for business %s: %v", bid, err)
 		}
 
-		// 3. Clear KYB data
+		// 3. Set all other users to 'none' role
+		if err := txBusinessUserRelRepo.SetNonOwnerRolesToNone(ctx, bid); err != nil {
+			s.logger.Warnf("Failed to set non-owner roles to 'none': %v", err)
+		}
+
+		// 4. Clear KYB data
+		if bus.ITID != "" {
+			if err := txBusinessRepo.ClearKYBData(ctx, bus.ITID); err != nil {
+				return err
+			}
+		}
+
+		// 2. Set owner and kyb_initiator roles to NULL
+		if err := txBusinessUserRelRepo.SetOwnerAndKYBInitiatorRoleToNull(ctx, bid); err != nil {
+			s.logger.Warnf("No owner/KYB initiator found for business %s: %v", bid, err)
+		}
+
+		// 3. Set all other users to 'none' role
+		if err := txBusinessUserRelRepo.SetNonOwnerRolesToNone(ctx, bid); err != nil {
+			s.logger.Warnf("Failed to set non-owner roles to 'none': %v", err)
+		}
+
+		// 4. Clear KYB data
 		if bus.ITID != "" {
 			if err := txBusinessRepo.ClearKYBData(ctx, bus.ITID); err != nil {
 				return err
@@ -1187,13 +1235,6 @@ func (s *BusinessServiceImpl) RejectKYB(ctx context.Context, bid string, notes s
 		// Invalidate business details cache
 		if err := s.rclient.Delete(bgCtx, keys.Business.Details(bid)); err != nil {
 			s.logger.Warnf("Failed to invalidate business details cache for BID %s: %v", bid, err)
-		}
-		// Invalidate owner's user roles cache if an owner was found
-		if userIDToNotify != "" {
-			invalidationKeys := keys.InvalidateUserRoles(userIDToNotify)
-			if err := s.rclient.Delete(bgCtx, invalidationKeys...); err != nil {
-				s.logger.Warnf("Failed to invalidate user roles cache for user %s after KYB rejection: %v", userIDToNotify, err)
-			}
 		}
 	}()
 
@@ -1280,14 +1321,13 @@ func (s *BusinessServiceImpl) OpsUpdateUserRole(ctx context.Context, bid string,
 		return err
 	}
 
-	// Invalidate user roles cache after successful update
-	go func() {
-		bgCtx := context.Background()
-		invalidationKeys := keys.InvalidateUserRoles(userID)
-		if err := s.rclient.Delete(bgCtx, invalidationKeys...); err != nil {
-			s.logger.Warnf("Failed to invalidate user roles cache for user %s: %v", userID, err)
+	// Revoke all tokens for the affected user — their role changed via ops
+	if s.authService != nil {
+		if revokeErr := s.authService.RevokeAllUserTokens(ctx, userID); revokeErr != nil {
+			s.logger.Errorf("Failed to revoke tokens for user %s after ops role update: %v", userID, revokeErr)
+			// Non-fatal: role change still succeeds; tokens expire naturally within 15 min
 		}
-	}()
+	}
 
 	// Trigger notification to owner about user role approval
 	go func() {

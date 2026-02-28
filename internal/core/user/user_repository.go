@@ -13,6 +13,7 @@ type UserRepository interface {
 	WithTx(tx client.Tx) UserRepository
 	CreateUser(ctx context.Context, authPayload auth.AuthPayload) (*User, error)
 	GetUserByID(ctx context.Context, userID string) (*User, error)
+	SetActiveBid(ctx context.Context, userID string, activeBid string) error
 	GetUserByEmail(ctx context.Context, email string) (*User, error)
 	UpdateUserMobile(ctx context.Context, userID, newMobile string) error
 	UpdateUserTaxID(ctx context.Context, userID, newTaxID string) error

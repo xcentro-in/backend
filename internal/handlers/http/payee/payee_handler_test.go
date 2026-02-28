@@ -57,8 +57,8 @@ const validBusinessID = "b1a2c3d4-e5f6-7890-abcd-ef1234567890"
 // ---------------------------------------------------------------------------
 // OnboardPayee – tests that improper requests are rejected before the service
 // is called. The payee handler uses a manual switch-based validation (not
-// c.Validate), so the gate tests cover: missing header, missing JWT, bad type,
-// type mismatch, and malformed JSON.
+// c.Validate), so the gate tests cover: missing bid in JWT context, missing JWT,
+// bad type, type mismatch, and malformed JSON.
 // ---------------------------------------------------------------------------
 
 func TestOnboardPayee_Validation(t *testing.T) {
@@ -77,76 +77,76 @@ func TestOnboardPayee_Validation(t *testing.T) {
 	}`
 
 	tests := []struct {
-		name          string
-		businessIDHdr string
-		userIDCtx     string
-		body          string
-		wantStatus    int
-		wantError     string
+		name       string
+		businessID string
+		userIDCtx  string
+		body       string
+		wantStatus int
+		wantError  string
 	}{
 		{
-			name:          "missing X-Business-ID header",
-			businessIDHdr: "",
-			userIDCtx:     "user-uuid-001",
-			body:          validVendorBody,
-			wantStatus:    http.StatusBadRequest,
-			wantError:     "MISSING_BUSINESS_ID",
+			name:       "missing bid in JWT context",
+			businessID: "",
+			userIDCtx:  "user-uuid-001",
+			body:       validVendorBody,
+			wantStatus: http.StatusUnauthorized,
+			wantError:  "NO_BUSINESS_CONTEXT",
 		},
 		{
-			name:          "missing userId in JWT context",
-			businessIDHdr: validBusinessID,
-			userIDCtx:     "", // intentionally empty
-			body:          validVendorBody,
-			wantStatus:    http.StatusUnauthorized,
-			wantError:     "MISSING_USER_ID",
+			name:       "missing userId in JWT context",
+			businessID: validBusinessID,
+			userIDCtx:  "", // intentionally empty
+			body:       validVendorBody,
+			wantStatus: http.StatusUnauthorized,
+			wantError:  "MISSING_USER_ID",
 		},
 		{
-			name:          "malformed JSON body",
-			businessIDHdr: validBusinessID,
-			userIDCtx:     "user-uuid-001",
-			body:          `{not valid json`,
-			wantStatus:    http.StatusBadRequest,
-			wantError:     "invalid_request",
+			name:       "malformed JSON body",
+			businessID: validBusinessID,
+			userIDCtx:  "user-uuid-001",
+			body:       `{not valid json`,
+			wantStatus: http.StatusBadRequest,
+			wantError:  "invalid_request",
 		},
 		{
-			name:          "unsupported payee_type",
-			businessIDHdr: validBusinessID,
-			userIDCtx:     "user-uuid-001",
-			body:          `{"payee_type":"unknown_type","display_name":"Test"}`,
-			wantStatus:    http.StatusBadRequest,
-			wantError:     "invalid_payee_type",
+			name:       "unsupported payee_type",
+			businessID: validBusinessID,
+			userIDCtx:  "user-uuid-001",
+			body:       `{"payee_type":"unknown_type","display_name":"Test"}`,
+			wantStatus: http.StatusBadRequest,
+			wantError:  "invalid_payee_type",
 		},
 		{
-			name:          "payee_type vendor but vendor object missing",
-			businessIDHdr: validBusinessID,
-			userIDCtx:     "user-uuid-001",
-			body:          `{"payee_type":"vendor","display_name":"ACME"}`,
-			wantStatus:    http.StatusBadRequest,
-			wantError:     "invalid_request",
+			name:       "payee_type vendor but vendor object missing",
+			businessID: validBusinessID,
+			userIDCtx:  "user-uuid-001",
+			body:       `{"payee_type":"vendor","display_name":"ACME"}`,
+			wantStatus: http.StatusBadRequest,
+			wantError:  "invalid_request",
 		},
 		{
-			name:          "payee_type employee but employee object missing",
-			businessIDHdr: validBusinessID,
-			userIDCtx:     "user-uuid-001",
-			body:          `{"payee_type":"employee","display_name":"John Doe"}`,
-			wantStatus:    http.StatusBadRequest,
-			wantError:     "invalid_request",
+			name:       "payee_type employee but employee object missing",
+			businessID: validBusinessID,
+			userIDCtx:  "user-uuid-001",
+			body:       `{"payee_type":"employee","display_name":"John Doe"}`,
+			wantStatus: http.StatusBadRequest,
+			wantError:  "invalid_request",
 		},
 		{
-			name:          "payee_type biller but biller object missing",
-			businessIDHdr: validBusinessID,
-			userIDCtx:     "user-uuid-001",
-			body:          `{"payee_type":"biller","display_name":"Electricity Board"}`,
-			wantStatus:    http.StatusBadRequest,
-			wantError:     "invalid_request",
+			name:       "payee_type biller but biller object missing",
+			businessID: validBusinessID,
+			userIDCtx:  "user-uuid-001",
+			body:       `{"payee_type":"biller","display_name":"Electricity Board"}`,
+			wantStatus: http.StatusBadRequest,
+			wantError:  "invalid_request",
 		},
 		{
-			name:          "payee_type gst_payment but gst object missing",
-			businessIDHdr: validBusinessID,
-			userIDCtx:     "user-uuid-001",
-			body:          `{"payee_type":"gst_payment","display_name":"GST Payment"}`,
-			wantStatus:    http.StatusBadRequest,
-			wantError:     "invalid_request",
+			name:       "payee_type gst_payment but gst object missing",
+			businessID: validBusinessID,
+			userIDCtx:  "user-uuid-001",
+			body:       `{"payee_type":"gst_payment","display_name":"GST Payment"}`,
+			wantStatus: http.StatusBadRequest,
+			wantError:  "invalid_request",
 		},
 	}
 
@@ -155,12 +155,12 @@ func TestOnboardPayee_Validation(t *testing.T) {
 			e := newTestEcho()
 			req := httptest.NewRequest(http.MethodPost, "/payees", strings.NewReader(tt.body))
 			req.Header.Set("Content-Type", "application/json")
-			if tt.businessIDHdr != "" {
-				req.Header.Set("X-Business-ID", tt.businessIDHdr)
-			}
 
 			rec := httptest.NewRecorder()
 			c := e.NewContext(req, rec)
+			if tt.businessID != "" {
+				c.Set("bid", tt.businessID)
+			}
 			if tt.userIDCtx != "" {
 				c.Set("userId", tt.userIDCtx)
 			}
@@ -187,22 +187,22 @@ func TestOnboardPayee_Validation(t *testing.T) {
 
 func TestGetPayees_Validation(t *testing.T) {
 	tests := []struct {
-		name          string
-		businessIDHdr string
+		name           string
+		businessID     string
 		typeQueryParam string
-		wantStatus    int
-		wantError     string
+		wantStatus     int
+		wantError      string
 	}{
 		{
-			name:           "missing X-Business-ID header",
-			businessIDHdr:  "",
+			name:           "missing bid in JWT context",
+			businessID:     "",
 			typeQueryParam: "",
-			wantStatus:     http.StatusBadRequest,
-			wantError:      "MISSING_BUSINESS_ID",
+			wantStatus:     http.StatusUnauthorized,
+			wantError:      "NO_BUSINESS_CONTEXT",
 		},
 		{
 			name:           "invalid payee type filter",
-			businessIDHdr:  validBusinessID,
+			businessID:     validBusinessID,
 			typeQueryParam: "unknown",
 			wantStatus:     http.StatusBadRequest,
 			wantError:      "invalid_type",
@@ -217,12 +217,12 @@ func TestGetPayees_Validation(t *testing.T) {
 				target += "?type=" + tt.typeQueryParam
 			}
 			req := httptest.NewRequest(http.MethodGet, target, nil)
-			if tt.businessIDHdr != "" {
-				req.Header.Set("X-Business-ID", tt.businessIDHdr)
-			}
 
 			rec := httptest.NewRecorder()
 			c := e.NewContext(req, rec)
+			if tt.businessID != "" {
+				c.Set("bid", tt.businessID)
+			}
 			c.Set("userId", "user-uuid-001")
 
 			if err := newPayeeHandler().GetPayees(c); err != nil {
@@ -242,9 +242,9 @@ func TestGetPayees_Validation(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// UpdatePayee – validates header and body gates.
+// UpdatePayee – validates JWT context and body gates.
 // Note: UpdatePayee currently uses an anonymous inline struct without
-// validate tags, so only structural gates (missing header, malformed JSON)
+// validate tags, so only structural gates (missing bid in JWT, malformed JSON)
 // are enforced at the handler level.
 // ---------------------------------------------------------------------------
 
@@ -253,25 +253,25 @@ func TestUpdatePayee_Validation(t *testing.T) {
 		name          string
 		payeeIDPath   string
 		accountIDPath string
-		businessIDHdr string
+		businessID    string
 		body          string
 		wantStatus    int
 		wantError     string
 	}{
 		{
-			name:          "missing X-Business-ID header",
+			name:          "missing bid in JWT context",
 			payeeIDPath:   "payee-uuid-001",
 			accountIDPath: "account-uuid-001",
-			businessIDHdr: "",
+			businessID:    "",
 			body:          `{"display_name":"ACME"}`,
-			wantStatus:    http.StatusBadRequest,
-			wantError:     "MISSING_BUSINESS_ID",
+			wantStatus:    http.StatusUnauthorized,
+			wantError:     "NO_BUSINESS_CONTEXT",
 		},
 		{
 			name:          "malformed JSON body",
 			payeeIDPath:   "payee-uuid-001",
 			accountIDPath: "account-uuid-001",
-			businessIDHdr: validBusinessID,
+			businessID:    validBusinessID,
 			body:          `{bad json`,
 			wantStatus:    http.StatusBadRequest,
 			wantError:     "invalid_request",
@@ -284,14 +284,14 @@ func TestUpdatePayee_Validation(t *testing.T) {
 			path := "/payees/" + tt.payeeIDPath + "/accounts/" + tt.accountIDPath
 			req := httptest.NewRequest(http.MethodPut, path, strings.NewReader(tt.body))
 			req.Header.Set("Content-Type", "application/json")
-			if tt.businessIDHdr != "" {
-				req.Header.Set("X-Business-ID", tt.businessIDHdr)
-			}
 
 			rec := httptest.NewRecorder()
 			c := e.NewContext(req, rec)
 			c.SetParamNames("payee_id", "account_id")
 			c.SetParamValues(tt.payeeIDPath, tt.accountIDPath)
+			if tt.businessID != "" {
+				c.Set("bid", tt.businessID)
+			}
 			c.Set("userId", "user-uuid-001")
 
 			if err := newPayeeHandler().UpdatePayee(c); err != nil {

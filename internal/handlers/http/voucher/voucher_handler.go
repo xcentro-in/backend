@@ -6,12 +6,10 @@ import (
 	// "io"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
-	"xcentro.in/internal/core/business"
 	"xcentro.in/internal/core/voucher"
 	voucherSvc "xcentro.in/internal/services/voucher"
 	"xcentro.in/internal/shared/logger"
@@ -81,21 +79,21 @@ func (h *VoucherHandler) validateVoucherDates(c echo.Context, invoiceDate, invoi
 func (h *VoucherHandler) CreateDraftVoucher(c echo.Context) error {
 	h.logger.InfoWith("CreateDraftVoucher API called")
 
-	// Extract business_id from X-Business-ID header
-	businessIDStr := strings.TrimSpace(c.Request().Header.Get("X-Business-ID"))
+	// Extract business_id from JWT context (set by JWTMiddleware)
+	businessIDStr, _ := c.Get("bid").(string)
 	if businessIDStr == "" {
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "MISSING_BUSINESS_ID",
-			"message": "X-Business-ID header is required",
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "NO_BUSINESS_CONTEXT",
+			"message": "No active business in token",
 		})
 	}
 
 	businessID, err := uuid.Parse(businessIDStr)
 	if err != nil {
 		h.logger.ErrorWith("Invalid business_id format", "error", err)
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "INVALID_BUSINESS_ID",
-			"message": "X-Business-ID must be a valid UUID",
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "NO_BUSINESS_CONTEXT",
+			"message": "No active business in token",
 		})
 	}
 
@@ -180,18 +178,19 @@ func (h *VoucherHandler) CreateDraftVoucher(c echo.Context) error {
 func (h *VoucherHandler) ListVouchers(c echo.Context) error {
 	h.logger.InfoWith("ListVouchers API called")
 
-	businessIDStr := strings.TrimSpace(c.Request().Header.Get("X-Business-ID"))
+	// Extract business_id from JWT context (set by JWTMiddleware)
+	businessIDStr, _ := c.Get("bid").(string)
 	if businessIDStr == "" {
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "MISSING_BUSINESS_ID",
-			"message": "X-Business-ID header is required",
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "NO_BUSINESS_CONTEXT",
+			"message": "No active business in token",
 		})
 	}
 	businessID, err := uuid.Parse(businessIDStr)
 	if err != nil {
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "INVALID_BUSINESS_ID",
-			"message": "X-Business-ID must be a valid UUID",
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "NO_BUSINESS_CONTEXT",
+			"message": "No active business in token",
 		})
 	}
 
@@ -331,21 +330,21 @@ func (h *VoucherHandler) UpdateVoucher(c echo.Context) error {
 func (h *VoucherHandler) DeleteVoucher(c echo.Context) error {
 	h.logger.InfoWith("DeleteVoucher API called")
 
-	// Extract business_id from X-Business-ID header
-	businessIDStr := strings.TrimSpace(c.Request().Header.Get("X-Business-ID"))
+	// Extract business_id from JWT context (set by JWTMiddleware)
+	businessIDStr, _ := c.Get("bid").(string)
 	if businessIDStr == "" {
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "MISSING_BUSINESS_ID",
-			"message": "X-Business-ID header is required",
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "NO_BUSINESS_CONTEXT",
+			"message": "No active business in token",
 		})
 	}
 
 	businessID, err := uuid.Parse(businessIDStr)
 	if err != nil {
 		h.logger.ErrorWith("Invalid business_id format", "error", err)
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "INVALID_BUSINESS_ID",
-			"message": "X-Business-ID must be a valid UUID",
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "NO_BUSINESS_CONTEXT",
+			"message": "No active business in token",
 		})
 	}
 
@@ -439,21 +438,21 @@ func (h *VoucherHandler) FinalizeVoucher(c echo.Context) error {
 func (h *VoucherHandler) CreateMultiVouchers(c echo.Context) error {
 	h.logger.InfoWith("CreateMultiVouchers API called")
 
-	// Extract business_id from X-Business-ID header
-	businessIDStr := strings.TrimSpace(c.Request().Header.Get("X-Business-ID"))
+	// Extract business_id from JWT context (set by JWTMiddleware)
+	businessIDStr, _ := c.Get("bid").(string)
 	if businessIDStr == "" {
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "MISSING_BUSINESS_ID",
-			"message": "X-Business-ID header is required",
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "NO_BUSINESS_CONTEXT",
+			"message": "No active business in token",
 		})
 	}
 
 	businessID, err := uuid.Parse(businessIDStr)
 	if err != nil {
 		h.logger.ErrorWith("Invalid business_id format", "error", err)
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "INVALID_BUSINESS_ID",
-			"message": "X-Business-ID must be a valid UUID",
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "NO_BUSINESS_CONTEXT",
+			"message": "No active business in token",
 		})
 	}
 
@@ -529,18 +528,19 @@ func (h *VoucherHandler) CreateMultiVouchers(c echo.Context) error {
 func (h *VoucherHandler) GetDraftReminders(c echo.Context) error {
 	h.logger.InfoWith("GetDraftReminders API called")
 
-	businessIDStr := strings.TrimSpace(c.Request().Header.Get("X-Business-ID"))
+	// Extract business_id from JWT context (set by JWTMiddleware)
+	businessIDStr, _ := c.Get("bid").(string)
 	if businessIDStr == "" {
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "MISSING_BUSINESS_ID",
-			"message": "X-Business-ID header is required",
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "NO_BUSINESS_CONTEXT",
+			"message": "No active business in token",
 		})
 	}
 	businessID, err := uuid.Parse(businessIDStr)
 	if err != nil {
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "INVALID_BUSINESS_ID",
-			"message": "X-Business-ID must be a valid UUID",
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "NO_BUSINESS_CONTEXT",
+			"message": "No active business in token",
 		})
 	}
 
@@ -873,21 +873,21 @@ func (h *VoucherHandler) GetVouchersByPayee(c echo.Context) error {
 		})
 	}
 
-	// Extract business_id from X-Business-ID header
-	businessIDStr := strings.TrimSpace(c.Request().Header.Get("X-Business-ID"))
+	// Extract business_id from JWT context (set by JWTMiddleware)
+	businessIDStr, _ := c.Get("bid").(string)
 	if businessIDStr == "" {
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "MISSING_BUSINESS_ID",
-			"message": "X-Business-ID header is required",
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "NO_BUSINESS_CONTEXT",
+			"message": "No active business in token",
 		})
 	}
 
 	businessID, err := uuid.Parse(businessIDStr)
 	if err != nil {
 		h.logger.ErrorWith("Invalid business_id format", "error", err)
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "INVALID_BUSINESS_ID",
-			"message": "X-Business-ID must be a valid UUID",
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "NO_BUSINESS_CONTEXT",
+			"message": "No active business in token",
 		})
 	}
 
@@ -950,18 +950,12 @@ func parseIntParam(s string) (int, error) {
 func (h *VoucherHandler) GetVoucherList(c echo.Context) error {
 	h.logger.InfoWith("GetVoucherList API called")
 
-	// Extract business_id from X-Business-ID header
-	businessID := strings.TrimSpace(c.Request().Header.Get("X-Business-ID"))
+	// Extract business_id from JWT context (set by JWTMiddleware)
+	businessID, _ := c.Get("bid").(string)
 	if businessID == "" {
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "MISSING_BUSINESS_ID",
-			"message": "X-Business-ID header is required",
-		})
-	}
-	if _, err := uuid.Parse(businessID); err != nil {
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "INVALID_BUSINESS_ID",
-			"message": "X-Business-ID must be a valid UUID",
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "NO_BUSINESS_CONTEXT",
+			"message": "No active business in token",
 		})
 	}
 
@@ -1038,18 +1032,12 @@ func (h *VoucherHandler) RequestApproval(c echo.Context) error {
 		})
 	}
 
-	// Extract business_id from header (for validation)
-	businessID := strings.TrimSpace(c.Request().Header.Get("X-Business-ID"))
+	// Extract business_id from JWT context (set by JWTMiddleware)
+	businessID, _ := c.Get("bid").(string)
 	if businessID == "" {
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "MISSING_BUSINESS_ID",
-			"message": "X-Business-ID header is required",
-		})
-	}
-	if _, err := uuid.Parse(businessID); err != nil {
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "INVALID_BUSINESS_ID",
-			"message": "X-Business-ID must be a valid UUID",
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "NO_BUSINESS_CONTEXT",
+			"message": "No active business in token",
 		})
 	}
 
@@ -1113,18 +1101,12 @@ func (h *VoucherHandler) RequestApproval(c echo.Context) error {
 func (h *VoucherHandler) GetApprovalInbox(c echo.Context) error {
 	h.logger.InfoWith("GetApprovalInbox API called")
 
-	// Extract business_id from header
-	businessID := strings.TrimSpace(c.Request().Header.Get("X-Business-ID"))
+	// Extract business_id from JWT context (set by JWTMiddleware)
+	businessID, _ := c.Get("bid").(string)
 	if businessID == "" {
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "MISSING_BUSINESS_ID",
-			"message": "X-Business-ID header is required",
-		})
-	}
-	if _, err := uuid.Parse(businessID); err != nil {
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "INVALID_BUSINESS_ID",
-			"message": "X-Business-ID must be a valid UUID",
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "NO_BUSINESS_CONTEXT",
+			"message": "No active business in token",
 		})
 	}
 
@@ -1180,18 +1162,12 @@ func (h *VoucherHandler) GetApprovalInbox(c echo.Context) error {
 func (h *VoucherHandler) GetApprovalInboxCounts(c echo.Context) error {
 	h.logger.InfoWith("GetApprovalInboxCounts API called")
 
-	// Extract business_id from header
-	businessID := strings.TrimSpace(c.Request().Header.Get("X-Business-ID"))
+	// Extract business_id from JWT context (set by JWTMiddleware)
+	businessID, _ := c.Get("bid").(string)
 	if businessID == "" {
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "MISSING_BUSINESS_ID",
-			"message": "X-Business-ID header is required",
-		})
-	}
-	if _, err := uuid.Parse(businessID); err != nil {
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "INVALID_BUSINESS_ID",
-			"message": "X-Business-ID must be a valid UUID",
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "NO_BUSINESS_CONTEXT",
+			"message": "No active business in token",
 		})
 	}
 
@@ -1229,18 +1205,12 @@ func (h *VoucherHandler) BatchApproveVouchers(c echo.Context) error {
 		})
 	}
 
-	// Extract business_id from header
-	businessID := strings.TrimSpace(c.Request().Header.Get("X-Business-ID"))
+	// Extract business_id from JWT context (set by JWTMiddleware)
+	businessID, _ := c.Get("bid").(string)
 	if businessID == "" {
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "MISSING_BUSINESS_ID",
-			"message": "X-Business-ID header is required",
-		})
-	}
-	if _, err := uuid.Parse(businessID); err != nil {
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "INVALID_BUSINESS_ID",
-			"message": "X-Business-ID must be a valid UUID",
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "NO_BUSINESS_CONTEXT",
+			"message": "No active business in token",
 		})
 	}
 
@@ -1301,39 +1271,20 @@ func (h *VoucherHandler) BatchApproveVouchers(c echo.Context) error {
 func (h *VoucherHandler) GetUnpaidBills(c echo.Context) error {
 	h.logger.InfoWith("GetUnpaidBills API called")
 
-	// Extract business_id from header
-	businessID := strings.TrimSpace(c.Request().Header.Get("X-Business-ID"))
+	// Extract business_id from JWT context (set by JWTMiddleware)
+	businessID, _ := c.Get("bid").(string)
 	if businessID == "" {
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "MISSING_BUSINESS_ID",
-			"message": "X-Business-ID header is required",
-		})
-	}
-	if _, err := uuid.Parse(businessID); err != nil {
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "INVALID_BUSINESS_ID",
-			"message": "X-Business-ID must be a valid UUID",
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "NO_BUSINESS_CONTEXT",
+			"message": "No active business in token",
 		})
 	}
 
-	// Get user roles from middleware context
-	ur := c.Get("userRoles")
-	if ur == nil {
-		return c.JSON(http.StatusForbidden, map[string]any{
-			"error":   "FORBIDDEN",
-			"message": "No business association found",
-		})
-	}
-	roles := ur.([]*business.BusinessUserRelation)
+	// Get role from JWT context (set by JWTMiddleware)
+	role, _ := c.Get("role").(string)
 
-	// Find the role for the requested business
-	var isOwner bool
-	for _, rel := range roles {
-		if rel.BID == businessID {
-			isOwner = (string(rel.Role) == "owner")
-			break
-		}
-	}
+	// Determine owner status from JWT role claim
+	isOwner := (role == "owner")
 
 	// Parse optional query parameters for pagination
 	limit := 50 // Default limit
@@ -1384,18 +1335,12 @@ func (h *VoucherHandler) GetUnpaidBills(c echo.Context) error {
 func (h *VoucherHandler) GetVoucherCounts(c echo.Context) error {
 	h.logger.InfoWith("GetVoucherCounts API called")
 
-	// Extract business_id from header
-	businessID := strings.TrimSpace(c.Request().Header.Get("X-Business-ID"))
+	// Extract business_id from JWT context (set by JWTMiddleware)
+	businessID, _ := c.Get("bid").(string)
 	if businessID == "" {
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "MISSING_BUSINESS_ID",
-			"message": "X-Business-ID header is required",
-		})
-	}
-	if _, err := uuid.Parse(businessID); err != nil {
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "INVALID_BUSINESS_ID",
-			"message": "X-Business-ID must be a valid UUID",
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "NO_BUSINESS_CONTEXT",
+			"message": "No active business in token",
 		})
 	}
 
@@ -1522,18 +1467,12 @@ func (h *VoucherHandler) GetVoucherPaymentDetails(c echo.Context) error {
 func (h *VoucherHandler) GetCalendarView(c echo.Context) error {
 	h.logger.InfoWith("GetCalendarView API called")
 
-	// Extract business_id from X-Business-ID header
-	businessIDStr := strings.TrimSpace(c.Request().Header.Get("X-Business-ID"))
+	// Extract business_id from JWT context (set by JWTMiddleware)
+	businessIDStr, _ := c.Get("bid").(string)
 	if businessIDStr == "" {
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "MISSING_BUSINESS_ID",
-			"message": "X-Business-ID header is required",
-		})
-	}
-	if _, err := uuid.Parse(businessIDStr); err != nil {
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "INVALID_BUSINESS_ID",
-			"message": "X-Business-ID must be a valid UUID",
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "NO_BUSINESS_CONTEXT",
+			"message": "No active business in token",
 		})
 	}
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/labstack/echo/v4"
 	"xcentro.in/internal/adapters/external/payment/jiopay"
 	"xcentro.in/internal/core/business"
 	"xcentro.in/internal/core/payment"
@@ -23,19 +24,19 @@ func (m *MockBusinessService) GetOwnerMobile(ctx context.Context, businessID str
 func (m *MockBusinessService) UpdateBusinessDeedDocumentKey(ctx context.Context, bid string, key string) error {
 	return nil
 }
-func (m *MockBusinessService) GetKYBDocumentUploadURL(ctx context.Context, userRoles []*business.BusinessUserRelation) (string, error) {
+func (m *MockBusinessService) GetKYBDocumentUploadURL(_ echo.Context, _ context.Context) (string, error) {
 	return "", nil
 }
-func (m *MockBusinessService) ConfirmKYBDocumentUpload(ctx context.Context, userRoles []*business.BusinessUserRelation) (string, error) {
+func (m *MockBusinessService) ConfirmKYBDocumentUpload(_ echo.Context, _ context.Context) (string, error) {
 	return "", nil
 }
 func (m *MockBusinessService) InitiateOnboarding(ctx context.Context, uid string, name string, gstin string) (*business.OnboardingInitResponse, error) {
 	return nil, nil
 }
-func (m *MockBusinessService) CompleteKYB(ctx context.Context, uid string, userRoles []*business.BusinessUserRelation, req *business.CompleteKYBRequest) (*business.CompleteKYBResponse, error) {
+func (m *MockBusinessService) CompleteKYB(_ echo.Context, _ context.Context, uid string, req *business.CompleteKYBRequest) (*business.CompleteKYBResponse, error) {
 	return nil, nil
 }
-func (m *MockBusinessService) GetOnboardingStatus(ctx context.Context, uid string, userRoles []*business.BusinessUserRelation) (*business.OnboardingStatusResponse, error) {
+func (m *MockBusinessService) GetOnboardingStatus(_ echo.Context, _ context.Context, uid string) (*business.OnboardingStatusResponse, error) {
 	return nil, nil
 }
 func (m *MockBusinessService) GetBusinessDetails(ctx context.Context, bid string, userRole shared.UserRole) (*business.BusinessDetailsResponse, error) {
@@ -53,7 +54,7 @@ func (m *MockBusinessService) GetBusinessOnboardingFlags(ctx context.Context, bi
 func (m *MockBusinessService) UpdateOnboardingStatus(ctx context.Context, bid string, flagName string, value bool) error {
 	return nil
 }
-func (m *MockBusinessService) InviteUserToBusiness(ctx context.Context, bid string, email string, name string, role shared.UserRole, requesterRole shared.UserRole) (*business.InviteUserResponse, error) {
+func (m *MockBusinessService) InviteUserToBusiness(ctx context.Context, bid string, email string, name string, mobile string, role shared.UserRole, requesterRole shared.UserRole) (*business.InviteUserResponse, error) {
 	return nil, nil
 }
 func (m *MockBusinessService) AddUserToBusiness(ctx context.Context, relation *business.BusinessUserRelation) error {
@@ -88,6 +89,9 @@ func (m *MockBusinessService) VerifyKYB(ctx context.Context, bid string, notes s
 }
 func (m *MockBusinessService) OpsUpdateUserRole(ctx context.Context, bid string, userID string, role shared.UserRole) error {
 	return nil
+}
+func (m *MockBusinessService) ValidateUserInBusiness(ctx context.Context, email string, bid string) (bool, error) {
+	return false, nil
 }
 
 // Example: How to test JioPay client with mocked HTTP responses

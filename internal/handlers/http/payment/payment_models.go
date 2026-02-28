@@ -4,7 +4,7 @@ package payment
 
 // FetchWalletRequest represents the request for fetching business wallet information
 type FetchWalletRequest struct {
-	// No fields needed - businessID comes from X-Business-ID header
+	// No fields needed - businessID comes from JWT context (bid)
 }
 
 // GetFeeRulesRequest represents the request for getting fee rules

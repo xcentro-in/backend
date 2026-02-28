@@ -2,9 +2,7 @@ package voucher
 
 import (
 	"github.com/labstack/echo/v4"
-	redisClient "xcentro.in/internal/adapters/cache/redis/client"
 	"xcentro.in/internal/core/auth"
-	"xcentro.in/internal/core/business"
 	"xcentro.in/internal/middleware"
 	voucherSvc "xcentro.in/internal/services/voucher"
 	"xcentro.in/internal/shared/httputil"
@@ -13,13 +11,11 @@ import (
 )
 
 // RegisterVoucherRoutes registers all voucher-related routes
-func RegisterVoucherRoutes(group *echo.Group, voucherService voucherSvc.VoucherService, authService auth.AuthService, businessUserRelRepo business.BusinessUserRelationRepository, rclient *redisClient.RedisClient, cookieManager *httputil.CookieManager) {
+func RegisterVoucherRoutes(group *echo.Group, voucherService voucherSvc.VoucherService, authService auth.AuthService, cookieManager *httputil.CookieManager) {
 	handler := NewVoucherHandler(voucherService, logger.GetDefault())
 
 	group.Use(middleware.JWTMiddleware(authService))
-	group.Use(middleware.BusinessAccessMiddleware(businessUserRelRepo, rclient))
 	group.Use(middleware.CSRFMiddleware(cookieManager))
-	group.Use(middleware.BusinessRolesMiddleware(businessUserRelRepo, rclient))
 	group.Use(ratelimiter.MiddlewareDefault())
 
 	// Voucher management endpoints

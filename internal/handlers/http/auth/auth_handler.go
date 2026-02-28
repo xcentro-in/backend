@@ -67,6 +67,8 @@ func RegisterAuthRoutes(e *echo.Group, authService auth.AuthService, businessSer
 	protectedAuth.POST("/send-mobile-update-otp", authHandler.HandleSendMobileUpdateOTP, middleware.TurnstileMiddleware())
 	protectedAuth.POST("/verify-mobile-update", authHandler.HandleVerifyMobileUpdate, middleware.TurnstileMiddleware())
 	protectedAuth.GET("/onboarding-status", authHandler.HandleGetBusinessOnboardingFlags)
+	protectedAuth.POST("/switch-business", authHandler.HandleSwitchBusiness)
+	protectedAuth.GET("/verify-session", authHandler.HandleVerifySession)
 
 	// OAuth sub group
 	oauthGroup := authGroup.Group("/Oauth")
@@ -187,13 +189,7 @@ func (ah AuthHandler) HandleLogin(c echo.Context) error {
 		ah.cookieManager.SetCSRFTokenCookie(c, csrfToken)
 	}
 
-	return c.JSON(200, map[string]any{
-		"message": "Login successful",
-		"data": map[string]any{
-			"accessToken":  response.AccessToken,
-			"refreshToken": response.RefreshToken,
-		},
-	})
+	return c.JSON(200, map[string]any{"message": "Login successful"})
 }
 
 // HandleRefreshToken processes refresh token requests
@@ -484,12 +480,13 @@ func (ah AuthHandler) HandleChangePassword(c echo.Context) error {
 
 // HandleGetBusinessOnboardingFlags retrieves the onboarding status flags for a business.
 func (ah AuthHandler) HandleGetBusinessOnboardingFlags(c echo.Context) error {
-	// Get businessID from header
-	businessID := strings.TrimSpace(c.Request().Header.Get("X-Business-ID"))
+	// Get businessID from JWT context (set by JWTMiddleware)
+	businessID, _ := c.Get("bid").(string)
+	businessID = strings.TrimSpace(businessID)
 	if businessID == "" {
-		return c.JSON(400, map[string]interface{}{
-			"error":   "MISSING_BUSINESS_ID",
-			"message": "X-Business-ID header is required",
+		return c.JSON(401, map[string]interface{}{
+			"error":   "NO_BUSINESS_CONTEXT",
+			"message": "No active business in token",
 		})
 	}
 
@@ -499,7 +496,7 @@ func (ah AuthHandler) HandleGetBusinessOnboardingFlags(c echo.Context) error {
 			logger.Errorf("Invalid business ID format: %s", businessID)
 			return c.JSON(400, map[string]interface{}{
 				"error":   "INVALID_BUSINESS_ID",
-				"message": "X-Business-ID must be a valid UUID",
+				"message": "business ID must be a valid UUID",
 			})
 		}
 	}
@@ -514,6 +511,46 @@ func (ah AuthHandler) HandleGetBusinessOnboardingFlags(c echo.Context) error {
 		"message": "Business onboarding status retrieved successfully",
 		"data":    status,
 	})
+}
+
+// HandleSwitchBusiness switches the active business context in the JWT access token.
+// Validates membership, reissues access token with new bid/role, sets updated cookie.
+func (ah *AuthHandler) HandleSwitchBusiness(c echo.Context) error {
+	userID, ok := c.Get("userId").(string)
+	if !ok || userID == "" {
+		return c.JSON(401, map[string]any{"message": "Unauthorized", "data": nil})
+	}
+
+	var req auth.SwitchBusinessRequest
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(400, map[string]any{"message": "Invalid input provided", "data": nil})
+	}
+	if err := c.Validate(&req); err != nil {
+		return c.JSON(400, map[string]any{"message": "Validation failed", "data": nil})
+	}
+
+	// Service needs the raw access token to extract sessionID/deviceType/deviceVersion.
+	// JWTMiddleware already validated the token; we just need the raw string.
+	cookie, err := c.Cookie("access_token")
+	if err != nil || cookie.Value == "" {
+		return c.JSON(401, map[string]any{"message": "Access token required", "data": nil})
+	}
+
+	resp, newAccessToken, err := ah.authService.SwitchBusiness(c.Request().Context(), cookie.Value, req.Bid)
+	if err != nil {
+		if err.Error() == "user is not a member of this business" {
+			return c.JSON(403, map[string]any{"message": "Access denied: you are not a member of this business", "data": nil})
+		}
+		logger.Errorf("HandleSwitchBusiness: %v", err)
+		return c.JSON(500, map[string]any{"message": "Failed to switch business", "data": nil})
+	}
+
+	// Set the new access token cookie (same settings as HandleLogin).
+	// DO NOT set refresh token — switch-business reuses existing session.
+	// DO NOT re-set CSRF token — CSRF = HMAC(sessionID, secret); sessionID unchanged after switch.
+	ah.cookieManager.SetAccessTokenCookie(c, newAccessToken)
+
+	return c.JSON(200, map[string]any{"message": "Business switched successfully", "data": resp})
 }
 
 // HandleResendEmailVerification resends email verification token
@@ -890,4 +927,19 @@ func (ah AuthHandler) HandleVerifyMobileUpdate(c echo.Context) error {
 		"message": "Mobile number updated and verified successfully",
 		"data":    nil,
 	})
+}
+
+// HandleVerifySession returns full session context for the authenticated user.
+// Called by the frontend on every app load/refresh to hydrate session state.
+func (ah *AuthHandler) HandleVerifySession(c echo.Context) error {
+	userID, ok := c.Get("userId").(string)
+	if !ok || userID == "" {
+		return c.JSON(401, map[string]any{"message": "Unauthorized"})
+	}
+	resp, err := ah.authService.VerifySession(c.Request().Context(), userID)
+	if err != nil {
+		logger.Errorf("HandleVerifySession: %v", err)
+		return c.JSON(500, map[string]any{"message": "Failed to verify session"})
+	}
+	return c.JSON(200, map[string]any{"message": "Session verified", "data": resp})
 }
