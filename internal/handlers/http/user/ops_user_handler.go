@@ -5,6 +5,7 @@ import (
 
 	"github.com/labstack/echo/v4"
 	"xcentro.in/internal/core/auth"
+	shared "xcentro.in/internal/core/shared"
 	"xcentro.in/internal/core/user"
 	"xcentro.in/internal/middleware"
 	"xcentro.in/internal/shared/httputil"
@@ -226,6 +227,9 @@ func (h *OpsUserHandler) KYCAction(c echo.Context) error {
 	case "reject":
 		err = h.userService.RejectKYC(c.Request().Context(), req.UserID, req.Notes)
 		successMessage = "KYC rejected successfully"
+	case "approve":
+		err = h.userService.UpdateKYCStatus(c.Request().Context(), req.UserID, shared.KYCVerified)
+		successMessage = "KYC approved successfully"
 	}
 
 	// Handle service errors

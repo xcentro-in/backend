@@ -636,7 +636,7 @@ func (s *BusinessServiceImpl) InviteUserToBusiness(ctx context.Context, bid stri
 			Role:         role,
 			RoleClaim:    role,
 			KybInitiated: false,
-			KycNeeded:    false, // Always require KYC for invited users in business relation
+			KycNeeded:    true, // Invited users must complete KYC before accessing the business
 		}
 
 		txBusinessUserRelRepo := s.businessUserRelRepo.WithTx(tx)
@@ -1238,6 +1238,16 @@ func (s *BusinessServiceImpl) RejectKYB(ctx context.Context, bid string, notes s
 		}
 	}()
 
+	// Revoke tokens for all business users — their roles changed via KYB rejection
+	if s.authService != nil {
+		for _, rel := range relations {
+			if revokeErr := s.authService.RevokeAllUserTokens(ctx, rel.UserID); revokeErr != nil {
+				s.logger.Errorf("Failed to revoke tokens for user %s after KYB rejection: %v", rel.UserID, revokeErr)
+				// Non-fatal
+			}
+		}
+	}
+
 	// Trigger notification if notes are present and user found
 	if notes != "" && userIDToNotify != "" {
 		go func() {
@@ -1294,6 +1304,14 @@ func (s *BusinessServiceImpl) VerifyKYB(ctx context.Context, bid string, notes s
 		return err
 	}
 
+	// Revoke owner's tokens so the frontend is forced to re-login and picks up kyc_status=kyc_verified immediately
+	if s.authService != nil && ownerUserID != "" {
+		if revokeErr := s.authService.RevokeAllUserTokens(ctx, ownerUserID); revokeErr != nil {
+			s.logger.Errorf("Failed to revoke tokens for owner %s after KYB verification: %v", ownerUserID, revokeErr)
+			// Non-fatal
+		}
+	}
+
 	// Trigger notification to owner using multicast mode with owner role
 	go func() {
 		bgCtx := context.Background()
@@ -1315,8 +1333,16 @@ func (s *BusinessServiceImpl) VerifyKYB(ctx context.Context, bid string, notes s
 func (s *BusinessServiceImpl) OpsUpdateUserRole(ctx context.Context, bid string, userID string, role shared.UserRole) error {
 	s.logger.Infof("Ops updating user %s role in business %s to %s", userID, bid, role)
 
-	// Call repository to update role - it will return error if user-business relation doesn't exist
-	err := s.businessUserRelRepo.OpsUpdateUserRole(ctx, bid, userID, role)
+	// Update role and set kyc_status=verified atomically — ops assigning any role implies KYC approval.
+	err := s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
+		if err := s.businessUserRelRepo.WithTx(tx).OpsUpdateUserRole(ctx, bid, userID, role); err != nil {
+			return err
+		}
+		if err := s.userRepo.WithTx(tx).SetKYCStatusVerified(ctx, userID); err != nil {
+			return fmt.Errorf("failed to set kyc_status=verified for user %s: %w", userID, err)
+		}
+		return nil
+	})
 	if err != nil {
 		return err
 	}
