@@ -167,7 +167,7 @@ func responseBody(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {
 // validRelationID is a stable test UUID used wherever a valid relation_id is needed.
 var validRelationID = uuid.New().String()
 
-// validBusinessID is a stable test UUID used in X-Business-ID header.
+// validBusinessID is a stable test UUID injected as JWT bid context.
 var validBusinessID = uuid.New().String()
 
 // validUserID is a stable test UUID injected as JWT context userId.
@@ -196,32 +196,24 @@ func TestCreateDraftVoucher_Validation(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		businessIDHdr string
+		businessIDCtx string
 		userIDCtx     string
 		body          string
 		wantStatus    int
 		wantError     string
 	}{
-		// --- Header / auth checks -----------------------------------------------
+		// --- JWT context auth checks --------------------------------------------
 		{
-			name:          "missing X-Business-ID header",
-			businessIDHdr: "",
+			name:          "missing bid in JWT context",
+			businessIDCtx: "",
 			userIDCtx:     validUserID,
 			body:          validBody,
-			wantStatus:    http.StatusBadRequest,
-			wantError:     "MISSING_BUSINESS_ID",
-		},
-		{
-			name:          "invalid X-Business-ID (not a UUID)",
-			businessIDHdr: "not-a-uuid",
-			userIDCtx:     validUserID,
-			body:          validBody,
-			wantStatus:    http.StatusBadRequest,
-			wantError:     "INVALID_BUSINESS_ID",
+			wantStatus:    http.StatusUnauthorized,
+			wantError:     "NO_BUSINESS_CONTEXT",
 		},
 		{
 			name:          "missing userId in context",
-			businessIDHdr: validBusinessID,
+			businessIDCtx: validBusinessID,
 			userIDCtx:     "", // intentionally empty – simulates missing JWT
 			body:          validBody,
 			wantStatus:    http.StatusUnauthorized,
@@ -230,7 +222,7 @@ func TestCreateDraftVoucher_Validation(t *testing.T) {
 		// --- Structural / type checks -------------------------------------------
 		{
 			name:          "malformed JSON body",
-			businessIDHdr: validBusinessID,
+			businessIDCtx: validBusinessID,
 			userIDCtx:     validUserID,
 			body:          `{invalid json`,
 			wantStatus:    http.StatusBadRequest,
@@ -239,7 +231,7 @@ func TestCreateDraftVoucher_Validation(t *testing.T) {
 		// --- Required field checks ----------------------------------------------
 		{
 			name:          "missing relation_id",
-			businessIDHdr: validBusinessID,
+			businessIDCtx: validBusinessID,
 			userIDCtx:     validUserID,
 			body:          `{"invoice_number":"INV-001","gross_amount":50000,"net_amount":50000,"currency":"INR"}`,
 			wantStatus:    http.StatusBadRequest,
@@ -247,7 +239,7 @@ func TestCreateDraftVoucher_Validation(t *testing.T) {
 		},
 		{
 			name:          "missing invoice_number",
-			businessIDHdr: validBusinessID,
+			businessIDCtx: validBusinessID,
 			userIDCtx:     validUserID,
 			body:          fmt.Sprintf(`{"relation_id":%q,"gross_amount":50000,"net_amount":50000,"currency":"INR"}`, validRelationID),
 			wantStatus:    http.StatusBadRequest,
@@ -255,7 +247,7 @@ func TestCreateDraftVoucher_Validation(t *testing.T) {
 		},
 		{
 			name:          "gross_amount is zero",
-			businessIDHdr: validBusinessID,
+			businessIDCtx: validBusinessID,
 			userIDCtx:     validUserID,
 			body:          fmt.Sprintf(`{"relation_id":%q,"invoice_number":"INV-001","gross_amount":0,"net_amount":50000,"currency":"INR"}`, validRelationID),
 			wantStatus:    http.StatusBadRequest,
@@ -263,7 +255,7 @@ func TestCreateDraftVoucher_Validation(t *testing.T) {
 		},
 		{
 			name:          "net_amount is zero",
-			businessIDHdr: validBusinessID,
+			businessIDCtx: validBusinessID,
 			userIDCtx:     validUserID,
 			body:          fmt.Sprintf(`{"relation_id":%q,"invoice_number":"INV-001","gross_amount":50000,"net_amount":0,"currency":"INR"}`, validRelationID),
 			wantStatus:    http.StatusBadRequest,
@@ -271,7 +263,7 @@ func TestCreateDraftVoucher_Validation(t *testing.T) {
 		},
 		{
 			name:          "invalid currency",
-			businessIDHdr: validBusinessID,
+			businessIDCtx: validBusinessID,
 			userIDCtx:     validUserID,
 			body:          fmt.Sprintf(`{"relation_id":%q,"invoice_number":"INV-001","gross_amount":50000,"net_amount":50000,"currency":"GBP"}`, validRelationID),
 			wantStatus:    http.StatusBadRequest,
@@ -282,7 +274,7 @@ func TestCreateDraftVoucher_Validation(t *testing.T) {
 		// (except \n \r \t which are explicitly allowed)
 		{
 			name:          "description contains <script> XSS",
-			businessIDHdr: validBusinessID,
+			businessIDCtx: validBusinessID,
 			userIDCtx:     validUserID,
 			body:          fmt.Sprintf(`{"relation_id":%q,"invoice_number":"INV-001","gross_amount":50000,"net_amount":50000,"currency":"INR","description":"<script>alert(1)<\/script>"}`, validRelationID),
 			wantStatus:    http.StatusBadRequest,
@@ -290,7 +282,7 @@ func TestCreateDraftVoucher_Validation(t *testing.T) {
 		},
 		{
 			name:          "description contains SVG XSS vector",
-			businessIDHdr: validBusinessID,
+			businessIDCtx: validBusinessID,
 			userIDCtx:     validUserID,
 			body:          fmt.Sprintf(`{"relation_id":%q,"invoice_number":"INV-001","gross_amount":50000,"net_amount":50000,"currency":"INR","description":"<svg onload=alert(1)>"}`, validRelationID),
 			wantStatus:    http.StatusBadRequest,
@@ -298,7 +290,7 @@ func TestCreateDraftVoucher_Validation(t *testing.T) {
 		},
 		{
 			name:          "invoice_number contains HTML tag",
-			businessIDHdr: validBusinessID,
+			businessIDCtx: validBusinessID,
 			userIDCtx:     validUserID,
 			// Tests safe_text on invoice_number, not just description
 			body:          fmt.Sprintf(`{"relation_id":%q,"invoice_number":"<div>INV<\/div>","gross_amount":50000,"net_amount":50000,"currency":"INR"}`, validRelationID),
@@ -307,7 +299,7 @@ func TestCreateDraftVoucher_Validation(t *testing.T) {
 		},
 		{
 			name:          "invoice_number contains null byte (\\u0000)",
-			businessIDHdr: validBusinessID,
+			businessIDCtx: validBusinessID,
 			userIDCtx:     validUserID,
 			// JSON decoder converts \u0000 to actual NUL byte (0x00); safe_text blocks it
 			body:          fmt.Sprintf(`{"relation_id":%q,"invoice_number":"INV\u0000injection","gross_amount":50000,"net_amount":50000,"currency":"INR"}`, validRelationID),
@@ -316,7 +308,7 @@ func TestCreateDraftVoucher_Validation(t *testing.T) {
 		},
 		{
 			name:          "description contains control character (\\u0001 SOH)",
-			businessIDHdr: validBusinessID,
+			businessIDCtx: validBusinessID,
 			userIDCtx:     validUserID,
 			// \u0001 (ASCII SOH, 0x01) is a control char blocked by safe_text
 			body:          fmt.Sprintf(`{"relation_id":%q,"invoice_number":"INV-001","gross_amount":50000,"net_amount":50000,"currency":"INR","description":"hello\u0001world"}`, validRelationID),
@@ -325,7 +317,7 @@ func TestCreateDraftVoucher_Validation(t *testing.T) {
 		},
 		{
 			name:          "description with only closing angle bracket",
-			businessIDHdr: validBusinessID,
+			businessIDCtx: validBusinessID,
 			userIDCtx:     validUserID,
 			// > alone (without <) must also be blocked
 			body:          fmt.Sprintf(`{"relation_id":%q,"invoice_number":"INV-001","gross_amount":50000,"net_amount":50000,"currency":"INR","description":"amount > 0"}`, validRelationID),
@@ -335,7 +327,7 @@ func TestCreateDraftVoucher_Validation(t *testing.T) {
 		// --- Date range checks --------------------------------------------------
 		{
 			name:          "invoice_date more than 2 months in the past",
-			businessIDHdr: validBusinessID,
+			businessIDCtx: validBusinessID,
 			userIDCtx:     validUserID,
 			body:          fmt.Sprintf(`{"relation_id":%q,"invoice_number":"INV-001","gross_amount":50000,"net_amount":50000,"currency":"INR","invoice_date":%q}`, validRelationID, dateInRange(-3)),
 			wantStatus:    http.StatusBadRequest,
@@ -343,7 +335,7 @@ func TestCreateDraftVoucher_Validation(t *testing.T) {
 		},
 		{
 			name:          "invoice_date more than 2 months in the future",
-			businessIDHdr: validBusinessID,
+			businessIDCtx: validBusinessID,
 			userIDCtx:     validUserID,
 			body:          fmt.Sprintf(`{"relation_id":%q,"invoice_number":"INV-001","gross_amount":50000,"net_amount":50000,"currency":"INR","invoice_date":%q}`, validRelationID, dateInRange(3)),
 			wantStatus:    http.StatusBadRequest,
@@ -351,7 +343,7 @@ func TestCreateDraftVoucher_Validation(t *testing.T) {
 		},
 		{
 			name:          "invoice_due_date before invoice_date",
-			businessIDHdr: validBusinessID,
+			businessIDCtx: validBusinessID,
 			userIDCtx:     validUserID,
 			body: fmt.Sprintf(`{
 				"relation_id":      %q,
@@ -368,7 +360,7 @@ func TestCreateDraftVoucher_Validation(t *testing.T) {
 		// --- Whitelist: safe chars that must pass --------------------------------
 		{
 			name:          "description with newlines and tabs is allowed",
-			businessIDHdr: validBusinessID,
+			businessIDCtx: validBusinessID,
 			userIDCtx:     validUserID,
 			// \n and \t are explicitly whitelisted in validateSafeText
 			body:          fmt.Sprintf(`{"relation_id":%q,"invoice_number":"INV-001","gross_amount":50000,"net_amount":50000,"currency":"INR","description":"Line1\nLine2\tTabbed"}`, validRelationID),
@@ -378,7 +370,7 @@ func TestCreateDraftVoucher_Validation(t *testing.T) {
 		// --- Happy path ---------------------------------------------------------
 		{
 			name:          "valid request reaches service",
-			businessIDHdr: validBusinessID,
+			businessIDCtx: validBusinessID,
 			userIDCtx:     validUserID,
 			body:          validBody,
 			wantStatus:    http.StatusCreated,
@@ -392,12 +384,12 @@ func TestCreateDraftVoucher_Validation(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, "/vouchers/draft", strings.NewReader(tt.body))
 			req.Header.Set(echo.MIMEApplicationJSON, "application/json")
 			req.Header.Set("Content-Type", "application/json")
-			if tt.businessIDHdr != "" {
-				req.Header.Set("X-Business-ID", tt.businessIDHdr)
-			}
 
 			rec := httptest.NewRecorder()
 			c := e.NewContext(req, rec)
+			if tt.businessIDCtx != "" {
+				c.Set("bid", tt.businessIDCtx)
+			}
 			if tt.userIDCtx != "" {
 				c.Set("userId", tt.userIDCtx)
 			}
@@ -429,17 +421,16 @@ func TestUpdateVoucher_Validation(t *testing.T) {
 	tests := []struct {
 		name          string
 		voucherIDPath string
-		businessIDHdr string
 		userIDCtx     string
 		body          string
 		wantStatus    int
 		wantError     string
 	}{
-		// --- Path / header / structural checks ----------------------------------
+		// --- Path / structural checks -------------------------------------------
+		// Note: UpdateVoucher does not read business_id; it's not needed for update.
 		{
 			name:          "invalid voucher_id path param",
 			voucherIDPath: "not-a-uuid",
-			businessIDHdr: validBusinessID,
 			userIDCtx:     validUserID,
 			body:          `{"gross_amount": 50000}`,
 			wantStatus:    http.StatusBadRequest,
@@ -448,7 +439,6 @@ func TestUpdateVoucher_Validation(t *testing.T) {
 		{
 			name:          "malformed JSON body",
 			voucherIDPath: validVoucherID,
-			businessIDHdr: validBusinessID,
 			userIDCtx:     validUserID,
 			body:          `{bad json`,
 			wantStatus:    http.StatusBadRequest,
@@ -458,7 +448,6 @@ func TestUpdateVoucher_Validation(t *testing.T) {
 		{
 			name:          "gross_amount is zero when explicitly provided",
 			voucherIDPath: validVoucherID,
-			businessIDHdr: validBusinessID,
 			userIDCtx:     validUserID,
 			body:          `{"gross_amount": 0}`,
 			wantStatus:    http.StatusBadRequest,
@@ -467,7 +456,6 @@ func TestUpdateVoucher_Validation(t *testing.T) {
 		{
 			name:          "invalid currency when provided",
 			voucherIDPath: validVoucherID,
-			businessIDHdr: validBusinessID,
 			userIDCtx:     validUserID,
 			body:          `{"currency": "EUR"}`,
 			wantStatus:    http.StatusBadRequest,
@@ -477,7 +465,6 @@ func TestUpdateVoucher_Validation(t *testing.T) {
 		{
 			name:          "description with <img> XSS",
 			voucherIDPath: validVoucherID,
-			businessIDHdr: validBusinessID,
 			userIDCtx:     validUserID,
 			body:          `{"description": "<img src=x onerror=alert(1)>"}`,
 			wantStatus:    http.StatusBadRequest,
@@ -486,7 +473,6 @@ func TestUpdateVoucher_Validation(t *testing.T) {
 		{
 			name:          "description with null byte injection",
 			voucherIDPath: validVoucherID,
-			businessIDHdr: validBusinessID,
 			userIDCtx:     validUserID,
 			// \u0000 in JSON value decodes to NUL byte (0x00)
 			body:          `{"description": "clean\u0000text"}`,
@@ -496,7 +482,6 @@ func TestUpdateVoucher_Validation(t *testing.T) {
 		{
 			name:          "invoice_number with closing angle bracket only",
 			voucherIDPath: validVoucherID,
-			businessIDHdr: validBusinessID,
 			userIDCtx:     validUserID,
 			// Verifies > is blocked even without an accompanying <
 			body:          `{"invoice_number": "INV>001"}`,
@@ -507,7 +492,6 @@ func TestUpdateVoucher_Validation(t *testing.T) {
 		{
 			name:          "invoice_date out of allowed range",
 			voucherIDPath: validVoucherID,
-			businessIDHdr: validBusinessID,
 			userIDCtx:     validUserID,
 			body:          fmt.Sprintf(`{"invoice_date": %q}`, dateInRange(-3)),
 			wantStatus:    http.StatusBadRequest,
@@ -516,7 +500,6 @@ func TestUpdateVoucher_Validation(t *testing.T) {
 		{
 			name:          "invoice_due_date before invoice_date",
 			voucherIDPath: validVoucherID,
-			businessIDHdr: validBusinessID,
 			userIDCtx:     validUserID,
 			body:          fmt.Sprintf(`{"invoice_date":%q,"invoice_due_date":%q}`, dateInRange(0), dateInRange(-1)),
 			wantStatus:    http.StatusBadRequest,
@@ -526,7 +509,6 @@ func TestUpdateVoucher_Validation(t *testing.T) {
 		{
 			name:          "valid partial update reaches service",
 			voucherIDPath: validVoucherID,
-			businessIDHdr: validBusinessID,
 			userIDCtx:     validUserID,
 			body:          `{"currency": "INR"}`,
 			wantStatus:    http.StatusOK,
@@ -539,9 +521,6 @@ func TestUpdateVoucher_Validation(t *testing.T) {
 			e := newTestEcho()
 			req := httptest.NewRequest(http.MethodPut, "/vouchers/"+tt.voucherIDPath, strings.NewReader(tt.body))
 			req.Header.Set("Content-Type", "application/json")
-			if tt.businessIDHdr != "" {
-				req.Header.Set("X-Business-ID", tt.businessIDHdr)
-			}
 
 			rec := httptest.NewRecorder()
 			c := e.NewContext(req, rec)
@@ -584,24 +563,24 @@ func TestCreateMultiVouchers_Validation(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		businessIDHdr string
+		businessIDCtx string
 		userIDCtx     string
 		body          string
 		wantStatus    int
 		wantError     string
 	}{
-		// --- Header / structural checks -----------------------------------------
+		// --- JWT context auth checks / structural checks ------------------------
 		{
-			name:          "missing X-Business-ID header",
-			businessIDHdr: "",
+			name:          "missing bid in JWT context",
+			businessIDCtx: "",
 			userIDCtx:     validUserID,
 			body:          fmt.Sprintf(`{"vouchers":[%s]}`, validSingleBill),
-			wantStatus:    http.StatusBadRequest,
-			wantError:     "MISSING_BUSINESS_ID",
+			wantStatus:    http.StatusUnauthorized,
+			wantError:     "NO_BUSINESS_CONTEXT",
 		},
 		{
 			name:          "empty vouchers array",
-			businessIDHdr: validBusinessID,
+			businessIDCtx: validBusinessID,
 			userIDCtx:     validUserID,
 			body:          `{"vouchers":[]}`,
 			wantStatus:    http.StatusBadRequest,
@@ -609,7 +588,7 @@ func TestCreateMultiVouchers_Validation(t *testing.T) {
 		},
 		{
 			name:          "vouchers field missing entirely",
-			businessIDHdr: validBusinessID,
+			businessIDCtx: validBusinessID,
 			userIDCtx:     validUserID,
 			body:          `{}`,
 			wantStatus:    http.StatusBadRequest,
@@ -618,7 +597,7 @@ func TestCreateMultiVouchers_Validation(t *testing.T) {
 		// --- Nested bill field checks (dive tag) --------------------------------
 		{
 			name:          "bill missing relation_id",
-			businessIDHdr: validBusinessID,
+			businessIDCtx: validBusinessID,
 			userIDCtx:     validUserID,
 			body:          `{"vouchers":[{"invoice_number":"INV-001","gross_amount":50000,"net_amount":50000}]}`,
 			wantStatus:    http.StatusBadRequest,
@@ -626,7 +605,7 @@ func TestCreateMultiVouchers_Validation(t *testing.T) {
 		},
 		{
 			name:          "bill gross_amount is zero",
-			businessIDHdr: validBusinessID,
+			businessIDCtx: validBusinessID,
 			userIDCtx:     validUserID,
 			body:          fmt.Sprintf(`{"vouchers":[{"relation_id":%q,"invoice_number":"INV-001","gross_amount":0,"net_amount":50000}]}`, validRelationID),
 			wantStatus:    http.StatusBadRequest,
@@ -635,7 +614,7 @@ func TestCreateMultiVouchers_Validation(t *testing.T) {
 		// --- Injection / safe_text checks on nested bill fields -----------------
 		{
 			name:          "bill invoice_number contains HTML tag",
-			businessIDHdr: validBusinessID,
+			businessIDCtx: validBusinessID,
 			userIDCtx:     validUserID,
 			// Tests that safe_text is enforced on invoice_number inside each bill
 			body:          fmt.Sprintf(`{"vouchers":[{"relation_id":%q,"invoice_number":"<b>INV<\/b>","gross_amount":50000,"net_amount":50000}]}`, validRelationID),
@@ -644,7 +623,7 @@ func TestCreateMultiVouchers_Validation(t *testing.T) {
 		},
 		{
 			name:          "bill description contains control character",
-			businessIDHdr: validBusinessID,
+			businessIDCtx: validBusinessID,
 			userIDCtx:     validUserID,
 			// \u001f (ASCII 0x1F, Unit Separator) is a control char blocked by safe_text
 			body:          fmt.Sprintf(`{"vouchers":[{"relation_id":%q,"invoice_number":"INV-001","gross_amount":50000,"net_amount":50000,"description":"vendor\u001fpayment"}]}`, validRelationID),
@@ -654,7 +633,7 @@ func TestCreateMultiVouchers_Validation(t *testing.T) {
 		// --- Date range check on nested bill ------------------------------------
 		{
 			name:          "bill invoice_date out of range",
-			businessIDHdr: validBusinessID,
+			businessIDCtx: validBusinessID,
 			userIDCtx:     validUserID,
 			body:          fmt.Sprintf(`{"vouchers":[{"relation_id":%q,"invoice_number":"INV-001","gross_amount":50000,"net_amount":50000,"invoice_date":%q}]}`, validRelationID, dateInRange(-3)),
 			wantStatus:    http.StatusBadRequest,
@@ -663,7 +642,7 @@ func TestCreateMultiVouchers_Validation(t *testing.T) {
 		// --- Happy path ---------------------------------------------------------
 		{
 			name:          "valid multi-voucher request reaches service",
-			businessIDHdr: validBusinessID,
+			businessIDCtx: validBusinessID,
 			userIDCtx:     validUserID,
 			body:          fmt.Sprintf(`{"vouchers":[%s]}`, validSingleBill),
 			wantStatus:    http.StatusCreated,
@@ -676,12 +655,12 @@ func TestCreateMultiVouchers_Validation(t *testing.T) {
 			e := newTestEcho()
 			req := httptest.NewRequest(http.MethodPost, "/vouchers/multi", strings.NewReader(tt.body))
 			req.Header.Set("Content-Type", "application/json")
-			if tt.businessIDHdr != "" {
-				req.Header.Set("X-Business-ID", tt.businessIDHdr)
-			}
 
 			rec := httptest.NewRecorder()
 			c := e.NewContext(req, rec)
+			if tt.businessIDCtx != "" {
+				c.Set("bid", tt.businessIDCtx)
+			}
 			if tt.userIDCtx != "" {
 				c.Set("userId", tt.userIDCtx)
 			}

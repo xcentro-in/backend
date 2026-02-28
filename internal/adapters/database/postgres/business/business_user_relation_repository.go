@@ -403,6 +403,32 @@ func (r *PgBusinessUserRelationRepository) SetOwnerRoleToNull(ctx context.Contex
 	return nil
 }
 
+// SetOwnerAndKYBInitiatorRoleToNull sets role to NULL for owner and kyb_initiated users
+func (r *PgBusinessUserRelationRepository) SetOwnerAndKYBInitiatorRoleToNull(ctx context.Context, bid string) error {
+	query := `UPDATE xcentro.business_user_relation 
+              SET role = NULL 
+              WHERE bid = $1 
+              AND (role = 'owner' OR kyb_initiated = true)`
+	_, err := r.querier.Exec(ctx, query, bid)
+	if err != nil {
+		return fmt.Errorf("failed to set owner and kyb_initiator roles to NULL: %w", err)
+	}
+	return nil
+}
+
+// SetNonOwnerRolesToNone sets role='none' and kyc_needed=true for non-owner, non-kyb_initiated users
+func (r *PgBusinessUserRelationRepository) SetNonOwnerRolesToNone(ctx context.Context, bid string) error {
+	query := `UPDATE xcentro.business_user_relation 
+              SET role = 'none', kyc_needed = true 
+              WHERE bid = $1 
+              AND role != 'owner' AND kyb_initiated = false`
+	_, err := r.querier.Exec(ctx, query, bid)
+	if err != nil {
+		return fmt.Errorf("failed to set non-owner roles to 'none': %w", err)
+	}
+	return nil
+}
+
 // ResetAllUserRelationsForRejectedKYC resets all business relations for a user (role='none', kyc_needed=true)
 func (r *PgBusinessUserRelationRepository) ResetAllUserRelationsForRejectedKYC(ctx context.Context, userID string) error {
 	query := `UPDATE xcentro.business_user_relation SET role = 'none', kyc_needed = true WHERE user_id = $1`
@@ -411,6 +437,30 @@ func (r *PgBusinessUserRelationRepository) ResetAllUserRelationsForRejectedKYC(c
 		return fmt.Errorf("failed to reset user relations for rejected KYC: %w", err)
 	}
 	return nil
+}
+
+// FindByUserAndBusiness retrieves a single business-user relation for a specific user and business.
+// Returns an error wrapping pgx.ErrNoRows if no relation is found.
+func (r *PgBusinessUserRelationRepository) FindByUserAndBusiness(ctx context.Context, userID string, bid string) (*business.BusinessUserRelation, error) {
+	query := `
+		SELECT user_id, bid, role, role_claim, kyb_initiated, kyc_needed
+		FROM xcentro.business_user_relation
+		WHERE user_id = $1 AND bid = $2
+		LIMIT 1
+	`
+	var rel business.BusinessUserRelation
+	var role, roleClaim sql.NullString
+
+	err := r.querier.QueryRow(ctx, query, userID, bid).Scan(
+		&rel.UserID, &rel.BID, &role, &roleClaim, &rel.KybInitiated, &rel.KycNeeded,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("business relation not found for user %s bid %s: %w", userID, bid, err)
+	}
+
+	rel.Role = shared.UserRole(role.String)
+	rel.RoleClaim = shared.UserRole(roleClaim.String)
+	return &rel, nil
 }
 
 // OpsUpdateUserRole updates a user's role in a business (ops endpoint - simple update with WHERE check)

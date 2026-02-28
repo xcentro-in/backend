@@ -64,7 +64,8 @@ func (r *PgUserRepository) CreateUser(ctx context.Context, authPayload auth.Auth
 // GetUserByID retrieves a user by ID
 func (r *PgUserRepository) GetUserByID(ctx context.Context, userID string) (*user.User, error) {
 	query := `
-		SELECT id, email, pwd_hash, mobile, name, dob, tax_id, kyc_status, kyc_needed, email_verified, mobile_verified
+		SELECT id, email, pwd_hash, mobile, name, dob, tax_id, kyc_status, kyc_needed, email_verified, mobile_verified,
+		       COALESCE(active_bid::text, '') as active_bid
 		FROM xcentro.user_table
 		WHERE id = $1
 	`
@@ -85,6 +86,7 @@ func (r *PgUserRepository) GetUserByID(ctx context.Context, userID string) (*use
 		&u.KycNeeded,
 		&u.EmailVerified,
 		&u.MobileVerified,
+		&u.ActiveBid,
 	)
 
 	if err != nil {
@@ -98,6 +100,24 @@ func (r *PgUserRepository) GetUserByID(ctx context.Context, userID string) (*use
 	u.KycStatus = parseKYCStatus(kycStatusStr)
 
 	return &u, nil
+}
+
+// SetActiveBid updates the active_bid column for a user.
+// Pass an empty string to set the column to NULL.
+func (r *PgUserRepository) SetActiveBid(ctx context.Context, userID string, activeBid string) error {
+	if activeBid == "" {
+		// Set to NULL for empty string input
+		query := `UPDATE xcentro.user_table SET active_bid = NULL WHERE id = $1`
+		_, err := r.querier.Exec(ctx, query, userID)
+		return err
+	}
+	query := `
+		UPDATE xcentro.user_table
+		SET active_bid = $2::uuid
+		WHERE id = $1
+	`
+	_, err := r.querier.Exec(ctx, query, userID, activeBid)
+	return err
 }
 
 // GetUserMobileByID retrieves only the mobile number for a user

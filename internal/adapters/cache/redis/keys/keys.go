@@ -24,7 +24,6 @@ const (
 
 	// Business-related TTLs
 	TTLBusinessDetails = 10 * time.Minute // Business details
-	TTLUserRoles       = 5 * time.Minute  // User-business relations
 	TTLFeatureFlags    = 15 * time.Minute // Feature flags (longer TTL as they change infrequently)
 )
 
@@ -51,12 +50,6 @@ type businessKeys struct{}
 // Pattern: xcentro:business:{businessId}
 func (businessKeys) Details(businessID string) string {
 	return fmt.Sprintf("%s:business:%s", keyPrefix, businessID)
-}
-
-// UserRoles returns cache key for user roles in business
-// Pattern: xcentro:business:user:{userId}:roles
-func (businessKeys) UserRoles(userID string) string {
-	return fmt.Sprintf("%s:business:user:%s:roles", keyPrefix, userID)
 }
 
 // OnboardingStatus returns cache key for business onboarding status
@@ -87,14 +80,6 @@ func (userKeys) DeviceVersion(userID string, deviceType string) string {
 func InvalidateUser(userID string) []string {
 	return []string{
 		User.Profile(userID),
-		Business.UserRoles(userID),
-	}
-}
-
-// InvalidateUserRoles invalidates only user roles cache (for role changes without profile updates)
-func InvalidateUserRoles(userID string) []string {
-	return []string{
-		Business.UserRoles(userID),
 	}
 }
 

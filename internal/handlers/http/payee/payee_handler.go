@@ -50,13 +50,13 @@ func (h *PayeeHandler) OnboardPayee(c echo.Context) error {
 	}
 	h.logger.DebugWith("User authenticated", "user_id", userID)
 
-	// Extract business_id from X-Business-ID header
-	businessID := c.Request().Header.Get("X-Business-ID")
+	// Extract business_id from JWT context (set by JWTMiddleware)
+	businessID, _ := c.Get("bid").(string)
 	if businessID == "" {
-		h.logger.WarnWith("Missing X-Business-ID header")
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "MISSING_BUSINESS_ID",
-			"message": "X-Business-ID header is required",
+		h.logger.WarnWith("No active business in JWT context")
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "NO_BUSINESS_CONTEXT",
+			"message": "No active business in token",
 		})
 	}
 	req.BusinessID = businessID
@@ -202,12 +202,12 @@ func (h *PayeeHandler) GetPayees(c echo.Context) error {
 		"page", page,
 		"page_size", pageSize)
 
-	// Extract business_id from X-Business-ID header
-	businessID := c.Request().Header.Get("X-Business-ID")
+	// Extract business_id from JWT context (set by JWTMiddleware)
+	businessID, _ := c.Get("bid").(string)
 	if businessID == "" {
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "MISSING_BUSINESS_ID",
-			"message": "X-Business-ID header is required",
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "NO_BUSINESS_CONTEXT",
+			"message": "No active business in token",
 		})
 	}
 	h.logger.DebugWith("Business context", "business_id", businessID)
@@ -298,12 +298,12 @@ func (h *PayeeHandler) GetPayeeDetails(c echo.Context) error {
 		})
 	}
 
-	// Extract business_id from X-Business-ID header
-	businessID := c.Request().Header.Get("X-Business-ID")
+	// Extract business_id from JWT context (set by JWTMiddleware)
+	businessID, _ := c.Get("bid").(string)
 	if businessID == "" {
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "MISSING_BUSINESS_ID",
-			"message": "X-Business-ID header is required",
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "NO_BUSINESS_CONTEXT",
+			"message": "No active business in token",
 		})
 	}
 
@@ -343,12 +343,12 @@ func (h *PayeeHandler) GetPayeeAccountDetails(c echo.Context) error {
 		})
 	}
 
-	// Extract business_id from X-Business-ID header
-	businessID := c.Request().Header.Get("X-Business-ID")
+	// Extract business_id from JWT context (set by JWTMiddleware)
+	businessID, _ := c.Get("bid").(string)
 	if businessID == "" {
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "MISSING_BUSINESS_ID",
-			"message": "X-Business-ID header is required",
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "NO_BUSINESS_CONTEXT",
+			"message": "No active business in token",
 		})
 	}
 
@@ -409,13 +409,13 @@ func (h *PayeeHandler) UpdatePayeeStatus(c echo.Context) error {
 		})
 	}
 
-	// Extract businessID from X-Business-ID header
-	businessID := c.Request().Header.Get("X-Business-ID")
+	// Extract businessID from JWT context (set by JWTMiddleware)
+	businessID, _ := c.Get("bid").(string)
 	if businessID == "" {
-		h.logger.WarnWith("Missing X-Business-ID header")
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "MISSING_BUSINESS_ID",
-			"message": "X-Business-ID header is required",
+		h.logger.WarnWith("No active business in JWT context")
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "NO_BUSINESS_CONTEXT",
+			"message": "No active business in token",
 		})
 	}
 
@@ -507,12 +507,12 @@ func (h *PayeeHandler) UpdatePayee(c echo.Context) error {
 
 	h.logger.DebugWith("Request body parsed", "display_name", req.DisplayName, "is_favorite", req.IsFavorite)
 
-	// Extract business_id from X-Business-ID header
-	businessID := c.Request().Header.Get("X-Business-ID")
+	// Extract business_id from JWT context (set by JWTMiddleware)
+	businessID, _ := c.Get("bid").(string)
 	if businessID == "" {
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "MISSING_BUSINESS_ID",
-			"message": "X-Business-ID header is required",
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "NO_BUSINESS_CONTEXT",
+			"message": "No active business in token",
 		})
 	}
 	h.logger.DebugWith("Business context", "business_id", businessID)
@@ -558,12 +558,12 @@ func (h *PayeeHandler) DeactivatePayee(c echo.Context) error {
 
 	h.logger.DebugWith("Path parameters", "payee_id", payeeID, "account_id", accountID)
 
-	// Extract business_id from X-Business-ID header
-	businessID := c.Request().Header.Get("X-Business-ID")
+	// Extract business_id from JWT context (set by JWTMiddleware)
+	businessID, _ := c.Get("bid").(string)
 	if businessID == "" {
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "MISSING_BUSINESS_ID",
-			"message": "X-Business-ID header is required",
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "NO_BUSINESS_CONTEXT",
+			"message": "No active business in token",
 		})
 	}
 	h.logger.DebugWith("Business context", "business_id", businessID)
@@ -591,13 +591,13 @@ func (h *PayeeHandler) DeactivatePayee(c echo.Context) error {
 func (h *PayeeHandler) GetVendorsForDropdown(c echo.Context) error {
 	h.logger.InfoWith("GetVendorsForDropdown API called")
 
-	// Extract business_id from X-Business-ID header
-	businessID := c.Request().Header.Get("X-Business-ID")
+	// Extract business_id from JWT context (set by JWTMiddleware)
+	businessID, _ := c.Get("bid").(string)
 	if businessID == "" {
-		h.logger.WarnWith("Missing X-Business-ID header")
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "MISSING_BUSINESS_ID",
-			"message": "X-Business-ID header is required",
+		h.logger.WarnWith("No active business in JWT context")
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "NO_BUSINESS_CONTEXT",
+			"message": "No active business in token",
 		})
 	}
 
@@ -627,13 +627,13 @@ func (h *PayeeHandler) GetVendorsForDropdown(c echo.Context) error {
 func (h *PayeeHandler) GetEmployeesForList(c echo.Context) error {
 	h.logger.InfoWith("GetEmployeesForList API called")
 
-	// Extract business_id from X-Business-ID header
-	businessID := c.Request().Header.Get("X-Business-ID")
+	// Extract business_id from JWT context (set by JWTMiddleware)
+	businessID, _ := c.Get("bid").(string)
 	if businessID == "" {
-		h.logger.WarnWith("Missing X-Business-ID header")
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "MISSING_BUSINESS_ID",
-			"message": "X-Business-ID header is required",
+		h.logger.WarnWith("No active business in JWT context")
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "NO_BUSINESS_CONTEXT",
+			"message": "No active business in token",
 		})
 	}
 
@@ -673,13 +673,13 @@ func (h *PayeeHandler) GetRemunerationDocumentUploadURL(c echo.Context) error {
 		})
 	}
 
-	// Extract business_id from X-Business-ID header
-	businessID := c.Request().Header.Get("X-Business-ID")
+	// Extract business_id from JWT context (set by JWTMiddleware)
+	businessID, _ := c.Get("bid").(string)
 	if businessID == "" {
-		h.logger.WarnWith("Missing X-Business-ID header")
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "MISSING_BUSINESS_ID",
-			"message": "X-Business-ID header is required",
+		h.logger.WarnWith("No active business in JWT context")
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "NO_BUSINESS_CONTEXT",
+			"message": "No active business in token",
 		})
 	}
 
@@ -722,13 +722,13 @@ func (h *PayeeHandler) ConfirmRemunerationDocumentUpload(c echo.Context) error {
 		})
 	}
 
-	// Extract business_id from X-Business-ID header
-	businessID := c.Request().Header.Get("X-Business-ID")
+	// Extract business_id from JWT context (set by JWTMiddleware)
+	businessID, _ := c.Get("bid").(string)
 	if businessID == "" {
-		h.logger.WarnWith("Missing X-Business-ID header")
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "MISSING_BUSINESS_ID",
-			"message": "X-Business-ID header is required",
+		h.logger.WarnWith("No active business in JWT context")
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "NO_BUSINESS_CONTEXT",
+			"message": "No active business in token",
 		})
 	}
 
@@ -772,13 +772,13 @@ func (h *PayeeHandler) GetRemunerationDocumentDownloadURL(c echo.Context) error 
 		})
 	}
 
-	// Extract business_id from X-Business-ID header
-	businessID := c.Request().Header.Get("X-Business-ID")
+	// Extract business_id from JWT context (set by JWTMiddleware)
+	businessID, _ := c.Get("bid").(string)
 	if businessID == "" {
-		h.logger.WarnWith("Missing X-Business-ID header")
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "MISSING_BUSINESS_ID",
-			"message": "X-Business-ID header is required",
+		h.logger.WarnWith("No active business in JWT context")
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "NO_BUSINESS_CONTEXT",
+			"message": "No active business in token",
 		})
 	}
 
