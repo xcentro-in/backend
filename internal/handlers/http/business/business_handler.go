@@ -63,13 +63,16 @@ func RegisterBusinessRoutes(e *echo.Group, businessService business.BusinessServ
 	// Business details route
 	businessGroup.GET("", handler.GetBusinessDetails)
 
-	// Onboarding routes
-	onboardingGroup := businessGroup.Group("/onboard")
-	onboardingGroup.POST("/init", handler.InitiateOnboarding, middleware.TurnstileMiddleware())
-	onboardingGroup.POST("/complete", handler.CompleteOnboarding, middleware.TurnstileMiddleware())
-	onboardingGroup.GET("/status", handler.GetOnboardingStatus)
-	onboardingGroup.GET("/upload", handler.UploadKYBDocuments)
-	onboardingGroup.POST("/confirm-upload", handler.ConfirmKYBDocumentsUpload, middleware.TurnstileMiddleware())
+	// Business onboarding routes — all exempt from KYC gate so re-KYC flow works.
+	noKycBusiness := e.Group("/business/onboard")
+	noKycBusiness.Use(middleware.JWTMiddlewareNoKYCCheck(authService))
+	noKycBusiness.Use(middleware.CSRFMiddleware(cookieManager))
+	noKycBusiness.Use(ratelimiter.MiddlewareDefault())
+	noKycBusiness.POST("/init", handler.InitiateOnboarding, middleware.TurnstileMiddleware())
+	noKycBusiness.POST("/complete", handler.CompleteOnboarding, middleware.TurnstileMiddleware())
+	noKycBusiness.GET("/status", handler.GetOnboardingStatus)
+	noKycBusiness.GET("/upload", handler.UploadKYBDocuments)
+	noKycBusiness.POST("/confirm-upload", handler.ConfirmKYBDocumentsUpload, middleware.TurnstileMiddleware())
 
 	// Invite user routes
 	businessGroup.POST("/invite-user", handler.InviteUser, middleware.TurnstileMiddleware())

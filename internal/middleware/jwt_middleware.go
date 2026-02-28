@@ -8,6 +8,60 @@ import (
 	"xcentro.in/internal/core/auth"
 )
 
+// JWTMiddlewareNoKYCCheck validates JWT and sets context values identically to
+// JWTMiddleware but does NOT enforce the KYC verification gate. Use this only
+// for endpoints that must be reachable regardless of KYC state (e.g. /verify-session).
+func JWTMiddlewareNoKYCCheck(authService auth.AuthService) echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			cookie, err := c.Cookie("access_token")
+			if err != nil {
+				return c.JSON(401, map[string]any{
+					"error":   "MISSING_TOKEN",
+					"message": "Access token cookie required",
+				})
+			}
+
+			tokenString := cookie.Value
+			if tokenString == "" {
+				return c.JSON(401, map[string]any{
+					"error":   "MISSING_TOKEN",
+					"message": "Access token cookie is empty",
+				})
+			}
+
+			claims, err := authService.ValidateAccessTokenWithVersion(c.Request().Context(), tokenString)
+			if err != nil {
+				if errors.Is(err, jwt.ErrTokenExpired) {
+					return c.JSON(401, map[string]any{
+						"error":   "TOKEN_EXPIRED",
+						"message": "Access token has expired, please refresh.",
+					})
+				}
+				if err.Error() == "SESSION_INVALIDATED" {
+					return c.JSON(401, map[string]any{
+						"error":   "SESSION_INVALIDATED",
+						"message": "Your session has been invalidated. Please login again.",
+					})
+				}
+				return c.JSON(401, map[string]any{
+					"error":   "INVALID_TOKEN",
+					"message": "Invalid token",
+				})
+			}
+
+			c.Set("userId", claims.Subject)
+			c.Set("sessionId", claims.SessionID)
+			c.Set("bid", claims.Bid)
+			c.Set("role", claims.Role)
+			c.Set("kyc_status", claims.KycStatus)
+			c.Set("kyc_needed", claims.KycNeeded)
+
+			return next(c)
+		}
+	}
+}
+
 // JWTMiddleware creates a middleware that validates JWT access tokens from cookies
 // and validates device version for session management (cached in Redis)
 func JWTMiddleware(authService auth.AuthService) echo.MiddlewareFunc {

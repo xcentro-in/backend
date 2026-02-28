@@ -42,10 +42,14 @@ func RegisterUserRoutes(e *echo.Group, userService user.UserService, authService
 	protectedUser.Use(middleware.CSRFMiddleware(cookieManager))
 	protectedUser.Use(ratelimiter.MiddlewareDefault())
 
-	// User onboarding endpoints
-	protectedUser.POST("/onboard/init", handler.InitiateOnboarding)
-	protectedUser.POST("/onboard/complete", handler.CompleteOnboarding)
-	protectedUser.GET("/onboard/status", handler.GetOnboardingStatus)
+	// User onboarding endpoints — all exempt from KYC gate so re-KYC flow works.
+	noKycUser := userGroup.Group("")
+	noKycUser.Use(middleware.JWTMiddlewareNoKYCCheck(authService))
+	noKycUser.Use(middleware.CSRFMiddleware(cookieManager))
+	noKycUser.Use(ratelimiter.MiddlewareDefault())
+	noKycUser.POST("/onboard/init", handler.InitiateOnboarding)
+	noKycUser.POST("/onboard/complete", handler.CompleteOnboarding)
+	noKycUser.GET("/onboard/status", handler.GetOnboardingStatus)
 
 	// User profile endpoints
 	protectedUser.GET("/profile", handler.GetProfile)

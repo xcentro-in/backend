@@ -279,7 +279,15 @@ func (s *UserServiceImpl) UpdateKYCStatus(ctx context.Context, userID string, st
 		return err
 	}
 
-	// Invalidate only the user profile cache, as roles are not affected by a KYC status change.
+	// Bump token version to invalidate all existing tokens — KYC status changed.
+	if s.authService != nil {
+		if revokeErr := s.authService.RevokeAllUserTokens(ctx, userID); revokeErr != nil {
+			s.logger.Errorf("Failed to revoke tokens for user %s after KYC status update: %v", userID, revokeErr)
+			// Non-fatal
+		}
+	}
+
+	// Invalidate user profile cache.
 	go func() {
 		bgCtx := context.Background()
 		invalidationKey := keys.User.Profile(userID)
@@ -543,14 +551,8 @@ func (s *UserServiceImpl) CompleteOnboarding(ctx context.Context, userID, busine
 				return types.NewInvalidKYCInputError("businessID or gstin", "invited user must have a business relation with a role")
 			}
 
-			s.logger.Info("User %s is invited, completing KYC for all business relations", userID)
-			for _, rel := range userRelations {
-				if err := txBusinessUserRelRepo.UpdateKycNeeded(ctx, userID, rel.BID, false); err != nil {
-					s.logger.Errorf("Failed to update kycNeeded for user %s in business %s: %v", userID, rel.BID, err)
-					return fmt.Errorf("failed to update kycNeeded for business %s: %w", rel.BID, err)
-				}
-			}
-			s.logger.Info("Onboarding completed for invited user %s - role already assigned, kycNeeded=false", userID)
+			s.logger.Info("User %s is invited, completing KYC for all business relations — kyc_needed remains true until ops approves", userID)
+			// kyc_needed stays true: ops must explicitly approve before the user can access the business
 
 		} else {
 			// Flow 2 & 3: Business-specific flows
@@ -595,20 +597,13 @@ func (s *UserServiceImpl) CompleteOnboarding(ctx context.Context, userID, busine
 				if err := txBusinessUserRelRepo.UpdateRoleClaim(ctx, userID, targetBusinessID, claimedRole); err != nil {
 					return fmt.Errorf("failed to update role claim for business %s: %w", targetBusinessID, err)
 				}
-				if err := txBusinessUserRelRepo.UpdateKycNeeded(ctx, userID, targetBusinessID, false); err != nil {
-					return fmt.Errorf("failed to update kycNeeded for business %s: %w", targetBusinessID, err)
-				}
-				s.logger.Info("Onboarding completed - role='none', roleClaim='%s', kycNeeded=false for user %s in business %s (pending ops approval)", claimedRole, userID, targetBusinessID)
-
+				// kyc_needed stays as-is — permanent business rule flag, not a transient state.
+				// The JWT gate passes once kyc_status reaches completed/verified.
+				s.logger.Info("Onboarding completed - role='none', roleClaim='%s' for user %s in business %s (pending ops approval)", claimedRole, userID, targetBusinessID)
 			} else if rel.Role != "" {
-				// Flow 3: Invited user for specific business
-				s.logger.Info("User %s is invited to business %s", userID, targetBusinessID)
-
-				if err := txBusinessUserRelRepo.UpdateKycNeeded(ctx, userID, targetBusinessID, false); err != nil {
-					s.logger.Errorf("Failed to update kycNeeded for user %s in business %s: %v", userID, targetBusinessID, err)
-					return fmt.Errorf("failed to update kycNeeded for business %s: %w", targetBusinessID, err)
-				}
-				s.logger.Info("Onboarding completed for invited user %s in business %s - kycNeeded=false", userID, targetBusinessID)
+				// Flow 3: Invited user for specific business.
+				// kyc_needed stays true — ops must explicitly approve before the user can access the business.
+				s.logger.Info("Onboarding completed for invited user %s in business %s — kyc_needed remains true until ops approves", userID, targetBusinessID)
 
 			} else {
 				return fmt.Errorf("ambiguous user-business relation for user %s and business %s", userID, targetBusinessID)

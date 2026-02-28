@@ -68,7 +68,14 @@ func RegisterAuthRoutes(e *echo.Group, authService auth.AuthService, businessSer
 	protectedAuth.POST("/verify-mobile-update", authHandler.HandleVerifyMobileUpdate, middleware.TurnstileMiddleware())
 	protectedAuth.GET("/onboarding-status", authHandler.HandleGetBusinessOnboardingFlags)
 	protectedAuth.POST("/switch-business", authHandler.HandleSwitchBusiness)
-	protectedAuth.GET("/verify-session", authHandler.HandleVerifySession)
+
+	// /verify-session must be reachable even when KYC is pending/rejected so the
+	// frontend can read the session state and decide what screen to show.
+	verifySessionGroup := authGroup.Group("")
+	verifySessionGroup.Use(middleware.JWTMiddlewareNoKYCCheck(authService))
+	verifySessionGroup.Use(middleware.CSRFMiddleware(cookieManager))
+	verifySessionGroup.Use(ratelimiter.MiddlewareDefault())
+	verifySessionGroup.GET("/verify-session", authHandler.HandleVerifySession)
 
 	// OAuth sub group
 	oauthGroup := authGroup.Group("/Oauth")

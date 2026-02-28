@@ -2,7 +2,9 @@ package main
 
 import (
 	"github.com/labstack/echo/v4"
+	authRepo "xcentro.in/internal/adapters/database/postgres/auth"
 	"xcentro.in/internal/adapters/database/postgres/business"
+	coreAuth "xcentro.in/internal/core/auth"
 	invoiceRepo "xcentro.in/internal/adapters/database/postgres/invoice"
 	notificationRepo "xcentro.in/internal/adapters/database/postgres/notification"
 	opsAuthRepo "xcentro.in/internal/adapters/database/postgres/opsauth"
@@ -20,6 +22,7 @@ import (
 	payoutHandler "xcentro.in/internal/handlers/http/payout"
 	userHandler "xcentro.in/internal/handlers/http/user"
 	"xcentro.in/internal/middleware"
+	authservice "xcentro.in/internal/services/auth"
 	businessSvc "xcentro.in/internal/services/business"
 	invoiceSvc "xcentro.in/internal/services/invoice"
 	notificationSvc "xcentro.in/internal/services/notification"
@@ -41,7 +44,7 @@ type serviceFactory struct {
 }
 
 // registerOpsBusinessRoutes registers ops dashboard business routes
-func registerOpsBusinessRoutes(clients *externalClients, cfg *config.Config, group *echo.Group, cookieManager *httputil.CookieManager) {
+func registerOpsBusinessRoutes(clients *externalClients, cfg *config.Config, group *echo.Group, cookieManager *httputil.CookieManager, tokenRevoker coreAuth.AuthService) {
 	// Create repositories
 	businessRepo := business.NewPgBusinessRepository(clients.db)
 	businessUserRelRepo := business.NewPgBusinessUserRelationRepository(clients.db)
@@ -58,6 +61,11 @@ func registerOpsBusinessRoutes(clients *externalClients, cfg *config.Config, gro
 		clients,
 		cfg,
 	)
+
+	// Wire auth service so KYB reject/verify can revoke user tokens immediately
+	if busSvcImpl, ok := businessService.(*businessSvc.BusinessServiceImpl); ok {
+		busSvcImpl.SetAuthService(tokenRevoker)
+	}
 
 	// Register routes
 	businessHandler.RegisterOpsBusinessRoutes(group, businessService, cookieManager)
@@ -111,7 +119,7 @@ func registerOpsAuthRoutes(clients *externalClients, cfg *config.Config, group *
 }
 
 // registerOpsUserRoutes registers ops dashboard user routes
-func registerOpsUserRoutes(clients *externalClients, cfg *config.Config, group *echo.Group, cookieManager *httputil.CookieManager) {
+func registerOpsUserRoutes(clients *externalClients, cfg *config.Config, group *echo.Group, cookieManager *httputil.CookieManager, tokenRevoker coreAuth.AuthService) {
 	// Create user repository
 	userRepository := userRepo.NewPgUserRepository(clients.db)
 
@@ -134,6 +142,11 @@ func registerOpsUserRoutes(clients *externalClients, cfg *config.Config, group *
 		clients,
 		cfg,
 	)
+
+	// Wire auth service so KYC reject can revoke user tokens immediately
+	if userSvcImpl, ok := userService.(*userSvc.UserServiceImpl); ok {
+		userSvcImpl.SetAuthService(tokenRevoker)
+	}
 
 	// Register routes
 	userHandler.RegisterOpsUserRoutes(group, userService, cookieManager)
@@ -232,20 +245,28 @@ func registerOpsV1Routes(s *opsDashboardServer) {
 	// Register auth routes (public - login, callback, refresh) and get auth service
 	opsAuthService := registerOpsAuthRoutes(clients, cfg, v1)
 
+	// Create a user-facing AuthService solely for token revocation triggered by ops actions
+	// (KYB reject/verify, KYC reject). This breaks the circular dep: authSvc has no
+	// dependency on business/user services when constructed with nil for those fields,
+	// and RevokeAllUserTokens only uses deviceVersionRepo, sessionRepo, txManager, rclient.
+	sessionRepo := authRepo.NewPgSessionRepository(clients.db)
+	deviceVersionRepo := authRepo.NewPgDeviceVersionRepository(clients.db)
+	tokenRevoker := authservice.NewAuthService(sessionRepo, deviceVersionRepo, nil, nil, nil, nil, clients, cfg)
+
 	// Create protected group with only JWT middleware (CSRF applied per handler as needed)
 	protectedGroup := v1.Group("")
 	protectedGroup.Use(middleware.OpsJWTMiddleware(opsAuthService, cfg))
 
 	// Register all protected route groups
 	// Routes will apply CSRF middleware internally for state-changing operations
-	opsAuthHandler.RegisterOpsUserRoutes(protectedGroup, opsAuthService, opsCookieManager) // User profile endpoint
-	registerOpsBusinessRoutes(clients, cfg, protectedGroup, opsCookieManager)              // Business management
-	registerOpsNotificationRoutes(clients, cfg, protectedGroup, opsCookieManager)          // Notifications
-	registerOpsUserRoutes(clients, cfg, protectedGroup, opsCookieManager)                  // User management
-	registerOpsPayoutRoutes(clients, cfg, protectedGroup)                                  // Payouts
-	registerOpsCollectionRoutes(clients, cfg, protectedGroup)                              // Collections/Payments
-	registerOpsFeeRulesRoutes(clients, cfg, protectedGroup)                                // Fee rules
-	registerOpsInvoiceRoutes(clients, cfg, protectedGroup)                                 // Invoices
+	opsAuthHandler.RegisterOpsUserRoutes(protectedGroup, opsAuthService, opsCookieManager)          // User profile endpoint
+	registerOpsBusinessRoutes(clients, cfg, protectedGroup, opsCookieManager, tokenRevoker)         // Business management
+	registerOpsNotificationRoutes(clients, cfg, protectedGroup, opsCookieManager)                   // Notifications
+	registerOpsUserRoutes(clients, cfg, protectedGroup, opsCookieManager, tokenRevoker)             // User management
+	registerOpsPayoutRoutes(clients, cfg, protectedGroup)                                           // Payouts
+	registerOpsCollectionRoutes(clients, cfg, protectedGroup)                                       // Collections/Payments
+	registerOpsFeeRulesRoutes(clients, cfg, protectedGroup)                                         // Fee rules
+	registerOpsInvoiceRoutes(clients, cfg, protectedGroup)                                          // Invoices
 }
 
 func initializeNotificationTrigger(clients *externalClients) {
