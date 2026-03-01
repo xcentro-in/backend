@@ -321,6 +321,11 @@ func (s *BusinessServiceImpl) InitiateOnboarding(ctx context.Context, uid string
 		return nil, err
 	}
 
+	// Set active_bid so the next token refresh picks up the new business context.
+	if setErr := s.userRepo.SetActiveBid(ctx, uid, newBusiness.BID); setErr != nil {
+		s.logger.Warnf("InitiateOnboarding: failed to set active_bid for user %s: %v — continuing", uid, setErr)
+	}
+
 	s.logger.Infof("Business onboarding initiated successfully for BID: %s with PAN: %s", newBusiness.BID, pan)
 
 	return &business.OnboardingInitResponse{

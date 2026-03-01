@@ -89,11 +89,15 @@ func RegisterBusinessRoutes(e *echo.Group, businessService business.BusinessServ
 func (h *BusinessHandler) UploadKYBDocuments(c echo.Context) error {
 	bid, _ := c.Get("bid").(string)
 	if bid == "" {
+		bid = c.QueryParam("bid")
+	}
+	if bid == "" {
 		return c.JSON(http.StatusUnauthorized, map[string]interface{}{
 			"error":   "NO_BUSINESS_CONTEXT",
-			"message": "No active business in token",
+			"message": "No active business in token or bid query param",
 		})
 	}
+	c.Set("bid", bid)
 
 	// Get presigned URL from service (service handles authorization and S3 operations)
 	url, err := h.businessService.GetKYBDocumentUploadURL(c, c.Request().Context())
@@ -111,11 +115,15 @@ func (h *BusinessHandler) UploadKYBDocuments(c echo.Context) error {
 func (h *BusinessHandler) ConfirmKYBDocumentsUpload(c echo.Context) error {
 	bid, _ := c.Get("bid").(string)
 	if bid == "" {
+		bid = c.QueryParam("bid")
+	}
+	if bid == "" {
 		return c.JSON(http.StatusUnauthorized, map[string]interface{}{
 			"error":   "NO_BUSINESS_CONTEXT",
-			"message": "No active business in token",
+			"message": "No active business in token or bid query param",
 		})
 	}
+	c.Set("bid", bid)
 
 	// Confirm upload (service handles authorization, S3 operations, and DB update)
 	fileurl, err := h.businessService.ConfirmKYBDocumentUpload(c, c.Request().Context())
@@ -514,7 +522,7 @@ func (h *BusinessHandler) ResendInvite(c echo.Context) error {
 		})
 	}
 
-	userID := c.Get("userID").(string)
+	userID, _ := c.Get("userId").(string)
 	h.logger.Infof("Admin %s resent invitation to %s for business %s", userID, req.Email, businessID)
 
 	return c.JSON(200, map[string]interface{}{
@@ -632,10 +640,7 @@ func (h *BusinessHandler) RemoveBusinessUser(c echo.Context) error {
 		})
 	}
 
-	// Parse request
 	var req business.RemoveBusinessUserRequest
-
-	// Bind input
 	if err := c.Bind(&req); err != nil {
 		h.logger.Errorf("Invalid input: %v", err)
 		return c.JSON(400, map[string]interface{}{
@@ -643,8 +648,6 @@ func (h *BusinessHandler) RemoveBusinessUser(c echo.Context) error {
 			"message": "Invalid request payload",
 		})
 	}
-
-	// Validate input
 	if err := c.Validate(&req); err != nil {
 		h.logger.Errorf("Validation failed: %v", err)
 		if ve, ok := err.(*customValidator.ValidationError); ok {
@@ -669,7 +672,7 @@ func (h *BusinessHandler) RemoveBusinessUser(c echo.Context) error {
 		})
 	}
 
-	// Remove user from business (service handles all authorization checks and fetches target role)
+	// Remove target user from business
 	err = h.businessService.RemoveUserFromBusiness(c.Request().Context(), businessID, req.UserID, requesterRole)
 	if err != nil {
 		h.logger.Errorf("Error removing user from business: %v", err)
