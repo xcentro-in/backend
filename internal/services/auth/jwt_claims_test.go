@@ -7,6 +7,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	authcore "xcentro.in/internal/core/auth"
+	"xcentro.in/internal/core/shared"
 )
 
 const testJWTSecret = "test-secret-key-32-chars-minimum!!"
@@ -58,8 +59,8 @@ func TestJWTRoundTripWithBidAndRole(t *testing.T) {
 	if claims.Bid != "business-abc-123" {
 		t.Errorf("Bid round-trip: expected %q, got %q", "business-abc-123", claims.Bid)
 	}
-	if claims.Role != "owner" {
-		t.Errorf("Role round-trip: expected %q, got %q", "owner", claims.Role)
+	if claims.Role != string(shared.Owner) {
+		t.Errorf("Role round-trip: expected %q, got %q", shared.Owner, claims.Role)
 	}
 }
 

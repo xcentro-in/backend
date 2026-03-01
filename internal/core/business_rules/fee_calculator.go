@@ -153,7 +153,7 @@ func (calc *FeeCalculatorImpl) CalculateFee(amount int64, method payment.Payment
 		}
 		fmt.Printf("💰 Fixed Fee: %d\n", rule.FixedFee)
 
-	case payment.FeeTypePercentagePlus:
+	case payment.FeeTypeHybrid:
 		calculatedPercentageFee := int64(float64(amount) * rule.PercentageFee / 100)
 		feeAmount = calculatedPercentageFee + rule.FixedFee
 		breakdown = &FeeBreakdown{
@@ -401,7 +401,7 @@ func CalculateFeeWithRule(amount int64, rule *FeeRule) (*FeeCalculationWithTax, 
 	case payment.FeeTypeFixed:
 		convenienceFee = rule.FixedFee
 
-	case payment.FeeTypePercentagePlus:
+	case payment.FeeTypeHybrid:
 		percentagePart := int64(float64(amount) * rule.PercentageFee / 100)
 		convenienceFee = percentagePart + rule.FixedFee
 
@@ -457,7 +457,7 @@ func (calc *PostgresDatabaseFeeCalculator) CalculateWithTax(
 	case payment.FeeTypeFixed:
 		convenienceFee = rule.FixedFee
 
-	case payment.FeeTypePercentagePlus:
+	case payment.FeeTypeHybrid:
 		percentagePart := int64(float64(amount) * rule.PercentageFee / 100)
 		convenienceFee = percentagePart + rule.FixedFee
 

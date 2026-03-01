@@ -6,6 +6,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/labstack/echo/v4"
 	"xcentro.in/internal/core/auth"
+	"xcentro.in/internal/core/shared"
 )
 
 // JWTMiddlewareNoKYCCheck validates JWT and sets context values identically to
@@ -55,7 +56,6 @@ func JWTMiddlewareNoKYCCheck(authService auth.AuthService) echo.MiddlewareFunc {
 			c.Set("bid", claims.Bid)
 			c.Set("role", claims.Role)
 			c.Set("kyc_status", claims.KycStatus)
-			c.Set("kyc_needed", claims.KycNeeded)
 
 			return next(c)
 		}
@@ -117,10 +117,9 @@ func JWTMiddleware(authService auth.AuthService) echo.MiddlewareFunc {
 			c.Set("bid", claims.Bid)              // from CustomClaims.Bid — empty string if token predates Phase 3
 			c.Set("role", claims.Role)            // from CustomClaims.Role — empty string if token predates Phase 3
 			c.Set("kyc_status", claims.KycStatus) // from CustomClaims.KycStatus — empty string if token predates this change
-			c.Set("kyc_needed", claims.KycNeeded) // from CustomClaims.KycNeeded — false if token predates this change
 
 			// Enforce KYC verification requirement
-			if claims.KycNeeded && claims.KycStatus != "kyc_completed" && claims.KycStatus != "kyc_verified" {
+			if claims.KycNeeded && claims.KycStatus != string(shared.KYCCompleted) && claims.KycStatus != string(shared.KYCVerified) {
 				return c.JSON(403, map[string]any{
 					"error":   "KYC_REQUIRED",
 					"message": "Please complete KYC verification to access this resource",

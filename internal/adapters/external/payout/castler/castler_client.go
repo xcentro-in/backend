@@ -109,7 +109,7 @@ func (c *CastlerClient) OnboardBeneficiary(ctx context.Context, req *payout.Onbo
 
 	// Map Castler response to domain response
 	status := payout.BeneficiaryStatusActive
-	if castlerResp.Status != "active" {
+	if castlerResp.Status != string(payout.BeneficiaryStatusActive) {
 		status = payout.BeneficiaryStatusPending
 	}
 
@@ -141,14 +141,14 @@ func (c *CastlerClient) GetBeneficiaryStatus(ctx context.Context, providerBenefi
 	}
 
 	status := payout.BeneficiaryStatusActive
-	if castlerResp.Status != "active" {
+	if castlerResp.Status != string(payout.BeneficiaryStatusActive) {
 		status = payout.BeneficiaryStatusPending
 	}
 
 	return &payout.BeneficiaryStatus{
 		ProviderBeneficiaryID: castlerResp.BeneficiaryID,
 		Status:                status,
-		IsActive:              castlerResp.Status == "active",
+		IsActive:              castlerResp.Status == string(payout.BeneficiaryStatusActive),
 		LastVerifiedAt:        &castlerResp.VerifiedAt,
 		Metadata: map[string]interface{}{
 			"verification_status": castlerResp.VerificationStatus,

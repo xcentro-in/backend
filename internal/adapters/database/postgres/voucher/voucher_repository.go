@@ -1703,7 +1703,7 @@ func (r *PostgresVoucherRepository) BatchApproveVouchers(ctx context.Context, re
 		}
 
 		// Verify voucher is in appropriate status (draft or finalized)
-		if voucherStatus != "draft" && voucherStatus != "finalized" {
+		if voucherStatus != string(voucher.StatusDraft) && voucherStatus != string(voucher.StatusFinalized) {
 			result.Success = false
 			result.Message = fmt.Sprintf("Cannot approve voucher in status: %s", voucherStatus)
 			response.Results = append(response.Results, result)

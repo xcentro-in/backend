@@ -469,7 +469,7 @@ func (h *WebhookHandler) handleMockPGPaymentWebhook(c echo.Context) error {
 
 	// Step 5: Map status
 	var newStatus payment.PaymentStatus
-	if webhook.Status == "success" {
+	if webhook.Status == string(payment.PaymentStatusSuccess) {
 		newStatus = payment.PaymentStatusSuccess
 	} else {
 		newStatus = payment.PaymentStatusFailed

@@ -981,7 +981,7 @@ func (s *PaymentService) validateVouchersAreInDraft(ctx context.Context, voucher
 
 		if v, ok := voucherInterface.(statusGetter); ok {
 			status := v.GetStatus()
-			if status != "draft" {
+			if status != string(voucher.StatusDraft) {
 				s.logger.WarnWith("Voucher not in draft status",
 					"voucher_id", voucherID,
 					"status", status)
