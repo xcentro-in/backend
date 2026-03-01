@@ -120,7 +120,7 @@ func JWTMiddleware(authService auth.AuthService) echo.MiddlewareFunc {
 			c.Set("kyc_needed", claims.KycNeeded) // from CustomClaims.KycNeeded — false if token predates this change
 
 			// Enforce KYC verification requirement
-			if claims.KycNeeded && claims.KycStatus != "completed" && claims.KycStatus != "verified" {
+			if claims.KycNeeded && claims.KycStatus != "kyc_completed" && claims.KycStatus != "kyc_verified" {
 				return c.JSON(403, map[string]any{
 					"error":   "KYC_REQUIRED",
 					"message": "Please complete KYC verification to access this resource",
