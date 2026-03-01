@@ -403,7 +403,7 @@ func (r *PostgresPayoutTransferRepository) UpdateStatus(ctx context.Context, tra
 	switch status {
 	case payout.TransferStatusInitiated:
 		timestampField = "initiated_at"
-	case payout.TransferStatusPending, payout.TransferStatusProcessing:
+	case payout.TransferStatusProcessing:
 		timestampField = "processing_at"
 	case payout.TransferStatusCompleted:
 		timestampField = "completed_at"

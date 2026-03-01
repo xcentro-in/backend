@@ -480,7 +480,7 @@ func (h *CallbackHandler) handleMockPGCallback(c echo.Context) error {
 
 	// Step 5: Map callback status to internal status
 	var newStatus payment.PaymentStatus
-	if callback.Status == "success" {
+	if callback.Status == string(payment.PaymentStatusSuccess) {
 		newStatus = payment.PaymentStatusSuccess
 	} else {
 		newStatus = payment.PaymentStatusFailed
@@ -696,11 +696,11 @@ func isTerminalStatus(status payment.PaymentStatus) bool {
 // mapCallbackStatusToPaymentStatus converts string status to PaymentStatus enum
 func mapCallbackStatusToPaymentStatus(status string) payment.PaymentStatus {
 	switch status {
-	case "success":
+	case string(payment.PaymentStatusSuccess):
 		return payment.PaymentStatusSuccess
-	case "pending":
+	case string(payment.PaymentStatusPending):
 		return payment.PaymentStatusPending
-	case "failed":
+	case string(payment.PaymentStatusFailed):
 		return payment.PaymentStatusFailed
 	default:
 		return payment.PaymentStatusFailed

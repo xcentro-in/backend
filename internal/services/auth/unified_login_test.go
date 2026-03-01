@@ -315,7 +315,7 @@ func TestBuildUnifiedLoginResponse_UserFields(t *testing.T) {
 			Email:     email,
 			Name:      uName,
 			Mobile:    mob,
-			KycStatus: shared.KYCStatus("verified"),
+			KycStatus: shared.KYCVerified,
 			ActiveBid: bid1,
 		},
 	}
@@ -337,7 +337,7 @@ func TestBuildUnifiedLoginResponse_UserFields(t *testing.T) {
 
 	bizService := &mockBusinessService{
 		businesses: map[string]*business.Business{
-			bid1: {BID: bid1, Name: "Arjun Corp", KybStatus: shared.KYBstatus("verified")},
+			bid1: {BID: bid1, Name: "Arjun Corp", KybStatus: shared.KYBVerified},
 		},
 		flags: map[string]*business.BusinessOnboardingStatusDTO{
 			bid1: {HasAddedPaymentMethod: true, HasAddedVendor: true, HasCreatedFirstPayment: false},
@@ -368,8 +368,8 @@ func TestBuildUnifiedLoginResponse_UserFields(t *testing.T) {
 	if resp.User.Mobile != mob {
 		t.Errorf("User.Mobile: expected %q, got %q", mob, resp.User.Mobile)
 	}
-	if string(resp.User.KycStatus) != "verified" {
-		t.Errorf("User.KycStatus: expected %q, got %q", "verified", resp.User.KycStatus)
+	if resp.User.KycStatus != string(shared.KYCVerified) {
+		t.Errorf("User.KycStatus: expected %q, got %q", shared.KYCVerified, resp.User.KycStatus)
 	}
 
 	// Assert onboarding flags (AUTH-03: flags computed for active_bid)
@@ -414,7 +414,7 @@ func TestBuildUnifiedLoginResponse_BusinessList(t *testing.T) {
 
 	bizService := &mockBusinessService{
 		businesses: map[string]*business.Business{
-			bid1: {BID: bid1, Name: "Alpha Corp", KybStatus: shared.KYBstatus("verified")},
+			bid1: {BID: bid1, Name: "Alpha Corp", KybStatus: shared.KYBVerified},
 			bid2: {BID: bid2, Name: "Beta Ltd", KybStatus: shared.KYBstatus("pending")},
 		},
 		flags: map[string]*business.BusinessOnboardingStatusDTO{},
@@ -440,11 +440,11 @@ func TestBuildUnifiedLoginResponse_BusinessList(t *testing.T) {
 	if b0.Name != "Alpha Corp" {
 		t.Errorf("Businesses[0].Name: expected %q, got %q", "Alpha Corp", b0.Name)
 	}
-	if string(b0.Role) != "owner" {
-		t.Errorf("Businesses[0].Role: expected %q, got %q", "owner", b0.Role)
+	if b0.Role != string(shared.Owner) {
+		t.Errorf("Businesses[0].Role: expected %q, got %q", shared.Owner, b0.Role)
 	}
-	if string(b0.KybStatus) != "verified" {
-		t.Errorf("Businesses[0].KybStatus: expected %q, got %q", "verified", b0.KybStatus)
+	if b0.KybStatus != string(shared.KYBVerified) {
+		t.Errorf("Businesses[0].KybStatus: expected %q, got %q", shared.KYBVerified, b0.KybStatus)
 	}
 	if b0.KycNeeded {
 		t.Errorf("Businesses[0].KycNeeded: expected false, got true")
@@ -455,8 +455,8 @@ func TestBuildUnifiedLoginResponse_BusinessList(t *testing.T) {
 	if b1.Bid != bid2 {
 		t.Errorf("Businesses[1].Bid: expected %q, got %q", bid2, b1.Bid)
 	}
-	if string(b1.Role) != "admin" {
-		t.Errorf("Businesses[1].Role: expected %q, got %q", "admin", b1.Role)
+	if b1.Role != string(shared.Admin) {
+		t.Errorf("Businesses[1].Role: expected %q, got %q", shared.Admin, b1.Role)
 	}
 	if !b1.KycNeeded {
 		t.Errorf("Businesses[1].KycNeeded: expected true, got false")
@@ -496,7 +496,7 @@ func TestBuildUnifiedLoginResponse_ActiveBid_FromUserTable(t *testing.T) {
 
 	bizService := &mockBusinessService{
 		businesses: map[string]*business.Business{
-			bid1: {BID: bid1, Name: "Alpha Corp", KybStatus: shared.KYBstatus("verified")},
+			bid1: {BID: bid1, Name: "Alpha Corp", KybStatus: shared.KYBVerified},
 			bid2: {BID: bid2, Name: "Beta Ltd", KybStatus: shared.KYBstatus("pending")},
 		},
 		flags: map[string]*business.BusinessOnboardingStatusDTO{},
@@ -551,7 +551,7 @@ func TestBuildUnifiedLoginResponse_ActiveBid_FallsBackToFirstBusiness(t *testing
 
 	bizService := &mockBusinessService{
 		businesses: map[string]*business.Business{
-			firstBid:  {BID: firstBid, Name: "First Corp", KybStatus: shared.KYBstatus("verified")},
+			firstBid:  {BID: firstBid, Name: "First Corp", KybStatus: shared.KYBVerified},
 			secondBid: {BID: secondBid, Name: "Second Corp", KybStatus: shared.KYBstatus("pending")},
 		},
 		flags: map[string]*business.BusinessOnboardingStatusDTO{},

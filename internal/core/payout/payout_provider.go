@@ -173,11 +173,10 @@ type TransferStatusType string
 
 const (
 	TransferStatusInitiated  TransferStatusType = "initiated"  // Created in DB, awaiting Castler API call
-	TransferStatusPending    TransferStatusType = "pending"    // Castler API success, awaiting settlement webhook
+	TransferStatusProcessing TransferStatusType = "processing" // Castler API success, awaiting settlement webhook
 	TransferStatusCompleted  TransferStatusType = "completed"  // Successfully completed (from webhook)
 	TransferStatusFailed     TransferStatusType = "failed"     // Failed (API error or webhook)
 	TransferStatusTimeout    TransferStatusType = "timeout"    // No webhook received (needs investigation)
-	TransferStatusProcessing TransferStatusType = "processing" // DEPRECATED: Use 'pending' instead
 )
 
 // PayoutProviderError represents provider-specific errors

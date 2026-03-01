@@ -1541,7 +1541,7 @@ func (r *PgPaymentRepository) buildOpsPaymentMethodDetails(
 func (r *PgPaymentRepository) getPayeesForPayment(ctx context.Context, paymentID string, status string) ([]payment.OpsPayeeDetails, error) {
 	var query string
 
-	if status == "success" {
+	if status == string(payment.PaymentStatusSuccess) {
 		// Finalized vouchers - payment_id is set in payment_vouchers
 		query = `
 			SELECT DISTINCT

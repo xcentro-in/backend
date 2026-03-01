@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"xcentro.in/internal/core/payment"
 	"xcentro.in/internal/core/voucher"
 	"xcentro.in/internal/core/notification"
 	"xcentro.in/internal/shared/logger"
@@ -309,7 +310,7 @@ func (s *VoucherServiceImpl) UpdateVoucher(ctx context.Context, req *UpdateVouch
 	}
 
 	// If payment exists and is successful, voucher cannot be edited
-	if paymentStatus != nil && *paymentStatus == "success" {
+	if paymentStatus != nil && *paymentStatus == string(payment.PaymentStatusSuccess) {
 		return nil, fmt.Errorf("cannot edit voucher: payment has been completed successfully")
 	}
 
@@ -514,7 +515,7 @@ func (s *VoucherServiceImpl) DeleteVoucher(ctx context.Context, voucherID uuid.U
 	}
 
 	// If payment exists and is successful, voucher cannot be deleted
-	if paymentStatus != nil && *paymentStatus == "success" {
+	if paymentStatus != nil && *paymentStatus == string(payment.PaymentStatusSuccess) {
 		return fmt.Errorf("cannot delete voucher: payment has been completed successfully")
 	}
 
@@ -927,20 +928,20 @@ func (s *VoucherServiceImpl) GetVouchersByPayee(ctx context.Context, req *GetVou
 			status = v.PaymentStatus
 			if v.PaymentSourceType != "" {
 				switch v.PaymentSourceType {
-				case "card":
+				case string(payment.PaymentSourceCard):
 					paymentMethod = fmt.Sprintf("Card ****%s", v.PaymentSourceDigits)
-				case "bank_account":
+				case string(payment.PaymentSourceBankAccount):
 					paymentMethod = fmt.Sprintf("Bank *****%s", v.PaymentSourceDigits)
-				case "upi":
+				case string(payment.PaymentSourceUPI):
 					paymentMethod = "UPI"
-				case "wallet":
+				case string(payment.PaymentMethodWallet):
 					paymentMethod = "Wallet"
 				default:
 					paymentMethod = v.PaymentSourceType
 				}
 			}
 
-			if status == "success" {
+			if status == string(payment.PaymentStatusSuccess) {
 				completedCount++
 			}
 		} else {
@@ -1236,7 +1237,7 @@ func (s *VoucherServiceImpl) GetVoucherPaymentDetails(ctx context.Context, vouch
 
 	// Format convenience fee rate
 	convenienceFeeRate := ""
-	if details.PaymentMethod == "card" {
+	if details.PaymentMethod == string(payment.PaymentMethodCard) {
 		// For cards, it's usually percentage-based
 		if details.Amount > 0 {
 			rate := (float64(convenienceFee) / float64(details.Amount)) * 100

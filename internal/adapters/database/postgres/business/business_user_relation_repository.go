@@ -169,7 +169,7 @@ func (r *PgBusinessUserRelationRepository) GetBusinessUsersWithDetails(ctx conte
 			u.name,
 			bur.role,
 			bur.role_claim,
-			bur.kyc_needed,
+			u.kyc_status::text,
 			bur.added_at::text,
 			COALESCE(bur.updated_at::text, '')
 		FROM xcentro.business_user_relation bur
@@ -190,13 +190,14 @@ func (r *PgBusinessUserRelationRepository) GetBusinessUsersWithDetails(ctx conte
 		var user business.BusinessUserDTO
 		var role, roleClaim sql.NullString
 
+		var kycStatus string
 		err := rows.Scan(
 			&user.UserID,
 			&user.Email,
 			&user.Name,
 			&role,
 			&roleClaim,
-			&user.KycNeeded,
+			&kycStatus,
 			&user.AddedAt,
 			&user.UpdatedAt,
 		)
@@ -204,6 +205,7 @@ func (r *PgBusinessUserRelationRepository) GetBusinessUsersWithDetails(ctx conte
 			return nil, fmt.Errorf("error scanning business user: %w", err)
 		}
 
+		user.KycStatus = shared.KYCStatus(kycStatus)
 		user.Role = shared.UserRole(role.String)
 		user.RoleClaim = shared.UserRole(roleClaim.String)
 		users = append(users, &user)

@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
+	"xcentro.in/internal/core/shared"
 	"xcentro.in/internal/core/voucher"
 	voucherSvc "xcentro.in/internal/services/voucher"
 	"xcentro.in/internal/shared/logger"
@@ -1284,7 +1285,7 @@ func (h *VoucherHandler) GetUnpaidBills(c echo.Context) error {
 	role, _ := c.Get("role").(string)
 
 	// Determine owner status from JWT role claim
-	isOwner := (role == "owner")
+	isOwner := (role == string(shared.Owner))
 
 	// Parse optional query parameters for pagination
 	limit := 50 // Default limit

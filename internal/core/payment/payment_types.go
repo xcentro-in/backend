@@ -126,7 +126,7 @@ type FeeType string
 const (
 	FeeTypePercentage     FeeType = "percentage"
 	FeeTypeFixed          FeeType = "fixed"
-	FeeTypePercentagePlus FeeType = "percentage_plus_fixed"
+	FeeTypeHybrid FeeType = "hybrid"
 )
 
 // CallingDevice represents the device type initiating the payment

@@ -985,7 +985,11 @@ func (h *PaymentHandler) validatePaymentRequest(req *MakePaymentRequest) error {
 
 	// Validate payment method
 	validMethods := map[string]bool{
-		"card": true, "token_card": true, "net_banking": true, "upi": true, "wallet": true,
+		string(payment.PaymentMethodCard):       true,
+		string(payment.PaymentMethodTokenCard):  true,
+		string(payment.PaymentMethodNetBanking): true,
+		string(payment.PaymentMethodUPI):        true,
+		string(payment.PaymentMethodWallet):     true,
 	}
 	if !validMethods[req.PaymentMethod] {
 		return fmt.Errorf("invalid payment method: %s", req.PaymentMethod)
@@ -1006,35 +1010,35 @@ func (h *PaymentHandler) validatePaymentRequest(req *MakePaymentRequest) error {
 
 	// Payment method specific validation
 	switch req.PaymentMethod {
-	case "card":
+	case string(payment.PaymentMethodCard):
 		if req.CardDetails == nil {
 			return fmt.Errorf("card_details are required for card payments")
 		}
 		if err := h.validateCardDetails(req.CardDetails); err != nil {
 			return fmt.Errorf("card validation failed: %v", err)
 		}
-	case "token_card":
+	case string(payment.PaymentMethodTokenCard):
 		if req.TokenDetails == nil {
 			return fmt.Errorf("token_details are required for token card payments")
 		}
 		if req.TokenDetails.CardID == "" {
 			return fmt.Errorf("card_id is required for token card payments")
 		}
-	case "netbanking":
+	case string(payment.PaymentMethodNetBanking):
 		if req.NetBanking == nil {
-			return fmt.Errorf("net_banking details are required for netbanking payments")
+			return fmt.Errorf("net_banking details are required for net_banking payments")
 		}
 		if req.NetBanking.BankCode == "" {
-			return fmt.Errorf("bank_code is required for netbanking")
+			return fmt.Errorf("bank_code is required for net_banking")
 		}
-	case "upi":
+	case string(payment.PaymentMethodUPI):
 		if req.UPI == nil {
 			return fmt.Errorf("upi details are required for UPI payments")
 		}
 		if req.UPI.VPA == "" {
 			return fmt.Errorf("vpa is required for UPI payments")
 		}
-	case "wallet":
+	case string(payment.PaymentMethodWallet):
 		if req.Wallet == nil {
 			return fmt.Errorf("wallet details are required for wallet payments")
 		}
@@ -1101,7 +1105,7 @@ func getCardCategoryFromRequest(req *MakePaymentRequest) string {
 // populatePaymentMethodDetails adds payment method specific details to core request
 func (h *PaymentHandler) populatePaymentMethodDetails(coreReq *payment.PaymentRequest, httpReq *MakePaymentRequest) {
 	switch httpReq.PaymentMethod {
-	case "card":
+	case string(payment.PaymentMethodCard):
 		if httpReq.CardDetails != nil {
 			coreReq.CardDetails = &payment.Card{
 				Number:         httpReq.CardDetails.CardNumber,
@@ -1114,26 +1118,26 @@ func (h *PaymentHandler) populatePaymentMethodDetails(coreReq *payment.PaymentRe
 				LastFourDigits: httpReq.CardDetails.LastFourDigits,
 			}
 		}
-	case "token_card":
+	case string(payment.PaymentMethodTokenCard):
 		if httpReq.TokenDetails != nil {
 			coreReq.TokenCardDetails = &payment.TokenCardDetails{
 				CardID: httpReq.TokenDetails.CardID,
 			}
 		}
-	case "netbanking":
+	case string(payment.PaymentMethodNetBanking):
 		if httpReq.NetBanking != nil {
 			coreReq.NetBankingDetails = &payment.NetBanking{
 				BankCode: httpReq.NetBanking.BankCode,
 				BankName: httpReq.NetBanking.BankName,
 			}
 		}
-	case "upi":
+	case string(payment.PaymentMethodUPI):
 		if httpReq.UPI != nil {
 			coreReq.UPIDetails = &payment.UPI{
 				VPA: httpReq.UPI.VPA,
 			}
 		}
-	case "wallet":
+	case string(payment.PaymentMethodWallet):
 		if httpReq.Wallet != nil {
 			coreReq.WalletDetails = &payment.Wallet{
 				WalletID: httpReq.Wallet.WalletID,

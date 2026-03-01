@@ -7,6 +7,7 @@ import (
 	"github.com/labstack/echo/v4"
 	"xcentro.in/internal/core/auth"
 	"xcentro.in/internal/core/business"
+	"xcentro.in/internal/core/shared"
 	"xcentro.in/internal/middleware"
 	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/httputil"
@@ -161,7 +162,7 @@ func (ah AuthHandler) HandleLogin(c echo.Context) error {
 	}
 
 	// TODO: Support mobile device type in future - currently only "web" is supported
-	if deviceType != "web" {
+	if deviceType != string(shared.DeviceWeb) {
 		logger.Warnf("Unsupported device type '%s' requested, rejecting", deviceType)
 		return c.JSON(400, map[string]any{
 			"message": "Only 'web' device type is currently supported",

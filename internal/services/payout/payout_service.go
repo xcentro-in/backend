@@ -94,7 +94,7 @@ func (s *PayoutService) InitiateManualPayout(ctx context.Context, paymentID stri
 	}
 
 	// Step 3: Validate settlement status (unless bypassed by ops)
-	if !bypassSettlementCheck && pmt.SettlementStatus != "settled" {
+	if !bypassSettlementCheck && pmt.SettlementStatus != payment.SettlementStatusSettled {
 		s.logger.WarnWith("Payout rejected - payment not settled",
 			"payment_id", paymentID,
 			"settlement_status", pmt.SettlementStatus)
@@ -669,10 +669,10 @@ func (s *PayoutService) processSingleTransfer(ctx context.Context, transfer *pay
 		"transfer_id", transfer.TransferRequestID,
 		"provider_transfer_id", resp.ProviderTransferID)
 
-	// Update status to 'pending'
+	// Update status to 'processing'
 	pendingTime := time.Now()
-	if err := s.transferRepo.UpdateStatus(ctx, transfer.TransferRequestID, payout.TransferStatusPending, pendingTime); err != nil {
-		s.logger.ErrorWith("Failed to update status to pending", "error", err)
+	if err := s.transferRepo.UpdateStatus(ctx, transfer.TransferRequestID, payout.TransferStatusProcessing, pendingTime); err != nil {
+		s.logger.ErrorWith("Failed to update status to processing", "error", err)
 		return
 	}
 
