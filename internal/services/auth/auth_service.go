@@ -1120,8 +1120,8 @@ func (s *AuthService) ResendInviteEmail(ctx context.Context, emailAddr string) e
 		return fmt.Errorf("user not found")
 	}
 
-	// Check if user has already activated account (password is set)
-	if userObj.PwdHash != "" {
+	// Check if user has already completed KYC onboarding
+	if userObj.KycStatus == shared.KYCVerified || userObj.KycStatus == shared.KYCCompleted {
 		logger.Warnf("Cannot resend invite to activated user: %s", emailAddr)
 		return fmt.Errorf("user has already activated their account")
 	}
@@ -1611,6 +1611,13 @@ func (s *AuthService) SendInviteOTP(ctx context.Context, userID, token, signatur
 	if !security.ValidateHMACSignature(userID, token, signature, s.config.SecretKey) {
 		logger.Errorf("Invalid HMAC signature for user: %s", userID)
 		return fmt.Errorf("invalid or tampered invitation link")
+	}
+
+	// Validate the invite token exists in DB and hasn't been used
+	hashedToken := security.HashTokenWithPepper(token, s.bcryptConfig.Pepper)
+	if _, err := s.userRepo.GetVerificationCodeByUserIDAndCode(ctx, userID, hashedToken, shared.PasswordReset); err != nil {
+		logger.Errorf("Invalid or expired invite token for user %s: %v", userID, err)
+		return fmt.Errorf("invalid or expired invitation link")
 	}
 
 	// Fetch user to get mobile number
