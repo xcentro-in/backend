@@ -21,6 +21,10 @@ func Middleware(group string) echo.MiddlewareFunc {
 		return func(c echo.Context) error {
 			rl := GetInstance()
 
+			if !rl.enabled {
+				return next(c)
+			}
+
 			// Use provided group, empty string will fallback to default in getPolicy()
 			policyGroup := group
 			if policyGroup == "" {
