@@ -8,7 +8,6 @@ package common
 //
 // Redaction rules:
 // - Payment gateway actors (mockpg_callback, jiopay_*, easebuzz_*) → "system"
-// - Payout provider actors (castler_webhook, castler_api) → "system"
 // - Internal handlers/workers → "system"
 // - UUID-formatted names (36 chars with dashes at positions 8, 13) → "user"
 // - Actual user/admin names → preserved as-is
@@ -24,7 +23,6 @@ func RedactActorName(actorName string) string {
 		"easebuzz_webhook":  true,
 
 		// Payout provider webhooks
-		"castler_webhook": true,
 		"castler_api":     true,
 
 		// Internal handlers/workers

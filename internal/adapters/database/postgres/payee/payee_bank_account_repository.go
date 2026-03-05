@@ -58,9 +58,8 @@ func (r *PgPayeeBankAccountRepository) CreateBankAccount(ctx context.Context, ac
 			ifsc_code, bank_name, branch_name, account_type, account_holder_name,
 			is_verified, verified_at, bank_verification_status, bank_verification_data,
 			cross_verification_status,
-			castler_beneficiary_id,
 			is_active, account_label, metadata
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 		RETURNING account_id, added_at
 	`
 
@@ -99,7 +98,6 @@ func (r *PgPayeeBankAccountRepository) CreateBankAccount(ctx context.Context, ac
 		account.BankVerificationStatus,
 		bankVerificationDataJSON,
 		account.CrossVerificationStatus,
-		account.CastlerBeneficiaryID,
 		account.IsActive,
 		account.AccountLabel,
 		metadataJSON,
@@ -128,7 +126,6 @@ func (r *PgPayeeBankAccountRepository) FindByID(ctx context.Context, accountID s
 		       ifsc_code, bank_name, branch_name, account_type, account_holder_name,
 		       is_verified, verified_at, bank_verification_status, bank_verification_data,
 		       cross_verification_status,
-		       castler_beneficiary_id,
 		       is_active, account_label, metadata, added_at, updated_at
 		FROM xcentro.payee_bank_accounts
 		WHERE account_id = $1
@@ -137,7 +134,6 @@ func (r *PgPayeeBankAccountRepository) FindByID(ctx context.Context, accountID s
 	var account payee.PayeeBankAccount
 	var bankName, branchName, accountLabel sql.NullString
 	var verifiedAt sql.NullTime
-	var castlerBeneficiaryID sql.NullString
 	var bankVerificationDataJSON, metadataJSON []byte
 	var updatedAt sql.NullTime
 	var encryptedAccountNumber string
@@ -156,7 +152,6 @@ func (r *PgPayeeBankAccountRepository) FindByID(ctx context.Context, accountID s
 		&account.BankVerificationStatus,
 		&bankVerificationDataJSON,
 		&account.CrossVerificationStatus,
-		&castlerBeneficiaryID,
 		&account.IsActive,
 		&accountLabel,
 		&metadataJSON,
@@ -190,7 +185,6 @@ func (r *PgPayeeBankAccountRepository) FindByID(ctx context.Context, accountID s
 	account.BankName = bankName.String
 	account.BranchName = branchName.String
 	account.AccountLabel = accountLabel.String
-	account.CastlerBeneficiaryID = castlerBeneficiaryID.String
 	if verifiedAt.Valid {
 		account.VerifiedAt = &verifiedAt.Time
 	}
@@ -227,7 +221,6 @@ func (r *PgPayeeBankAccountRepository) FindByAccountHash(ctx context.Context, ac
 		       ifsc_code, bank_name, branch_name, account_type, account_holder_name,
 		       is_verified, verified_at, bank_verification_status, bank_verification_data,
 		       cross_verification_status,
-		       castler_beneficiary_id,
 		       is_active, account_label, metadata, added_at, updated_at
 		FROM xcentro.payee_bank_accounts
 		WHERE account_number_hash = $1
@@ -237,7 +230,6 @@ func (r *PgPayeeBankAccountRepository) FindByAccountHash(ctx context.Context, ac
 	var account payee.PayeeBankAccount
 	var bankName, branchName, accountLabel sql.NullString
 	var verifiedAt sql.NullTime
-	var castlerBeneficiaryID sql.NullString
 	var bankVerificationDataJSON, metadataJSON []byte
 	var updatedAt sql.NullTime
 	var encryptedAccountNumber string
@@ -256,7 +248,6 @@ func (r *PgPayeeBankAccountRepository) FindByAccountHash(ctx context.Context, ac
 		&account.BankVerificationStatus,
 		&bankVerificationDataJSON,
 		&account.CrossVerificationStatus,
-		&castlerBeneficiaryID,
 		&account.IsActive,
 		&accountLabel,
 		&metadataJSON,
@@ -290,7 +281,6 @@ func (r *PgPayeeBankAccountRepository) FindByAccountHash(ctx context.Context, ac
 	account.BankName = bankName.String
 	account.BranchName = branchName.String
 	account.AccountLabel = accountLabel.String
-	account.CastlerBeneficiaryID = castlerBeneficiaryID.String
 	if verifiedAt.Valid {
 		account.VerifiedAt = &verifiedAt.Time
 	}
@@ -319,36 +309,6 @@ func (r *PgPayeeBankAccountRepository) FindByAccountHash(ctx context.Context, ac
 	return &account, nil
 }
 
-// GetCastlerBeneficiaryID fetches only the Castler beneficiary ID for a bank account
-// Lightweight method for payout processing - no decryption needed
-func (r *PgPayeeBankAccountRepository) GetCastlerBeneficiaryID(ctx context.Context, accountID string) (string, error) {
-	query := `
-		SELECT castler_beneficiary_id
-		FROM xcentro.payee_bank_accounts
-		WHERE account_id = $1
-	`
-
-	var castlerBeneficiaryID sql.NullString
-	err := r.querier.QueryRow(ctx, query, accountID).Scan(&castlerBeneficiaryID)
-
-	if err != nil {
-		if err == pgx.ErrNoRows {
-			r.logger.DebugWith("payee bank account not found",
-				"account_id", accountID)
-			return "", fmt.Errorf("account not found: %s", accountID)
-		}
-		r.logger.ErrorWith("failed to get castler_beneficiary_id",
-			"error", err,
-			"account_id", accountID)
-		return "", fmt.Errorf("failed to get castler_beneficiary_id: %w", err)
-	}
-
-	if !castlerBeneficiaryID.Valid || castlerBeneficiaryID.String == "" {
-		return "", fmt.Errorf("account not onboarded to Castler (castler_beneficiary_id is null)")
-	}
-
-	return castlerBeneficiaryID.String, nil
-}
 
 // UpdateBankAccount updates a payee bank account record
 func (r *PgPayeeBankAccountRepository) UpdateBankAccount(ctx context.Context, account *payee.PayeeBankAccount) error {
@@ -356,8 +316,7 @@ func (r *PgPayeeBankAccountRepository) UpdateBankAccount(ctx context.Context, ac
 		UPDATE xcentro.payee_bank_accounts
 		SET is_verified = $2, verified_at = $3, bank_verification_status = $4, bank_verification_data = $5,
 		    cross_verification_status = $6,
-		    castler_beneficiary_id = $7,
-		    is_active = $8, account_label = $9, metadata = $10
+		    is_active = $7, account_label = $8, metadata = $9
 		WHERE account_id = $1
 	`
 
@@ -391,7 +350,6 @@ func (r *PgPayeeBankAccountRepository) UpdateBankAccount(ctx context.Context, ac
 		account.BankVerificationStatus,
 		bankVerificationDataJSON,
 		account.CrossVerificationStatus,
-		account.CastlerBeneficiaryID,
 		account.IsActive,
 		account.AccountLabel,
 		metadataJSON,

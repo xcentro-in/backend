@@ -55,15 +55,15 @@ func (r *PostgresPaymentStateChangeRepository) Create(ctx context.Context, req *
 
 	query := `
 		INSERT INTO xcentro.payment_state_changes (
-			state_change_id, payment_id, transfer_request_id,
+			state_change_id, payment_id,
 			action, action_timestamp, actor_type, actor_user_id, actor_name,
 			previous_state, new_state, amount, currency, utr, provider,
 			metadata, remarks, created_at
 		) VALUES (
-			$1, $2, $3,
-			$4, $5, $6, $7, $8,
-			$9, $10, $11, $12, $13, $14,
-			$15, $16, NOW()
+			$1, $2,
+			$3, $4, $5, $6, $7,
+			$8, $9, $10, $11, $12, $13,
+			$14, $15, NOW()
 		)
 		RETURNING created_at
 	`
@@ -72,7 +72,6 @@ func (r *PostgresPaymentStateChangeRepository) Create(ctx context.Context, req *
 	err = r.querier.QueryRow(ctx, query,
 		stateChangeID,
 		req.PaymentID,
-		req.TransferID,
 		req.Action,
 		req.ActionTimestamp,
 		req.ActorType,
@@ -96,7 +95,6 @@ func (r *PostgresPaymentStateChangeRepository) Create(ctx context.Context, req *
 	stateChange := &payment.PaymentStateChange{
 		StateChangeID:   stateChangeID,
 		PaymentID:       req.PaymentID,
-		TransferID:      req.TransferID,
 		Action:          req.Action,
 		ActionTimestamp: req.ActionTimestamp,
 		ActorType:       req.ActorType,
@@ -122,7 +120,6 @@ func (r *PostgresPaymentStateChangeRepository) GetByPaymentID(ctx context.Contex
 		SELECT
 			state_change_id,
 			payment_id::text,
-			COALESCE(transfer_request_id::text, '') as transfer_request_id,
 			action, action_timestamp,
 			actor_type,
 			COALESCE(actor_user_id::text, '') as actor_user_id,
@@ -163,52 +160,6 @@ func (r *PostgresPaymentStateChangeRepository) GetByPaymentID(ctx context.Contex
 	return stateChanges, nil
 }
 
-// GetByTransferID retrieves all state changes for a payout transfer
-func (r *PostgresPaymentStateChangeRepository) GetByTransferID(ctx context.Context, transferID uuid.UUID) ([]*payment.PaymentStateChange, error) {
-	query := `
-		SELECT
-			state_change_id,
-			payment_id::text,
-			COALESCE(transfer_request_id::text, '') as transfer_request_id,
-			action, action_timestamp,
-			actor_type,
-			COALESCE(actor_user_id::text, '') as actor_user_id,
-			COALESCE(actor_name, '') as actor_name,
-			COALESCE(previous_state, '') as previous_state,
-			COALESCE(new_state, '') as new_state,
-			COALESCE(amount, 0) as amount,
-			COALESCE(currency, '') as currency,
-			COALESCE(utr, '') as utr,
-			COALESCE(provider, '') as provider,
-			COALESCE(metadata, '{}'::jsonb) as metadata,
-			COALESCE(remarks, '') as remarks,
-			created_at
-		FROM xcentro.payment_state_changes
-		WHERE transfer_request_id = $1
-		ORDER BY action_timestamp ASC, created_at ASC
-	`
-
-	rows, err := r.querier.Query(ctx, query, transferID)
-	if err != nil {
-		return nil, fmt.Errorf("failed to query state changes: %w", err)
-	}
-	defer rows.Close()
-
-	var stateChanges []*payment.PaymentStateChange
-	for rows.Next() {
-		sc, err := r.scanStateChange(rows)
-		if err != nil {
-			return nil, err
-		}
-		stateChanges = append(stateChanges, sc)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("error iterating state changes: %w", err)
-	}
-
-	return stateChanges, nil
-}
 
 // GetLatestByPaymentID retrieves the most recent state change for a payment
 func (r *PostgresPaymentStateChangeRepository) GetLatestByPaymentID(ctx context.Context, paymentID uuid.UUID) (*payment.PaymentStateChange, error) {
@@ -216,7 +167,6 @@ func (r *PostgresPaymentStateChangeRepository) GetLatestByPaymentID(ctx context.
 		SELECT
 			state_change_id,
 			payment_id::text,
-			COALESCE(transfer_request_id::text, '') as transfer_request_id,
 			action, action_timestamp,
 			actor_type,
 			COALESCE(actor_user_id::text, '') as actor_user_id,
@@ -246,7 +196,6 @@ func (r *PostgresPaymentStateChangeRepository) GetByAction(ctx context.Context, 
 		SELECT
 			state_change_id,
 			payment_id::text,
-			COALESCE(transfer_request_id::text, '') as transfer_request_id,
 			action, action_timestamp,
 			actor_type,
 			COALESCE(actor_user_id::text, '') as actor_user_id,
@@ -293,7 +242,7 @@ func (r *PostgresPaymentStateChangeRepository) scanStateChange(row interface {
 	Scan(dest ...interface{}) error
 }) (*payment.PaymentStateChange, error) {
 	var sc payment.PaymentStateChange
-	var paymentIDStr, transferIDStr, actorUserIDStr string
+	var paymentIDStr, actorUserIDStr string
 	var previousState, newState, actorName string
 	var amount int64
 	var currency, utr, provider, remarks string
@@ -302,7 +251,6 @@ func (r *PostgresPaymentStateChangeRepository) scanStateChange(row interface {
 	err := row.Scan(
 		&sc.StateChangeID,
 		&paymentIDStr,
-		&transferIDStr,
 		&sc.Action,
 		&sc.ActionTimestamp,
 		&sc.ActorType,
@@ -330,12 +278,6 @@ func (r *PostgresPaymentStateChangeRepository) scanStateChange(row interface {
 			return nil, fmt.Errorf("failed to parse payment_id: %w", err)
 		}
 		sc.PaymentID = paymentID
-	}
-
-	// Parse transfer_id (optional)
-	if transferIDStr != "" {
-		transferID, _ := uuid.Parse(transferIDStr)
-		sc.TransferID = &transferID
 	}
 
 	// Parse actor_user_id (optional)

@@ -220,9 +220,6 @@ type PayeeBankAccount struct {
 	// Cross-verification with GST/PAN (money rotation check)
 	CrossVerificationStatus VerificationStatus `json:"cross_verification_status"`
 
-	// Payout provider onboarding (Castler)
-	CastlerBeneficiaryID string `json:"castler_beneficiary_id,omitempty"` // Castler payee ID for payouts
-
 	// Account status
 	IsActive     bool   `json:"is_active"`
 	AccountLabel string `json:"account_label,omitempty"`

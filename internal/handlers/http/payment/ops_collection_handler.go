@@ -38,8 +38,6 @@ func RegisterOpsCollectionRoutes(e *echo.Group, collectionService *payments.OpsC
 	collectionGroup.GET("/:payment_id", handler.GetCollectionDetails)
 	// Endpoint: Get complete activity log for a collection (payment lifecycle)
 	collectionGroup.GET("/:payment_id/activity", handler.GetCollectionActivity)
-	// Endpoint: Get all voucher-payout mappings for a collection
-	collectionGroup.GET("/:payment_id/payouts", handler.GetCollectionPayouts)
 }
 
 // ListCollections handles GET /collections?page=1&limit=20&status=pending|payoutReady|failed
@@ -163,25 +161,3 @@ func (h *OpsCollectionHandler) GetCollectionActivity(c echo.Context) error {
 	return c.JSON(http.StatusOK, activity)
 }
 
-// GetCollectionPayouts handles GET /collections/:payment_id/payouts
-// Returns all voucher-payout mappings for this collection
-// Shows which vouchers were funded by this payment and their payout status
-func (h *OpsCollectionHandler) GetCollectionPayouts(c echo.Context) error {
-	paymentID := c.Param("payment_id")
-	if paymentID == "" {
-		return c.JSON(http.StatusBadRequest, map[string]string{
-			"error": "payment_id is required",
-		})
-	}
-
-	// Call service layer
-	payouts, err := h.collectionService.GetCollectionPayouts(c.Request().Context(), paymentID)
-	if err != nil {
-		h.logger.Errorf("Error getting collection payouts: %v", err)
-		return c.JSON(http.StatusInternalServerError, map[string]string{
-			"error": "Failed to fetch collection payouts",
-		})
-	}
-
-	return c.JSON(http.StatusOK, payouts)
-}

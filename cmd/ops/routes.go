@@ -8,18 +8,13 @@ import (
 	invoiceRepo "xcentro.in/internal/adapters/database/postgres/invoice"
 	notificationRepo "xcentro.in/internal/adapters/database/postgres/notification"
 	opsAuthRepo "xcentro.in/internal/adapters/database/postgres/opsauth"
-	payeeRepo "xcentro.in/internal/adapters/database/postgres/payee"
 	paymentRepo "xcentro.in/internal/adapters/database/postgres/payment"
-	payoutRepo "xcentro.in/internal/adapters/database/postgres/payout"
 	userRepo "xcentro.in/internal/adapters/database/postgres/user"
-	voucherRepo "xcentro.in/internal/adapters/database/postgres/voucher"
-	"xcentro.in/internal/adapters/external/payout/factory"
 	businessHandler "xcentro.in/internal/handlers/http/business"
 	invoiceHandler "xcentro.in/internal/handlers/http/invoice"
 	notificationHandler "xcentro.in/internal/handlers/http/notification"
 	opsAuthHandler "xcentro.in/internal/handlers/http/opsauth"
 	paymentHandler "xcentro.in/internal/handlers/http/payment"
-	payoutHandler "xcentro.in/internal/handlers/http/payout"
 	userHandler "xcentro.in/internal/handlers/http/user"
 	"xcentro.in/internal/middleware"
 	authservice "xcentro.in/internal/services/auth"
@@ -28,7 +23,6 @@ import (
 	notificationSvc "xcentro.in/internal/services/notification"
 	opsAuthSvc "xcentro.in/internal/services/opsauth"
 	"xcentro.in/internal/services/payments"
-	payoutSvc "xcentro.in/internal/services/payout"
 	userSvc "xcentro.in/internal/services/user"
 	"xcentro.in/internal/services/verification"
 	"xcentro.in/internal/shared/config"
@@ -179,34 +173,6 @@ func registerOpsFeeRulesRoutes(clients *externalClients, cfg *config.Config, gro
 	paymentHandler.RegisterOpsFeeRulesRoutes(group, feeRulesHandler)
 }
 
-// registerOpsPayoutRoutes registers ops dashboard payout routes
-func registerOpsPayoutRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
-	// Create repositories
-	payoutRepository := payoutRepo.NewPostgresOpsPayoutRepository(clients.db)
-	paymentRepository := paymentRepo.NewPgPaymentRepository(clients.db, cfg.BankAccountEncryption.EncryptionKey)
-	transferRepository := payoutRepo.NewPostgresPayoutTransferRepository(clients.db)
-	voucherRepository := voucherRepo.NewPostgresVoucherRepository(clients.db, cfg.BankAccountEncryption.EncryptionKey)
-	bankAccountRepository := payeeRepo.NewPgPayeeBankAccountRepository(clients.db, cfg.BankAccountEncryption.EncryptionKey)
-	stateChangeRepository := paymentRepo.NewPostgresPaymentStateChangeRepository(clients.db)
-
-	// Create ops payout service (for listing endpoints)
-	opsPayoutService := payoutSvc.NewOpsPayoutService(payoutRepository)
-
-	// Create payout provider factory and full payout service (for operations)
-	providerFactory := factory.NewPayoutProviderFactory(cfg)
-	payoutService := payoutSvc.NewPayoutService(
-		paymentRepository,
-		voucherRepository,
-		transferRepository,
-		bankAccountRepository,
-		stateChangeRepository,
-		providerFactory,
-		cfg, // Pass config for retry/timeout settings and transfer mode logic
-	)
-
-	// Register all payout routes (listing + operations)
-	payoutHandler.RegisterOpsPayoutRoutes(group, opsPayoutService, payoutService)
-}
 
 // registerOpsInvoiceRoutes registers ops dashboard invoice routes
 func registerOpsInvoiceRoutes(clients *externalClients, cfg *config.Config, group *echo.Group) {
@@ -263,7 +229,6 @@ func registerOpsV1Routes(s *opsDashboardServer) {
 	registerOpsBusinessRoutes(clients, cfg, protectedGroup, opsCookieManager, tokenRevoker)         // Business management
 	registerOpsNotificationRoutes(clients, cfg, protectedGroup, opsCookieManager)                   // Notifications
 	registerOpsUserRoutes(clients, cfg, protectedGroup, opsCookieManager, tokenRevoker)             // User management
-	registerOpsPayoutRoutes(clients, cfg, protectedGroup)                                           // Payouts
 	registerOpsCollectionRoutes(clients, cfg, protectedGroup)                                       // Collections/Payments
 	registerOpsFeeRulesRoutes(clients, cfg, protectedGroup)                                         // Fee rules
 	registerOpsInvoiceRoutes(clients, cfg, protectedGroup)                                          // Invoices

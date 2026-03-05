@@ -1654,19 +1654,10 @@ func (h *PaymentHandler) fetchPaymentActivity(ctx context.Context, paymentUUID u
 
 	activity := []PaymentActivityItem{}
 	for _, sc := range stateChanges {
-		// Filter: Payment activity should ONLY show payment-related actions
-		// Exclude settlement actions (internal operations - funds reaching escrow)
-		// Exclude ALL payout actions (belong to voucher activity, not payment activity)
-		//   In multi-bill scenarios, 1 payment → N payouts, so payout status is voucher-specific
+		// Filter: exclude settlement actions (internal, not user-facing)
 		if sc.Action == payment.SettlementActionPending ||
 			sc.Action == payment.SettlementActionReceived ||
-			sc.Action == payment.SettlementActionFailed ||
-			sc.Action == payment.PayoutActionInitiated ||
-			sc.Action == payment.PayoutActionProcessing ||
-			sc.Action == payment.PayoutActionCompleted ||
-			sc.Action == payment.PayoutActionFailed ||
-			sc.Action == payment.PayoutActionTimeout ||
-			sc.Action == payment.PayoutActionCancelled {
+			sc.Action == payment.SettlementActionFailed {
 			continue
 		}
 

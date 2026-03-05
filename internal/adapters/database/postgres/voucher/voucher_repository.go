@@ -1952,14 +1952,6 @@ func (r *PostgresVoucherRepository) GetVoucherActivity(ctx context.Context, vouc
 					-- Payment failures
 					WHEN psc.action = 'payment_failed' THEN 'Payment Failed'
 					WHEN psc.action = 'payment_refunded' THEN 'Payment Refunded'
-					-- Payout lifecycle: In-progress → "Payment Processing"
-					WHEN psc.action IN ('payout_initiated', 'payout_processing') THEN 'Payment Processing'
-					-- Payout completed → Final success
-					WHEN psc.action = 'payout_completed' THEN 'Payment Completed to Payee'
-					-- Payout failures
-					WHEN psc.action = 'payout_failed' THEN 'Payout Failed'
-					WHEN psc.action = 'payout_timeout' THEN 'Payout Under Investigation'
-					WHEN psc.action = 'payout_cancelled' THEN 'Payout Cancelled'
 					ELSE psc.action::text
 				END as action,
 				psc.action_timestamp as timestamp
@@ -1969,10 +1961,6 @@ func (r *PostgresVoucherRepository) GetVoucherActivity(ctx context.Context, vouc
 			WHERE v.voucher_id = $1
 			  -- Exclude settlement lifecycle (internal step, not user-facing)
 			  AND psc.action NOT IN ('settlement_pending', 'settlement_received', 'settlement_failed')
-			  -- Exclude payout_initiated to avoid duplicate "Payment Processing" entries
-			  -- (both payout_initiated and payout_processing map to same display text,
-			  --  but payout_processing is more meaningful as it happens after API success)
-			  AND psc.action != 'payout_initiated'
 		)
 		SELECT
 			activity_id,
@@ -2068,10 +2056,6 @@ func (r *PostgresVoucherRepository) GetPaymentDetailsByVoucher(ctx context.Conte
 			p.convenience_fee_gst,
 			p.total_amount,
 
-			-- Payout details (from payout_transfer_requests)
-			COALESCE(ptr.utr, '') as payout_utr,
-			ptr.completed_at as payout_completed_at,
-
 			-- Additional metadata
 			COALESCE(p.description, '') as description
 
@@ -2079,14 +2063,12 @@ func (r *PostgresVoucherRepository) GetPaymentDetailsByVoucher(ctx context.Conte
 		INNER JOIN xcentro.payments p ON v.payment_id = p.payment_id
 		LEFT JOIN xcentro.stored_cards sc ON p.payment_source_id = sc.card_id AND p.payment_source_type = 'card'
 		LEFT JOIN xcentro.bank_accounts ba ON p.payment_source_id = ba.account_id AND p.payment_source_type = 'bank_account'
-		LEFT JOIN xcentro.payout_transfer_requests ptr ON v.voucher_id = ptr.voucher_id
 		WHERE v.voucher_id = $1
 	`
 
 	var details voucher.VoucherPaymentDetails
 	var cardLastFour, cardIssuerBank string
 	var bankAccountEncrypted, bankName string
-	var payoutCompletedAt sql.NullTime
 
 	err := r.querier.QueryRow(ctx, query, voucherID).Scan(
 		&details.PaymentID,
@@ -2106,8 +2088,6 @@ func (r *PostgresVoucherRepository) GetPaymentDetailsByVoucher(ctx context.Conte
 		&details.ConvenienceFee,
 		&details.ConvenienceFeeGST,
 		&details.TotalAmount,
-		&details.PayoutUTR,
-		&payoutCompletedAt,
 		&details.Description,
 	)
 
@@ -2132,36 +2112,14 @@ func (r *PostgresVoucherRepository) GetPaymentDetailsByVoucher(ctx context.Conte
 		details.BankName = bankName
 	}
 
-	// Handle nullable payout completed_at
-	if payoutCompletedAt.Valid {
-		details.PayoutCompletedAt = &payoutCompletedAt.Time
-	}
-
 	return &details, nil
 }
 
 // Delete deletes a voucher by ID
 // Only draft vouchers can be deleted (business logic enforced at service layer)
 // Cascades to voucher_approvals and erp_sync_queue automatically
-// Fails if payout_transfer_requests exist (ON DELETE RESTRICT constraint)
+// Cascades to voucher_approvals and erp_sync_queue automatically
 func (r *PostgresVoucherRepository) Delete(ctx context.Context, voucherID uuid.UUID) error {
-	// Check for payout transfers first (better error message than constraint violation)
-	var payoutCount int
-	checkQuery := `
-		SELECT COUNT(*)
-		FROM xcentro.payout_transfer_requests
-		WHERE voucher_id = $1
-	`
-
-	err := r.querier.QueryRow(ctx, checkQuery, voucherID).Scan(&payoutCount)
-	if err != nil {
-		return fmt.Errorf("failed to check payout transfers: %w", err)
-	}
-
-	if payoutCount > 0 {
-		return fmt.Errorf("cannot delete voucher: %d active payout transfer(s) exist", payoutCount)
-	}
-
 	// Delete voucher (cascades to approvals and sync queue)
 	deleteQuery := `
 		DELETE FROM xcentro.payment_vouchers
