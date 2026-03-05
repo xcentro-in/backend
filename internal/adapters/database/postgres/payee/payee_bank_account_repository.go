@@ -58,8 +58,9 @@ func (r *PgPayeeBankAccountRepository) CreateBankAccount(ctx context.Context, ac
 			ifsc_code, bank_name, branch_name, account_type, account_holder_name,
 			is_verified, verified_at, bank_verification_status, bank_verification_data,
 			cross_verification_status,
-			is_active, account_label, metadata
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+			is_active, account_label, metadata,
+			jiopay_submerchant_id, easebuzz_submerchant_id
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 		RETURNING account_id, added_at
 	`
 
@@ -101,6 +102,8 @@ func (r *PgPayeeBankAccountRepository) CreateBankAccount(ctx context.Context, ac
 		account.IsActive,
 		account.AccountLabel,
 		metadataJSON,
+		toNullString(account.JioPaySubmerchantID),
+		toNullString(account.EasebuzzSubmerchantID),
 	).Scan(&account.AccountID, &account.AddedAt)
 
 	if err != nil {
@@ -126,7 +129,8 @@ func (r *PgPayeeBankAccountRepository) FindByID(ctx context.Context, accountID s
 		       ifsc_code, bank_name, branch_name, account_type, account_holder_name,
 		       is_verified, verified_at, bank_verification_status, bank_verification_data,
 		       cross_verification_status,
-		       is_active, account_label, metadata, added_at, updated_at
+		       is_active, account_label, metadata, added_at, updated_at,
+		       COALESCE(jiopay_submerchant_id, ''), COALESCE(easebuzz_submerchant_id, '')
 		FROM xcentro.payee_bank_accounts
 		WHERE account_id = $1
 	`
@@ -157,6 +161,8 @@ func (r *PgPayeeBankAccountRepository) FindByID(ctx context.Context, accountID s
 		&metadataJSON,
 		&account.AddedAt,
 		&updatedAt,
+		&account.JioPaySubmerchantID,
+		&account.EasebuzzSubmerchantID,
 	)
 
 	if err != nil {
@@ -221,7 +227,8 @@ func (r *PgPayeeBankAccountRepository) FindByAccountHash(ctx context.Context, ac
 		       ifsc_code, bank_name, branch_name, account_type, account_holder_name,
 		       is_verified, verified_at, bank_verification_status, bank_verification_data,
 		       cross_verification_status,
-		       is_active, account_label, metadata, added_at, updated_at
+		       is_active, account_label, metadata, added_at, updated_at,
+		       COALESCE(jiopay_submerchant_id, ''), COALESCE(easebuzz_submerchant_id, '')
 		FROM xcentro.payee_bank_accounts
 		WHERE account_number_hash = $1
 		LIMIT 1
@@ -253,6 +260,8 @@ func (r *PgPayeeBankAccountRepository) FindByAccountHash(ctx context.Context, ac
 		&metadataJSON,
 		&account.AddedAt,
 		&updatedAt,
+		&account.JioPaySubmerchantID,
+		&account.EasebuzzSubmerchantID,
 	)
 
 	if err != nil {
@@ -316,7 +325,8 @@ func (r *PgPayeeBankAccountRepository) UpdateBankAccount(ctx context.Context, ac
 		UPDATE xcentro.payee_bank_accounts
 		SET is_verified = $2, verified_at = $3, bank_verification_status = $4, bank_verification_data = $5,
 		    cross_verification_status = $6,
-		    is_active = $7, account_label = $8, metadata = $9
+		    is_active = $7, account_label = $8, metadata = $9,
+		    jiopay_submerchant_id = $10, easebuzz_submerchant_id = $11
 		WHERE account_id = $1
 	`
 
@@ -353,6 +363,8 @@ func (r *PgPayeeBankAccountRepository) UpdateBankAccount(ctx context.Context, ac
 		account.IsActive,
 		account.AccountLabel,
 		metadataJSON,
+		toNullString(account.JioPaySubmerchantID),
+		toNullString(account.EasebuzzSubmerchantID),
 	)
 
 	if err != nil {
@@ -372,4 +384,13 @@ func (r *PgPayeeBankAccountRepository) UpdateBankAccount(ctx context.Context, ac
 		"account_id", account.AccountID,
 		"is_verified", account.IsVerified)
 	return nil
+}
+
+// toNullString converts an empty string to nil so pgx inserts NULL rather than ''
+// for nullable VARCHAR columns such as gateway sub-merchant IDs.
+func toNullString(s string) interface{} {
+	if s == "" {
+		return nil
+	}
+	return s
 }

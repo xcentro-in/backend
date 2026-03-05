@@ -22,6 +22,25 @@ type InitiatePaymentRequest struct {
 	UDF4 string `json:"udf4,omitempty"`
 	UDF5 string `json:"udf5,omitempty"`
 	// UDF8-10 must be empty per Easebuzz requirements
+
+	// SplitPayments distributes the payment across sub-merchants (payees) on T+1.
+	// Nil/empty means full settlement to master merchant account.
+	// TODO: Confirm the exact JSON key with Easebuzz API documentation.
+	SplitPayments []EasebuzzSplitLeg `json:"split_payments,omitempty"`
+}
+
+// ============================================================================
+// SPLIT SETTLEMENT TYPES
+// Used when a single payment is distributed across multiple sub-merchants.
+// Each payee registered with Easebuzz receives their share directly on T+1.
+// ============================================================================
+
+// EasebuzzSplitLeg represents a single leg in an Easebuzz split-settlement payment.
+// The master merchant leg (our service fee) uses the master merchant ID.
+// TODO: Confirm exact field names against the Easebuzz split-settlement API spec.
+type EasebuzzSplitLeg struct {
+	MerchantID string `json:"merchant_id"` // Easebuzz sub-merchant ID; master merchant ID for our fee leg
+	Amount     string `json:"amount"`      // Amount in rupees (e.g. "100.00")
 }
 
 // InitiatePaymentResponse represents the response from Easebuzz Initiate Payment API

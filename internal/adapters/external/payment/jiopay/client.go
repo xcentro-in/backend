@@ -535,6 +535,22 @@ func (c *JioPayClient) InitiatePayment(ctx context.Context, request payment.Gate
 		saleReq.TokenRefID = tokenRefID              // Token reference ID
 	}
 
+	// Populate split-settlement legs when the payment covers multiple payees.
+	// Each payee leg sends their voucher amount directly to their account on T+1.
+	// The master merchant leg represents our service fee + GST.
+	if len(request.SplitInstructions) > 0 {
+		splitLegs := make([]SplitPaymentLeg, 0, len(request.SplitInstructions))
+		for _, si := range request.SplitInstructions {
+			amountRupees := fmt.Sprintf("%.2f", float64(si.Amount)/100.0)
+			leg := SplitPaymentLeg{Amount: amountRupees}
+			if !si.IsMasterMerchant {
+				leg.SubMerchantID = si.SubmerchantID
+			}
+			splitLegs = append(splitLegs, leg)
+		}
+		saleReq.SplitInfo = splitLegs
+	}
+
 	// Generate secure hash for outgoing request
 	// Use hash generator to calculate HMAC-SHA256 from all request fields
 	fieldMap := buildInitiateSaleFieldMap(&saleReq)

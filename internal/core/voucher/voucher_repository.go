@@ -131,6 +131,21 @@ type VoucherRepository interface {
 	// Returns: (totalAmount, validVoucherCount, error)
 	// Error cases: not all vouchers found, wrong business, not in draft status
 	ValidateAndSumVouchers(ctx context.Context, voucherIDs []uuid.UUID, businessID string) (int64, int, error)
+
+	// GetVouchersForSplit retrieves per-voucher data required to build split-settlement instructions.
+	// For each voucher ID it returns the net_amount and the gateway sub-merchant IDs stored on
+	// the linked payee bank account.  Vouchers that are NOT in draft status or do not belong to
+	// the business are excluded (the caller should have already validated ownership via
+	// ValidateAndSumVouchers).
+	GetVouchersForSplit(ctx context.Context, voucherIDs []uuid.UUID, businessID string) ([]*VoucherSplitData, error)
+}
+
+// VoucherSplitData holds the per-voucher information needed to build split-settlement legs.
+type VoucherSplitData struct {
+	VoucherID             uuid.UUID
+	NetAmount             int64  // in paise
+	JioPaySubmerchantID   string // empty if not yet onboarded with JioPay
+	EasebuzzSubmerchantID string // empty if not yet onboarded with Easebuzz
 }
 
 // VoucherFilters defines filter criteria for listing vouchers

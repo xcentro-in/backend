@@ -263,6 +263,49 @@ func (r *PostgresVoucherRepository) ValidateAndSumVouchers(ctx context.Context, 
 	return totalAmount, count, nil
 }
 
+// GetVouchersForSplit retrieves per-voucher amounts and gateway sub-merchant IDs for split settlement.
+// Joins payment_vouchers → payee_bank_accounts using the voucher's account_id FK.
+// Only returns vouchers that belong to the business and are in draft status.
+func (r *PostgresVoucherRepository) GetVouchersForSplit(ctx context.Context, voucherIDs []uuid.UUID, businessID string) ([]*voucher.VoucherSplitData, error) {
+	query := `
+		SELECT
+			v.voucher_id,
+			v.net_amount,
+			COALESCE(pba.jiopay_submerchant_id, '')    AS jiopay_submerchant_id,
+			COALESCE(pba.easebuzz_submerchant_id, '')   AS easebuzz_submerchant_id
+		FROM xcentro.payment_vouchers v
+		JOIN xcentro.payee_bank_accounts pba ON pba.account_id = v.account_id
+		WHERE v.voucher_id = ANY($1)
+		  AND v.business_id = $2
+		  AND v.status = 'draft'
+	`
+
+	rows, err := r.querier.Query(ctx, query, voucherIDs, businessID)
+	if err != nil {
+		return nil, fmt.Errorf("GetVouchersForSplit: query failed: %w", err)
+	}
+	defer rows.Close()
+
+	var results []*voucher.VoucherSplitData
+	for rows.Next() {
+		var d voucher.VoucherSplitData
+		if err := rows.Scan(
+			&d.VoucherID,
+			&d.NetAmount,
+			&d.JioPaySubmerchantID,
+			&d.EasebuzzSubmerchantID,
+		); err != nil {
+			return nil, fmt.Errorf("GetVouchersForSplit: scan failed: %w", err)
+		}
+		results = append(results, &d)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("GetVouchersForSplit: rows error: %w", err)
+	}
+
+	return results, nil
+}
+
 // ValidateVoucherForApproval checks if voucher exists, belongs to business, and is in valid status for approval
 func (r *PostgresVoucherRepository) ValidateVoucherForApproval(ctx context.Context, voucherID uuid.UUID, businessID string) (voucher.VoucherStatus, error) {
 	query := `
