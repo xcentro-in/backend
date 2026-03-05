@@ -14,7 +14,6 @@ import (
 	notificationRepo "xcentro.in/internal/adapters/database/postgres/notification"
 	payeeRepo "xcentro.in/internal/adapters/database/postgres/payee"
 	paymentRepo "xcentro.in/internal/adapters/database/postgres/payment"
-	payoutRepo "xcentro.in/internal/adapters/database/postgres/payout"
 	userRepo "xcentro.in/internal/adapters/database/postgres/user"
 	voucherRepo "xcentro.in/internal/adapters/database/postgres/voucher"
 	"xcentro.in/internal/adapters/external/payment/easebuzz"
@@ -36,7 +35,6 @@ import (
 	notificationHandler "xcentro.in/internal/handlers/http/notification"
 	"xcentro.in/internal/handlers/http/payee"
 	"xcentro.in/internal/handlers/http/payment"
-	payoutHandler "xcentro.in/internal/handlers/http/payout"
 	userHandler "xcentro.in/internal/handlers/http/user"
 	voucherHandler "xcentro.in/internal/handlers/http/voucher"
 	"xcentro.in/internal/middleware"
@@ -289,22 +287,6 @@ func registerV1VoucherRoutes(clients *externalClients, cfg *config.Config, group
 	voucherHandler.RegisterVoucherRoutes(voucherGroup, voucherService, authSvc, cookieManager)
 }
 
-func registerV1PayoutRoutes(clients *externalClients, cfg *config.Config, group *echo.Group, cookieManager *httputil.CookieManager) {
-	transferRepository := payoutRepo.NewPostgresPayoutTransferRepository(clients.db)
-	paymentRepository := paymentRepo.NewPgPaymentRepository(clients.db, cfg.BankAccountEncryption.EncryptionKey)
-	stateChangeRepository := paymentRepo.NewPostgresPaymentStateChangeRepository(clients.db)
-
-	webhookHandler := payoutHandler.NewPayoutWebhookHandler(transferRepository, paymentRepository, stateChangeRepository, cfg.Castler.WebhookSecret)
-
-	// Payout routes - separated by purpose
-	payoutGroup := group.Group("/payout")
-
-	// Webhook endpoints (external - called by Castler)
-	payoutGroup.POST("/webhooks/castler", webhookHandler.HandleCastlerWebhook)
-
-	// NOTE: Dashboard/Operations endpoints have been moved to cmd/ops (ops dashboard service)
-	// See cmd/ops/routes.go -> registerOpsPayoutRoutes() for all payout operations endpoints
-}
 
 func registerV1BatchPaymentRoutes(clients *externalClients, cfg *config.Config, group *echo.Group, cookieManager *httputil.CookieManager) {
 	factory := &serviceFactory{clients, cfg}
@@ -408,7 +390,6 @@ func registerV1Routes(s *xcentroServer) {
 	registerV1BusinessRoutes(clients, cfg, v1, cookieManager)
 	registerV1PayeeRoutes(clients, cfg, v1, cookieManager)
 	registerV1VoucherRoutes(clients, cfg, v1, cookieManager)
-	registerV1PayoutRoutes(clients, cfg, v1, cookieManager)
 	registerV1BatchPaymentRoutes(clients, cfg, v1, cookieManager)
 	registerV1NotificationRoutes(clients, cfg, v1, cookieManager)
 	registerV1DashboardRoutes(clients, cfg, v1, cookieManager)

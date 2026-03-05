@@ -33,6 +33,28 @@ type PaymentGateway interface {
 	IsAggregatorModel() bool
 }
 
+// === SPLIT SETTLEMENT ===
+
+// SplitInstruction defines a single leg of a split-settlement payment.
+// When a payment covers one or more vouchers, each payee receives their
+// voucher amount directly from the payment gateway on T+1 (split settlement).
+// We (the platform) receive the service fee + GST as a separate leg.
+type SplitInstruction struct {
+	// SubmerchantID is the gateway-assigned ID for the payee.
+	// Empty string means this leg belongs to the master merchant (us).
+	SubmerchantID string `json:"submerchant_id,omitempty"`
+
+	// Amount is the leg amount in paise (INR smallest unit).
+	Amount int64 `json:"amount"`
+
+	// VoucherID is the internal voucher this leg corresponds to.
+	// Empty for the master merchant (service fee) leg.
+	VoucherID string `json:"voucher_id,omitempty"`
+
+	// IsMasterMerchant flags the leg that represents our service fee + GST.
+	IsMasterMerchant bool `json:"is_master_merchant,omitempty"`
+}
+
 // === GATEWAY REQUEST/RESPONSE STRUCTURES ===
 
 // GatewayTokenizeRequest represents a generic tokenization request
@@ -81,6 +103,11 @@ type GatewayPaymentRequest struct {
 	WalletDetails     *Wallet     `json:"wallet_details,omitempty"`
 
 	Metadata map[string]any `json:"metadata,omitempty"`
+
+	// SplitInstructions carries per-payee split-settlement legs (one per voucher)
+	// plus a master-merchant leg for our service fee + GST.
+	// Nil or empty means no split (direct settlement to master merchant).
+	SplitInstructions []SplitInstruction `json:"split_instructions,omitempty"`
 }
 
 // GatewayPaymentResponse represents a generic payment initiation response

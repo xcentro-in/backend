@@ -89,11 +89,12 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 
 	// Step 0: Derive amount from vouchers if voucher_ids provided
 	// This ensures amount is always calculated from database (single source of truth)
+	var voucherUUIDs []uuid.UUID
 	if len(req.VoucherIDs) > 0 {
 		s.logger.InfoWith("Deriving payment amount from vouchers", "voucher_count", len(req.VoucherIDs))
 
 		// Parse voucher IDs to UUIDs
-		voucherUUIDs := make([]uuid.UUID, 0, len(req.VoucherIDs))
+		voucherUUIDs = make([]uuid.UUID, 0, len(req.VoucherIDs))
 		for _, voucherIDStr := range req.VoucherIDs {
 			voucherUUID, parseErr := uuid.Parse(voucherIDStr)
 			if parseErr != nil {
@@ -157,7 +158,60 @@ func (s *PaymentService) ProcessPayment(ctx context.Context, req payment.Payment
 		"total_fee", totalFee,
 		"gst_percentage", feeRule.GSTPercentage)
 
-	// Step 2: Generate payment ID and callback URL (no DB operations)
+	// Step 2.5: Build split-settlement instructions when vouchers are present.
+	// We select the gateway early (dry-run, no side effects) so we know which
+	// gateway-specific sub-merchant IDs to pull from payee_bank_accounts.
+	if len(voucherUUIDs) > 0 {
+		selectedGateway, gwErr := s.orchestrator.SelectGateway(req)
+		if gwErr != nil {
+			s.logger.ErrorWith("Gateway selection failed during split calculation", "error", gwErr)
+			return nil, fmt.Errorf("gateway selection failed: %w", gwErr)
+		}
+		s.logger.DebugWith("Gateway selected for split calculation", "gateway", selectedGateway)
+
+		splitData, splitErr := s.voucherRepo.(voucher.VoucherRepository).GetVouchersForSplit(
+			ctx, voucherUUIDs, req.BusinessID,
+		)
+		if splitErr != nil {
+			s.logger.ErrorWith("Failed to fetch voucher split data", "error", splitErr)
+			return nil, fmt.Errorf("failed to build split instructions: %w", splitErr)
+		}
+
+		splits := make([]payment.SplitInstruction, 0, len(splitData)+1)
+		for _, d := range splitData {
+			var submerchantID string
+			switch selectedGateway {
+			case payment.GatewayJioPay:
+				submerchantID = d.JioPaySubmerchantID
+			case payment.GatewayEasebuzz:
+				submerchantID = d.EasebuzzSubmerchantID
+			}
+			if submerchantID == "" {
+				s.logger.WarnWith("Payee has no sub-merchant ID for selected gateway; split leg will lack submerchant_id",
+					"voucher_id", d.VoucherID,
+					"gateway", selectedGateway)
+			}
+			splits = append(splits, payment.SplitInstruction{
+				SubmerchantID: submerchantID,
+				Amount:        d.NetAmount,
+				VoucherID:     d.VoucherID.String(),
+			})
+		}
+
+		// Master merchant leg: our service fee + GST
+		splits = append(splits, payment.SplitInstruction{
+			Amount:           feeBreakdown.TotalFee,
+			IsMasterMerchant: true,
+		})
+
+		req.SplitInstructions = splits
+		s.logger.InfoWith("Split instructions built",
+			"gateway", selectedGateway,
+			"payee_legs", len(splitData),
+			"master_fee_paise", feeBreakdown.TotalFee)
+	}
+
+	// Step 3: Generate payment ID and callback URL (no DB operations)
 	paymentID := uuid.Must(uuid.NewV7()).String()
 	s.logger.DebugWith("Generated payment ID", "payment_id", paymentID)
 

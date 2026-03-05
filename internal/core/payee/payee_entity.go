@@ -220,8 +220,11 @@ type PayeeBankAccount struct {
 	// Cross-verification with GST/PAN (money rotation check)
 	CrossVerificationStatus VerificationStatus `json:"cross_verification_status"`
 
-	// Payout provider onboarding (Castler)
-	CastlerBeneficiaryID string `json:"castler_beneficiary_id,omitempty"` // Castler payee ID for payouts
+	// Payment gateway sub-merchant IDs (for split settlement)
+	// Assigned by the respective gateway when the payee is onboarded as a sub-merchant.
+	// NULL until onboarding is completed with that gateway.
+	JioPaySubmerchantID   string `json:"jiopay_submerchant_id,omitempty"`
+	EasebuzzSubmerchantID string `json:"easebuzz_submerchant_id,omitempty"`
 
 	// Account status
 	IsActive     bool   `json:"is_active"`

@@ -14,7 +14,6 @@ type OpsCollectionRepository interface {
 	GetCollectionSummary(ctx context.Context, paymentID string) (*payment.OpsCollectionSummary, error)
 	GetCollectionDetails(ctx context.Context, paymentID string) (*payment.OpsCollectionDetails, error)
 	GetCollectionActivity(ctx context.Context, paymentID string) (*payment.OpsCollectionActivityResponse, error)
-	GetCollectionPayouts(ctx context.Context, paymentID string) (*payment.OpsCollectionPayoutsResponse, error)
 }
 
 // OpsCollectionService provides ops-specific payment collection operations
@@ -126,20 +125,3 @@ func (s *OpsCollectionService) GetCollectionActivity(ctx context.Context, paymen
 	return activity, nil
 }
 
-// GetCollectionPayouts retrieves all voucher-payout mappings for a collection
-func (s *OpsCollectionService) GetCollectionPayouts(ctx context.Context, paymentID string) (*payment.OpsCollectionPayoutsResponse, error) {
-	s.logger.Infof("Ops: Fetching collection payouts - payment_id=%s", paymentID)
-
-	if paymentID == "" {
-		return nil, fmt.Errorf("payment_id is required")
-	}
-
-	payouts, err := s.repo.GetCollectionPayouts(ctx, paymentID)
-	if err != nil {
-		s.logger.Errorf("Failed to get collection payouts: %v", err)
-		return nil, err
-	}
-
-	s.logger.Infof("Ops: Collection payouts fetched - payment_id=%s, count=%d", paymentID, payouts.TotalCount)
-	return payouts, nil
-}

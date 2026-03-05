@@ -150,11 +150,8 @@ type PayeeBankAccountRepository interface {
 	FindByID(ctx context.Context, accountID string) (*PayeeBankAccount, error)
 	UpdateBankAccount(ctx context.Context, account *PayeeBankAccount) error
 
-	// Global account lookup (for reusing Castler beneficiary IDs)
+	// Global account lookup (for duplicate detection)
 	FindByAccountHash(ctx context.Context, accountHash string) (*PayeeBankAccount, error)
-
-	// Lightweight lookup for payout (no decryption needed)
-	GetCastlerBeneficiaryID(ctx context.Context, accountID string) (string, error)
 }
 
 // ############################################################################

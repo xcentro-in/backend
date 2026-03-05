@@ -23,13 +23,6 @@ const (
 	SettlementActionReceived PaymentAction = "settlement_received"
 	SettlementActionFailed   PaymentAction = "settlement_failed"
 
-	// Payout lifecycle (funds from escrow to payee)
-	PayoutActionInitiated  PaymentAction = "payout_initiated"
-	PayoutActionProcessing PaymentAction = "payout_processing"
-	PayoutActionCompleted  PaymentAction = "payout_completed"
-	PayoutActionFailed     PaymentAction = "payout_failed"
-	PayoutActionTimeout    PaymentAction = "payout_timeout"
-	PayoutActionCancelled  PaymentAction = "payout_cancelled"
 )
 
 // MapPaymentActionToUserFriendly converts internal payment actions to user-friendly strings
@@ -56,22 +49,6 @@ func MapPaymentActionToUserFriendly(action PaymentAction) string {
 	case SettlementActionPending, SettlementActionReceived, SettlementActionFailed:
 		return "Payment Processing"
 
-	// Payout lifecycle: In-progress → "Payment Processing"
-	case PayoutActionInitiated, PayoutActionProcessing:
-		return "Payment Processing"
-
-	// Payout completed → Final success state
-	case PayoutActionCompleted:
-		return "Payment Completed to Payee"
-
-	// Payout failures → Show specific status for investigation
-	case PayoutActionFailed:
-		return "Payout Failed"
-	case PayoutActionTimeout:
-		return "Payout Under Investigation"
-	case PayoutActionCancelled:
-		return "Payout Cancelled"
-
 	default:
 		return string(action)
 	}
@@ -92,7 +69,6 @@ const (
 type PaymentStateChange struct {
 	StateChangeID   uuid.UUID        `json:"state_change_id"`
 	PaymentID       uuid.UUID        `json:"payment_id"`
-	TransferID      *uuid.UUID       `json:"transfer_request_id,omitempty"`
 	Action          PaymentAction    `json:"action"`
 	ActionTimestamp time.Time        `json:"action_timestamp"`
 	ActorType       PaymentActorType `json:"actor_type"`
@@ -112,7 +88,6 @@ type PaymentStateChange struct {
 // CreatePaymentStateChangeRequest represents the request to create a state change record
 type CreatePaymentStateChangeRequest struct {
 	PaymentID       uuid.UUID  // Required: multiple vouchers can share same payment
-	TransferID      *uuid.UUID
 	Action          PaymentAction
 	ActionTimestamp time.Time
 	ActorType       PaymentActorType
@@ -136,8 +111,6 @@ type PaymentStateChangeRepository interface {
 	// GetByPaymentID retrieves all state changes for a payment (chronologically)
 	GetByPaymentID(ctx context.Context, paymentID uuid.UUID) ([]*PaymentStateChange, error)
 
-	// GetByTransferID retrieves all state changes for a payout transfer
-	GetByTransferID(ctx context.Context, transferID uuid.UUID) ([]*PaymentStateChange, error)
 
 	// GetLatestByPaymentID retrieves the most recent state change for a payment
 	GetLatestByPaymentID(ctx context.Context, paymentID uuid.UUID) (*PaymentStateChange, error)

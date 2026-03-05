@@ -66,14 +66,13 @@ const (
 	OpsCollectionStatusPending     OpsCollectionStatus = "pending"     // Payment pending
 	OpsCollectionStatusSuccess     OpsCollectionStatus = "success"     // Payment successful but not yet settled
 	OpsCollectionStatusFailed      OpsCollectionStatus = "failed"      // Payment failed
-	OpsCollectionStatusPayoutReady OpsCollectionStatus = "payoutReady" // Payment settled and ready for payout
 )
 
 // OpsListCollectionsRequest represents the request for listing collections
 type OpsListCollectionsRequest struct {
 	Page   int                 `query:"page" validate:"omitempty,min=1"`
 	Limit  int                 `query:"limit" validate:"omitempty,min=1,max=100"`
-	Status OpsCollectionStatus `query:"status" validate:"omitempty,oneof=pending success failed payoutReady"`
+	Status OpsCollectionStatus `query:"status" validate:"omitempty,oneof=pending success failed"`
 }
 
 // OpsCollectionListItem represents a single collection in the ops list view

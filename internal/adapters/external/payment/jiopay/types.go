@@ -235,8 +235,27 @@ type InitiateSaleRequest struct {
 	// Tokenization fields
 	PaymentOptionCodes string `json:"paymentOptionCodes,omitempty"` // "CC" for credit, "DC" for debit
 
+	// Split settlement: distribute payment across sub-merchants (payees) on T+1.
+	// Nil/empty means full settlement to master merchant account.
+	// TODO: Confirm the exact JSON key with JioPay API documentation.
+	SplitInfo []SplitPaymentLeg `json:"splitInfo,omitempty"`
+
 	// Security
 	SecureHash string `json:"secureHash"` // SHA-256 hash
+}
+
+// ============================================================================
+// SPLIT SETTLEMENT TYPES
+// Used when a single payment is distributed across multiple sub-merchants.
+// Each payee registered with JioPay receives their share directly on T+1.
+// ============================================================================
+
+// SplitPaymentLeg represents a single leg in a JioPay split-settlement payment.
+// The master merchant leg (our service fee) omits SubMerchantID.
+// TODO: Confirm exact field names against the JioPay split-settlement API spec.
+type SplitPaymentLeg struct {
+	SubMerchantID string `json:"subMerchantId,omitempty"` // JioPay-assigned sub-merchant ID; empty for master merchant leg
+	Amount        string `json:"amount"`                  // Amount in rupees (e.g. "100.00")
 }
 
 // InitiateSaleResponse represents the response from initiateSale API

@@ -185,6 +185,7 @@ func (o *paymentOrchestratorImpl) ProcessPayment(ctx context.Context, request Pa
 		UPIDetails:        request.UPIDetails,
 		WalletDetails:     request.WalletDetails,
 		Metadata:          request.Metadata,
+		SplitInstructions: request.SplitInstructions,
 	}
 
 	// Call actual gateway
@@ -429,15 +430,16 @@ func (o *paymentOrchestratorImpl) ProcessTokenizedPayment(ctx context.Context, r
 	// Note: CallbackURL comes from request (set by payment service based on calling device)
 	// We don't fetch from DB because payment is in uncommitted transaction
 	gatewayRequest := GatewayPaymentRequest{
-		BusinessID:    request.BusinessID,
-		TransactionID: paymentID,
-		Amount:        amountToGateway,
-		Currency:      request.Currency,
-		PaymentMethod: PaymentMethodCard, // Gateway sees this as card payment
-		Description:   request.Description,
-		CallbackURL:   request.CallbackURL, // From request, not DB
-		Token:         storedCard.Token,
-		Cryptogram:    "", // Empty - gateway will generate if needed
+		BusinessID:        request.BusinessID,
+		TransactionID:     paymentID,
+		Amount:            amountToGateway,
+		Currency:          request.Currency,
+		PaymentMethod:     PaymentMethodCard, // Gateway sees this as card payment
+		Description:       request.Description,
+		CallbackURL:       request.CallbackURL, // From request, not DB
+		Token:             storedCard.Token,
+		Cryptogram:        "", // Empty - gateway will generate if needed
+		SplitInstructions: request.SplitInstructions,
 		Metadata: map[string]any{
 			"payment_type": "tokenized",
 			"card_id":      storedCard.CardID,

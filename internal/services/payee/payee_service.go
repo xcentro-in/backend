@@ -11,24 +11,17 @@ import (
 
 	"github.com/google/uuid"
 	"xcentro.in/internal/adapters/database/postgres/client"
-	"xcentro.in/internal/adapters/external/payout/castler"
 	"xcentro.in/internal/adapters/providers/fileupload"
 	"xcentro.in/internal/core/business"
 	"xcentro.in/internal/core/business_rules"
 	"xcentro.in/internal/core/payee"
 	"xcentro.in/internal/core/payment"
-	"xcentro.in/internal/core/payout"
 	"xcentro.in/internal/services/verification"
 	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/logger"
 	"xcentro.in/internal/shared/timeutil"
 	"xcentro.in/internal/shared/utils"
 )
-
-// CastlerPayeeOnboarder interface for Castler-specific payee onboarding operations
-type CastlerPayeeOnboarder interface {
-	OnboardPayeeToCastler(ctx context.Context, accountHolder, email, mobile, accountNumber, ifsc, bankName string) (*castler.CastlerPayeeOnboardResponse, error)
-}
 
 // PayeeService orchestrates the complete payee onboarding and management flow
 // Supports polymorphic payee types: Vendor, GST Payment, Biller, Employee
@@ -47,10 +40,6 @@ type PayeeService struct {
 	// Shared repositories
 	payeeBankAccountRepo      payee.PayeeBankAccountRepository
 	businessPayeeRelationRepo payee.BusinessPayeeRelationRepository
-
-	// Payout provider integration (Phase 8)
-	payoutProvider payout.PayoutProvider
-	castlerClient  CastlerPayeeOnboarder // For Castler-specific payee onboarding
 
 	// Verification services
 	docVerificationSvc   *verification.DocumentVerificationService // AuthBridge for GST, PAN verification
@@ -84,8 +73,6 @@ func NewPayeeService(
 	payeeEmployeeRepo payee.PayeeEmployeeRepository,
 	payeeBankAccountRepo payee.PayeeBankAccountRepository,
 	businessPayeeRelationRepo payee.BusinessPayeeRelationRepository,
-	payoutProvider payout.PayoutProvider,
-	castlerClient CastlerPayeeOnboarder,
 	docVerificationSvc *verification.DocumentVerificationService,
 	bankVerificationSvc business_rules.BankVerificationService,
 	crossVerificationSvc business_rules.CrossVerificationService,
@@ -105,8 +92,6 @@ func NewPayeeService(
 		payeeEmployeeRepo:          payeeEmployeeRepo,
 		payeeBankAccountRepo:       payeeBankAccountRepo,
 		businessPayeeRelationRepo:  businessPayeeRelationRepo,
-		payoutProvider:             payoutProvider,
-		castlerClient:              castlerClient,
 		docVerificationSvc:         docVerificationSvc,
 		bankVerificationSvc:        bankVerificationSvc,
 		crossVerificationSvc:       crossVerificationSvc,
@@ -212,7 +197,7 @@ func (s *PayeeService) onboardVendor(ctx context.Context, req payee.OnboardPayee
 		vendorPayee = existingVendor
 	}
 
-	// Step 4: Check if bank account already exists globally (for Castler ID reuse)
+	// Step 4: Check if bank account already exists globally (for duplicate detection)
 	s.logger.DebugWith("Checking for existing bank account globally")
 	accountHash := s.computeAccountHash(vendor.AccountNumber)
 
@@ -226,8 +211,7 @@ func (s *PayeeService) onboardVendor(ctx context.Context, req payee.OnboardPayee
 
 	if existingAccount != nil {
 		s.logger.InfoWith("Bank account already exists globally, checking if business already has this account",
-			"existing_account_id", existingAccount.AccountID,
-			"castler_beneficiary_id", existingAccount.CastlerBeneficiaryID)
+			"existing_account_id", existingAccount.AccountID)
 
 		// ANTI-FRAUD CHECK: Ensure this business doesn't already have this account
 		// This prevents same account being used for multiple payees within one business
@@ -244,9 +228,9 @@ func (s *PayeeService) onboardVendor(ctx context.Context, req payee.OnboardPayee
 		}
 
 		// Account exists globally but NOT for this business - safe to reuse
-		s.logger.InfoWith("Account not found for this business, reusing Castler beneficiary ID",
+		s.logger.InfoWith("Account not found for this business, reusing existing account",
 			"business_id", req.BusinessID,
-			"castler_beneficiary_id", existingAccount.CastlerBeneficiaryID)
+			"account_id", existingAccount.AccountID)
 		bankAccount = existingAccount
 	} else {
 		s.logger.InfoWith("Bank account not found, initiating penny drop verification")
@@ -295,24 +279,7 @@ func (s *PayeeService) onboardVendor(ctx context.Context, req payee.OnboardPayee
 			return nil, err
 		}
 
-		// Step 7.5: Onboard payee to Castler (after all verifications pass)
-		s.logger.InfoWith("Onboarding payee to Castler")
-		castlerPayeeResp, err := s.castlerClient.OnboardPayeeToCastler(
-			ctx,
-			vendor.AccountHolderName,
-			req.ContactEmail,
-			req.ContactPhone,
-			vendor.AccountNumber,
-			vendor.IFSCCode,
-			vendor.BankName,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("castler payee onboarding failed: %w", err)
-		}
-		s.logger.InfoWith("Castler onboarding successful",
-			"castler_payee_id", castlerPayeeResp.Result)
-
-		// Create PayeeBankAccount entity with Castler beneficiary ID
+		// Create PayeeBankAccount entity
 		now := time.Now()
 		bankAccount = &payee.PayeeBankAccount{
 			AccountNumber:           vendor.AccountNumber,
@@ -326,7 +293,6 @@ func (s *PayeeService) onboardVendor(ctx context.Context, req payee.OnboardPayee
 			VerifiedAt:              &now,
 			BankVerificationStatus:  payee.VerificationStatusSuccess,
 			CrossVerificationStatus: payee.VerificationStatusSuccess,
-			CastlerBeneficiaryID:    castlerPayeeResp.Result, // Store Castler payee ID
 			IsActive:                true,
 			AccountLabel:            vendor.AccountLabel,
 			VerificationData:        map[string]any{"test": "test"}, // TODO: Store actual verification data
@@ -822,7 +788,7 @@ func (s *PayeeService) onboardEmployee(ctx context.Context, req payee.OnboardPay
 	// Step 2: Always create new employee (employees are business-specific, not global)
 	s.logger.InfoWith("Preparing to create new employee payee")
 
-	// Step 3: Check if bank account already exists globally (for Castler ID reuse)
+	// Step 3: Check if bank account already exists globally (for duplicate detection)
 	s.logger.DebugWith("Checking for existing bank account globally")
 	accountHash := s.computeAccountHash(employee.AccountNumber)
 
@@ -844,8 +810,7 @@ func (s *PayeeService) onboardEmployee(ctx context.Context, req payee.OnboardPay
 
 	if existingAccount != nil {
 		s.logger.InfoWith("Bank account already exists globally, checking if business already has this account",
-			"existing_account_id", existingAccount.AccountID,
-			"castler_beneficiary_id", existingAccount.CastlerBeneficiaryID)
+			"existing_account_id", existingAccount.AccountID)
 
 		// ANTI-FRAUD CHECK: Ensure this business doesn't already have this account
 		// This prevents same account being used for multiple payees within one business
@@ -862,9 +827,9 @@ func (s *PayeeService) onboardEmployee(ctx context.Context, req payee.OnboardPay
 		}
 
 		// Account exists globally but NOT for this business - safe to reuse
-		s.logger.InfoWith("Account not found for this business, reusing Castler beneficiary ID",
+		s.logger.InfoWith("Account not found for this business, reusing existing account",
 			"business_id", req.BusinessID,
-			"castler_beneficiary_id", existingAccount.CastlerBeneficiaryID)
+			"account_id", existingAccount.AccountID)
 		bankAccount = existingAccount
 	} else {
 		// Step 4: Perform penny drop verification (only for new accounts)
@@ -938,23 +903,6 @@ func (s *PayeeService) onboardEmployee(ctx context.Context, req payee.OnboardPay
 			return nil, err
 		}
 
-		// Step 4.3: Onboard to Castler using the ACTUAL bank account holder name (from bank verification)
-		s.logger.InfoWith("Onboarding payee to Castler")
-		castlerPayeeResp, err := s.castlerClient.OnboardPayeeToCastler(
-			ctx,
-			bankData.AccountHolderName, // Use actual bank account holder name, not display_name
-			req.ContactEmail,
-			req.ContactPhone,
-			employee.AccountNumber,
-			employee.IFSCCode,
-			employee.BankName,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("castler payee onboarding failed: %w", err)
-		}
-		s.logger.InfoWith("Castler onboarding successful",
-			"castler_payee_id", castlerPayeeResp.Result)
-
 		// Prepare bank account entity (will be created in transaction)
 		// At this point, all verifications have passed (name validation + money rotation)
 		now := time.Now()
@@ -968,8 +916,7 @@ func (s *PayeeService) onboardEmployee(ctx context.Context, req payee.OnboardPay
 			AccountType:             accountType,
 			AccountLabel:            employee.AccountLabel,
 			IsActive:                true,
-			IsVerified:              true,                    // Always true at this point
-			CastlerBeneficiaryID:    castlerPayeeResp.Result, // Store Castler payee ID
+			IsVerified:              true, // Always true at this point
 			BankVerificationStatus:  payee.VerificationStatusSuccess,
 			CrossVerificationStatus: payee.VerificationStatusSuccess,
 			VerifiedAt:              &now,

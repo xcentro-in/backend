@@ -26,8 +26,6 @@ type Config struct {
 	S3                    S3Config                    `json:"s3"`
 	SES                   SESConfig                   `json:"ses"`
 	SMS                   SMSConfig                   `json:"sms"`
-	Castler               CastlerConfig               `json:"castler"`
-	Payout                PayoutConfig                `json:"payout"`
 	JioPay                JioPayConfig                `json:"jiopay"`
 	Easebuzz              EasebuzzConfig              `json:"easebuzz"`
 	MockPG                MockPGConfig                `json:"mockpg"`
@@ -117,38 +115,7 @@ type SMSConfig struct {
 	OTPExpiry time.Duration `json:"otp_expiry" env:"SMS_OTP_EXPIRY" env-default:"10m"` // OTP validity window
 }
 
-// CastlerConfig holds Castler payout provider configuration.
-type CastlerConfig struct {
-	BaseURL       string `json:"base_url" env:"CASTLER_BASE_URL" env-default:"https://api.castler.in"`
-	APIKey        string `json:"-" env:"CASTLER_API_KEY"`                                     // API authentication key (sensitive)
-	SecretKey     string `json:"-" env:"CASTLER_SECRET_KEY"`                                  // API signing secret (sensitive)
-	WebhookSecret string `json:"-" env:"CASTLER_WEBHOOK_SECRET"`                              // Webhook signature verification (sensitive)
-	EncryptionKey string `json:"-" env:"CASTLER_ENCRYPTION_KEY"`                              // AES encryption key (optional, sensitive)
-	EncryptionIV  string `json:"-" env:"CASTLER_ENCRYPTION_IV"`                               // Fixed AES IV in base64 (optional, sensitive)
-	EscrowID      string `json:"-" env:"CASTLER_ESCROW_ID"`                                   // Escrow account ID (sensitive)
-	MockEnabled   bool   `json:"mock_enabled" env:"CASTLER_MOCK_ENABLED" env-default:"false"` // Enable mock mode for testing (no real API calls)
-}
 
-// PayoutConfig holds payout system configuration
-// All values hardcoded - no need for env variables until automated retry is implemented
-type PayoutConfig struct {
-	MaxRetryAttempts       int     // Hardcoded: 3 (not used until auto-retry implemented)
-	RetryDelayMinutes      int     // Hardcoded: 15 (not used until auto-retry implemented)
-	RetryBackoffMultiplier float64 // Hardcoded: 2.0 (not used until auto-retry implemented)
-	WebhookTimeoutMinutes  int     // Hardcoded: 60 minutes (flags transfer for manual review if no webhook)
-	RTGSThresholdAmount    int64   // Hardcoded: 20000000 paise (₹2,00,000) - NEFT below, RTGS above
-}
-
-// NewPayoutConfig returns hardcoded payout configuration
-func NewPayoutConfig() PayoutConfig {
-	return PayoutConfig{
-		MaxRetryAttempts:       3,
-		RetryDelayMinutes:      15,
-		RetryBackoffMultiplier: 2.0,
-		WebhookTimeoutMinutes:  60,       // 1 hour
-		RTGSThresholdAmount:    20000000, // ₹2 lakh
-	}
-}
 
 // JioPayConfig holds JioPay payment gateway configuration.
 type JioPayConfig struct {
@@ -251,7 +218,6 @@ type FrontendConfig struct {
 // WorkersConfig holds worker configuration.
 type WorkersConfig struct {
 	Notification NotificationWorkerConfig `json:"notification"`
-	AutoPayout   AutoPayoutWorkerConfig   `json:"auto_payout"`
 }
 
 // NotificationWorkerConfig holds notification worker configuration.
@@ -276,13 +242,6 @@ type NotificationWorkerConfig struct {
 	RecoveryIntervalSeconds  int `json:"recovery_interval_seconds" env:"NOTIFICATION_RECOVERY_INTERVAL_SECONDS" env-default:"60"`
 }
 
-// AutoPayoutWorkerConfig holds auto-payout worker configuration.
-// This worker automatically scans for settled payments and initiates payouts after validation.
-type AutoPayoutWorkerConfig struct {
-	Enabled             bool `json:"enabled" env:"AUTO_PAYOUT_WORKER_ENABLED" env-default:"false"`                       // Enable/disable auto-payout worker (disabled by default for safety)
-	PollIntervalMinutes int  `json:"poll_interval_minutes" env:"AUTO_PAYOUT_POLL_INTERVAL_MINUTES" env-default:"30"`    // How often to scan for settled payments (in minutes)
-	BatchSize           int  `json:"batch_size" env:"AUTO_PAYOUT_BATCH_SIZE" env-default:"50"`                          // Max number of payments to process per run
-}
 
 // BankAccountEncryptionConfig holds bank account encryption configuration for PCI DSS compliance.
 type BankAccountEncryptionConfig struct {
@@ -377,9 +336,6 @@ func Load(path string) (Config, error) {
 		}
 	}
 
-	// Set hardcoded payout configuration (not configurable via env)
-	cfg.Payout = NewPayoutConfig()
-
 	return cfg, err
 }
 
@@ -396,9 +352,6 @@ func LoadWithSecrets(path string, secrets map[string]string) (Config, error) {
 			return cfg, fmt.Errorf("read env: %w", err)
 		}
 	}
-
-	// Set hardcoded payout configuration (not configurable via env)
-	cfg.Payout = NewPayoutConfig()
 
 	// Inject secrets from AWS Secrets Manager (overrides env vars)
 	injectSecrets(&cfg, secrets)
@@ -490,25 +443,6 @@ func injectSecrets(cfg *Config, secrets map[string]string) {
 		cfg.Easebuzz.WebhookSecret = val
 	}
 
-	// Castler Payout Provider
-	if val, ok := secrets["castler_api_key"]; ok && val != "" {
-		cfg.Castler.APIKey = val
-	}
-	if val, ok := secrets["castler_secret_key"]; ok && val != "" {
-		cfg.Castler.SecretKey = val
-	}
-	if val, ok := secrets["castler_webhook_secret"]; ok && val != "" {
-		cfg.Castler.WebhookSecret = val
-	}
-	if val, ok := secrets["castler_encryption_key"]; ok && val != "" {
-		cfg.Castler.EncryptionKey = val
-	}
-	if val, ok := secrets["castler_encryption_iv"]; ok && val != "" {
-		cfg.Castler.EncryptionIV = val
-	}
-	if val, ok := secrets["castler_escrow_id"]; ok && val != "" {
-		cfg.Castler.EscrowID = val
-	}
 
 	// Ops OAuth & Security
 	if val, ok := secrets["ops_oauth_client_secret"]; ok && val != "" {
@@ -606,11 +540,6 @@ func (c Config) Safe() Config {
 	c.SES.SecretKey = "***REDACTED***"
 	c.SES.SessionToken = "***REDACTED***"
 	c.SMS.APIKey = "***REDACTED***"
-	c.Castler.APIKey = "***REDACTED***"
-	c.Castler.SecretKey = "***REDACTED***"
-	c.Castler.WebhookSecret = "***REDACTED***"
-	c.Castler.EncryptionKey = "***REDACTED***"
-	c.Castler.EncryptionIV = "***REDACTED***"
 	c.JioPay.APIKey = "***REDACTED***"
 	c.JioPay.AppID = "***REDACTED***"
 	c.JioPay.EncryptionKey = "***REDACTED***"

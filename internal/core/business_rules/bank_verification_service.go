@@ -25,7 +25,6 @@ const (
 	BankVerificationProviderRazorpay   BankVerificationProvider = "razorpay"
 	BankVerificationProviderCashfree   BankVerificationProvider = "cashfree"
 	BankVerificationProviderInstamojo  BankVerificationProvider = "instamojo"
-	BankVerificationProviderCastler    BankVerificationProvider = "castler"
 	BankVerificationProviderMock       BankVerificationProvider = "mock"
 )
 

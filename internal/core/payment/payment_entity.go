@@ -119,6 +119,11 @@ type PaymentRequest struct {
 	Metadata          map[string]any    `json:"metadata,omitempty"`
 	// Voucher integration (Phase 6)
 	VoucherIDs []string `json:"voucher_ids,omitempty"` // Draft voucher IDs to finalize on payment success
+
+	// SplitInstructions carries the computed split-settlement legs for this payment.
+	// Populated by the service layer before calling the orchestrator when voucher_ids are present.
+	// Nil or empty when there are no vouchers (e.g. card tokenization).
+	SplitInstructions []SplitInstruction `json:"split_instructions,omitempty"`
 }
 
 // PaymentResponse represents a response from payment processing

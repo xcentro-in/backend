@@ -598,6 +598,27 @@ func (c *EasebuzzClient) initiatePaymentAPI(ctx context.Context, req payment.Gat
 		formData.Add("udf10", udf10)
 	}
 
+	// If split-settlement legs are present, encode them as JSON and attach.
+	// TODO: Confirm the form-field name and encoding with Easebuzz API documentation.
+	if len(req.SplitInstructions) > 0 {
+		splitLegs := make([]EasebuzzSplitLeg, 0, len(req.SplitInstructions))
+		for _, si := range req.SplitInstructions {
+			amountRupees := fmt.Sprintf("%.2f", float64(si.Amount)/100.0)
+			merchantID := si.SubmerchantID
+			if si.IsMasterMerchant {
+				merchantID = c.merchantKey // master merchant uses our own key as identifier
+			}
+			splitLegs = append(splitLegs, EasebuzzSplitLeg{
+				MerchantID: merchantID,
+				Amount:     amountRupees,
+			})
+		}
+		splitJSON, jsonErr := json.Marshal(splitLegs)
+		if jsonErr == nil {
+			formData.Set("split_payments", string(splitJSON))
+		}
+	}
+
 	// Make HTTP POST request
 	resp, err := c.postFormData(ctx, "/payment/initiateLink", formData)
 	if err != nil {
