@@ -115,6 +115,21 @@ type VoucherRepository interface {
 	// Fails if payout_transfer_requests exist (ON DELETE RESTRICT)
 	Delete(ctx context.Context, voucherID uuid.UUID) error
 
+	// CreateVoucherDocument inserts a new document record into voucher_documents
+	CreateVoucherDocument(ctx context.Context, doc *VoucherDocument) error
+
+	// GetVoucherDocumentByID retrieves a voucher document by its ID
+	GetVoucherDocumentByID(ctx context.Context, docID uuid.UUID) (*VoucherDocument, error)
+
+	// UpdateVoucherDocumentValidation updates the validated data and status of a voucher document
+	UpdateVoucherDocumentValidation(ctx context.Context, docID uuid.UUID, status DocumentStatus, validatedData map[string]interface{}) error
+
+	// CreateInvoiceFromExtraction persists validated invoice data to the existing invoice table
+	CreateInvoiceFromExtraction(ctx context.Context, docID uuid.UUID, data map[string]interface{}) error
+
+	// CreatePurchaseOrder persists validated PO data to the purchase_orders table
+	CreatePurchaseOrder(ctx context.Context, docID uuid.UUID, data map[string]interface{}) error
+
 	// WithTx creates a new repository instance that uses a transaction
 	// This enables transactional voucher operations (e.g., finalizing vouchers atomically with payments)
 	WithTx(tx interface{}) VoucherRepository

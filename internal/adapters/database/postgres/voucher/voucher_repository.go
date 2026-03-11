@@ -2304,3 +2304,165 @@ func (r *PostgresVoucherRepository) GetCalendarViewBills(ctx context.Context, bu
 
 	return bills, nil
 }
+
+// CreateVoucherDocument inserts a new document record into the voucher_documents table
+func (r *PostgresVoucherRepository) CreateVoucherDocument(ctx context.Context, doc *voucher.VoucherDocument) error {
+	query := `
+		INSERT INTO xcentro.voucher_documents (
+			id, s3_path, doc_type, status
+		) VALUES ($1, $2, $3, $4)
+	`
+
+	_, err := r.querier.Exec(ctx, query,
+		doc.ID, doc.S3Path, doc.DocType, doc.Status,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create voucher document: %w", err)
+	}
+
+	return nil
+}
+
+// GetVoucherDocumentByID retrieves a voucher document by its ID
+func (r *PostgresVoucherRepository) GetVoucherDocumentByID(ctx context.Context, docID uuid.UUID) (*voucher.VoucherDocument, error) {
+	query := `
+		SELECT id, s3_path, doc_type, status, raw_extraction, draft_data, i2d_template, processed_by, validated_data
+		FROM xcentro.voucher_documents
+		WHERE id = $1
+	`
+
+	var doc voucher.VoucherDocument
+	var docType sql.NullString
+	var rawExtraction, draftData, validatedData []byte
+	var i2dTemplate, processedBy sql.NullString
+
+	err := r.querier.QueryRow(ctx, query, docID).Scan(
+		&doc.ID,
+		&doc.S3Path,
+		&docType,
+		&doc.Status,
+		&rawExtraction,
+		&draftData,
+		&i2dTemplate,
+		&processedBy,
+		&validatedData,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("voucher document not found: %s", docID)
+		}
+		return nil, fmt.Errorf("failed to get voucher document: %w", err)
+	}
+
+	if docType.Valid {
+		doc.DocType = docType.String
+	}
+	if i2dTemplate.Valid {
+		doc.I2DTemplate = i2dTemplate.String
+	}
+	if processedBy.Valid {
+		doc.ProcessedBy = processedBy.String
+	}
+	if rawExtraction != nil {
+		if err := json.Unmarshal(rawExtraction, &doc.RawExtraction); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal raw_extraction: %w", err)
+		}
+	}
+	if draftData != nil {
+		if err := json.Unmarshal(draftData, &doc.DraftData); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal draft_data: %w", err)
+		}
+	}
+	if validatedData != nil {
+		if err := json.Unmarshal(validatedData, &doc.ValidatedData); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal validated_data: %w", err)
+		}
+	}
+
+	return &doc, nil
+}
+
+// UpdateVoucherDocumentValidation updates the validated data and status of a voucher document
+func (r *PostgresVoucherRepository) UpdateVoucherDocumentValidation(ctx context.Context, docID uuid.UUID, status voucher.DocumentStatus, validatedData map[string]interface{}) error {
+	validatedJSON, err := json.Marshal(validatedData)
+	if err != nil {
+		return fmt.Errorf("failed to marshal validated_data: %w", err)
+	}
+
+	query := `
+		UPDATE xcentro.voucher_documents
+		SET status = $2, validated_data = $3
+		WHERE id = $1
+	`
+
+	result, err := r.querier.Exec(ctx, query, docID, status, validatedJSON)
+	if err != nil {
+		return fmt.Errorf("failed to update voucher document validation: %w", err)
+	}
+
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("voucher document not found: %s", docID)
+	}
+
+	return nil
+}
+
+// CreateInvoiceFromExtraction persists validated invoice data to the existing invoice table
+func (r *PostgresVoucherRepository) CreateInvoiceFromExtraction(ctx context.Context, docID uuid.UUID, data map[string]interface{}) error {
+	query := `
+		INSERT INTO xcentro.invoice (
+			document_id, inv_id, type, inv_date, total_amount
+		) VALUES ($1, $2, 'PURCHASE'::xcentro.invoice_type_enum, NULLIF($3, '')::DATE, $4)
+	`
+
+	var invDate interface{} = data["invoice_date"]
+	if invDateStr, ok := invDate.(string); ok && invDateStr == "" {
+		invDate = nil // Avoid "invalid input syntax for type date: """
+	}
+
+	_, err := r.querier.Exec(ctx, query,
+		docID,
+		data["invoice_number"], // maps to inv_id
+		invDate,                // maps to inv_date
+		data["total_amount"],
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create invoice from extraction: %w", err)
+	}
+
+	return nil
+}
+
+// CreatePurchaseOrder persists validated PO data to the purchase_orders table
+func (r *PostgresVoucherRepository) CreatePurchaseOrder(ctx context.Context, docID uuid.UUID, data map[string]interface{}) error {
+	lineItemsJSON, err := json.Marshal(data["line_items"])
+	if err != nil {
+		return fmt.Errorf("failed to marshal line_items: %w", err)
+	}
+
+	query := `
+		INSERT INTO xcentro.purchase_orders (
+			document_id, po_number, po_date,
+			vendor_name, vendor_gstin, buyer_gstin,
+			total_amount, discount, discount_type, line_items
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+	`
+
+	_, err = r.querier.Exec(ctx, query,
+		docID,
+		data["po_number"],
+		data["invoice_date"], // po_date maps from invoice_date in draft_data
+		data["vendor_name"],
+		data["vendor_gstin"],
+		data["buyer_gstin"],
+		data["total_amount"],
+		data["discount"],
+		data["discount_type"],
+		lineItemsJSON,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to create purchase order: %w", err)
+	}
+
+	return nil
+}

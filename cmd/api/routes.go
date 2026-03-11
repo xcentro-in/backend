@@ -272,8 +272,22 @@ func registerV1VoucherRoutes(clients *externalClients, cfg *config.Config, group
 	notificationEventRepo := notificationRepo.NewPgNotificationEventRepository(clients.db)
 	voucherService := voucherSvc.NewVoucherService(voucherRepository, queueRepository, voucherCoreService, businessPayeeRelationRepo, notificationEventRepo, logger.GetDefault())
 
+	// S3 client for document uploads
+	s3Client, err := fileupload.NewS3ClientFromConfig(cfg.S3)
+	if err != nil {
+		logger.GetDefault().Warnf("Failed to create S3 client for voucher uploads: %v (document upload will be unavailable)", err)
+	}
+
+	// Document upload service & handler
+	uploadService := voucherSvc.NewDocumentUploadService(voucherRepository, s3Client, clients.rcache.Client, logger.GetDefault())
+	uploadHandler := voucherHandler.NewDocumentUploadHandler(uploadService, logger.GetDefault())
+
+	// Document review (HITL) service & handler
+	reviewService := voucherSvc.NewDocumentReviewService(voucherRepository, logger.GetDefault())
+	reviewHandler := voucherHandler.NewDocumentReviewHandler(reviewService, logger.GetDefault())
+
 	voucherGroup := group.Group("/vouchers")
-	voucherHandler.RegisterVoucherRoutes(voucherGroup, voucherService, authSvc, businessUserRelRepo, clients.rcache, cookieManager)
+	voucherHandler.RegisterVoucherRoutes(voucherGroup, voucherService, uploadHandler, reviewHandler, authSvc, businessUserRelRepo, clients.rcache, cookieManager)
 }
 
 func registerV1PayoutRoutes(clients *externalClients, cfg *config.Config, group *echo.Group, cookieManager *httputil.CookieManager) {

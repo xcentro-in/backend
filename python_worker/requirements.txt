@@ -1,0 +1,9 @@
+setuptools>=75.0.0,<81
+psycopg2-binary==2.9.10
+redis==5.2.1
+invoice2data==0.4.5
+google-genai==1.10.0
+pydantic==2.10.6
+pydantic-settings==2.8.1
+python-dotenv==1.0.1
+boto3
