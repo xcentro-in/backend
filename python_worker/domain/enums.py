@@ -18,6 +18,7 @@ class DocumentType(str, Enum):
     """Classification of the uploaded document."""
     INVOICE = "INVOICE"
     PURCHASE_ORDER = "PURCHASE_ORDER"
+    OTHER = "OTHER"
     UNKNOWN = "UNKNOWN"
 
 

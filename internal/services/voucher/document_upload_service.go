@@ -39,8 +39,9 @@ const maxUploadSizeBytes = 10 * 1024 * 1024
 
 // UploadDocumentRequest is the input for the UploadDocument service method
 type UploadDocumentRequest struct {
-	File    *multipart.FileHeader `json:"-"`
-	DocType string                `json:"doc_type"` // INVOICE or PURCHASE_ORDER
+	File       *multipart.FileHeader `json:"-"`
+	DocType    string                `json:"doc_type"`    // INVOICE or PURCHASE_ORDER
+	BusinessID *uuid.UUID            `json:"business_id"` // Optional, for violation tracking
 }
 
 // UploadDocumentResponse is the output of a successful document upload
@@ -151,6 +152,9 @@ func (s *DocumentUploadService) UploadDocument(ctx context.Context, req *UploadD
 		"document_id": docID.String(),
 		"s3_path":     uploadedKey,
 		"doc_type":    docType,
+	}
+	if req.BusinessID != nil {
+		taskPayload["business_id"] = req.BusinessID.String()
 	}
 
 	taskJSON, err := json.Marshal(taskPayload)

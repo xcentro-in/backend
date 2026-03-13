@@ -3,6 +3,7 @@ package voucher
 import (
 	"net/http"
 
+	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
 	voucherSvc "xcentro.in/internal/services/voucher"
 	"xcentro.in/internal/shared/logger"
@@ -27,7 +28,19 @@ func NewDocumentUploadHandler(uploadService *voucherSvc.DocumentUploadService, l
 func (h *DocumentUploadHandler) UploadDocument(c echo.Context) error {
 	h.logger.InfoWith("UploadDocument API called")
 
-	// 1. Extract file from multipart form
+	// 1. Extract business_id from X-Business-ID header (optional for violation tracking)
+	businessIDStr := c.Request().Header.Get("X-Business-ID")
+	var businessID *uuid.UUID
+	if businessIDStr != "" {
+		parsed, err := uuid.Parse(businessIDStr)
+		if err != nil {
+			h.logger.WarnWith("Invalid X-Business-ID header, ignoring", "error", err)
+		} else {
+			businessID = &parsed
+		}
+	}
+
+	// 2. Extract file from multipart form
 	file, err := c.FormFile("file")
 	if err != nil {
 		h.logger.ErrorWith("Failed to read uploaded file", "error", err)
@@ -37,19 +50,21 @@ func (h *DocumentUploadHandler) UploadDocument(c echo.Context) error {
 		})
 	}
 
-	// 2. Read optional doc_type form value (defaults to UNKNOWN if not provided)
+	// 3. Read optional doc_type form value (defaults to UNKNOWN if not provided)
 	docType := c.FormValue("doc_type")
 
 	h.logger.DebugWith("Upload request received",
 		"filename", file.Filename,
 		"size", file.Size,
 		"content_type", file.Header.Get("Content-Type"),
-		"doc_type", docType)
+		"doc_type", docType,
+		"business_id", businessIDStr)
 
-	// 3. Build service request
+	// 4. Build service request
 	req := &voucherSvc.UploadDocumentRequest{
-		File:    file,
-		DocType: docType,
+		File:       file,
+		DocType:    docType,
+		BusinessID: businessID,
 	}
 
 	// 4. Call service

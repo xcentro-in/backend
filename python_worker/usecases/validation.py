@@ -106,10 +106,17 @@ def check_arithmetic(result: ExtractionResult) -> list[str]:
     return failures
 
 
-def run_all_checks(result: ExtractionResult) -> list[str]:
-    """Execute every validation check and return aggregated failures."""
+def run_all_checks(result: ExtractionResult, include_arithmetic: bool = True) -> list[str]:
+    """Execute every validation check and return aggregated failures.
+
+    Args:
+        result: The extraction result to validate.
+        include_arithmetic: If False, skip arithmetic checks (used to
+            prevent arithmetic mismatches from triggering LLM fallback).
+    """
     failures: list[str] = []
     failures.extend(check_required_fields(result))
     failures.extend(check_gstin(result))
-    failures.extend(check_arithmetic(result))
+    if include_arithmetic:
+        failures.extend(check_arithmetic(result))
     return failures

@@ -52,19 +52,27 @@ You are an expert invoice and purchase order data extraction system.
 Analyze the attached document and extract the following fields into a single, valid JSON object.
 
 ### Extraction Logic:
-1. **Discount Logic**: 
+1. **Document Classification**:
+   - If the document is an invoice or bill, set `doc_type` to "INVOICE".
+   - If the document is a purchase order, set `doc_type` to "PURCHASE_ORDER".
+   - If the document is neither an invoice nor a purchase order (e.g., a receipt, a letter, a random image), set `doc_type` to "OTHER".
+2. **Discount Logic**: 
    - If a percentage is explicitly mentioned (e.g., "20%"), set `discount` to the numeric percentage value (e.g., 20) and `discount_type` to "PERCENTAGE".
    - If only a currency amount is shown as a discount without a percentage, set `discount` to that amount and `discount_type` to "FLAT".
-2. **Line Items**: 
+3. **Line Items**: 
    - Concatenate descriptions that span multiple lines or rows into a single string.
    - Clean all numeric strings (remove symbols like '$', '₹', or ',') before converting to a number.
-3. **General**:
+4. **Tax Fields**:
+   - Extract SGST, CGST, and IGST amounts if they appear on the document.
+   - These are Indian GST tax components. If they are not present, set to null.
+5. **Shipping**:
+   - Extract shipping / freight charges if present on the document.
+6. **General**:
    - For `invoice_date`, always use YYYY-MM-DD format.
-   - For `doc_type`, look for keywords like "Invoice", "Bill", or "Purchase Order".
 
 ### Schema:
 {
-  "doc_type": "INVOICE" or "PURCHASE_ORDER",
+  "doc_type": "INVOICE" or "PURCHASE_ORDER" or "OTHER",
   "invoice_number": "string or null",
   "invoice_date": "YYYY-MM-DD or null",
   "po_number": "string or null",
@@ -74,6 +82,10 @@ Analyze the attached document and extract the following fields into a single, va
   "total_amount": number or null,
   "discount": number or null,
   "discount_type": "FLAT" or "PERCENTAGE" or null,
+  "sgst": number or null,
+  "cgst": number or null,
+  "igst": number or null,
+  "shipping": number or null,
   "line_items": [
     {
       "description": "string",
@@ -82,13 +94,31 @@ Analyze the attached document and extract the following fields into a single, va
       "tax": number or null,
       "amount": number
     }
-  ]
+  ],
+  "confidence_scores": {
+    "invoice_number": 0.0 to 1.0,
+    "invoice_date": 0.0 to 1.0,
+    "po_number": 0.0 to 1.0,
+    "vendor_name": 0.0 to 1.0,
+    "vendor_gstin": 0.0 to 1.0,
+    "buyer_gstin": 0.0 to 1.0,
+    "total_amount": 0.0 to 1.0,
+    "discount": 0.0 to 1.0,
+    "sgst": 0.0 to 1.0,
+    "cgst": 0.0 to 1.0,
+    "igst": 0.0 to 1.0,
+    "shipping": 0.0 to 1.0,
+    "doc_type": 0.0 to 1.0,
+    "line_items": 0.0 to 1.0
+  }
 }
 
 ### Rules:
 - Return ONLY the JSON object. No markdown wrappers (like ```json), no preamble, no explanation.
-- If a field is not visible, use null.
+- If a field is not visible, use null and set its confidence to 0.0.
 - All amount/rate/quantity fields MUST be numeric.
+- For confidence_scores, rate how confident you are in each extracted field value from 0.0 (no confidence / not found) to 1.0 (fully certain).
+- If doc_type is "OTHER", you may leave all other fields as null with 0.0 confidence.
 """
 
 
@@ -164,6 +194,14 @@ class GeminiLLMExtractor(LLMExtractor):
         except ValueError:
             doc_type = DocumentType.UNKNOWN
 
+        # Parse confidence scores from LLM response
+        raw_confidence = data.get("confidence_scores", {})
+        confidence_scores: dict[str, float] = {}
+        for key, val in raw_confidence.items():
+            score = _safe_float(val)
+            if score is not None:
+                confidence_scores[key] = score
+
         return ExtractionResult(
             invoice_number=data.get("invoice_number"),
             invoice_date=data.get("invoice_date"),
@@ -174,9 +212,14 @@ class GeminiLLMExtractor(LLMExtractor):
             total_amount=_safe_float(data.get("total_amount")),
             discount=_safe_float(data.get("discount")),
             discount_type=data.get("discount_type"),
+            sgst=_safe_float(data.get("sgst")),
+            cgst=_safe_float(data.get("cgst")),
+            igst=_safe_float(data.get("igst")),
+            shipping=_safe_float(data.get("shipping")),
             line_items=line_items,
             doc_type=doc_type,
             raw=data,
+            confidence_scores=confidence_scores,
         )
 
 

@@ -2408,47 +2408,73 @@ func (r *PostgresVoucherRepository) UpdateVoucherDocumentValidation(ctx context.
 }
 
 // CreateInvoiceFromExtraction persists validated invoice data to the existing invoice table
+// and inserts line items into the line_items table within a transaction.
 func (r *PostgresVoucherRepository) CreateInvoiceFromExtraction(ctx context.Context, docID uuid.UUID, data map[string]interface{}) error {
-	query := `
+	tx, err := r.db.BeginTx(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck
+
+	// 1. Insert into invoice table and return generated ID
+	invoiceQuery := `
 		INSERT INTO xcentro.invoice (
-			document_id, inv_id, type, inv_date, total_amount
-		) VALUES ($1, $2, 'PURCHASE'::xcentro.invoice_type_enum, NULLIF($3, '')::DATE, $4)
+			document_id, inv_id, type, inv_date, total_amount,
+			sgst, cgst, igst
+		) VALUES (
+			$1, $2, 'PURCHASE'::xcentro.invoice_type_enum,
+			NULLIF($3, '')::DATE, $4, $5, $6, $7
+		) RETURNING id
 	`
 
 	var invDate interface{} = data["invoice_date"]
 	if invDateStr, ok := invDate.(string); ok && invDateStr == "" {
-		invDate = nil // Avoid "invalid input syntax for type date: """
+		invDate = nil
 	}
 
-	_, err := r.querier.Exec(ctx, query,
+	var invoiceID uuid.UUID
+	err = tx.QueryRow(ctx, invoiceQuery,
 		docID,
-		data["invoice_number"], // maps to inv_id
-		invDate,                // maps to inv_date
+		data["invoice_number"],
+		invDate,
 		data["total_amount"],
-	)
+		data["sgst"],
+		data["cgst"],
+		data["igst"],
+	).Scan(&invoiceID)
 	if err != nil {
 		return fmt.Errorf("failed to create invoice from extraction: %w", err)
 	}
 
-	return nil
+	// 2. Insert line items
+	if err := insertLineItems(ctx, tx, nil, &invoiceID, data); err != nil {
+		return fmt.Errorf("failed to insert invoice line items: %w", err)
+	}
+
+	return tx.Commit(ctx)
 }
 
 // CreatePurchaseOrder persists validated PO data to the purchase_orders table
+// and inserts line items into the line_items table within a transaction.
 func (r *PostgresVoucherRepository) CreatePurchaseOrder(ctx context.Context, docID uuid.UUID, data map[string]interface{}) error {
-	lineItemsJSON, err := json.Marshal(data["line_items"])
+	tx, err := r.db.BeginTx(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to marshal line_items: %w", err)
+		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
+	defer tx.Rollback(ctx) //nolint:errcheck
 
-	query := `
+	// 1. Insert into purchase_orders table and return generated ID
+	poQuery := `
 		INSERT INTO xcentro.purchase_orders (
 			document_id, po_number, po_date,
 			vendor_name, vendor_gstin, buyer_gstin,
-			total_amount, discount, discount_type, line_items
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+			total_amount, discount, discount_type
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		RETURNING id
 	`
 
-	_, err = r.querier.Exec(ctx, query,
+	var poID uuid.UUID
+	err = tx.QueryRow(ctx, poQuery,
 		docID,
 		data["po_number"],
 		data["invoice_date"], // po_date maps from invoice_date in draft_data
@@ -2458,13 +2484,87 @@ func (r *PostgresVoucherRepository) CreatePurchaseOrder(ctx context.Context, doc
 		data["total_amount"],
 		data["discount"],
 		data["discount_type"],
-		lineItemsJSON,
-	)
+	).Scan(&poID)
 	if err != nil {
 		return fmt.Errorf("failed to create purchase order: %w", err)
 	}
 
+	// 2. Insert line items
+	if err := insertLineItems(ctx, tx, &poID, nil, data); err != nil {
+		return fmt.Errorf("failed to insert purchase order line items: %w", err)
+	}
+
+	return tx.Commit(ctx)
+}
+
+// insertLineItems inserts line items from the data map into the line_items table.
+// Exactly one of poID or invoiceID must be non-nil.
+func insertLineItems(ctx context.Context, tx client.Tx, poID *uuid.UUID, invoiceID *uuid.UUID, data map[string]interface{}) error {
+	rawItems, ok := data["line_items"]
+	if !ok || rawItems == nil {
+		return nil // no line items to insert
+	}
+
+	items, ok := rawItems.([]interface{})
+	if !ok {
+		return nil // unexpected shape, skip gracefully
+	}
+
+	lineItemQuery := `
+		INSERT INTO xcentro.line_items (
+			purchase_order_id, invoice_id,
+			description, quantity, unit_price,
+			tax_rate, tax_amount, total_amount
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+	`
+
+	for _, raw := range items {
+		item, ok := raw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+
+		description, _ := item["description"].(string)
+		quantity := toFloat64(item["quantity"])
+		unitPrice := toPaise(item["unit_price"])
+		taxAmount := toPaise(item["tax"])
+		totalAmount := toPaise(item["amount"])
+
+		_, err := tx.Exec(ctx, lineItemQuery,
+			poID,
+			invoiceID,
+			description,
+			quantity,
+			unitPrice,
+			0.0, // tax_rate — not tracked in extraction, default to 0
+			taxAmount,
+			totalAmount,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to insert line item: %w", err)
+		}
+	}
+
 	return nil
+}
+
+// toFloat64 safely converts an interface{} to float64.
+func toFloat64(v interface{}) float64 {
+	switch n := v.(type) {
+	case float64:
+		return n
+	case int:
+		return float64(n)
+	case int64:
+		return float64(n)
+	default:
+		return 0
+	}
+}
+
+// toPaise converts a float64 amount (in main currency unit) to paise (int64).
+func toPaise(v interface{}) int64 {
+	return int64(toFloat64(v) * 100)
 }
 
 // ListVoucherDocuments retrieves paginated list of voucher documents

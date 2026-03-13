@@ -92,6 +92,26 @@ class Invoice2DataExtractor(TemplateExtractor):
         # Store template_name in raw so extraction_service can read it
         raw["template_name"] = template_name
 
+        # Build confidence scores: template extraction is exact-match,
+        # so all extracted (non-None) fields get 1.0 confidence.
+        field_map = {
+            "invoice_number": raw.get("invoice_number"),
+            "invoice_date": raw.get("date"),
+            "po_number": raw.get("po_number"),
+            "vendor_name": raw.get("issuer"),
+            "vendor_gstin": raw.get("vendor_gstin") or raw.get("gstin"),
+            "buyer_gstin": raw.get("buyer_gstin"),
+            "total_amount": raw.get("amount"),
+            "discount": raw.get("discount"),
+            "sgst": raw.get("sgst"),
+            "cgst": raw.get("cgst"),
+            "igst": raw.get("igst"),
+            "shipping": raw.get("shipping") or raw.get("freight"),
+            "doc_type": template_name,  # non-None if template matched
+            "line_items": raw.get("lines"),
+        }
+        confidence_scores = {k: 1.0 for k, v in field_map.items() if v is not None}
+
         return ExtractionResult(
             invoice_number=raw.get("invoice_number"),
             invoice_date=str(raw["date"]) if raw.get("date") else None,
@@ -102,9 +122,14 @@ class Invoice2DataExtractor(TemplateExtractor):
             total_amount=_safe_float(raw.get("amount")),
             discount=_safe_float(raw.get("discount")),
             discount_type=raw.get("discount_type"),
+            sgst=_safe_float(raw.get("sgst")),
+            cgst=_safe_float(raw.get("cgst")),
+            igst=_safe_float(raw.get("igst")),
+            shipping=_safe_float(raw.get("shipping") or raw.get("freight")),
             line_items=line_items,
             doc_type=doc_type,
             raw=raw,
+            confidence_scores=confidence_scores,
         )
 
 

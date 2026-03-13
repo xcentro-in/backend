@@ -35,9 +35,14 @@ class ExtractionResult:
     total_amount: float | None = None
     discount: float | None = None
     discount_type: str | None = None  # 'FLAT' or 'PERCENTAGE'
+    sgst: float | None = None
+    cgst: float | None = None
+    igst: float | None = None
+    shipping: float | None = None
     line_items: list[LineItem] = field(default_factory=list)
     doc_type: DocumentType = DocumentType.UNKNOWN
     raw: dict[str, Any] = field(default_factory=dict)
+    confidence_scores: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass

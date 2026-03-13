@@ -18,7 +18,7 @@ import logging
 import uuid
 
 from domain.entities import Document, ExtractionResult
-from domain.enums import DocumentStatus, ProcessedBy
+from domain.enums import DocumentStatus, DocumentType, ProcessedBy
 from domain.exceptions import ExtractionError, LLMExtractionError, TemplateMatchError
 from domain.ports import DocumentRepository, FileDownloader, LLMExtractor, TemplateExtractor
 from usecases.validation import run_all_checks
@@ -38,8 +38,13 @@ def _result_to_draft(result: ExtractionResult) -> dict:
         "total_amount": result.total_amount,
         "discount": result.discount,
         "discount_type": result.discount_type,
+        "sgst": result.sgst,
+        "cgst": result.cgst,
+        "igst": result.igst,
+        "shipping": result.shipping,
         "doc_type": result.doc_type.value if result.doc_type else None,
         "line_items": [dataclasses.asdict(li) for li in result.line_items],
+        "confidence_scores": result.confidence_scores,
     }
 
 
@@ -89,9 +94,9 @@ class ExtractionService:
         # Step 1: Try template extraction
         result = self._try_template(local_path, doc)
 
-        # Step 2: If template succeeded, validate; fallback to LLM on failure
+        # Step 2: If template succeeded, validate (skip arithmetic); fallback to LLM on failure
         if result is not None:
-            failures = run_all_checks(result)
+            failures = run_all_checks(result, include_arithmetic=False)
             if failures:
                 logger.warning(
                     "Template extraction passed but validation failed for %s: %s",
@@ -104,7 +109,24 @@ class ExtractionService:
         else:
             result = self._try_llm(local_path, doc)  # may raise LLMExtractionError
 
-        # Step 3: Final validation & persist
+        # Step 3: Check for non-invoice/PO documents
+        if result is not None and result.doc_type in (DocumentType.OTHER, DocumentType.UNKNOWN):
+            logger.warning(
+                "Document %s classified as %s — marking FAILED (violation)",
+                document_id,
+                result.doc_type.value,
+            )
+            doc.status = DocumentStatus.FAILED
+            doc.doc_type = result.doc_type
+            doc.draft_data = {
+                "error": "Document is not an invoice or purchase order",
+                "violation": True,
+                "detected_type": result.doc_type.value,
+            }
+            self._repo.update(doc)
+            return
+
+        # Step 4: Final validation & persist
         if result is None:
             logger.error("Both extractors failed for document %s", document_id)
             doc.status = DocumentStatus.REVIEW_REQUIRED
@@ -166,10 +188,8 @@ class ExtractionService:
 
         if failures:
             logger.warning("Final validation issues for %s: %s", doc.id, failures)
-            doc.status = DocumentStatus.REVIEW_REQUIRED
             doc.draft_data["validation_failures"] = failures
-        else:
-            doc.status = DocumentStatus.VALIDATED
+        doc.status = DocumentStatus.REVIEW_REQUIRED
 
         self._repo.update(doc)
         logger.info("Document %s finalized with status %s", doc.id, doc.status.value)
