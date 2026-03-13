@@ -146,6 +146,15 @@ type VoucherRepository interface {
 	// Returns: (totalAmount, validVoucherCount, error)
 	// Error cases: not all vouchers found, wrong business, not in draft status
 	ValidateAndSumVouchers(ctx context.Context, voucherIDs []uuid.UUID, businessID string) (int64, int, error)
+
+	// ListVoucherDocuments retrieves paginated list of voucher documents
+	ListVoucherDocuments(ctx context.Context, filter DocumentListFilter) ([]*VoucherDocument, int64, error)
+
+	// ListExtractedInvoices retrieves paginated list of extracted invoices
+	ListExtractedInvoices(ctx context.Context, filter ExtractedInvoiceListFilter) ([]*ExtractedInvoice, int64, error)
+
+	// ListPurchaseOrders retrieves paginated list of purchase orders
+	ListPurchaseOrders(ctx context.Context, filter PurchaseOrderListFilter) ([]*PurchaseOrder, int64, error)
 }
 
 // VoucherFilters defines filter criteria for listing vouchers

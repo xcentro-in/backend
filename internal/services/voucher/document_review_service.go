@@ -111,3 +111,80 @@ func (s *DocumentReviewService) ValidateDocument(ctx context.Context, docID uuid
 
 	return nil
 }
+
+// ListDocuments retrieves a paginated list of voucher documents
+func (s *DocumentReviewService) ListDocuments(ctx context.Context, filter voucher.DocumentListFilter) (*voucher.PaginatedResponse[*voucher.VoucherDocument], error) {
+	docs, total, err := s.voucherRepo.ListVoucherDocuments(ctx, filter)
+	if err != nil {
+		s.logger.ErrorWith("Failed to list documents", "error", err)
+		return nil, err
+	}
+
+	pageSize := filter.PageSize
+	if pageSize == 0 {
+		pageSize = 20
+	}
+
+	return &voucher.PaginatedResponse[*voucher.VoucherDocument]{
+		Items:      docs,
+		Total:      total,
+		Page:       filter.Page,
+		PageSize:   pageSize,
+		TotalPages: calculateTotalPages(total, pageSize),
+	}, nil
+}
+
+// ListInvoices retrieves a paginated list of extracted invoices
+func (s *DocumentReviewService) ListInvoices(ctx context.Context, filter voucher.ExtractedInvoiceListFilter) (*voucher.PaginatedResponse[*voucher.ExtractedInvoice], error) {
+	invs, total, err := s.voucherRepo.ListExtractedInvoices(ctx, filter)
+	if err != nil {
+		s.logger.ErrorWith("Failed to list invoices", "error", err)
+		return nil, err
+	}
+
+	pageSize := filter.PageSize
+	if pageSize == 0 {
+		pageSize = 20
+	}
+
+	return &voucher.PaginatedResponse[*voucher.ExtractedInvoice]{
+		Items:      invs,
+		Total:      total,
+		Page:       filter.Page,
+		PageSize:   pageSize,
+		TotalPages: calculateTotalPages(total, pageSize),
+	}, nil
+}
+
+// ListPurchaseOrders retrieves a paginated list of purchase orders
+func (s *DocumentReviewService) ListPurchaseOrders(ctx context.Context, filter voucher.PurchaseOrderListFilter) (*voucher.PaginatedResponse[*voucher.PurchaseOrder], error) {
+	pos, total, err := s.voucherRepo.ListPurchaseOrders(ctx, filter)
+	if err != nil {
+		s.logger.ErrorWith("Failed to list purchase orders", "error", err)
+		return nil, err
+	}
+
+	pageSize := filter.PageSize
+	if pageSize == 0 {
+		pageSize = 20
+	}
+
+	return &voucher.PaginatedResponse[*voucher.PurchaseOrder]{
+		Items:      pos,
+		Total:      total,
+		Page:       filter.Page,
+		PageSize:   pageSize,
+		TotalPages: calculateTotalPages(total, pageSize),
+	}, nil
+}
+
+func calculateTotalPages(total int64, pageSize int) int {
+	if pageSize <= 0 {
+		return 1
+	}
+	pages := int(total) / pageSize
+	if int(total)%pageSize != 0 {
+		pages++
+	}
+	return pages
+}

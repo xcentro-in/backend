@@ -1,10 +1,12 @@
 package voucher
 
 import (
+	"fmt"
 	"net/http"
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
+	"xcentro.in/internal/core/voucher"
 	voucherSvc "xcentro.in/internal/services/voucher"
 	"xcentro.in/internal/shared/logger"
 )
@@ -136,4 +138,102 @@ func (h *DocumentReviewHandler) ValidateDocument(c echo.Context) error {
 			"document_status": "VALIDATED",
 		},
 	})
+}
+
+// ListDocuments handles GET /vouchers/documents
+func (h *DocumentReviewHandler) ListDocuments(c echo.Context) error {
+	filter := voucher.DocumentListFilter{
+		Page:     h.getQueryParamInt(c, "page", 1),
+		PageSize: h.getQueryParamInt(c, "limit", 20),
+	}
+
+	if status := c.QueryParam("status"); status != "" {
+		docStatus := voucher.DocumentStatus(status)
+		filter.Status = &docStatus
+	}
+
+	res, err := h.reviewService.ListDocuments(c.Request().Context(), filter)
+	if err != nil {
+		h.logger.ErrorWith("ListDocuments failed", "error", err)
+		return c.JSON(http.StatusInternalServerError, map[string]any{
+			"status":  "error",
+			"error":   "INTERNAL_SERVER_ERROR",
+			"message": "Failed to list documents",
+		})
+	}
+
+	return c.JSON(http.StatusOK, map[string]any{
+		"status": "success",
+		"data":   res,
+	})
+}
+
+// ListInvoices handles GET /vouchers/invoices
+func (h *DocumentReviewHandler) ListInvoices(c echo.Context) error {
+	filter := voucher.ExtractedInvoiceListFilter{
+		Page:     h.getQueryParamInt(c, "page", 1),
+		PageSize: h.getQueryParamInt(c, "limit", 20),
+	}
+
+	if bid := c.QueryParam("business_id"); bid != "" {
+		if u, err := uuid.Parse(bid); err == nil {
+			filter.BusinessID = &u
+		}
+	}
+
+	res, err := h.reviewService.ListInvoices(c.Request().Context(), filter)
+	if err != nil {
+		h.logger.ErrorWith("ListInvoices failed", "error", err)
+		return c.JSON(http.StatusInternalServerError, map[string]any{
+			"status":  "error",
+			"error":   "INTERNAL_SERVER_ERROR",
+			"message": "Failed to list invoices",
+		})
+	}
+
+	return c.JSON(http.StatusOK, map[string]any{
+		"status": "success",
+		"data":   res,
+	})
+}
+
+// ListPurchaseOrders handles GET /vouchers/purchase-orders
+func (h *DocumentReviewHandler) ListPurchaseOrders(c echo.Context) error {
+	filter := voucher.PurchaseOrderListFilter{
+		Page:     h.getQueryParamInt(c, "page", 1),
+		PageSize: h.getQueryParamInt(c, "limit", 20),
+	}
+
+	if docID := c.QueryParam("document_id"); docID != "" {
+		if u, err := uuid.Parse(docID); err == nil {
+			filter.DocumentID = &u
+		}
+	}
+
+	res, err := h.reviewService.ListPurchaseOrders(c.Request().Context(), filter)
+	if err != nil {
+		h.logger.ErrorWith("ListPurchaseOrders failed", "error", err)
+		return c.JSON(http.StatusInternalServerError, map[string]any{
+			"status":  "error",
+			"error":   "INTERNAL_SERVER_ERROR",
+			"message": "Failed to list purchase orders",
+		})
+	}
+
+	return c.JSON(http.StatusOK, map[string]any{
+		"status": "success",
+		"data":   res,
+	})
+}
+
+func (h *DocumentReviewHandler) getQueryParamInt(c echo.Context, name string, defaultValue int) int {
+	val := c.QueryParam(name)
+	if val == "" {
+		return defaultValue
+	}
+	var i int
+	if _, err := fmt.Sscanf(val, "%d", &i); err != nil {
+		return defaultValue
+	}
+	return i
 }

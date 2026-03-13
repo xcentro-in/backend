@@ -31,11 +31,11 @@ const (
 type VoucherDocument struct {
 	ID            uuid.UUID              `json:"id"`
 	S3Path        string                 `json:"s3_path"`
-	DocType       string                 `json:"doc_type,omitempty"`
+	DocType       string                 `json:"doc_type"`
 	Status        DocumentStatus         `json:"status"`
 	RawExtraction map[string]interface{} `json:"raw_extraction,omitempty"`
 	DraftData     map[string]interface{} `json:"draft_data,omitempty"`
-	I2DTemplate   string                 `json:"i2d_template,omitempty"`
-	ProcessedBy   string                 `json:"processed_by,omitempty"`
+	I2DTemplate   string                 `json:"i2d_template"`
+	ProcessedBy   string                 `json:"processed_by"`
 	ValidatedData map[string]interface{} `json:"validated_data,omitempty"`
 }

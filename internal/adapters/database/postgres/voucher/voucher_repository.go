@@ -2466,3 +2466,204 @@ func (r *PostgresVoucherRepository) CreatePurchaseOrder(ctx context.Context, doc
 
 	return nil
 }
+
+// ListVoucherDocuments retrieves paginated list of voucher documents
+func (r *PostgresVoucherRepository) ListVoucherDocuments(ctx context.Context, filter voucher.DocumentListFilter) ([]*voucher.VoucherDocument, int64, error) {
+	whereClauses := []string{"1=1"}
+	args := []interface{}{}
+	argPos := 1
+
+	if filter.Status != nil {
+		whereClauses = append(whereClauses, fmt.Sprintf("status = $%d", argPos))
+		args = append(args, *filter.Status)
+		argPos++
+	}
+
+	whereClause := strings.Join(whereClauses, " AND ")
+
+	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM xcentro.voucher_documents WHERE %s", whereClause)
+	var total int64
+	err := r.querier.QueryRow(ctx, countQuery, args...).Scan(&total)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to count voucher documents: %w", err)
+	}
+
+	limit := filter.PageSize
+	if limit == 0 {
+		limit = 20
+	}
+	offset := (filter.Page - 1) * limit
+	if offset < 0 {
+		offset = 0
+	}
+
+	query := fmt.Sprintf(`
+		SELECT id, s3_path, COALESCE(doc_type, ''), status, raw_extraction, draft_data, COALESCE(i2d_template, ''), COALESCE(processed_by, ''), validated_data
+		FROM xcentro.voucher_documents
+		WHERE %s
+		ORDER BY created_at DESC
+		LIMIT $%d OFFSET $%d
+	`, whereClause, argPos, argPos+1)
+
+	args = append(args, limit, offset)
+
+	rows, err := r.querier.Query(ctx, query, args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to query voucher documents: %w", err)
+	}
+	defer rows.Close()
+
+	var docs []*voucher.VoucherDocument
+	for rows.Next() {
+		var doc voucher.VoucherDocument
+		var rawExtraction, draftData, validatedData []byte
+
+		err := rows.Scan(
+			&doc.ID, &doc.S3Path, &doc.DocType, &doc.Status,
+			&rawExtraction, &draftData, &doc.I2DTemplate, &doc.ProcessedBy, &validatedData,
+		)
+		if err != nil {
+			return nil, 0, fmt.Errorf("failed to scan voucher document: %w", err)
+		}
+
+		if len(rawExtraction) > 0 {
+			json.Unmarshal(rawExtraction, &doc.RawExtraction)
+		}
+		if len(draftData) > 0 {
+			json.Unmarshal(draftData, &doc.DraftData)
+		}
+		if len(validatedData) > 0 {
+			json.Unmarshal(validatedData, &doc.ValidatedData)
+		}
+
+		docs = append(docs, &doc)
+	}
+
+	return docs, total, nil
+}
+
+// ListExtractedInvoices retrieves paginated list of extracted invoices
+func (r *PostgresVoucherRepository) ListExtractedInvoices(ctx context.Context, filter voucher.ExtractedInvoiceListFilter) ([]*voucher.ExtractedInvoice, int64, error) {
+	whereClauses := []string{"1=1"}
+	args := []interface{}{}
+	argPos := 1
+
+	if filter.BusinessID != nil {
+		whereClauses = append(whereClauses, fmt.Sprintf("bid = $%d", argPos))
+		args = append(args, *filter.BusinessID)
+		argPos++
+	}
+
+	whereClause := strings.Join(whereClauses, " AND ")
+
+	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM xcentro.invoice WHERE %s", whereClause)
+	var total int64
+	err := r.querier.QueryRow(ctx, countQuery, args...).Scan(&total)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to count extracted invoices: %w", err)
+	}
+
+	limit := filter.PageSize
+	if limit == 0 {
+		limit = 20
+	}
+	offset := (filter.Page - 1) * limit
+	if offset < 0 {
+		offset = 0
+	}
+
+	query := fmt.Sprintf(`
+		SELECT id, COALESCE(inv_id, ''), COALESCE(type::text, ''), bid, payment_id, payee_id, inv_date, inv_due_date, COALESCE(cgst, 0), COALESCE(igst, 0), COALESCE(sgst, 0), COALESCE(total_amount, 0), COALESCE(currency, ''), COALESCE(invoice_url, ''), COALESCE(comments, ''), document_id, created_at, updated_at
+		FROM xcentro.invoice
+		WHERE %s
+		ORDER BY created_at DESC
+		LIMIT $%d OFFSET $%d
+	`, whereClause, argPos, argPos+1)
+
+	args = append(args, limit, offset)
+
+	rows, err := r.querier.Query(ctx, query, args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to query extracted invoices: %w", err)
+	}
+	defer rows.Close()
+
+	var invoices []*voucher.ExtractedInvoice
+	for rows.Next() {
+		var inv voucher.ExtractedInvoice
+		err := rows.Scan(
+			&inv.ID, &inv.InvID, &inv.Type, &inv.BusinessID, &inv.PaymentID, &inv.PayeeID,
+			&inv.InvDate, &inv.InvDueDate, &inv.CGST, &inv.IGST, &inv.SGST, &inv.TotalAmount,
+			&inv.Currency, &inv.InvoiceURL, &inv.Comments, &inv.DocumentID, &inv.CreatedAt, &inv.UpdatedAt,
+		)
+		if err != nil {
+			return nil, 0, fmt.Errorf("failed to scan extracted invoice: %w", err)
+		}
+		invoices = append(invoices, &inv)
+	}
+
+	return invoices, total, nil
+}
+
+// ListPurchaseOrders retrieves paginated list of purchase orders
+func (r *PostgresVoucherRepository) ListPurchaseOrders(ctx context.Context, filter voucher.PurchaseOrderListFilter) ([]*voucher.PurchaseOrder, int64, error) {
+	whereClauses := []string{"1=1"}
+	args := []interface{}{}
+	argPos := 1
+
+	if filter.DocumentID != nil {
+		whereClauses = append(whereClauses, fmt.Sprintf("document_id = $%d", argPos))
+		args = append(args, *filter.DocumentID)
+		argPos++
+	}
+
+	whereClause := strings.Join(whereClauses, " AND ")
+
+	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM xcentro.purchase_orders WHERE %s", whereClause)
+	var total int64
+	err := r.querier.QueryRow(ctx, countQuery, args...).Scan(&total)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to count purchase orders: %w", err)
+	}
+
+	limit := filter.PageSize
+	if limit == 0 {
+		limit = 20
+	}
+	offset := (filter.Page - 1) * limit
+	if offset < 0 {
+		offset = 0
+	}
+
+	query := fmt.Sprintf(`
+		SELECT id, document_id, COALESCE(po_number, ''), COALESCE(po_date, ''), COALESCE(vendor_name, ''), COALESCE(vendor_gstin, ''), COALESCE(buyer_gstin, ''), COALESCE(total_amount, 0), COALESCE(discount, 0), COALESCE(discount_type, ''), created_at, updated_at
+		FROM xcentro.purchase_orders
+		WHERE %s
+		ORDER BY created_at DESC
+		LIMIT $%d OFFSET $%d
+	`, whereClause, argPos, argPos+1)
+
+	args = append(args, limit, offset)
+
+	rows, err := r.querier.Query(ctx, query, args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("failed to query purchase orders: %w", err)
+	}
+	defer rows.Close()
+
+	var pos []*voucher.PurchaseOrder
+	for rows.Next() {
+		var po voucher.PurchaseOrder
+		err := rows.Scan(
+			&po.ID, &po.DocumentID, &po.PONumber, &po.PODate, &po.VendorName, &po.VendorGSTIN,
+			&po.BuyerGSTIN, &po.TotalAmount, &po.Discount, &po.DiscountType, &po.CreatedAt, &po.UpdatedAt,
+		)
+		if err != nil {
+			return nil, 0, fmt.Errorf("failed to scan purchase order: %w", err)
+		}
+		pos = append(pos, &po)
+	}
+
+	return pos, total, nil
+}
+

@@ -47,6 +47,9 @@ func RegisterVoucherRoutes(group *echo.Group, voucherService voucherSvc.VoucherS
 	group.POST("/:voucher_id/request-approval", handler.RequestApproval)     // POST /vouchers/:voucher_id/request-approval - Create/update approval
 
 	// Document review HITL endpoints
+	group.GET("/documents", reviewHandler.ListDocuments)                   // GET /vouchers/documents - List voucher documents
+	group.GET("/invoices", reviewHandler.ListInvoices)                     // GET /vouchers/invoices - List extracted invoices
+	group.GET("/purchase-orders", reviewHandler.ListPurchaseOrders)         // GET /vouchers/purchase-orders - List purchase orders
 	group.GET("/:document_id/draft", reviewHandler.GetDocumentDraft)       // GET /vouchers/:document_id/draft - Get extracted draft data
 	group.GET("/:document_id/status", reviewHandler.GetDocumentStatus)     // GET /vouchers/:document_id/status - Get processing status
 	group.POST("/:document_id/validate", reviewHandler.ValidateDocument)   // POST /vouchers/:document_id/validate - Validate with corrections
