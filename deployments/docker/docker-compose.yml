@@ -40,6 +40,8 @@ services:
     depends_on:
       - postgres
       - redis
+    env_file:
+      - ../../python_worker/.env
     environment:
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
@@ -51,8 +53,6 @@ services:
       REDIS_USER: ${REDIS_APP_USER:-xcentro_redis}
       REDIS_PASSWORD: ${REDIS_APP_PASSWORD:-XcentroRedis456!}
       REDIS_QUEUE: xcentro:extraction_tasks
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-AIzaSyBfbFD6UhilwZSskZ-_-9NBafn-TfHHC0Y}
-      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
     volumes:
       - ../../python_worker/templates:/app/templates:ro
 

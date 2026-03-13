@@ -77,8 +77,8 @@ class PostgresDocumentRepository(DocumentRepository):
                 (
                     document.doc_type.value if document.doc_type else None,
                     document.status.value if document.status else None,
-                    json.dumps(document.raw_extraction) if document.raw_extraction else None,
-                    json.dumps(document.draft_data) if document.draft_data else None,
+                    json.dumps(document.raw_extraction, default=str) if document.raw_extraction else None,
+                    json.dumps(document.draft_data, default=str) if document.draft_data else None,
                     document.i2d_template,
                     document.processed_by.value if document.processed_by else None,
                     document.id,
