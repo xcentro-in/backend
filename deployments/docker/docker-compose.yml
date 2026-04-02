@@ -54,7 +54,7 @@ services:
       REDIS_PASSWORD: ${REDIS_APP_PASSWORD:-XcentroRedis456!}
       REDIS_QUEUE: xcentro:extraction_tasks
     volumes:
-      - ../../python_worker/templates:/app/templates:ro
+      - ../../python_worker/templates:/app/templates
 
 volumes:
   postgres_data:

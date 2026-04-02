@@ -2,9 +2,13 @@ package voucher
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"reflect"
 
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
+	"xcentro.in/internal/core/payee"
 	"xcentro.in/internal/core/voucher"
 	"xcentro.in/internal/shared/logger"
 )
@@ -14,16 +18,29 @@ import (
 // documents with corrected fields before persisting to typed tables.
 type DocumentReviewService struct {
 	voucherRepo voucher.VoucherRepository
+	resolutionService *PayeeResolutionService
+	matchingEngine *MatchingEngine
+	redisClient *redis.Client
 	logger      *logger.Logger
 }
 
 // NewDocumentReviewService creates a new DocumentReviewService
 func NewDocumentReviewService(
 	voucherRepo voucher.VoucherRepository,
+	vendorRepo payee.PayeeVendorRepository,
+	redisClient *redis.Client,
+	matchingEngine *MatchingEngine,
 	logger *logger.Logger,
 ) *DocumentReviewService {
+	var resolutionSvc *PayeeResolutionService
+	if vendorRepo != nil {
+		resolutionSvc = NewPayeeResolutionService(vendorRepo, logger)
+	}
 	return &DocumentReviewService{
 		voucherRepo: voucherRepo,
+		resolutionService: resolutionSvc,
+		matchingEngine: matchingEngine,
+		redisClient: redisClient,
 		logger:      logger,
 	}
 }
@@ -37,6 +54,50 @@ func (s *DocumentReviewService) GetDocumentDraft(ctx context.Context, docID uuid
 	}
 
 	return doc, nil
+}
+
+// DocumentDraftWithResolution is the enriched response returned by GetDocumentDraftWithResolution
+type DocumentDraftWithResolution struct {
+	Document           *voucher.VoucherDocument `json:"document"`
+	PayeeResolution    *PayeeResolution         `json:"payee_resolution"`
+	BusinessResolution *BusinessResolution      `json:"business_resolution"`
+}
+
+// GetDocumentDraftWithResolution fetches draft data and performs payee + business resolution
+func (s *DocumentReviewService) GetDocumentDraftWithResolution(ctx context.Context, docID uuid.UUID, headerBusinessID string) (*DocumentDraftWithResolution, error) {
+	doc, err := s.voucherRepo.GetVoucherDocumentByID(ctx, docID)
+	if err != nil {
+		s.logger.ErrorWith("Failed to get document draft", "error", err, "doc_id", docID)
+		return nil, err
+	}
+
+	result := &DocumentDraftWithResolution{Document: doc}
+
+	if s.resolutionService != nil && doc.DraftData != nil {
+		vendorName, _ := doc.DraftData["vendor_name"].(string)
+		vendorGSTIN, _ := doc.DraftData["vendor_gstin"].(string)
+		buyerGSTIN, _ := doc.DraftData["buyer_gstin"].(string)
+
+		result.PayeeResolution = s.resolutionService.ResolvePayee(ctx, vendorName, vendorGSTIN)
+
+		result.BusinessResolution = s.resolutionService.ResolveBusiness(
+			ctx,
+			headerBusinessID,
+			buyerGSTIN,
+			s.voucherRepo.GetBusinessIDByGSTIN,
+		)
+	} else {
+		result.PayeeResolution = &PayeeResolution{Status: PayeeResolutionNotFound}
+		result.BusinessResolution = &BusinessResolution{ResolvedVia: "unresolved"}
+		if headerBusinessID != "" {
+			result.BusinessResolution = &BusinessResolution{
+				BusinessID:  headerBusinessID,
+				ResolvedVia: "header",
+			}
+		}
+	}
+
+	return result, nil
 }
 
 // GetDocumentStatus fetches just the processing status for a document
@@ -87,25 +148,84 @@ func (s *DocumentReviewService) ValidateDocument(ctx context.Context, docID uuid
 
 	switch docType {
 	case string(voucher.DocTypePurchaseOrder):
-		if err := s.voucherRepo.CreatePurchaseOrder(ctx, docID, req.DraftData); err != nil {
+		if poID, err := s.voucherRepo.CreatePurchaseOrder(ctx, docID, req.DraftData); err != nil {
 			s.logger.ErrorWith("Failed to persist purchase order", "error", err, "doc_id", docID)
 			return fmt.Errorf("validated but failed to persist purchase order: %w", err)
+		} else {
+			s.logger.InfoWith("Purchase order persisted", "doc_id", docID, "po_id", poID)
+			
+			// Trigger orphan invoice reconciliation matching
+			poNumber, _ := req.DraftData["po_number"].(string)
+			businessIDStr, _ := req.DraftData["business_id"].(string)
+			if poNumber != "" && businessIDStr != "" && s.matchingEngine != nil {
+				if bid, err := uuid.Parse(businessIDStr); err == nil {
+					go func() {
+						matchCtx := context.Background()
+						if err := s.matchingEngine.RetryOrphanInvoices(matchCtx, poNumber, bid); err != nil {
+							s.logger.ErrorWith("Orphan reconciliation failed", "error", err, "po_number", poNumber)
+						}
+					}()
+				}
+			}
 		}
-		s.logger.InfoWith("Purchase order persisted", "doc_id", docID)
 
 	case string(voucher.DocTypeInvoice):
-		if err := s.voucherRepo.CreateInvoiceFromExtraction(ctx, docID, req.DraftData); err != nil {
+		if invoiceID, err := s.voucherRepo.CreateInvoiceFromExtraction(ctx, docID, req.DraftData); err != nil {
 			s.logger.ErrorWith("Failed to persist extracted invoice", "error", err, "doc_id", docID)
 			return fmt.Errorf("validated but failed to persist extracted invoice: %w", err)
+		} else {
+			s.logger.InfoWith("Extracted invoice persisted", "doc_id", docID, "invoice_id", invoiceID)
+			
+			// Trigger invoice-PO matching
+			if s.matchingEngine != nil {
+				go func() {
+					matchCtx := context.Background()
+					if err := s.matchingEngine.RunMatchingForInvoice(matchCtx, invoiceID); err != nil {
+						s.logger.ErrorWith("Matching engine failed for invoice", "error", err, "invoice_id", invoiceID)
+					}
+				}()
+			}
 		}
-		s.logger.InfoWith("Extracted invoice persisted", "doc_id", docID)
 
 	default:
 		// For UNKNOWN doc_type, default to invoice
 		s.logger.WarnWith("Unknown doc_type, defaulting to invoice", "doc_type", docType, "doc_id", docID)
-		if err := s.voucherRepo.CreateInvoiceFromExtraction(ctx, docID, req.DraftData); err != nil {
+		if invoiceID, err := s.voucherRepo.CreateInvoiceFromExtraction(ctx, docID, req.DraftData); err != nil {
 			s.logger.ErrorWith("Failed to persist extracted invoice (default)", "error", err, "doc_id", docID)
 			return fmt.Errorf("validated but failed to persist extracted invoice: %w", err)
+		} else {
+			// Trigger invoice-PO matching
+			if s.matchingEngine != nil {
+				go func() {
+					matchCtx := context.Background()
+					if err := s.matchingEngine.RunMatchingForInvoice(matchCtx, invoiceID); err != nil {
+						s.logger.ErrorWith("Matching engine failed for invoice (default)", "error", err, "invoice_id", invoiceID)
+					}
+				}()
+			}
+		}
+	}
+
+	// 5. Enqueue template generation task if processed by LLM or human corrected the data
+	humanCorrected := !reflect.DeepEqual(doc.DraftData, req.DraftData)
+	if doc.ProcessedBy == "LLM" || humanCorrected {
+		taskPayload := map[string]interface{}{
+			"document_id": docID.String(),
+			"task_type":   "generate_template",
+		}
+
+		if taskJSON, err := json.Marshal(taskPayload); err != nil {
+			s.logger.ErrorWith("Failed to marshal template generation task payload", "error", err, "doc_id", docID)
+		} else {
+			if err := s.redisClient.LPush(ctx, "xcentro:template_generation_tasks", taskJSON).Err(); err != nil {
+				s.logger.ErrorWith("Failed to push template generation task to Redis", "error", err, "doc_id", docID)
+			} else {
+				s.logger.InfoWith("Template generation task enqueued",
+					"doc_id", docID,
+					"reason_llm", doc.ProcessedBy == "LLM",
+					"reason_corrected", humanCorrected,
+				)
+			}
 		}
 	}
 

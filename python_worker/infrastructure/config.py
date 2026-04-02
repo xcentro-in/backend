@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     redis_user: str = "xcentro_redis"
     redis_password: str = ""
     redis_queue: str = "xcentro:extraction_tasks"
+    redis_template_queue: str = "xcentro:template_generation_tasks"
 
     # Gemini LLM
     gemini_api_key: str = ""

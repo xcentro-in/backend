@@ -52,7 +52,9 @@ class Document:
     s3_path: str
     doc_type: DocumentType = DocumentType.UNKNOWN
     status: DocumentStatus = DocumentStatus.QUEUED
-    raw_extraction: dict[str, Any] | None = None
+    raw_ocr: str | None = None
     draft_data: dict[str, Any] | None = None
+    validated_data: dict[str, Any] | None = None
     i2d_template: str | None = None
     processed_by: ProcessedBy | None = None
+

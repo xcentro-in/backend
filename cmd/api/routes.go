@@ -283,7 +283,9 @@ func registerV1VoucherRoutes(clients *externalClients, cfg *config.Config, group
 	uploadHandler := voucherHandler.NewDocumentUploadHandler(uploadService, logger.GetDefault())
 
 	// Document review (HITL) service & handler
-	reviewService := voucherSvc.NewDocumentReviewService(voucherRepository, logger.GetDefault())
+	payeeVendorRepository := payeeRepo.NewPgPayeeVendorRepository(clients.db)
+	matchingEngine := voucherSvc.NewMatchingEngine(voucherRepository, clients.rcache.Client, logger.GetDefault())
+	reviewService := voucherSvc.NewDocumentReviewService(voucherRepository, payeeVendorRepository, clients.rcache.Client, matchingEngine, logger.GetDefault())
 	reviewHandler := voucherHandler.NewDocumentReviewHandler(reviewService, logger.GetDefault())
 
 	voucherGroup := group.Group("/vouchers")

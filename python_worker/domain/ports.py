@@ -42,11 +42,17 @@ class LLMExtractor(abc.ABC):
 
     @abc.abstractmethod
     def extract(self, file_path: str) -> ExtractionResult:
-        """Send the document to the LLM and return structured data.
+        """Process the file using an LLM and return structured ExtractionResult."""
+        pass
+
+    @abc.abstractmethod
+    def generate_template(self, raw_ocr: str, draft_data: dict) -> str:
+        """Generate an invoice2data YAML template from OCR text and expected data.
 
         Raises:
             LLMExtractionError: If the LLM call fails.
         """
+
 
 
 class FileDownloader(abc.ABC):

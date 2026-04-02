@@ -8,12 +8,13 @@ from __future__ import annotations
 
 import sys
 import logging
+import time
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
 print("THIS IS THE NEW BUILD")
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
     handlers=[logging.StreamHandler(sys.stdout)],
@@ -36,6 +37,7 @@ from usecases.extraction_service import ExtractionService
 # Constants
 # ---------------------------------------------------------------------------
 MAX_RETRIES = 3
+CONNECTION_RETRY_DELAY = 5  # seconds to wait before reconnecting to infra
 
 # ---------------------------------------------------------------------------
 # Graceful shutdown
@@ -68,7 +70,7 @@ def main() -> None:
     queue = RedisTaskQueue(
         host=settings.redis_host,
         port=settings.redis_port,
-        queue_name=settings.redis_queue,
+        queues=[settings.redis_queue, settings.redis_template_queue],
         username=settings.redis_user,
         password=settings.redis_password,
     )
@@ -96,6 +98,7 @@ def main() -> None:
         llm_extractor=llm_extractor,
         downloader=downloader,
         temp_dir=settings.temp_dir,
+        template_dir=settings.i2d_template_dir,
     )
 
     # -- Consumer loop -------------------------------------------------------
@@ -103,10 +106,14 @@ def main() -> None:
 
     try:
         while not _shutdown:
-            payload = queue.dequeue(timeout=5)
+            try:
+                payload = queue.dequeue(timeout=5)
+            except Exception as conn_err:
+                logger.error("Redis connection error: %s — retrying in %ds", conn_err, CONNECTION_RETRY_DELAY)
+                time.sleep(CONNECTION_RETRY_DELAY)
+                continue
             if payload is None:
-                continue  # timeout — loop back and check shutdown flag
-
+                continue
             doc_id_raw = payload.get("document_id")
 
             if not doc_id_raw:
@@ -120,10 +127,16 @@ def main() -> None:
                 continue
 
             retry_count = payload.get("retry_count", 0)
-            logger.info("Processing document %s (attempt %d/%d)", doc_id, retry_count + 1, MAX_RETRIES)
+            queue_name = payload.get("_queue_name", settings.redis_queue)
+            
+            task_type = "Extraction" if queue_name == settings.redis_queue else "Template Generation"
+            logger.info("Processing %s task for document %s (attempt %d/%d)", task_type, doc_id, retry_count + 1, MAX_RETRIES)
 
             try:
-                service.process(doc_id)
+                if queue_name == settings.redis_template_queue:
+                    service.generate_template_for_document(doc_id)
+                else:
+                    service.process(doc_id)
             except Exception as exc:
                 # Infrastructure error (S3, LLM API, etc.) — eligible for retry
                 logger.exception("Error processing document %s (attempt %d/%d): %s",
@@ -131,13 +144,24 @@ def main() -> None:
 
                 if retry_count + 1 < MAX_RETRIES:
                     retry_payload = {**payload, "retry_count": retry_count + 1}
-                    queue.enqueue(retry_payload)
-                    logger.info("Re-queued document %s for retry %d/%d",
-                                doc_id, retry_count + 2, MAX_RETRIES)
+                    try:
+                        queue.enqueue(retry_payload)
+                        logger.info("Re-queued document %s for retry %d/%d",
+                                    doc_id, retry_count + 2, MAX_RETRIES)
+                    except Exception as enqueue_err:
+                        logger.error("Failed to re-queue document %s: %s — marking FAILED",
+                                     doc_id, enqueue_err)
+                        try:
+                            service.mark_failed(doc_id, reason=f"Enqueue failed after error: {exc}")
+                        except Exception:
+                            logger.exception("Could not mark document %s as FAILED (DB may be down)", doc_id)
                 else:
                     logger.error("Document %s exhausted all %d retries — marking as FAILED",
                                  doc_id, MAX_RETRIES)
-                    service.mark_failed(doc_id, reason=f"Max retries ({MAX_RETRIES}) exhausted: {exc}")
+                    try:
+                        service.mark_failed(doc_id, reason=f"Max retries ({MAX_RETRIES}) exhausted: {exc}")
+                    except Exception:
+                        logger.exception("Could not mark document %s as FAILED (DB may be down)", doc_id)
 
     finally:
         logger.info("Cleaning up connections …")

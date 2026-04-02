@@ -16,9 +16,9 @@ logger = logging.getLogger(__name__)
 class RedisTaskQueue(TaskQueue):
     """Blocking pop consumer for a Redis list acting as a task queue."""
 
-    def __init__(self, host: str, port: int, queue_name: str,
+    def __init__(self, host: str, port: int, queues: list[str],
                  username: str | None = None, password: str | None = None) -> None:
-        self._queue = queue_name
+        self._queues = queues
         self._client = redis.Redis(
             host=host,
             port=port,
@@ -36,23 +36,26 @@ class RedisTaskQueue(TaskQueue):
         Returns:
             Parsed JSON payload or None on timeout.
         """
-        result = self._client.brpop(self._queue, timeout=timeout)
+        result = self._client.brpop(self._queues, timeout=timeout)
         if result is None:
             return None
 
-        _, raw = result
+        queue_name, raw = result
         try:
             payload = json.loads(raw)
-            logger.info("Dequeued task: %s", payload.get("document_id", "unknown"))
+            payload["_queue_name"] = queue_name
+            logger.info("Dequeued task from %s: %s", queue_name, payload.get("document_id", "unknown"))
             return payload
         except json.JSONDecodeError:
-            logger.error("Invalid JSON in queue: %s", raw)
+            logger.error("Invalid JSON in queue %s: %s", queue_name, raw)
             return None
 
     def enqueue(self, payload: dict[str, Any]) -> None:
-        """Push a task payload onto the queue (used for retries)."""
-        self._client.lpush(self._queue, json.dumps(payload))
-        logger.info("Enqueued task: %s", payload.get("document_id", "unknown"))
+        """Push a task payload onto the primary queue (used for retries)."""
+        # Always push to the first queue for retries by default
+        target_queue = payload.pop("_queue_name", self._queues[0])
+        self._client.lpush(target_queue, json.dumps(payload))
+        logger.info("Enqueued task to %s: %s", target_queue, payload.get("document_id", "unknown"))
 
     def close(self) -> None:
         self._client.close()

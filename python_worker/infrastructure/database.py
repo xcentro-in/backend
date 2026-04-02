@@ -45,8 +45,8 @@ class PostgresDocumentRepository(DocumentRepository):
         conn = self._get_conn()
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
-                "SELECT id, s3_path, doc_type, status, raw_extraction, "
-                "draft_data, i2d_template, processed_by "
+                "SELECT id, s3_path, doc_type, status, raw_ocr, "
+                "draft_data, validated_data, i2d_template, processed_by "
                 "FROM voucher_documents WHERE id = %s",
                 (document_id,),
             )
@@ -60,8 +60,9 @@ class PostgresDocumentRepository(DocumentRepository):
             s3_path=row["s3_path"],
             doc_type=DocumentType(row["doc_type"]) if row["doc_type"] else DocumentType.UNKNOWN,
             status=DocumentStatus(row["status"]) if row["status"] else DocumentStatus.QUEUED,
-            raw_extraction=row["raw_extraction"],
+            raw_ocr=row["raw_ocr"],
             draft_data=row["draft_data"],
+            validated_data=row["validated_data"],
             i2d_template=row["i2d_template"],
             processed_by=ProcessedBy(row["processed_by"]) if row["processed_by"] else None,
         )
@@ -71,14 +72,16 @@ class PostgresDocumentRepository(DocumentRepository):
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE voucher_documents SET "
-                "doc_type = %s, status = %s, raw_extraction = %s, "
-                "draft_data = %s, i2d_template = %s, processed_by = %s "
+                "doc_type = %s, status = %s, raw_ocr = %s, "
+                "draft_data = %s, validated_data = %s, "
+                "i2d_template = %s, processed_by = %s "
                 "WHERE id = %s",
                 (
                     document.doc_type.value if document.doc_type else None,
                     document.status.value if document.status else None,
-                    json.dumps(document.raw_extraction, default=str) if document.raw_extraction else None,
+                    document.raw_ocr,
                     json.dumps(document.draft_data, default=str) if document.draft_data else None,
+                    json.dumps(document.validated_data, default=str) if document.validated_data else None,
                     document.i2d_template,
                     document.processed_by.value if document.processed_by else None,
                     document.id,

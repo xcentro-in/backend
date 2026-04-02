@@ -67,7 +67,18 @@ Analyze the attached document and extract the following fields into a single, va
    - These are Indian GST tax components. If they are not present, set to null.
 5. **Shipping**:
    - Extract shipping / freight charges if present on the document.
-6. **General**:
+6. **GSTIN Extraction (CRITICAL)**:
+   - GSTIN is always exactly 15 alphanumeric characters, e.g., "27AADCB2230M1ZV".
+   - Do NOT include spaces, hyphens, or extra characters. Strip any whitespace.
+   - Vendor GSTIN typically appears near the seller/supplier header.
+   - Buyer GSTIN typically appears near the "Bill To" or "Ship To" section.
+   - If a GSTIN-like pattern is found but is clearly malformed (wrong length), set confidence to 0.2 and include it as-is.
+7. **Vendor Name Extraction (CRITICAL)**:
+   - Extract the **legal entity name** of the vendor/supplier, NOT a branch name or location.
+   - For example, if the header says "ABC Enterprises - Mumbai Branch", extract "ABC Enterprises" as the vendor_name.
+   - Prefer the name adjacent to the vendor GSTIN or at the top of the invoice header.
+   - If both a trade name and legal name are visible, prefer the **legal name** (the one registered with GST).
+8. **General**:
    - For `invoice_date`, always use YYYY-MM-DD format.
 
 ### Schema:
@@ -121,6 +132,29 @@ Analyze the attached document and extract the following fields into a single, va
 - If doc_type is "OTHER", you may leave all other fields as null with 0.0 confidence.
 """
 
+_TEMPLATE_GEN_PROMPT = """
+You are an expert at creating `invoice2data` YAML templates. Given the OCR text of an invoice and the target extracted values, create a strict YAML template that `invoice2data` can use to extract these fields from future invoices of the exact same layout.
+
+Your goal is to extract:
+- invoice_number
+- date (invoice date)
+- po_number
+- issuer (vendor name)
+- gstin or vendor_gstin
+- buyer_gstin
+- amount (total amount)
+- discount
+- discount_type
+- sgst, cgst, igst
+- freight or shipping
+
+Rules:
+1. Identify static keywords in the OCR text to use as the `issuer` or `keywords` fields to match this template.
+2. Write concise regex patterns matching the OCR text. Use `(?P<field_name>...)` syntax for capture groups.
+3. Use the provided actual data values as a reference to find where they appear in the OCR text.
+4. Return ONLY valid YAML. Do not include markdown formatting (like ```yaml). No explanations.
+"""
+
 
 class GeminiLLMExtractor(LLMExtractor):
     """Sends documents to Google Gemini for extraction.
@@ -147,10 +181,26 @@ class GeminiLLMExtractor(LLMExtractor):
             uploaded_file = client.files.upload(file=file_path)
             logger.info("Uploaded %s to Gemini as %s", file_path, uploaded_file.name)
 
+            token_info = client.models.count_tokens(
+                model=self._model,
+                contents=[uploaded_file, _EXTRACTION_PROMPT],
+            )
+            logger.info("Estimated tokens before call: %s", token_info.total_tokens)
+
             response = client.models.generate_content(
                 model=self._model,
                 contents=[uploaded_file, _EXTRACTION_PROMPT],
             )
+
+            usage = getattr(response, "usage_metadata", None)
+            if usage:
+                logger.info(
+                    "[TOKENS] prompt=%d response=%d total=%d",
+                    usage.prompt_token_count,
+                    usage.candidates_token_count,
+                    usage.total_token_count,
+                )
+
             logger.info("Gemini raw response: \n%s", response)
             logger.info("====== Gemini response text: \n%s\n======================================================", response.text)
 
@@ -170,6 +220,30 @@ class GeminiLLMExtractor(LLMExtractor):
             raise LLMExtractionError(f"Gemini returned non-JSON: {exc}") from exc
         except Exception as exc:
             raise LLMExtractionError(f"Gemini API error: {exc}") from exc
+
+    def generate_template(self, raw_ocr: str, draft_data: dict) -> str:
+        try:
+            client = self._get_client()
+            prompt = (
+                f"{_TEMPLATE_GEN_PROMPT}\n\n"
+                f"### TARGET DATA TO EXTRACT (DRAFT DATA) ###\n{json.dumps(draft_data, indent=2)}\n\n"
+                f"### RAW OCR TEXT ###\n{raw_ocr}\n"
+            )
+            response = client.models.generate_content(
+                model=self._model,
+                contents=[prompt],
+            )
+            raw_text = response.text.strip()
+            # Strip markdown fences if present
+            if raw_text.startswith("```"):
+                raw_text = raw_text.split("\n", 1)[1]
+            if raw_text.endswith("```"):
+                raw_text = raw_text.rsplit("```", 1)[0]
+            if raw_text.startswith("yaml\n"):
+                raw_text = raw_text[5:]
+            return raw_text.strip()
+        except Exception as exc:
+            raise LLMExtractionError(f"Gemini API error during template generation: {exc}") from exc
 
     # -- mapping helpers ------------------------------------------------------
 

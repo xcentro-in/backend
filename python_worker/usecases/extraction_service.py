@@ -16,7 +16,9 @@ from __future__ import annotations
 import dataclasses
 import logging
 import uuid
+import os
 
+from invoice2data.input import pdftotext
 from domain.entities import Document, ExtractionResult
 from domain.enums import DocumentStatus, DocumentType, ProcessedBy
 from domain.exceptions import ExtractionError, LLMExtractionError, TemplateMatchError
@@ -62,12 +64,14 @@ class ExtractionService:
         llm_extractor: LLMExtractor,
         downloader: FileDownloader,
         temp_dir: str = "/tmp/extraction",
+        template_dir: str = "/app/templates",
     ) -> None:
         self._repo = repo
         self._template = template_extractor
         self._llm = llm_extractor
         self._downloader = downloader
         self._temp_dir = temp_dir
+        self._template_dir = template_dir
 
     # -- public entry point --------------------------------------------------
 
@@ -90,6 +94,31 @@ class ExtractionService:
         # Download — may raise on S3 / network errors (retryable)
         local_path = self._downloader.download(doc.s3_path, self._temp_dir)
         logger.info("Downloaded s3_path=%s → %s", doc.s3_path, local_path)
+
+        # Extract RAW OCR early
+        try:
+            raw = pdftotext.to_text(local_path)
+            if isinstance(raw, bytes):
+                raw = raw.decode("utf-8", errors="replace")
+            
+            # Strip null bytes — psycopg2 rejects \x00 in TEXT columns
+            raw = raw.replace("\x00", "").strip()
+
+            if not raw:
+                logger.info("pdftotext returned empty text for %s. Attempting tesseract OCR fallback.", doc.id)
+                try:
+                    from invoice2data.input import tesseract
+                    raw_bytes = tesseract.to_text(local_path)
+                    if isinstance(raw_bytes, bytes):
+                        raw = raw_bytes.decode("utf-8", errors="replace")
+                    raw = raw.replace("\x00", "").strip()
+                except Exception as t_exc:
+                    logger.warning("tesseract OCR failed for %s: %s", doc.id, t_exc)
+
+            doc.raw_ocr = raw
+            self._repo.update(doc)
+        except Exception as exc:
+            logger.warning("Failed to extract raw OCR for %s: %s", doc.id, exc)
 
         # Step 1: Try template extraction
         result = self._try_template(local_path, doc)
@@ -148,6 +177,60 @@ class ExtractionService:
         self._repo.update(doc)
         logger.error("Document %s marked FAILED: %s", document_id, reason)
 
+    def generate_template_for_document(self, document_id: uuid.UUID) -> None:
+        """Use LLM to generate an invoice2data template after HITL validation."""
+        doc = self._repo.get_by_id(document_id)
+        if doc is None:
+            logger.error("Cannot generate template: document %s not found", document_id)
+            return
+
+        if not doc.raw_ocr:
+            logger.error("Cannot generate template for %s: missing raw_ocr", document_id)
+            return
+
+        # Use validated_data (post-HITL) as the target; fallback to draft_data
+        target_data = doc.validated_data or doc.draft_data
+        if not target_data:
+            logger.error("Cannot generate template for %s: missing validated_data and draft_data", document_id)
+            return
+
+        # Prevent overwriting a working template: if extraction was done by
+        # INVOICE2DATA and a template already exists, skip regeneration.
+        if doc.processed_by == ProcessedBy.INVOICE2DATA and doc.i2d_template:
+            logger.info(
+                "Skipping template generation for %s: already extracted by INVOICE2DATA with template %s",
+                document_id, doc.i2d_template,
+            )
+            return
+
+        logger.info("Generating invoice template for document %s", document_id)
+        try:
+            yaml_content = self._llm.generate_template(doc.raw_ocr, target_data)
+
+            # Build filename: prefer vendor_gstin, fallback to vendor_name
+            vendor_id = str(target_data.get("vendor_gstin") or "").strip()
+            if not vendor_id:
+                vendor_id = str(target_data.get("vendor_name") or "unknown_vendor")
+            vendor_id = vendor_id.replace(" ", "_").replace("/", "").lower()
+
+            doc_type = str(target_data.get("doc_type") or "invoice").lower()
+            filename = f"{vendor_id}_{doc_type}.yml"
+            filepath = os.path.join(self._template_dir, filename)
+
+            # Ensure templates dir exists
+            os.makedirs(self._template_dir, exist_ok=True)
+
+            with open(filepath, "w", encoding="utf-8") as f:
+                f.write(yaml_content)
+
+            # Update document with the generated template name
+            doc.i2d_template = filename
+            self._repo.update(doc)
+
+            logger.info("Successfully generated template at %s for document %s", filepath, document_id)
+        except Exception as exc:
+            logger.error("Failed to generate template for document %s: %s", document_id, exc)
+
     # -- private helpers ------------------------------------------------------
 
     def _try_template(self, path: str, doc: Document) -> ExtractionResult | None:
@@ -182,7 +265,6 @@ class ExtractionService:
         """Validate the final result and persist to the database."""
         failures = run_all_checks(result)
 
-        doc.raw_extraction = result.raw
         doc.draft_data = _result_to_draft(result)
         doc.doc_type = result.doc_type
 

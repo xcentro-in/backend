@@ -38,7 +38,10 @@ func (h *DocumentReviewHandler) GetDocumentDraft(c echo.Context) error {
 		})
 	}
 
-	doc, err := h.reviewService.GetDocumentDraft(c.Request().Context(), docID)
+	// Extract business_id from X-Business-ID header for resolution
+	headerBusinessID := c.Request().Header.Get("X-Business-ID")
+
+	result, err := h.reviewService.GetDocumentDraftWithResolution(c.Request().Context(), docID, headerBusinessID)
 	if err != nil {
 		h.logger.ErrorWith("GetDocumentDraft failed", "error", err, "doc_id", docID)
 		return c.JSON(http.StatusNotFound, map[string]any{
@@ -48,6 +51,7 @@ func (h *DocumentReviewHandler) GetDocumentDraft(c echo.Context) error {
 		})
 	}
 
+	doc := result.Document
 	return c.JSON(http.StatusOK, map[string]any{
 		"status": "success",
 		"data": map[string]any{
@@ -57,6 +61,8 @@ func (h *DocumentReviewHandler) GetDocumentDraft(c echo.Context) error {
 			"draft_data":      doc.DraftData,
 			"validated_data":  doc.ValidatedData,
 			"processed_by":    doc.ProcessedBy,
+			"payee_resolution":    result.PayeeResolution,
+			"business_resolution": result.BusinessResolution,
 		},
 	})
 }
@@ -120,6 +126,13 @@ func (h *DocumentReviewHandler) ValidateDocument(c echo.Context) error {
 			"error":   "MISSING_DRAFT_DATA",
 			"message": "draft_data field is required",
 		})
+	}
+
+	// Inject business_id from header if not already present in draft_data
+	if _, exists := req.DraftData["business_id"]; !exists {
+		if headerBusinessID := c.Request().Header.Get("X-Business-ID"); headerBusinessID != "" {
+			req.DraftData["business_id"] = headerBusinessID
+		}
 	}
 
 	if err := h.reviewService.ValidateDocument(c.Request().Context(), docID, &req); err != nil {

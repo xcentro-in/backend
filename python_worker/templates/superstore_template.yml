@@ -1,27 +1,54 @@
 issuer: SuperStore
 keywords:
   - "SuperStore"
+  - "INVOICE"
   - "Bill To:"
   - "Ship To:"
 
 fields:
-  # Using the short 'field: regex' format to avoid parser errors
-  invoice_number: '(?i)invoice\s*(?:no\.?|#)\s*(\d+)'
-  order_id: 'Order ID:\s*([A-Z0-9-]+)'
-  date: 'Date:\s*([A-Z][a-z]{2}\s\d{2}\s\d{4})'
-  customer: 'Bill To:\s*([\w\s]+?)\s*Ship To:'
-  amount: 'Total:\s*\$\s*([\d.]+)'
-  shipping_cost: 'Shipping:\s*\$\s*([\d.]+)'
-  discount: 'Discount\s*\(\d+%\):\s*\$\s*([\d.]+)'
+  invoice_number:
+    - '(?i)invoice\s*#\s*(\d+)'
+  invoice_date:
+    - '(?i)\b([A-Z][a-z]{2}\s+\d{1,2}\s+\d{4})\b'
+  order_id:
+    - '(?i)Order ID\s*:\s*([A-Z0-9-]+)'
+  vendor_name:
+    - '(?i)SuperStore'
+  total_amount:
+    - '(?i)Total:\s*\$?\s*([\d,]+\.\d{2})'
+  subtotal:
+    - '(?i)Subtotal:\s*\$?\s*([\d,]+\.\d{2})'
+  shipping:
+    - '(?i)Shipping:\s*\$?\s*([\d,]+\.\d{2})'
+  discount:
+    - '(?i)Discount\s*\((\d+)%\):'
+  discount_amount:
+    - '(?i)Discount\s*\(\d+%\):\s*\$?\s*([\d,]+\.\d{2})'
+  currency:
+    - '\$'
+  customer:
+    - '(?i)Bill To:\s*([A-Za-z\s]+)'
+  ship_to:
+    - '(?i)Ship To:\s*([A-Za-z,\s]+)'
 
 lines:
-  start: 'Item'
-  end: 'Notes:'
-  # Simplified line regex to be less sensitive to quotes
-  line: '(?P<name>.+?)\s+"?(?P<qty>\d+)"?\s+.*?\$(?P<price>[\d.]+)\s+\$(?P<amount>[\d.]+)'
+  start: '(?i)Item\s+Quantity\s+Rate\s+Amount'
+  end: '(?i)Subtotal:'
+  line: >
+    (?P<description>[\w\s,\-]+?)\s+
+    (?P<quantity>\d+)\s+
+    \$?(?P<rate>[\d,]+\.\d{2})\s+
+    \$?(?P<amount>[\d,]+\.\d{2})
+  types:
+    quantity: int
+    rate: float
+    amount: float
+  multiline: true
 
 options:
   currency: USD
   decimal_separator: .
+  remove_thousands_separator: true
   date_formats:
+    - '%b %d %Y'
     - '%b %d %Y'

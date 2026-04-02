@@ -125,10 +125,16 @@ type VoucherRepository interface {
 	UpdateVoucherDocumentValidation(ctx context.Context, docID uuid.UUID, status DocumentStatus, validatedData map[string]interface{}) error
 
 	// CreateInvoiceFromExtraction persists validated invoice data to the existing invoice table
-	CreateInvoiceFromExtraction(ctx context.Context, docID uuid.UUID, data map[string]interface{}) error
+	// Returns the generated invoice UUID for downstream use (e.g., matching engine)
+	CreateInvoiceFromExtraction(ctx context.Context, docID uuid.UUID, data map[string]interface{}) (uuid.UUID, error)
 
 	// CreatePurchaseOrder persists validated PO data to the purchase_orders table
-	CreatePurchaseOrder(ctx context.Context, docID uuid.UUID, data map[string]interface{}) error
+	// Returns the generated PO UUID for downstream use
+	CreatePurchaseOrder(ctx context.Context, docID uuid.UUID, data map[string]interface{}) (uuid.UUID, error)
+
+	// GetBusinessIDByGSTIN looks up a business by its GSTIN and returns the bid.
+	// Returns empty string if not found, error only on query failures.
+	GetBusinessIDByGSTIN(ctx context.Context, gstin string) (string, error)
 
 	// WithTx creates a new repository instance that uses a transaction
 	// This enables transactional voucher operations (e.g., finalizing vouchers atomically with payments)
@@ -155,6 +161,35 @@ type VoucherRepository interface {
 
 	// ListPurchaseOrders retrieves paginated list of purchase orders
 	ListPurchaseOrders(ctx context.Context, filter PurchaseOrderListFilter) ([]*PurchaseOrder, int64, error)
+
+	// --- Matching Engine Methods ---
+
+	// GetInvoiceByID retrieves a fully-typed invoice record by its primary key.
+	GetInvoiceByID(ctx context.Context, invoiceID uuid.UUID) (*ExtractedInvoice, error)
+
+	// GetPurchaseOrderByPONumber retrieves a PO by its po_number, scoped to a business.
+	GetPurchaseOrderByPONumber(ctx context.Context, poNumber string, businessID uuid.UUID) (*PurchaseOrder, error)
+
+	// GetLineItemsByPurchaseOrderID retrieves all typed line items for a PO.
+	GetLineItemsByPurchaseOrderID(ctx context.Context, poID uuid.UUID) ([]LineItemDetail, error)
+
+	// GetLineItemsByInvoiceID retrieves all typed line items for an invoice.
+	GetLineItemsByInvoiceID(ctx context.Context, invoiceID uuid.UUID) ([]LineItemDetail, error)
+
+	// UpdateInvoiceMatchStatus updates only the match_status column on an invoice.
+	UpdateInvoiceMatchStatus(ctx context.Context, invoiceID uuid.UUID, status string) error
+
+	// UpdatePurchaseOrderBalance atomically updates remaining_balance and po_status.
+	UpdatePurchaseOrderBalance(ctx context.Context, poID uuid.UUID, remainingBalance float64, status string) error
+
+	// UpdateLineItemQtyReceived adds to the qty_received on a line item.
+	UpdateLineItemQtyReceived(ctx context.Context, lineItemID uuid.UUID, qtyReceived float64) error
+
+	// CreateMatchResult persists a matching audit record.
+	CreateMatchResult(ctx context.Context, result *MatchResult) error
+
+	// GetOrphanInvoicesByPONumber finds invoices in ORPHAN_INVOICE status with the given po_number.
+	GetOrphanInvoicesByPONumber(ctx context.Context, poNumber string) ([]*ExtractedInvoice, error)
 }
 
 // VoucherFilters defines filter criteria for listing vouchers

@@ -2326,22 +2326,22 @@ func (r *PostgresVoucherRepository) CreateVoucherDocument(ctx context.Context, d
 // GetVoucherDocumentByID retrieves a voucher document by its ID
 func (r *PostgresVoucherRepository) GetVoucherDocumentByID(ctx context.Context, docID uuid.UUID) (*voucher.VoucherDocument, error) {
 	query := `
-		SELECT id, s3_path, doc_type, status, raw_extraction, draft_data, i2d_template, processed_by, validated_data
+		SELECT id, s3_path, doc_type, status, raw_ocr, draft_data, i2d_template, processed_by, validated_data
 		FROM xcentro.voucher_documents
 		WHERE id = $1
 	`
 
 	var doc voucher.VoucherDocument
 	var docType sql.NullString
-	var rawExtraction, draftData, validatedData []byte
-	var i2dTemplate, processedBy sql.NullString
+	var draftData, validatedData []byte
+	var i2dTemplate, processedBy, rawOCR sql.NullString
 
 	err := r.querier.QueryRow(ctx, query, docID).Scan(
 		&doc.ID,
 		&doc.S3Path,
 		&docType,
 		&doc.Status,
-		&rawExtraction,
+		&rawOCR,
 		&draftData,
 		&i2dTemplate,
 		&processedBy,
@@ -2363,10 +2363,8 @@ func (r *PostgresVoucherRepository) GetVoucherDocumentByID(ctx context.Context, 
 	if processedBy.Valid {
 		doc.ProcessedBy = processedBy.String
 	}
-	if rawExtraction != nil {
-		if err := json.Unmarshal(rawExtraction, &doc.RawExtraction); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal raw_extraction: %w", err)
-		}
+	if rawOCR.Valid {
+		doc.RawOCR = rawOCR.String
 	}
 	if draftData != nil {
 		if err := json.Unmarshal(draftData, &doc.DraftData); err != nil {
@@ -2409,21 +2407,38 @@ func (r *PostgresVoucherRepository) UpdateVoucherDocumentValidation(ctx context.
 
 // CreateInvoiceFromExtraction persists validated invoice data to the existing invoice table
 // and inserts line items into the line_items table within a transaction.
-func (r *PostgresVoucherRepository) CreateInvoiceFromExtraction(ctx context.Context, docID uuid.UUID, data map[string]interface{}) error {
+// Returns the generated invoice UUID.
+func (r *PostgresVoucherRepository) CreateInvoiceFromExtraction(ctx context.Context, docID uuid.UUID, data map[string]interface{}) (uuid.UUID, error) {
 	tx, err := r.db.BeginTx(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
+		return uuid.Nil, fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
-	// 1. Insert into invoice table and return generated ID
+	// 1. Compute net_amount: total_amount - tds - discount
+	totalAmount := toFloat64(data["total_amount"])
+	tds := toFloat64(data["tds_amount"])
+	discount := toFloat64(data["discount"])
+	netAmount := totalAmount - tds - discount
+	if netAmount <= 0 {
+		netAmount = totalAmount // fallback if no deductions extracted
+	}
+
+	// 2. Insert into invoice table and return generated ID
 	invoiceQuery := `
 		INSERT INTO xcentro.invoice (
-			document_id, inv_id, type, inv_date, total_amount,
-			sgst, cgst, igst
+			document_id, inv_id, type, bid, payee_id,
+			inv_date, total_amount, net_amount, po_number,
+			sgst, cgst, igst,
+			vendor_gstin, buyer_gstin,
+			match_status
 		) VALUES (
 			$1, $2, 'PURCHASE'::xcentro.invoice_type_enum,
-			NULLIF($3, '')::DATE, $4, $5, $6, $7
+			$3, $4,
+			NULLIF($5, '')::DATE, $6, $7, $8,
+			$9, $10, $11,
+			$12, $13,
+			$14
 		) RETURNING id
 	`
 
@@ -2432,69 +2447,93 @@ func (r *PostgresVoucherRepository) CreateInvoiceFromExtraction(ctx context.Cont
 		invDate = nil
 	}
 
+	poNumber, _ := data["po_number"].(string)
+
 	var invoiceID uuid.UUID
 	err = tx.QueryRow(ctx, invoiceQuery,
 		docID,
 		data["invoice_number"],
+		parseOptionalUUID(data["business_id"]),
+		parseOptionalUUID(data["payee_id"]),
 		invDate,
-		data["total_amount"],
+		totalAmount,
+		netAmount,
+		poNumber,
 		data["sgst"],
 		data["cgst"],
 		data["igst"],
+		optionalString(data["vendor_gstin"]),
+		optionalString(data["buyer_gstin"]),
+		voucher.InvoiceMatchPending,
 	).Scan(&invoiceID)
 	if err != nil {
-		return fmt.Errorf("failed to create invoice from extraction: %w", err)
+		return uuid.Nil, fmt.Errorf("failed to create invoice from extraction: %w", err)
 	}
 
-	// 2. Insert line items
+	// 3. Insert line items
 	if err := insertLineItems(ctx, tx, nil, &invoiceID, data); err != nil {
-		return fmt.Errorf("failed to insert invoice line items: %w", err)
+		return uuid.Nil, fmt.Errorf("failed to insert invoice line items: %w", err)
 	}
 
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return uuid.Nil, err
+	}
+	return invoiceID, nil
 }
 
 // CreatePurchaseOrder persists validated PO data to the purchase_orders table
 // and inserts line items into the line_items table within a transaction.
-func (r *PostgresVoucherRepository) CreatePurchaseOrder(ctx context.Context, docID uuid.UUID, data map[string]interface{}) error {
+// Returns the generated PO UUID.
+func (r *PostgresVoucherRepository) CreatePurchaseOrder(ctx context.Context, docID uuid.UUID, data map[string]interface{}) (uuid.UUID, error) {
 	tx, err := r.db.BeginTx(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
+		return uuid.Nil, fmt.Errorf("failed to begin transaction: %w", err)
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck
 
 	// 1. Insert into purchase_orders table and return generated ID
 	poQuery := `
 		INSERT INTO xcentro.purchase_orders (
-			document_id, po_number, po_date,
+			document_id, bid, payee_id,
+			po_number, po_date,
 			vendor_name, vendor_gstin, buyer_gstin,
-			total_amount, discount, discount_type
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+			total_amount, discount, discount_type,
+			remaining_balance, po_status
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 		RETURNING id
 	`
+
+	totalAmount := toFloat64(data["total_amount"])
 
 	var poID uuid.UUID
 	err = tx.QueryRow(ctx, poQuery,
 		docID,
+		parseOptionalUUID(data["business_id"]),
+		parseOptionalUUID(data["payee_id"]),
 		data["po_number"],
 		data["invoice_date"], // po_date maps from invoice_date in draft_data
 		data["vendor_name"],
 		data["vendor_gstin"],
 		data["buyer_gstin"],
-		data["total_amount"],
+		totalAmount,
 		data["discount"],
 		data["discount_type"],
+		totalAmount, // remaining_balance starts equal to total_amount
+		voucher.POStatusOpen,
 	).Scan(&poID)
 	if err != nil {
-		return fmt.Errorf("failed to create purchase order: %w", err)
+		return uuid.Nil, fmt.Errorf("failed to create purchase order: %w", err)
 	}
 
 	// 2. Insert line items
 	if err := insertLineItems(ctx, tx, &poID, nil, data); err != nil {
-		return fmt.Errorf("failed to insert purchase order line items: %w", err)
+		return uuid.Nil, fmt.Errorf("failed to insert purchase order line items: %w", err)
 	}
 
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return uuid.Nil, err
+	}
+	return poID, nil
 }
 
 // insertLineItems inserts line items from the data map into the line_items table.
@@ -2513,9 +2552,9 @@ func insertLineItems(ctx context.Context, tx client.Tx, poID *uuid.UUID, invoice
 	lineItemQuery := `
 		INSERT INTO xcentro.line_items (
 			purchase_order_id, invoice_id,
-			description, quantity, unit_price,
+			sku, description, quantity, unit_price,
 			tax_rate, tax_amount, total_amount
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 	`
 
 	for _, raw := range items {
@@ -2524,6 +2563,7 @@ func insertLineItems(ctx context.Context, tx client.Tx, poID *uuid.UUID, invoice
 			continue
 		}
 
+		sku, _ := item["sku"].(string)
 		description, _ := item["description"].(string)
 		quantity := toFloat64(item["quantity"])
 		unitPrice := toPaise(item["unit_price"])
@@ -2533,6 +2573,7 @@ func insertLineItems(ctx context.Context, tx client.Tx, poID *uuid.UUID, invoice
 		_, err := tx.Exec(ctx, lineItemQuery,
 			poID,
 			invoiceID,
+			sku,
 			description,
 			quantity,
 			unitPrice,
@@ -2567,6 +2608,36 @@ func toPaise(v interface{}) int64 {
 	return int64(toFloat64(v) * 100)
 }
 
+// parseOptionalUUID safely extracts a UUID from an interface{} value.
+// Returns nil if the value is nil, empty, or not a valid UUID string.
+func parseOptionalUUID(v interface{}) *uuid.UUID {
+	if v == nil {
+		return nil
+	}
+	s, ok := v.(string)
+	if !ok || s == "" {
+		return nil
+	}
+	parsed, err := uuid.Parse(s)
+	if err != nil {
+		return nil
+	}
+	return &parsed
+}
+
+// optionalString safely extracts a string from an interface{} value.
+// Returns nil if the value is nil or not a string.
+func optionalString(v interface{}) *string {
+	if v == nil {
+		return nil
+	}
+	s, ok := v.(string)
+	if !ok || s == "" {
+		return nil
+	}
+	return &s
+}
+
 // ListVoucherDocuments retrieves paginated list of voucher documents
 func (r *PostgresVoucherRepository) ListVoucherDocuments(ctx context.Context, filter voucher.DocumentListFilter) ([]*voucher.VoucherDocument, int64, error) {
 	whereClauses := []string{"1=1"}
@@ -2598,7 +2669,7 @@ func (r *PostgresVoucherRepository) ListVoucherDocuments(ctx context.Context, fi
 	}
 
 	query := fmt.Sprintf(`
-		SELECT id, s3_path, COALESCE(doc_type, ''), status, raw_extraction, draft_data, COALESCE(i2d_template, ''), COALESCE(processed_by, ''), validated_data
+		SELECT id, s3_path, COALESCE(doc_type, ''), status, raw_ocr, draft_data, COALESCE(i2d_template, ''), COALESCE(processed_by, ''), validated_data
 		FROM xcentro.voucher_documents
 		WHERE %s
 		ORDER BY created_at DESC
@@ -2616,18 +2687,19 @@ func (r *PostgresVoucherRepository) ListVoucherDocuments(ctx context.Context, fi
 	var docs []*voucher.VoucherDocument
 	for rows.Next() {
 		var doc voucher.VoucherDocument
-		var rawExtraction, draftData, validatedData []byte
+		var rawOCR sql.NullString
+		var draftData, validatedData []byte
 
 		err := rows.Scan(
 			&doc.ID, &doc.S3Path, &doc.DocType, &doc.Status,
-			&rawExtraction, &draftData, &doc.I2DTemplate, &doc.ProcessedBy, &validatedData,
+			&rawOCR, &draftData, &doc.I2DTemplate, &doc.ProcessedBy, &validatedData,
 		)
 		if err != nil {
 			return nil, 0, fmt.Errorf("failed to scan voucher document: %w", err)
 		}
 
-		if len(rawExtraction) > 0 {
-			json.Unmarshal(rawExtraction, &doc.RawExtraction)
+		if rawOCR.Valid {
+			doc.RawOCR = rawOCR.String
 		}
 		if len(draftData) > 0 {
 			json.Unmarshal(draftData, &doc.DraftData)
@@ -2673,7 +2745,7 @@ func (r *PostgresVoucherRepository) ListExtractedInvoices(ctx context.Context, f
 	}
 
 	query := fmt.Sprintf(`
-		SELECT id, COALESCE(inv_id, ''), COALESCE(type::text, ''), bid, payment_id, payee_id, inv_date, inv_due_date, COALESCE(cgst, 0), COALESCE(igst, 0), COALESCE(sgst, 0), COALESCE(total_amount, 0), COALESCE(currency, ''), COALESCE(invoice_url, ''), COALESCE(comments, ''), document_id, created_at, updated_at
+		SELECT id, COALESCE(inv_id, ''), COALESCE(type::text, ''), bid, payment_id, payee_id, inv_date, inv_due_date, COALESCE(cgst, 0), COALESCE(igst, 0), COALESCE(sgst, 0), COALESCE(total_amount, 0), COALESCE(currency, ''), COALESCE(invoice_url, ''), COALESCE(comments, ''), COALESCE(vendor_gstin, ''), COALESCE(buyer_gstin, ''), document_id, created_at, updated_at
 		FROM xcentro.invoice
 		WHERE %s
 		ORDER BY created_at DESC
@@ -2694,7 +2766,7 @@ func (r *PostgresVoucherRepository) ListExtractedInvoices(ctx context.Context, f
 		err := rows.Scan(
 			&inv.ID, &inv.InvID, &inv.Type, &inv.BusinessID, &inv.PaymentID, &inv.PayeeID,
 			&inv.InvDate, &inv.InvDueDate, &inv.CGST, &inv.IGST, &inv.SGST, &inv.TotalAmount,
-			&inv.Currency, &inv.InvoiceURL, &inv.Comments, &inv.DocumentID, &inv.CreatedAt, &inv.UpdatedAt,
+			&inv.Currency, &inv.InvoiceURL, &inv.Comments, &inv.VendorGSTIN, &inv.BuyerGSTIN, &inv.DocumentID, &inv.CreatedAt, &inv.UpdatedAt,
 		)
 		if err != nil {
 			return nil, 0, fmt.Errorf("failed to scan extracted invoice: %w", err)
@@ -2736,7 +2808,7 @@ func (r *PostgresVoucherRepository) ListPurchaseOrders(ctx context.Context, filt
 	}
 
 	query := fmt.Sprintf(`
-		SELECT id, document_id, COALESCE(po_number, ''), COALESCE(po_date, ''), COALESCE(vendor_name, ''), COALESCE(vendor_gstin, ''), COALESCE(buyer_gstin, ''), COALESCE(total_amount, 0), COALESCE(discount, 0), COALESCE(discount_type, ''), created_at, updated_at
+		SELECT id, document_id, bid, payee_id, COALESCE(po_number, ''), COALESCE(po_date, ''), COALESCE(vendor_name, ''), COALESCE(vendor_gstin, ''), COALESCE(buyer_gstin, ''), COALESCE(total_amount, 0), COALESCE(remaining_balance, 0), COALESCE(po_status, 'OPEN'), COALESCE(discount, 0), COALESCE(discount_type, ''), created_at, updated_at
 		FROM xcentro.purchase_orders
 		WHERE %s
 		ORDER BY created_at DESC
@@ -2755,8 +2827,8 @@ func (r *PostgresVoucherRepository) ListPurchaseOrders(ctx context.Context, filt
 	for rows.Next() {
 		var po voucher.PurchaseOrder
 		err := rows.Scan(
-			&po.ID, &po.DocumentID, &po.PONumber, &po.PODate, &po.VendorName, &po.VendorGSTIN,
-			&po.BuyerGSTIN, &po.TotalAmount, &po.Discount, &po.DiscountType, &po.CreatedAt, &po.UpdatedAt,
+			&po.ID, &po.DocumentID, &po.BusinessID, &po.PayeeID, &po.PONumber, &po.PODate, &po.VendorName, &po.VendorGSTIN,
+			&po.BuyerGSTIN, &po.TotalAmount, &po.RemainingBalance, &po.POStatus, &po.Discount, &po.DiscountType, &po.CreatedAt, &po.UpdatedAt,
 		)
 		if err != nil {
 			return nil, 0, fmt.Errorf("failed to scan purchase order: %w", err)
@@ -2767,3 +2839,238 @@ func (r *PostgresVoucherRepository) ListPurchaseOrders(ctx context.Context, filt
 	return pos, total, nil
 }
 
+// GetBusinessIDByGSTIN looks up a business by its GSTIN and returns the bid.
+// Returns empty string if not found, error only on query failures.
+func (r *PostgresVoucherRepository) GetBusinessIDByGSTIN(ctx context.Context, gstin string) (string, error) {
+	query := `SELECT bid::text FROM xcentro.business WHERE gstin = $1 LIMIT 1`
+
+	var bid string
+	err := r.querier.QueryRow(ctx, query, gstin).Scan(&bid)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", nil
+		}
+		return "", fmt.Errorf("failed to lookup business by GSTIN: %w", err)
+	}
+	return bid, nil
+}
+
+// --- Matching Engine Repository Methods ---
+
+// GetInvoiceByID retrieves a fully-typed invoice record by its primary key.
+func (r *PostgresVoucherRepository) GetInvoiceByID(ctx context.Context, invoiceID uuid.UUID) (*voucher.ExtractedInvoice, error) {
+	query := `
+		SELECT id, document_id,
+		       COALESCE(inv_id, ''), COALESCE(type::text, ''),
+		       bid, payee_id, inv_date,
+		       COALESCE(total_amount, 0), COALESCE(net_amount, 0),
+		       COALESCE(po_number, ''), COALESCE(match_status, 'PENDING_MATCH'),
+		       COALESCE(sgst, 0), COALESCE(cgst, 0), COALESCE(igst, 0),
+		       COALESCE(vendor_gstin, ''), COALESCE(buyer_gstin, ''),
+		       created_at, updated_at
+		FROM xcentro.invoice
+		WHERE id = $1
+	`
+
+	var inv voucher.ExtractedInvoice
+	var invDate sql.NullTime
+	err := r.querier.QueryRow(ctx, query, invoiceID).Scan(
+		&inv.ID, &inv.DocumentID,
+		&inv.InvID, &inv.Type,
+		&inv.BusinessID, &inv.PayeeID, &invDate,
+		&inv.TotalAmount, &inv.NetAmount,
+		&inv.PONumber, &inv.MatchStatus,
+		&inv.SGST, &inv.CGST, &inv.IGST,
+		&inv.VendorGSTIN, &inv.BuyerGSTIN,
+		&inv.CreatedAt, &inv.UpdatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("invoice not found: %s", invoiceID)
+		}
+		return nil, fmt.Errorf("failed to get invoice by ID: %w", err)
+	}
+	if invDate.Valid {
+		inv.InvDate = &invDate.Time
+	}
+	return &inv, nil
+}
+
+// GetPurchaseOrderByPONumber retrieves a PO by its po_number, scoped to a business.
+func (r *PostgresVoucherRepository) GetPurchaseOrderByPONumber(ctx context.Context, poNumber string, businessID uuid.UUID) (*voucher.PurchaseOrder, error) {
+	query := `
+		SELECT id, document_id, bid, payee_id,
+		       COALESCE(po_number, ''), COALESCE(po_date, ''),
+		       COALESCE(vendor_name, ''), COALESCE(vendor_gstin, ''), COALESCE(buyer_gstin, ''),
+		       COALESCE(total_amount, 0), COALESCE(remaining_balance, 0), COALESCE(po_status, 'OPEN'),
+		       COALESCE(discount, 0), COALESCE(discount_type, ''),
+		       created_at, updated_at
+		FROM xcentro.purchase_orders
+		WHERE po_number = $1 AND bid = $2
+		LIMIT 1
+	`
+
+	var po voucher.PurchaseOrder
+	err := r.querier.QueryRow(ctx, query, poNumber, businessID).Scan(
+		&po.ID, &po.DocumentID, &po.BusinessID, &po.PayeeID,
+		&po.PONumber, &po.PODate,
+		&po.VendorName, &po.VendorGSTIN, &po.BuyerGSTIN,
+		&po.TotalAmount, &po.RemainingBalance, &po.POStatus,
+		&po.Discount, &po.DiscountType,
+		&po.CreatedAt, &po.UpdatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil // nil, nil = not found
+		}
+		return nil, fmt.Errorf("failed to get PO by po_number: %w", err)
+	}
+	return &po, nil
+}
+
+// getLineItemsByFilter is the shared implementation for fetching typed line items.
+func (r *PostgresVoucherRepository) getLineItemsByFilter(ctx context.Context, column string, id uuid.UUID) ([]voucher.LineItemDetail, error) {
+	query := fmt.Sprintf(`
+		SELECT id, purchase_order_id, invoice_id,
+		       COALESCE(sku, ''), description,
+		       quantity, COALESCE(qty_received, 0), unit_price,
+		       COALESCE(tax_rate, 0), COALESCE(tax_amount, 0), COALESCE(total_amount, 0)
+		FROM xcentro.line_items
+		WHERE %s = $1
+	`, column)
+
+	rows, err := r.querier.Query(ctx, query, id)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query line items (%s=%s): %w", column, id, err)
+	}
+	defer rows.Close()
+
+	var items []voucher.LineItemDetail
+	for rows.Next() {
+		var item voucher.LineItemDetail
+		err := rows.Scan(
+			&item.ID, &item.PurchaseOrderID, &item.InvoiceID,
+			&item.SKU, &item.Description,
+			&item.Quantity, &item.QtyReceived, &item.UnitPrice,
+			&item.TaxRate, &item.TaxAmount, &item.TotalAmount,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan line item: %w", err)
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+// GetLineItemsByPurchaseOrderID retrieves all typed line items for a PO.
+func (r *PostgresVoucherRepository) GetLineItemsByPurchaseOrderID(ctx context.Context, poID uuid.UUID) ([]voucher.LineItemDetail, error) {
+	return r.getLineItemsByFilter(ctx, "purchase_order_id", poID)
+}
+
+// GetLineItemsByInvoiceID retrieves all typed line items for an invoice.
+func (r *PostgresVoucherRepository) GetLineItemsByInvoiceID(ctx context.Context, invoiceID uuid.UUID) ([]voucher.LineItemDetail, error) {
+	return r.getLineItemsByFilter(ctx, "invoice_id", invoiceID)
+}
+
+// UpdateInvoiceMatchStatus updates only the match_status column on an invoice.
+func (r *PostgresVoucherRepository) UpdateInvoiceMatchStatus(ctx context.Context, invoiceID uuid.UUID, status string) error {
+	query := `UPDATE xcentro.invoice SET match_status = $2 WHERE id = $1`
+	result, err := r.querier.Exec(ctx, query, invoiceID, status)
+	if err != nil {
+		return fmt.Errorf("failed to update invoice match status: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("invoice not found: %s", invoiceID)
+	}
+	return nil
+}
+
+// UpdatePurchaseOrderBalance atomically updates remaining_balance and po_status on a PO.
+func (r *PostgresVoucherRepository) UpdatePurchaseOrderBalance(ctx context.Context, poID uuid.UUID, remainingBalance float64, status string) error {
+	query := `UPDATE xcentro.purchase_orders SET remaining_balance = $2, po_status = $3 WHERE id = $1`
+	result, err := r.querier.Exec(ctx, query, poID, remainingBalance, status)
+	if err != nil {
+		return fmt.Errorf("failed to update PO balance: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("purchase order not found: %s", poID)
+	}
+	return nil
+}
+
+// UpdateLineItemQtyReceived adds to qty_received for a line item.
+func (r *PostgresVoucherRepository) UpdateLineItemQtyReceived(ctx context.Context, lineItemID uuid.UUID, qtyReceived float64) error {
+	query := `UPDATE xcentro.line_items SET qty_received = qty_received + $2 WHERE id = $1`
+	result, err := r.querier.Exec(ctx, query, lineItemID, qtyReceived)
+	if err != nil {
+		return fmt.Errorf("failed to update line item qty_received: %w", err)
+	}
+	if result.RowsAffected() == 0 {
+		return fmt.Errorf("line item not found: %s", lineItemID)
+	}
+	return nil
+}
+
+// CreateMatchResult persists a matching audit record.
+func (r *PostgresVoucherRepository) CreateMatchResult(ctx context.Context, result *voucher.MatchResult) error {
+	detailsJSON, err := json.Marshal(result.MatchDetails)
+	if err != nil {
+		return fmt.Errorf("failed to marshal match_details: %w", err)
+	}
+
+	query := `
+		INSERT INTO xcentro.match_results (invoice_id, purchase_order_id, match_status, match_details)
+		VALUES ($1, $2, $3, $4)
+	`
+	_, err = r.querier.Exec(ctx, query, result.InvoiceID, result.PurchaseOrderID, result.MatchStatus, detailsJSON)
+	if err != nil {
+		return fmt.Errorf("failed to create match result: %w", err)
+	}
+	return nil
+}
+
+// GetOrphanInvoicesByPONumber finds invoices in ORPHAN_INVOICE status with the given po_number.
+func (r *PostgresVoucherRepository) GetOrphanInvoicesByPONumber(ctx context.Context, poNumber string) ([]*voucher.ExtractedInvoice, error) {
+	query := `
+		SELECT id, document_id,
+		       COALESCE(inv_id, ''), COALESCE(type::text, ''),
+		       bid, payee_id, inv_date,
+		       COALESCE(total_amount, 0), COALESCE(net_amount, 0),
+		       COALESCE(po_number, ''), COALESCE(match_status, 'PENDING_MATCH'),
+		       COALESCE(sgst, 0), COALESCE(cgst, 0), COALESCE(igst, 0),
+		       COALESCE(vendor_gstin, ''), COALESCE(buyer_gstin, ''),
+		       created_at, updated_at
+		FROM xcentro.invoice
+		WHERE po_number = $1 AND match_status = $2
+	`
+
+	rows, err := r.querier.Query(ctx, query, poNumber, voucher.InvoiceMatchOrphan)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query orphan invoices: %w", err)
+	}
+	defer rows.Close()
+
+	var invoices []*voucher.ExtractedInvoice
+	for rows.Next() {
+		var inv voucher.ExtractedInvoice
+		var invDate sql.NullTime
+		err := rows.Scan(
+			&inv.ID, &inv.DocumentID,
+			&inv.InvID, &inv.Type,
+			&inv.BusinessID, &inv.PayeeID, &invDate,
+			&inv.TotalAmount, &inv.NetAmount,
+			&inv.PONumber, &inv.MatchStatus,
+			&inv.SGST, &inv.CGST, &inv.IGST,
+			&inv.VendorGSTIN, &inv.BuyerGSTIN,
+			&inv.CreatedAt, &inv.UpdatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan orphan invoice: %w", err)
+		}
+		if invDate.Valid {
+			inv.InvDate = &invDate.Time
+		}
+		invoices = append(invoices, &inv)
+	}
+	return invoices, rows.Err()
+}

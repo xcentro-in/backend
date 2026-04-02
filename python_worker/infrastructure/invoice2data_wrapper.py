@@ -40,22 +40,42 @@ class Invoice2DataExtractor(TemplateExtractor):
         ``template_name`` or ``issuer`` field.
         """
         # Step 1: Extract text from PDF using pdftotext
+        extracted_str = ""
         try:
-            extracted_str = pdftotext.to_text(file_path)
+            raw_bytes = pdftotext.to_text(file_path)
+            if isinstance(raw_bytes, bytes):
+                extracted_str = raw_bytes.decode("utf-8", errors="replace")
         except Exception as exc:
-            logger.warning("pdftotext failed for %s: %s — falling back to extract_data", file_path, exc)
-            # Fallback to the high-level helper
-            raw = extract_data(file_path, templates=self._templates)
-            if raw is None:
-                raise TemplateMatchError(f"No template matched for {file_path}")
-            return self._map(raw, template_name=raw.get("issuer"))
+            logger.warning("pdftotext failed for %s: %s", file_path, exc)
+
+        extracted_str = extracted_str.strip().replace("\x00", "")
+
+        # Target fallback: if pdftotext returns empty (e.g. scanned PDF), try tesseract
+        if not extracted_str:
+            logger.info("Empty text from pdftotext. Attempting tesseract OCR for %s", file_path)
+            try:
+                from invoice2data.input import tesseract
+                raw_bytes = tesseract.to_text(file_path)
+                if isinstance(raw_bytes, bytes):
+                    extracted_str = raw_bytes.decode("utf-8", errors="replace")
+                extracted_str = extracted_str.strip().replace("\x00", "")
+            except Exception as t_exc:
+                logger.warning("tesseract OCR failed for %s: %s", file_path, t_exc)
+
+        if not extracted_str:
+            logger.warning("No OCR text extracted from %s. Templates will fail to match.", file_path)
 
         # Step 2: Find the first matching template
         for t in self._templates:
             if t.matches_input(extracted_str):
                 # t is an InvoiceTemplate object — extract using it
                 optimized_str = t.prepare_input(extracted_str)
-                raw = t.extract(optimized_str, file_path, pdftotext)
+                try:
+                    raw = t.extract(optimized_str, file_path, pdftotext)
+                except Exception as exc:
+                    logger.warning("Template %s matched but extraction failed: %s", t.get('issuer', 'unknown'), exc)
+                    continue
+
                 if raw is not None:
                     # Capture the template name from the template object
                     tpl_name = t.get("template_name", None) or t.get("issuer", None) or str(t)

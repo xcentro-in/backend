@@ -4,7 +4,7 @@ CREATE TABLE IF NOT EXISTS xcentro.voucher_documents (
     s3_path TEXT NOT NULL,
     doc_type TEXT,
     status TEXT NOT NULL DEFAULT 'QUEUED',
-    raw_extraction JSONB,
+    raw_ocr TEXT,
     draft_data JSONB,
     i2d_template TEXT,
     processed_by TEXT,
@@ -38,6 +38,8 @@ CREATE TABLE IF NOT EXISTS xcentro.invoice (
     currency VARCHAR(3),
     invoice_url TEXT,
     comments TEXT,
+    vendor_gstin TEXT,
+    buyer_gstin TEXT,
     document_id UUID REFERENCES xcentro.voucher_documents(id),
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
@@ -47,6 +49,8 @@ CREATE TABLE IF NOT EXISTS xcentro.invoice (
 CREATE TABLE IF NOT EXISTS xcentro.purchase_orders (
     id UUID PRIMARY KEY DEFAULT uuidv7(),
     document_id UUID NOT NULL REFERENCES xcentro.voucher_documents(id),
+    bid UUID REFERENCES xcentro.business(bid),
+    payee_id UUID REFERENCES xcentro.payee_master(payee_id),
     po_number TEXT,
     po_date TEXT,
     vendor_name TEXT,
