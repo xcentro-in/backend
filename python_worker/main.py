@@ -132,12 +132,22 @@ def main() -> None:
             task_type = "Extraction" if queue_name == settings.redis_queue else "Template Generation"
             logger.info("Processing %s task for document %s (attempt %d/%d)", task_type, doc_id, retry_count + 1, MAX_RETRIES)
 
+            lock_key = f"xcentro:doc_lock:{doc_id}"
+            if not queue.acquire_lock(lock_key, ttl=300):
+                logger.warning(
+                    "Document %s is already being processed by another worker — skipping",
+                    doc_id,
+                )
+                continue
+
             try:
                 if queue_name == settings.redis_template_queue:
                     service.generate_template_for_document(doc_id)
                 else:
                     service.process(doc_id)
+                queue.release_lock(lock_key)
             except Exception as exc:
+                queue.release_lock(lock_key)
                 # Infrastructure error (S3, LLM API, etc.) — eligible for retry
                 logger.exception("Error processing document %s (attempt %d/%d): %s",
                                  doc_id, retry_count + 1, MAX_RETRIES, exc)

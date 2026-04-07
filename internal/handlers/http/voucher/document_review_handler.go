@@ -153,6 +153,174 @@ func (h *DocumentReviewHandler) ValidateDocument(c echo.Context) error {
 	})
 }
 
+// GetInvoiceLineItems handles GET /vouchers/invoices/:invoice_id/line-items
+// Returns typed line items for a given extracted invoice. Amounts are in rupees (converted from paise).
+func (h *DocumentReviewHandler) GetInvoiceLineItems(c echo.Context) error {
+	invoiceIDStr := c.Param("invoice_id")
+	invoiceID, err := uuid.Parse(invoiceIDStr)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"status":  "error",
+			"error":   "INVALID_INVOICE_ID",
+			"message": "Invalid invoice ID format",
+		})
+	}
+
+	items, err := h.reviewService.GetInvoiceLineItems(c.Request().Context(), invoiceID)
+	if err != nil {
+		h.logger.ErrorWith("GetInvoiceLineItems failed", "error", err, "invoice_id", invoiceID)
+		return c.JSON(http.StatusInternalServerError, map[string]any{
+			"status":  "error",
+			"error":   "INTERNAL_SERVER_ERROR",
+			"message": "Failed to retrieve line items",
+		})
+	}
+
+	// Convert paise to rupees for amounts
+	type lineItemResponse struct {
+		ID          string  `json:"id"`
+		SKU         string  `json:"sku"`
+		Description string  `json:"description"`
+		Quantity    float64 `json:"quantity"`
+		UnitPrice   float64 `json:"unit_price"`
+		TaxRate     float64 `json:"tax_rate"`
+		TaxAmount   float64 `json:"tax_amount"`
+		TotalAmount float64 `json:"total_amount"`
+	}
+	resp := make([]lineItemResponse, len(items))
+	for i, item := range items {
+		resp[i] = lineItemResponse{
+			ID:          item.ID.String(),
+			SKU:         item.SKU,
+			Description: item.Description,
+			Quantity:    item.Quantity,
+			UnitPrice:   float64(item.UnitPrice) / 100,
+			TaxRate:     item.TaxRate,
+			TaxAmount:   float64(item.TaxAmount) / 100,
+			TotalAmount: float64(item.TotalAmount) / 100,
+		}
+	}
+
+	return c.JSON(http.StatusOK, map[string]any{
+		"status": "success",
+		"data":   resp,
+	})
+}
+
+// GetPurchaseOrderLineItems handles GET /vouchers/purchase-orders/:po_id/line-items
+// Returns typed line items for a given purchase order. Amounts are in rupees (converted from paise).
+func (h *DocumentReviewHandler) GetPurchaseOrderLineItems(c echo.Context) error {
+	poIDStr := c.Param("po_id")
+	poID, err := uuid.Parse(poIDStr)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"status":  "error",
+			"error":   "INVALID_PO_ID",
+			"message": "Invalid purchase order ID format",
+		})
+	}
+
+	items, err := h.reviewService.GetPurchaseOrderLineItems(c.Request().Context(), poID)
+	if err != nil {
+		h.logger.ErrorWith("GetPurchaseOrderLineItems failed", "error", err, "po_id", poID)
+		return c.JSON(http.StatusInternalServerError, map[string]any{
+			"status":  "error",
+			"error":   "INTERNAL_SERVER_ERROR",
+			"message": "Failed to retrieve line items",
+		})
+	}
+
+	type lineItemResponse struct {
+		ID          string  `json:"id"`
+		SKU         string  `json:"sku"`
+		Description string  `json:"description"`
+		Quantity    float64 `json:"quantity"`
+		QtyReceived float64 `json:"qty_received"`
+		UnitPrice   float64 `json:"unit_price"`
+		TaxRate     float64 `json:"tax_rate"`
+		TaxAmount   float64 `json:"tax_amount"`
+		TotalAmount float64 `json:"total_amount"`
+	}
+	resp := make([]lineItemResponse, len(items))
+	for i, item := range items {
+		resp[i] = lineItemResponse{
+			ID:          item.ID.String(),
+			SKU:         item.SKU,
+			Description: item.Description,
+			Quantity:    item.Quantity,
+			QtyReceived: item.QtyReceived,
+			UnitPrice:   float64(item.UnitPrice) / 100,
+			TaxRate:     item.TaxRate,
+			TaxAmount:   float64(item.TaxAmount) / 100,
+			TotalAmount: float64(item.TotalAmount) / 100,
+		}
+	}
+
+	return c.JSON(http.StatusOK, map[string]any{
+		"status": "success",
+		"data":   resp,
+	})
+}
+
+// GetMatchResult handles GET /vouchers/invoices/:invoice_id/match-result
+// Returns the deterministic matching outcome for a given invoice
+func (h *DocumentReviewHandler) GetMatchResult(c echo.Context) error {
+	invoiceIDStr := c.Param("invoice_id")
+	invoiceID, err := uuid.Parse(invoiceIDStr)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"status":  "error",
+			"error":   "INVALID_INVOICE_ID",
+			"message": "Invalid invoice ID format",
+		})
+	}
+
+	results, err := h.reviewService.GetMatchResult(c.Request().Context(), invoiceID)
+	if err != nil {
+		h.logger.ErrorWith("GetMatchResult failed", "error", err, "invoice_id", invoiceID)
+		return c.JSON(http.StatusInternalServerError, map[string]any{
+			"status":  "error",
+			"error":   "INTERNAL_SERVER_ERROR",
+			"message": "Failed to retrieve match results",
+		})
+	}
+
+	return c.JSON(http.StatusOK, map[string]any{
+		"status": "success",
+		"data":   results,
+	})
+}
+
+// ListMatchResults handles GET /vouchers/match-results
+// Returns paginated joined view of match_results + invoice + purchase_orders for a business.
+func (h *DocumentReviewHandler) ListMatchResults(c echo.Context) error {
+	filter := voucher.MatchResultListFilter{
+		Page:     h.getQueryParamInt(c, "page", 1),
+		PageSize: h.getQueryParamInt(c, "limit", 20),
+	}
+
+	if bid := c.QueryParam("business_id"); bid != "" {
+		if u, err := uuid.Parse(bid); err == nil {
+			filter.BusinessID = &u
+		}
+	}
+
+	res, err := h.reviewService.ListMatchResults(c.Request().Context(), filter)
+	if err != nil {
+		h.logger.ErrorWith("ListMatchResults failed", "error", err)
+		return c.JSON(http.StatusInternalServerError, map[string]any{
+			"status":  "error",
+			"error":   "INTERNAL_SERVER_ERROR",
+			"message": "Failed to list match results",
+		})
+	}
+
+	return c.JSON(http.StatusOK, map[string]any{
+		"status": "success",
+		"data":   res,
+	})
+}
+
 // ListDocuments handles GET /vouchers/documents
 func (h *DocumentReviewHandler) ListDocuments(c echo.Context) error {
 	filter := voucher.DocumentListFilter{
@@ -236,6 +404,74 @@ func (h *DocumentReviewHandler) ListPurchaseOrders(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]any{
 		"status": "success",
 		"data":   res,
+	})
+}
+
+// QuickCreateVendor handles POST /vouchers/vendors/quick-create
+// Creates a minimal vendor payee for the document review context (no bank account / GSTIN verification).
+func (h *DocumentReviewHandler) QuickCreateVendor(c echo.Context) error {
+	userID, ok := c.Get("userId").(string)
+	if !ok || userID == "" {
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"status":  "error",
+			"error":   "MISSING_USER_ID",
+			"message": "User ID not found in token",
+		})
+	}
+
+	businessID := c.Request().Header.Get("X-Business-ID")
+	if businessID == "" {
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"status":  "error",
+			"error":   "MISSING_BUSINESS_ID",
+			"message": "X-Business-ID header is required",
+		})
+	}
+
+	var body struct {
+		DisplayName  string `json:"display_name"`
+		GSTIN        string `json:"gstin"`
+		ContactEmail string `json:"contact_email"`
+		ContactPhone string `json:"contact_phone"`
+	}
+	if err := c.Bind(&body); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"status":  "error",
+			"error":   "INVALID_REQUEST_BODY",
+			"message": "Failed to parse request body",
+		})
+	}
+	if body.DisplayName == "" {
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"status":  "error",
+			"error":   "MISSING_DISPLAY_NAME",
+			"message": "display_name is required",
+		})
+	}
+
+	resp, err := h.reviewService.QuickCreateVendor(c.Request().Context(), voucherSvc.QuickCreateVendorRequest{
+		BusinessID:   businessID,
+		AddedBy:      userID,
+		DisplayName:  body.DisplayName,
+		GSTIN:        body.GSTIN,
+		ContactEmail: body.ContactEmail,
+		ContactPhone: body.ContactPhone,
+	})
+	if err != nil {
+		h.logger.ErrorWith("QuickCreateVendor failed", "error", err)
+		return c.JSON(http.StatusInternalServerError, map[string]any{
+			"status":  "error",
+			"error":   "CREATE_FAILED",
+			"message": err.Error(),
+		})
+	}
+
+	return c.JSON(http.StatusCreated, map[string]any{
+		"status": "success",
+		"data": map[string]any{
+			"payee_id":    resp.PayeeID,
+			"relation_id": resp.RelationID,
+		},
 	})
 }
 

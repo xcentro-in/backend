@@ -24,6 +24,14 @@ class DocumentRepository(abc.ABC):
     def update(self, document: Document) -> None:
         """Persist all mutable fields of the document."""
 
+    @abc.abstractmethod
+    def get_validated_by_template(self, template_name: str, limit: int = 5) -> list[dict]:
+        """Return validated_data dicts for the most recent VALIDATED documents using this i2d template.
+
+        Used to supply historical examples to the LLM during template regeneration.
+        Returns an empty list if no matching documents exist.
+        """
+
 
 class TemplateExtractor(abc.ABC):
     """Port for invoice2data (or any template-based extractor)."""
@@ -46,8 +54,15 @@ class LLMExtractor(abc.ABC):
         pass
 
     @abc.abstractmethod
-    def generate_template(self, raw_ocr: str, draft_data: dict) -> str:
+    def generate_template(self, raw_ocr: str, draft_data: dict, historical_examples: list[dict] | None = None) -> str:
         """Generate an invoice2data YAML template from OCR text and expected data.
+
+        Args:
+            raw_ocr: Plain-text OCR content of the document.
+            draft_data: The target data values to extract (current document).
+            historical_examples: Optional list of validated_data dicts from prior documents
+                that used the same template. Included in the prompt to help the LLM
+                produce a more accurate template.
 
         Raises:
             LLMExtractionError: If the LLM call fails.

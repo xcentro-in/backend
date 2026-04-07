@@ -118,6 +118,10 @@ type VoucherRepository interface {
 	// CreateVoucherDocument inserts a new document record into voucher_documents
 	CreateVoucherDocument(ctx context.Context, doc *VoucherDocument) error
 
+	// GetDocumentByFileHash looks up a document by its SHA-256 file hash.
+	// Returns nil, nil when no match is found (not an error).
+	GetDocumentByFileHash(ctx context.Context, fileHash string) (*VoucherDocument, error)
+
 	// GetVoucherDocumentByID retrieves a voucher document by its ID
 	GetVoucherDocumentByID(ctx context.Context, docID uuid.UUID) (*VoucherDocument, error)
 
@@ -179,6 +183,9 @@ type VoucherRepository interface {
 	// UpdateInvoiceMatchStatus updates only the match_status column on an invoice.
 	UpdateInvoiceMatchStatus(ctx context.Context, invoiceID uuid.UUID, status string) error
 
+	// UpdateInvoicePOID sets the po_id FK on an invoice after a successful match.
+	UpdateInvoicePOID(ctx context.Context, invoiceID uuid.UUID, poID uuid.UUID) error
+
 	// UpdatePurchaseOrderBalance atomically updates remaining_balance and po_status.
 	UpdatePurchaseOrderBalance(ctx context.Context, poID uuid.UUID, remainingBalance float64, status string) error
 
@@ -190,6 +197,16 @@ type VoucherRepository interface {
 
 	// GetOrphanInvoicesByPONumber finds invoices in ORPHAN_INVOICE status with the given po_number.
 	GetOrphanInvoicesByPONumber(ctx context.Context, poNumber string) ([]*ExtractedInvoice, error)
+
+	// GetMatchResultsByInvoiceID retrieves all match result records for a given invoice, most recent first.
+	GetMatchResultsByInvoiceID(ctx context.Context, invoiceID uuid.UUID) ([]*MatchResult, error)
+
+	// ListMatchResults retrieves a paginated, joined view of match_results + invoice + purchase_orders
+	// scoped to a business. Used by the "Match Results" tab on the frontend.
+	ListMatchResults(ctx context.Context, filter MatchResultListFilter) ([]*MatchResultSummary, int64, error)
+
+	// GetValidatedDocumentsByTemplate retrieves validated_data for recent documents that used a given i2d template.
+	GetValidatedDocumentsByTemplate(ctx context.Context, templateName string, limit int) ([]*VoucherDocument, error)
 }
 
 // VoucherFilters defines filter criteria for listing vouchers

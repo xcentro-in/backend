@@ -45,9 +45,9 @@ class PostgresDocumentRepository(DocumentRepository):
         conn = self._get_conn()
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
-                "SELECT id, s3_path, doc_type, status, raw_ocr, "
+                "SELECT id, s3_path, doc_type, status, raw_ocr, raw_extraction, "
                 "draft_data, validated_data, i2d_template, processed_by "
-                "FROM voucher_documents WHERE id = %s",
+                "FROM xcentro.voucher_documents WHERE id = %s",
                 (document_id,),
             )
             row = cur.fetchone()
@@ -61,18 +61,31 @@ class PostgresDocumentRepository(DocumentRepository):
             doc_type=DocumentType(row["doc_type"]) if row["doc_type"] else DocumentType.UNKNOWN,
             status=DocumentStatus(row["status"]) if row["status"] else DocumentStatus.QUEUED,
             raw_ocr=row["raw_ocr"],
+            raw_extraction=row["raw_extraction"],
             draft_data=row["draft_data"],
             validated_data=row["validated_data"],
             i2d_template=row["i2d_template"],
             processed_by=ProcessedBy(row["processed_by"]) if row["processed_by"] else None,
         )
 
+    def get_validated_by_template(self, template_name: str, limit: int = 5) -> list[dict]:
+        conn = self._get_conn()
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                "SELECT validated_data FROM xcentro.voucher_documents "
+                "WHERE i2d_template = %s AND status = 'VALIDATED' AND validated_data IS NOT NULL "
+                "ORDER BY updated_at DESC LIMIT %s",
+                (template_name, limit),
+            )
+            rows = cur.fetchall()
+        return [row["validated_data"] for row in rows if row["validated_data"]]
+
     def update(self, document: Document) -> None:
         conn = self._get_conn()
         with conn.cursor() as cur:
             cur.execute(
-                "UPDATE voucher_documents SET "
-                "doc_type = %s, status = %s, raw_ocr = %s, "
+                "UPDATE xcentro.voucher_documents SET "
+                "doc_type = %s, status = %s, raw_ocr = %s, raw_extraction = %s, "
                 "draft_data = %s, validated_data = %s, "
                 "i2d_template = %s, processed_by = %s "
                 "WHERE id = %s",
@@ -80,6 +93,7 @@ class PostgresDocumentRepository(DocumentRepository):
                     document.doc_type.value if document.doc_type else None,
                     document.status.value if document.status else None,
                     document.raw_ocr,
+                    json.dumps(document.raw_extraction, default=str) if document.raw_extraction else None,
                     json.dumps(document.draft_data, default=str) if document.draft_data else None,
                     json.dumps(document.validated_data, default=str) if document.validated_data else None,
                     document.i2d_template,

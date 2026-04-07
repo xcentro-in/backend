@@ -73,10 +73,18 @@ func (r *PgBusinessPayeeRelationRepository) CreateRelation(ctx context.Context, 
 		addedBy = nil
 	}
 
+	// Handle empty AccountID as NULL (UUID field - nullable after migration 000061)
+	var accountID interface{}
+	if relation.AccountID != "" {
+		accountID = relation.AccountID
+	} else {
+		accountID = nil
+	}
+
 	err = r.querier.QueryRow(ctx, query,
 		relation.BusinessID,
 		relation.PayeeID,
-		relation.AccountID,
+		accountID,
 		relation.DisplayName,
 		relation.ContactEmail,
 		relation.ContactPhone,
@@ -516,6 +524,57 @@ func (r *PgBusinessPayeeRelationRepository) RelationExists(ctx context.Context, 
 	}
 
 	return exists, nil
+}
+
+// FindRelationByBusinessAndPayee finds the first relation for a business+payee pair, ignoring account_id.
+// Used by QuickCreateVendor to detect an existing relation when account_id may be NULL.
+func (r *PgBusinessPayeeRelationRepository) FindRelationByBusinessAndPayee(ctx context.Context, businessID, payeeID string) (*payee.BusinessPayeeRelation, error) {
+	query := `
+		SELECT relation_id, business_id, payee_id, COALESCE(account_id::text, ''),
+		       display_name, COALESCE(contact_email, ''), COALESCE(contact_phone, ''), COALESCE(notes, ''),
+		       is_active, is_favorite, tags, added_at, COALESCE(added_by::text, ''),
+		       updated_at, metadata
+		FROM xcentro.business_payee_relation
+		WHERE business_id = $1 AND payee_id = $2
+		LIMIT 1
+	`
+
+	var relation payee.BusinessPayeeRelation
+	var updatedAt sql.NullTime
+	var metadataJSON []byte
+
+	err := r.querier.QueryRow(ctx, query, businessID, payeeID).Scan(
+		&relation.RelationID,
+		&relation.BusinessID,
+		&relation.PayeeID,
+		&relation.AccountID,
+		&relation.DisplayName,
+		&relation.ContactEmail,
+		&relation.ContactPhone,
+		&relation.Notes,
+		&relation.IsActive,
+		&relation.IsFavorite,
+		&relation.Tags,
+		&relation.AddedAt,
+		&relation.AddedBy,
+		&updatedAt,
+		&metadataJSON,
+	)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to find relation by business and payee: %w", err)
+	}
+
+	if updatedAt.Valid {
+		relation.UpdatedAt = updatedAt.Time
+	}
+	if len(metadataJSON) > 0 {
+		_ = json.Unmarshal(metadataJSON, &relation.Metadata)
+	}
+
+	return &relation, nil
 }
 
 // AccountExistsForBusiness checks if a bank account is already used by any payee in this business

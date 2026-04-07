@@ -1,39 +1,35 @@
 issuer: Rob & Joe Traders
 keywords:
-  - Xcentro
-  - PURCHASE ORDER
-options:
-  currency: INR
-  decimal_places: 2
-  regex: '(?s)' # Enable DOTALL mode for multi-line regex matching
+  - "PURCHASE ORDER"
+  - "Rob & Joe Traders"
+  - "GSTIN 33GSPTN0372G1ZC"
+  - "Chennai"
 
 fields:
-  # Invoice Number: The document refers to it as "Purchase Order#", but the target data uses it as invoice_number.
-  invoice_number: "Purchase Order#\\s*(?P<invoice_number>[A-Z0-9-]+)"
+  po_number:
+    - 'Purchase\s*Order#\s*(?P<po_number>PO-\d+)'
+  date:
+    - 'Date\s*(?P<date>\d{2}/\d{2}/\d{4})'
+  payment_terms:
+    - 'Terms\s*(?P<payment_terms>Due on Receipt)'
+  vendor_gstin:
+    - 'India\s*GSTIN\s*(?P<vendor_gstin>\d{2}[A-Z]{5}\d{4}[A-Z]{1}[A-Z\d]{1}Z[A-Z\d]{1})'
+  buyer_gstin:
+    - 'Mumbai\s*Maharashtra\s*400093\s*\n\s*GSTIN\s*(?P<buyer_gstin>\d{2}[A-Z]{5}\d{4}[A-Z]{1}[A-Z\d]{1}Z[A-Z\d]{1})'
+  subtotal:
+    - 'Sub\s*Total\s*(?P<subtotal>[\d,]+\.\d{2})'
+  cgst:
+    - 'CGST\s*\(\d{2}\.\d{2}%\)\s*(?P<cgst>[\d,]+\.\d{2})'
+  sgst:
+    - 'SGST\s*\(\d{2}\.\d{2}%\)\s*(?P<sgst>[\d,]+\.\d{2})'
+  amount:
+    - 'Total\s*(?P<amount>[\d,]+\.\d{2})'
 
-  # PO Number: Explicitly requested, extracted from "Purchase Order#".
-  po_number: "Purchase Order#\\s*(?P<po_number>[A-Z0-9-]+)"
-
-  # Invoice Date:
-  date: "Date\\s*:\\s*(?P<date>\\d{2}/\\d{2}/\\d{4})"
-
-  # Issuer (Vendor Name): Extracted from the "Vendor Address" block.
-  vendor_name: "Vendor Address\\s*\\n\\s*(?P<vendor_name>[^\\n]+)"
-
-  # Buyer GSTIN: Located in the header section, associated with Xcentro.
-  buyer_gstin: "Xcentro[\\s\\S]*?GSTIN\\s*(?P<buyer_gstin>\\d{2}[A-Z]{5}\\d{4}[A-Z]{1}[A-Z\\d]{1}Z[A-Z\\d]{1})"
-
-  # Vendor GSTIN: Located in the vendor address block, associated with Rob & Joe Traders.
-  vendor_gstin: "Rob & Joe Traders[\\s\\S]*?GSTIN\\s*(?P<vendor_gstin>\\d{2}[A-Z]{5}\\d{4}[A-Z]{1}[A-Z\\d]{1}Z[A-Z\\d]{1})"
-
-  # CGST Amount:
-  cgst: "CGST\\s*\\([\\d\\.]+%\\)\\s*(?P<cgst>\\d+\\.\\d{2})"
-
-  # SGST Amount:
-  sgst: "SGST\\s*\\([\\d\\.]+%\\)\\s*(?P<sgst>\\d+\\.\\d{2})"
-
-  # Total Amount:
-  amount: "Total\\s*(?P<amount>\\d+\\.\\d{2})"
-
-# Discount, discount_type, igst, freight, and shipping are not explicitly present with a value in the summary section of the OCR text.
-# Therefore, they are not included in this strict YAML template.
+options:
+  currency: INR
+  decimal_separator: "."
+  thousands_separator: ""
+  date_formats:
+    - "%d/%m/%Y"
+    - "%d-%m-%Y"
+    - "%Y-%m-%d"

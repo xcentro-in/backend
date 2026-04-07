@@ -28,18 +28,90 @@ from usecases.validation import run_all_checks
 logger = logging.getLogger(__name__)
 
 
+def _normalize_result(result: ExtractionResult) -> ExtractionResult:
+    """Apply business-rule normalization to an ExtractionResult before serialization.
+
+    Rules applied (in order):
+    1. GST mutual exclusivity: zero out IGST if intra-state (SGST/CGST present),
+       zero out SGST/CGST if inter-state (IGST present).
+    2. Line item tax_rate default: if a line item has no tax_rate, fall back to the
+       document-level gst_rate; if that is also absent, default to 0.
+    3. Line item tax_rate distribution: if NO line item has an individual tax_rate but
+       the document has a single gst_rate, assign that rate to all line items.
+    4. PO invoice_number: purchase orders do not have invoice numbers — clear it.
+    5. (Shipping optional — no action needed, already nullable.)
+    """
+    # --- Rule 1: GST mutual exclusivity ---
+    igst = result.igst or 0.0
+    sgst = result.sgst or 0.0
+    cgst = result.cgst or 0.0
+
+    if igst > 0 and (sgst > 0 or cgst > 0):
+        # Both present — ambiguous. Inter-state (IGST) takes precedence.
+        logger.warning(
+            "Both IGST (%.2f) and SGST/CGST (%.2f/%.2f) are non-zero. "
+            "Treating as inter-state: clearing SGST and CGST.",
+            igst, sgst, cgst,
+        )
+        result.sgst = None
+        result.cgst = None
+    elif igst > 0:
+        # Inter-state: clear SGST/CGST even if they were null
+        result.sgst = None
+        result.cgst = None
+    elif sgst > 0 or cgst > 0:
+        # Intra-state: clear IGST
+        result.igst = None
+
+    # --- Rules 2 & 3: line item tax_rate defaulting ---
+    doc_rate = result.gst_rate  # may be None
+
+    # Check whether any line item already carries an individual rate
+    any_has_rate = any(li.tax_rate is not None for li in result.line_items)
+
+    for li in result.line_items:
+        if li.tax_rate is None:
+            if not any_has_rate and doc_rate is not None:
+                # Rule 3: distribute document-level rate uniformly
+                li.tax_rate = doc_rate
+            else:
+                # Rule 2: default to 0
+                li.tax_rate = 0.0
+
+    # --- Rule 4: PO has no invoice number ---
+    if result.doc_type == DocumentType.PURCHASE_ORDER:
+        result.invoice_number = None
+
+    return result
+
+
 def _result_to_draft(result: ExtractionResult) -> dict:
-    """Serialize an ExtractionResult into the draft_data JSONB shape."""
+    """Normalize and serialize an ExtractionResult into the draft_data JSONB shape."""
+    result = _normalize_result(result)
+
+    # Derive gst_type from the (now-normalized) tax components
+    gst_type = None
+    if result.igst and result.igst > 0:
+        gst_type = "INTER_STATE"
+    elif (result.sgst and result.sgst > 0) or (result.cgst and result.cgst > 0):
+        gst_type = "INTRA_STATE"
+
     return {
         "invoice_number": result.invoice_number,
         "invoice_date": result.invoice_date,
+        "invoice_due_date": result.invoice_due_date,
         "po_number": result.po_number,
         "vendor_name": result.vendor_name,
         "vendor_gstin": result.vendor_gstin,
         "buyer_gstin": result.buyer_gstin,
         "total_amount": result.total_amount,
+        "subtotal": result.subtotal,
+        "gross_amount": result.gross_amount,
         "discount": result.discount,
         "discount_type": result.discount_type,
+        "payment_terms": result.payment_terms,
+        "gst_type": gst_type,
+        "gst_rate": result.gst_rate,
         "sgst": result.sgst,
         "cgst": result.cgst,
         "igst": result.igst,
@@ -205,7 +277,17 @@ class ExtractionService:
 
         logger.info("Generating invoice template for document %s", document_id)
         try:
-            yaml_content = self._llm.generate_template(doc.raw_ocr, target_data)
+            # Fetch prior validated extractions from the same template to improve generation accuracy
+            historical_examples: list[dict] = []
+            if doc.i2d_template:
+                historical_examples = self._repo.get_validated_by_template(doc.i2d_template, limit=5)
+                if historical_examples:
+                    logger.info(
+                        "Including %d historical example(s) from template %s in prompt",
+                        len(historical_examples), doc.i2d_template,
+                    )
+
+            yaml_content = self._llm.generate_template(doc.raw_ocr, target_data, historical_examples=historical_examples)
 
             # Build filename: prefer vendor_gstin, fallback to vendor_name
             vendor_id = str(target_data.get("vendor_gstin") or "").strip()
@@ -259,6 +341,9 @@ class ExtractionService:
         logger.info("LLM extraction successful for %s", doc.id)
         logger.info("LLM extraction result: \n%s\n\n", result)
         doc.processed_by = ProcessedBy.LLM
+        # Preserve full structured LLM JSON for auditing
+        if result.raw:
+            doc.raw_extraction = result.raw
         return result
 
     def _finalize(self, doc: Document, result: ExtractionResult) -> None:

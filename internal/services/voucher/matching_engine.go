@@ -2,9 +2,11 @@ package voucher
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
@@ -37,6 +39,7 @@ const (
 	MatchMethodSKU         = "SKU_MATCH"
 	MatchMethodDescription = "DESCRIPTION_SIMILARITY"
 	PriceVarianceThreshold = 0.01 // 1%
+	poCacheTTL             = 5 * time.Minute
 )
 
 // MatchedPair represents a matched invoice-PO line item pair
@@ -80,9 +83,10 @@ func (e *MatchingEngine) RunMatchingForInvoice(ctx context.Context, invoiceID uu
 	// 2. Extract PO Number & Business
 	if inv.PONumber == "" {
 		e.logger.InfoWith("Invoice has no PO number", "invoice_id", invoiceID)
+		e.voucherRepo.UpdateInvoiceMatchStatus(ctx, invoiceID, voucher.InvoiceMatchOrphan)
 		matchResult := &voucher.MatchResult{
 			InvoiceID:   invoiceID,
-			MatchStatus: voucher.InvoiceMatchPending,
+			MatchStatus: voucher.InvoiceMatchOrphan,
 			MatchDetails: map[string]interface{}{"reason": "NO_PO_REFERENCE"},
 		}
 		_ = e.voucherRepo.CreateMatchResult(ctx, matchResult)
@@ -96,8 +100,8 @@ func (e *MatchingEngine) RunMatchingForInvoice(ctx context.Context, invoiceID uu
 		return fmt.Errorf("invoice has no business ID")
 	}
 
-	// 3. Find PO
-	po, err := e.voucherRepo.GetPurchaseOrderByPONumber(ctx, inv.PONumber, businessID)
+	// 3. Find PO (cache-first)
+	po, err := e.getPOCached(ctx, inv.PONumber, businessID)
 	if err != nil {
 		return fmt.Errorf("failed to lookup PO: %w", err)
 	}
@@ -148,10 +152,14 @@ func (e *MatchingEngine) RunMatchingForInvoice(ctx context.Context, invoiceID uu
 	}
 
 	if finalStatus == voucher.InvoiceMatchMatched {
-		// Update Invoice
+		// Update Invoice match status and link the PO FK
 		err = e.voucherRepo.UpdateInvoiceMatchStatus(ctx, invoiceID, voucher.InvoiceMatchMatched)
 		if err != nil {
 			return err
+		}
+		if err = e.voucherRepo.UpdateInvoicePOID(ctx, invoiceID, po.ID); err != nil {
+			// Non-fatal: log and continue — the match status is already set correctly
+			e.logger.ErrorWith("Failed to set po_id on invoice", "error", err, "invoice_id", invoiceID, "po_id", po.ID)
 		}
 
 		// Update PO Balance
@@ -164,6 +172,8 @@ func (e *MatchingEngine) RunMatchingForInvoice(ctx context.Context, invoiceID uu
 		if err != nil {
 			return err
 		}
+		// Invalidate cached PO now that balance has changed
+		e.invalidatePOCache(ctx, inv.PONumber, businessID)
 
 		// Update Line Items Qty
 		for _, pair := range lineMatch.MatchedPairs {
@@ -180,8 +190,9 @@ func (e *MatchingEngine) RunMatchingForInvoice(ctx context.Context, invoiceID uu
 			}
 		}
 	} else {
-		// Just update the status to PENDING_MATCH (retaining it in review queue essentially)
-		e.voucherRepo.UpdateInvoiceMatchStatus(ctx, invoiceID, voucher.InvoiceMatchPending)
+		// A PO was found but amounts or line items diverge — flag for Procurement Manager Review
+		e.voucherRepo.UpdateInvoiceMatchStatus(ctx, invoiceID, voucher.InvoiceMatchMismatch)
+		audit.MatchStatus = voucher.InvoiceMatchMismatch
 	}
 
 	// Always document the result
@@ -312,6 +323,48 @@ func (e *MatchingEngine) findBestPOLineItem(invItem voucher.LineItemDetail, poIt
 	}
 
 	return nil, ""
+}
+
+// ---------------------------------------------------------
+// Redis PO Cache Helpers
+// ---------------------------------------------------------
+
+func poCacheKey(poNumber string, businessID uuid.UUID) string {
+	return fmt.Sprintf("xcentro:po_cache:%s:%s", poNumber, businessID)
+}
+
+// getPOCached fetches a PO from Redis cache, falling back to the database on a miss.
+func (e *MatchingEngine) getPOCached(ctx context.Context, poNumber string, businessID uuid.UUID) (*voucher.PurchaseOrder, error) {
+	if e.redisClient != nil {
+		key := poCacheKey(poNumber, businessID)
+		raw, err := e.redisClient.Get(ctx, key).Bytes()
+		if err == nil {
+			var po voucher.PurchaseOrder
+			if jsonErr := json.Unmarshal(raw, &po); jsonErr == nil {
+				return &po, nil
+			}
+		}
+	}
+
+	po, err := e.voucherRepo.GetPurchaseOrderByPONumber(ctx, poNumber, businessID)
+	if err != nil || po == nil {
+		return po, err
+	}
+
+	// Populate cache on miss
+	if e.redisClient != nil {
+		if raw, jsonErr := json.Marshal(po); jsonErr == nil {
+			e.redisClient.Set(ctx, poCacheKey(poNumber, businessID), raw, poCacheTTL)
+		}
+	}
+	return po, nil
+}
+
+// invalidatePOCache removes a PO entry from the cache after a balance update.
+func (e *MatchingEngine) invalidatePOCache(ctx context.Context, poNumber string, businessID uuid.UUID) {
+	if e.redisClient != nil {
+		e.redisClient.Del(ctx, poCacheKey(poNumber, businessID))
+	}
 }
 
 // calculateDescriptionSimilarity computes a basic Jaccard index similarity score between two texts.

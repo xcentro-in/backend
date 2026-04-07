@@ -87,3 +87,32 @@ func (h *DocumentUploadHandler) UploadDocument(c echo.Context) error {
 		"data":    resp,
 	})
 }
+
+// GetDocumentURL handles GET /vouchers/:document_id/url
+// Returns a short-lived presigned S3 URL for viewing the document file
+func (h *DocumentUploadHandler) GetDocumentURL(c echo.Context) error {
+	docIDStr := c.Param("document_id")
+	docID, err := uuid.Parse(docIDStr)
+	if err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]any{
+			"status":  "error",
+			"error":   "INVALID_DOCUMENT_ID",
+			"message": "Invalid document ID format",
+		})
+	}
+
+	url, err := h.uploadService.GetPresignedURL(c.Request().Context(), docID)
+	if err != nil {
+		h.logger.ErrorWith("GetDocumentURL failed", "error", err, "doc_id", docID)
+		return c.JSON(http.StatusNotFound, map[string]any{
+			"status":  "error",
+			"error":   "DOCUMENT_NOT_FOUND",
+			"message": err.Error(),
+		})
+	}
+
+	return c.JSON(http.StatusOK, map[string]any{
+		"status": "success",
+		"data":   map[string]any{"url": url},
+	})
+}

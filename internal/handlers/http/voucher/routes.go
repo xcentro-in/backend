@@ -47,10 +47,16 @@ func RegisterVoucherRoutes(group *echo.Group, voucherService voucherSvc.VoucherS
 	group.POST("/:voucher_id/request-approval", handler.RequestApproval)     // POST /vouchers/:voucher_id/request-approval - Create/update approval
 
 	// Document review HITL endpoints
-	group.GET("/documents", reviewHandler.ListDocuments)                   // GET /vouchers/documents - List voucher documents
-	group.GET("/invoices", reviewHandler.ListInvoices)                     // GET /vouchers/invoices - List extracted invoices
-	group.GET("/purchase-orders", reviewHandler.ListPurchaseOrders)         // GET /vouchers/purchase-orders - List purchase orders
-	group.GET("/:document_id/draft", reviewHandler.GetDocumentDraft)       // GET /vouchers/:document_id/draft - Get extracted draft data
-	group.GET("/:document_id/status", reviewHandler.GetDocumentStatus)     // GET /vouchers/:document_id/status - Get processing status
-	group.POST("/:document_id/validate", reviewHandler.ValidateDocument)   // POST /vouchers/:document_id/validate - Validate with corrections
+	group.POST("/vendors/quick-create", reviewHandler.QuickCreateVendor)                              // POST /vouchers/vendors/quick-create - Quick vendor creation from document review (no bank verification)
+	group.GET("/match-results", reviewHandler.ListMatchResults)                                   // GET /vouchers/match-results - List match results (joined invoice + PO view)
+	group.GET("/documents", reviewHandler.ListDocuments)                                          // GET /vouchers/documents - List voucher documents
+	group.GET("/invoices", reviewHandler.ListInvoices)                                            // GET /vouchers/invoices - List extracted invoices
+	group.GET("/invoices/:invoice_id/match-result", reviewHandler.GetMatchResult)                 // GET /vouchers/invoices/:invoice_id/match-result - Get match result
+	group.GET("/invoices/:invoice_id/line-items", reviewHandler.GetInvoiceLineItems)              // GET /vouchers/invoices/:invoice_id/line-items - Get line items for an invoice
+	group.GET("/purchase-orders/:po_id/line-items", reviewHandler.GetPurchaseOrderLineItems)     // GET /vouchers/purchase-orders/:po_id/line-items - Get line items for a PO
+	group.GET("/purchase-orders", reviewHandler.ListPurchaseOrders)                               // GET /vouchers/purchase-orders - List purchase orders
+	group.GET("/:document_id/draft", reviewHandler.GetDocumentDraft)                              // GET /vouchers/:document_id/draft - Get extracted draft data
+	group.GET("/:document_id/status", reviewHandler.GetDocumentStatus)                            // GET /vouchers/:document_id/status - Get processing status
+	group.GET("/:document_id/url", uploadHandler.GetDocumentURL)                                  // GET /vouchers/:document_id/url - Get presigned S3 download URL
+	group.POST("/:document_id/validate", reviewHandler.ValidateDocument)                          // POST /vouchers/:document_id/validate - Validate with corrections
 }

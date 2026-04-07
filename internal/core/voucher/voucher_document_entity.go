@@ -1,6 +1,8 @@
 package voucher
 
 import (
+	"time"
+
 	"github.com/google/uuid"
 )
 
@@ -31,6 +33,7 @@ const (
 	InvoiceMatchPending  = "PENDING_MATCH"  // default; awaiting matching
 	InvoiceMatchMatched  = "MATCHED"         // fully matched to a PO
 	InvoiceMatchOrphan   = "ORPHAN_INVOICE"  // no matching PO found
+	InvoiceMatchMismatch = "MISMATCH"        // PO found but price/qty variance; flagged for Procurement Manager Review
 )
 
 // PO status values — stored in purchase_orders.po_status column
@@ -44,13 +47,16 @@ const (
 // VoucherDocument represents a row in the voucher_documents table.
 // It tracks the lifecycle of an uploaded document from ingestion through extraction to validation.
 type VoucherDocument struct {
-	ID            uuid.UUID              `json:"id"`
-	S3Path        string                 `json:"s3_path"`
-	DocType       string                 `json:"doc_type"`
-	Status        DocumentStatus         `json:"status"`
-	RawOCR        string                 `json:"raw_ocr,omitempty"`
-	DraftData     map[string]interface{} `json:"draft_data,omitempty"`
-	I2DTemplate   string                 `json:"i2d_template"`
-	ProcessedBy   string                 `json:"processed_by"`
-	ValidatedData map[string]interface{} `json:"validated_data,omitempty"`
+	ID             uuid.UUID              `json:"id"`
+	S3Path         string                 `json:"s3_path"`
+	DocType        string                 `json:"doc_type"`
+	Status         DocumentStatus         `json:"status"`
+	RawOCR         string                 `json:"raw_ocr,omitempty"`
+	RawExtraction  map[string]interface{} `json:"raw_extraction,omitempty"` // full structured LLM JSON
+	DraftData      map[string]interface{} `json:"draft_data,omitempty"`
+	I2DTemplate    string                 `json:"i2d_template"`
+	ProcessedBy    string                 `json:"processed_by"`
+	ValidatedData  map[string]interface{} `json:"validated_data,omitempty"`
+	FileHash       string                 `json:"file_hash,omitempty"` // SHA-256 hex for duplicate detection
+	UploadedAt     time.Time              `json:"uploaded_at"`
 }

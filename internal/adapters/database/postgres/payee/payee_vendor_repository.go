@@ -59,13 +59,25 @@ func (r *PgPayeeVendorRepository) Create(ctx context.Context, vendor *payee.Paye
 		}
 	}
 
+	// Handle nullable fields - pass nil instead of empty string for NULL columns
+	var gstin, legalName, gstStatus interface{}
+	if vendor.GSTIN != "" {
+		gstin = vendor.GSTIN
+	}
+	if vendor.LegalName != "" {
+		legalName = vendor.LegalName
+	}
+	if vendor.GSTStatus != "" {
+		gstStatus = vendor.GSTStatus
+	}
+
 	err = r.querier.QueryRow(ctx, query,
 		vendor.PayeeID,
-		vendor.GSTIN,
-		vendor.LegalName,
+		gstin,
+		legalName,
 		vendor.BusinessType,
 		vendor.RegistrationDate,
-		vendor.GSTStatus,
+		gstStatus,
 		vendor.PrimaryAddress.BuildingName,
 		vendor.PrimaryAddress.Street,
 		vendor.PrimaryAddress.City,

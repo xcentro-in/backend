@@ -2,11 +2,15 @@ package voucher
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"mime/multipart"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
@@ -77,10 +81,12 @@ func NewDocumentUploadService(
 }
 
 // UploadDocument handles the full ingestion flow:
-// 1. Validate file type and size
-// 2. Upload file to S3
-// 3. Persist document metadata to voucher_documents table
-// 4. Push extraction task to Redis for the Python worker
+// 1-4. Validate file type, size, extension, doc_type
+// 5. Compute SHA-256 hash; return existing record if duplicate
+// 6. Generate UUIDv7 document ID
+// 7. Upload file to S3
+// 8. Persist document metadata (with file_hash) to voucher_documents
+// 9. Push extraction task to Redis for the Python worker
 func (s *DocumentUploadService) UploadDocument(ctx context.Context, req *UploadDocumentRequest) (*UploadDocumentResponse, error) {
 	file := req.File
 
@@ -113,10 +119,38 @@ func (s *DocumentUploadService) UploadDocument(ctx context.Context, req *UploadD
 		return nil, fmt.Errorf("invalid doc_type '%s'; accepted: INVOICE, PURCHASE_ORDER", req.DocType)
 	}
 
-	// 5. Generate document ID (UUIDv7 for time-sortable ordering)
+	// 5. Compute SHA-256 hash for duplicate detection
+	f, err := file.Open()
+	if err != nil {
+		return nil, fmt.Errorf("failed to open uploaded file: %w", err)
+	}
+	fileBytes, err := io.ReadAll(f)
+	f.Close()
+	if err != nil {
+		return nil, fmt.Errorf("failed to read uploaded file: %w", err)
+	}
+	sum := sha256.Sum256(fileBytes)
+	fileHash := hex.EncodeToString(sum[:])
+
+	existing, err := s.voucherRepo.GetDocumentByFileHash(ctx, fileHash)
+	if err != nil {
+		s.logger.ErrorWith("Failed to check file hash", "error", err)
+		return nil, fmt.Errorf("failed to check for duplicate document: %w", err)
+	}
+	if existing != nil {
+		s.logger.InfoWith("Duplicate document detected", "file_hash", fileHash, "existing_doc_id", existing.ID)
+		return &UploadDocumentResponse{
+			DocumentID: existing.ID,
+			S3Path:     existing.S3Path,
+			Status:     string(existing.Status),
+			Message:    "Duplicate document — returning existing record",
+		}, nil
+	}
+
+	// 6. Generate document ID (UUIDv7 for time-sortable ordering)
 	docID := uuid.Must(uuid.NewV7())
 
-	// 6. Upload file to S3
+	// 7. Upload file to S3
 	s3Key := fileupload.GenerateUploadKey("voucher_documents", file.Filename)
 	s.logger.InfoWith("Uploading document to S3",
 		"doc_id", docID,
@@ -132,12 +166,13 @@ func (s *DocumentUploadService) UploadDocument(ctx context.Context, req *UploadD
 
 	s.logger.InfoWith("S3 upload successful", "doc_id", docID, "s3_path", uploadedKey)
 
-	// 7. Persist document metadata to database
+	// 8. Persist document metadata to database
 	doc := &voucher.VoucherDocument{
-		ID:      docID,
-		S3Path:  uploadedKey,
-		DocType: docType,
-		Status:  voucher.DocStatusQueued,
+		ID:       docID,
+		S3Path:   uploadedKey,
+		DocType:  docType,
+		Status:   voucher.DocStatusQueued,
+		FileHash: fileHash,
 	}
 
 	if err := s.voucherRepo.CreateVoucherDocument(ctx, doc); err != nil {
@@ -147,7 +182,7 @@ func (s *DocumentUploadService) UploadDocument(ctx context.Context, req *UploadD
 
 	s.logger.InfoWith("Document record persisted", "doc_id", docID, "status", doc.Status)
 
-	// 8. Push extraction task to Redis queue for the Python worker
+	// 9. Push extraction task to Redis queue for the Python worker
 	taskPayload := map[string]interface{}{
 		"document_id": docID.String(),
 		"s3_path":     uploadedKey,
@@ -178,4 +213,13 @@ func (s *DocumentUploadService) UploadDocument(ctx context.Context, req *UploadD
 		Status:     string(voucher.DocStatusQueued),
 		Message:    "Document uploaded and queued for extraction",
 	}, nil
+}
+
+// GetPresignedURL generates a short-lived presigned S3 download URL for a document.
+func (s *DocumentUploadService) GetPresignedURL(ctx context.Context, docID uuid.UUID) (string, error) {
+	doc, err := s.voucherRepo.GetVoucherDocumentByID(ctx, docID)
+	if err != nil {
+		return "", err
+	}
+	return s.s3Client.GetPresignedDownloadURL(ctx, doc.S3Path, 15*time.Minute)
 }

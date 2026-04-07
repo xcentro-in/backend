@@ -1,15 +1,44 @@
 issuer: Xcentro
 keywords:
-  - INVOICE
-  - GSTIN
-date_format: "%d/%m/%Y"
+  - "Xcentro"
+  - "Innov8 Solitaire Corporate Park"
+  - "GSTIN 27AATCM5865F1ZU"
+  - "INVOICE"
 
 fields:
-  invoice_number: "Invoice#\\s*(?P<invoice_number>INV-\\d+)"
-  date: "Invoice Date\\s*:\\s*(?P<date>\\d{2}/\\d{2}/\\d{4})"
-  po_number: "P\\.O\\.\\#\\s*:\\s*(?P<po_number>[A-Z0-9-]+)"
-  vendor_gstin: "(?P<vendor_gstin>[0-9A-Z]{15})\\s+shubhankar@xcentro\\.in"
-  buyer_gstin: "Bill To\\s+Rob & Joe Traders.*?GSTIN\\s*(?P<buyer_gstin>[0-9A-Z]{15})"
-  amount: "Total\\s*(?P<amount>\\d+\\.\\d{2})"
-  cgst: "CGST \\(\\d+\\.\\d+%\\)\\s*(?P<cgst>\\d+\\.\\d{2})"
-  sgst: "SGST \\(\\d+\\.\\d+%\\)\\s*(?P<sgst>\\d+\\.\\d{2})"
+  invoice_number:
+    - 'INVOICE\s*(?P<invoice_number>INV-\d+)'
+  date:
+    - 'Invoice\s*Date\s*(?P<date>\d{2}/\d{2}/\d{4})'
+  invoice_due_date:
+    - 'Due\s*Date\s*(?P<invoice_due_date>\d{2}/\d{2}/\d{4})'
+  po_number:
+    - 'P\.O\.\#\s*(?P<po_number>[A-Z0-9-]+)'
+  vendor_gstin:
+    - 'GSTIN\s*(?P<vendor_gstin>[A-Z0-9]{15})\s*shubhankar'
+  buyer_gstin:
+    - 'GSTIN\s*(?P<buyer_gstin>[A-Z0-9]{15})'
+  amount:
+    - 'Total\s*(?P<amount>[\d,]+\.\d{2})'
+    - 'Balance\s*Due\s*(?P<amount>[\d,]+\.\d{2})'
+  subtotal:
+    - 'Sub\s*Total\s*(?P<subtotal>[\d,]+\.\d{2})'
+  cgst:
+    - 'CGST\s*\(\d+\.\d+%\)\s*(?P<cgst>[\d,]+\.\d{2})'
+  sgst:
+    - 'SGST\s*\(\d+\.\d+%\)\s*(?P<sgst>[\d,]+\.\d{2})'
+  payment_terms:
+    - 'Terms\s*(?P<payment_terms>.+)'
+
+lines:
+  start: '#\s*Item\s*&\s*Description\s*HSN/SAC\s*Qty\s*Rate\s*Discount\s*Amount'
+  end: 'Sub\s*Total'
+  line: '^\s*\d+\s+(?P<description>.+?)\s{2,}(?P<sku>\d{8})\s+(?P<quantity>\d+\.\d{2})\s+(?P<unit_price>\d+\.\d{2})\s+\d+\.\d{2}\s+(?P<amount>\d+\.\d{2})'
+
+options:
+  currency: INR
+  decimal_separator: "."
+  date_formats:
+    - "%d/%m/%Y"
+    - "%d-%m-%Y"
+    - "%Y-%m-%d"

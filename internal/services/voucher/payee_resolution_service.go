@@ -113,12 +113,20 @@ func (s *PayeeResolutionService) ResolvePayee(ctx context.Context, vendorName, g
 		s.logger.InfoWith("No payee found via name match", "vendor_name", vendorName)
 	}
 
-	// Step 3: No match found
+	// Step 3: No match found — surface extracted data so frontend can pre-fill create-payee
 	s.logger.InfoWith("Payee resolution: NOT_FOUND", "vendor_name", vendorName, "gstin", gstin)
+	suggestedData := map[string]any{}
+	if vendorName != "" {
+		suggestedData["vendor_name"] = vendorName
+	}
+	if gstin != "" {
+		suggestedData["vendor_gstin"] = gstin
+	}
 	return &PayeeResolution{
-		Status:     PayeeResolutionNotFound,
-		Confidence: PayeeResolutionConfidenceLow,
-		MatchedVia: "",
+		Status:        PayeeResolutionNotFound,
+		Confidence:    PayeeResolutionConfidenceLow,
+		MatchedVia:    "",
+		SuggestedData: suggestedData,
 	}
 }
 

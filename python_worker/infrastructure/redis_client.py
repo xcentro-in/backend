@@ -57,5 +57,21 @@ class RedisTaskQueue(TaskQueue):
         self._client.lpush(target_queue, json.dumps(payload))
         logger.info("Enqueued task to %s: %s", target_queue, payload.get("document_id", "unknown"))
 
+    def acquire_lock(self, key: str, ttl: int = 300) -> bool:
+        """Atomically acquire a distributed lock using SET NX EX.
+
+        Args:
+            key: Lock key (e.g. 'xcentro:doc_lock:{document_id}').
+            ttl: Expiry in seconds. Prevents deadlock if the worker crashes.
+
+        Returns:
+            True if the lock was acquired, False if another worker holds it.
+        """
+        return bool(self._client.set(key, "1", nx=True, ex=ttl))
+
+    def release_lock(self, key: str) -> None:
+        """Release a previously acquired lock by deleting the key."""
+        self._client.delete(key)
+
     def close(self) -> None:
         self._client.close()
