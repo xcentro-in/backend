@@ -45,6 +45,7 @@ class ExtractionResult:
     sgst: float | None = None
     cgst: float | None = None
     igst: float | None = None
+    total_gst: float | None = None      # lump-sum GST when only a total is shown (no SGST/CGST/IGST breakdown)
     shipping: float | None = None
     line_items: list[LineItem] = field(default_factory=list)
     doc_type: DocumentType = DocumentType.UNKNOWN

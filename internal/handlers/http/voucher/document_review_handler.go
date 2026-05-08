@@ -1,8 +1,9 @@
 package voucher
 
 import (
-	"fmt"
+	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
@@ -10,6 +11,24 @@ import (
 	voucherSvc "xcentro.in/internal/services/voucher"
 	"xcentro.in/internal/shared/logger"
 )
+
+// Pagination bounds shared by every list endpoint on this handler.
+const (
+	defaultPageSize = 20
+	maxPageSize     = 100
+)
+
+// validDocumentStatuses enumerates the legal values for the ?status= filter.
+// Keeping it a map so handlers can reject unknown input before it hits SQL.
+var validDocumentStatuses = map[voucher.DocumentStatus]bool{
+	voucher.DocStatusQueued:         true,
+	voucher.DocStatusOCRProcessing:  true,
+	voucher.DocStatusPendingLLM:     true,
+	voucher.DocStatusLLMProcessing:  true,
+	voucher.DocStatusReviewRequired: true,
+	voucher.DocStatusValidated:      true,
+	voucher.DocStatusFailed:         true,
+}
 
 // DocumentReviewHandler handles HTTP requests for the HITL document review flow
 type DocumentReviewHandler struct {
@@ -25,29 +44,76 @@ func NewDocumentReviewHandler(reviewService *voucherSvc.DocumentReviewService, l
 	}
 }
 
-// GetDocumentDraft handles GET /vouchers/:document_id/draft
-// Returns the extracted draft data for human review
-func (h *DocumentReviewHandler) GetDocumentDraft(c echo.Context) error {
-	docIDStr := c.Param("document_id")
-	docID, err := uuid.Parse(docIDStr)
+// parseDocID parses the :document_id path param or writes a 400 and returns false.
+func parseDocID(c echo.Context) (uuid.UUID, bool) {
+	id, err := uuid.Parse(c.Param("document_id"))
 	if err != nil {
-		return c.JSON(http.StatusBadRequest, map[string]any{
+		_ = c.JSON(http.StatusBadRequest, map[string]any{
 			"status":  "error",
 			"error":   "INVALID_DOCUMENT_ID",
 			"message": "Invalid document ID format",
 		})
+		return uuid.Nil, false
+	}
+	return id, true
+}
+
+// paginationFromQuery extracts page/limit and clamps them to sane bounds so
+// a malicious or buggy client can't pull the whole table with ?limit=100000.
+func paginationFromQuery(c echo.Context) (page, pageSize int) {
+	page, _ = strconv.Atoi(c.QueryParam("page"))
+	if page < 1 {
+		page = 1
+	}
+	pageSize, _ = strconv.Atoi(c.QueryParam("limit"))
+	if pageSize < 1 {
+		pageSize = defaultPageSize
+	}
+	if pageSize > maxPageSize {
+		pageSize = maxPageSize
+	}
+	return page, pageSize
+}
+
+func forbidden(c echo.Context) error {
+	return c.JSON(http.StatusForbidden, map[string]any{
+		"status":  "error",
+		"error":   "ACCESS_DENIED",
+		"message": "Document does not belong to this business",
+	})
+}
+
+// GetDocumentDraft handles GET /vouchers/:document_id/draft
+// Returns the extracted draft data for human review
+func (h *DocumentReviewHandler) GetDocumentDraft(c echo.Context) error {
+	businessID, err := businessIDFromContext(c)
+	if err != nil {
+		return unauthorizedBusiness(c)
+	}
+	docID, ok := parseDocID(c)
+	if !ok {
+		return nil
 	}
 
-	// Extract business_id from X-Business-ID header for resolution
-	headerBusinessID := c.Request().Header.Get("X-Business-ID")
+	if err := h.reviewService.AssertDocumentOwnership(c.Request().Context(), docID, businessID); err != nil {
+		if errors.Is(err, voucherSvc.ErrDocumentNotOwned) {
+			return forbidden(c)
+		}
+		h.logger.ErrorWith("GetDocumentDraft ownership check failed", "error", err, "doc_id", docID)
+		return c.JSON(http.StatusNotFound, map[string]any{
+			"status":  "error",
+			"error":   "DOCUMENT_NOT_FOUND",
+			"message": "Document not found",
+		})
+	}
 
-	result, err := h.reviewService.GetDocumentDraftWithResolution(c.Request().Context(), docID, headerBusinessID)
+	result, err := h.reviewService.GetDocumentDraftWithResolution(c.Request().Context(), docID, businessID.String())
 	if err != nil {
 		h.logger.ErrorWith("GetDocumentDraft failed", "error", err, "doc_id", docID)
 		return c.JSON(http.StatusNotFound, map[string]any{
 			"status":  "error",
 			"error":   "DOCUMENT_NOT_FOUND",
-			"message": err.Error(),
+			"message": "Document not found",
 		})
 	}
 
@@ -55,12 +121,12 @@ func (h *DocumentReviewHandler) GetDocumentDraft(c echo.Context) error {
 	return c.JSON(http.StatusOK, map[string]any{
 		"status": "success",
 		"data": map[string]any{
-			"document_id":     doc.ID,
-			"doc_type":        doc.DocType,
-			"document_status": doc.Status,
-			"draft_data":      doc.DraftData,
-			"validated_data":  doc.ValidatedData,
-			"processed_by":    doc.ProcessedBy,
+			"document_id":         doc.ID,
+			"doc_type":            doc.DocType,
+			"document_status":     doc.Status,
+			"draft_data":          doc.DraftData,
+			"validated_data":      doc.ValidatedData,
+			"processed_by":        doc.ProcessedBy,
 			"payee_resolution":    result.PayeeResolution,
 			"business_resolution": result.BusinessResolution,
 		},
@@ -70,13 +136,24 @@ func (h *DocumentReviewHandler) GetDocumentDraft(c echo.Context) error {
 // GetDocumentStatus handles GET /vouchers/:document_id/status
 // Returns the current processing status of a document
 func (h *DocumentReviewHandler) GetDocumentStatus(c echo.Context) error {
-	docIDStr := c.Param("document_id")
-	docID, err := uuid.Parse(docIDStr)
+	businessID, err := businessIDFromContext(c)
 	if err != nil {
-		return c.JSON(http.StatusBadRequest, map[string]any{
+		return unauthorizedBusiness(c)
+	}
+	docID, ok := parseDocID(c)
+	if !ok {
+		return nil
+	}
+
+	if err := h.reviewService.AssertDocumentOwnership(c.Request().Context(), docID, businessID); err != nil {
+		if errors.Is(err, voucherSvc.ErrDocumentNotOwned) {
+			return forbidden(c)
+		}
+		h.logger.ErrorWith("GetDocumentStatus ownership check failed", "error", err, "doc_id", docID)
+		return c.JSON(http.StatusNotFound, map[string]any{
 			"status":  "error",
-			"error":   "INVALID_DOCUMENT_ID",
-			"message": "Invalid document ID format",
+			"error":   "DOCUMENT_NOT_FOUND",
+			"message": "Document not found",
 		})
 	}
 
@@ -86,7 +163,7 @@ func (h *DocumentReviewHandler) GetDocumentStatus(c echo.Context) error {
 		return c.JSON(http.StatusNotFound, map[string]any{
 			"status":  "error",
 			"error":   "DOCUMENT_NOT_FOUND",
-			"message": err.Error(),
+			"message": "Document not found",
 		})
 	}
 
@@ -101,13 +178,24 @@ func (h *DocumentReviewHandler) GetDocumentStatus(c echo.Context) error {
 // ValidateDocument handles POST /vouchers/:document_id/validate
 // Accepts corrected fields from the user and marks the document as VALIDATED
 func (h *DocumentReviewHandler) ValidateDocument(c echo.Context) error {
-	docIDStr := c.Param("document_id")
-	docID, err := uuid.Parse(docIDStr)
+	businessID, err := businessIDFromContext(c)
 	if err != nil {
-		return c.JSON(http.StatusBadRequest, map[string]any{
+		return unauthorizedBusiness(c)
+	}
+	docID, ok := parseDocID(c)
+	if !ok {
+		return nil
+	}
+
+	if err := h.reviewService.AssertDocumentOwnership(c.Request().Context(), docID, businessID); err != nil {
+		if errors.Is(err, voucherSvc.ErrDocumentNotOwned) {
+			return forbidden(c)
+		}
+		h.logger.ErrorWith("ValidateDocument ownership check failed", "error", err, "doc_id", docID)
+		return c.JSON(http.StatusNotFound, map[string]any{
 			"status":  "error",
-			"error":   "INVALID_DOCUMENT_ID",
-			"message": "Invalid document ID format",
+			"error":   "DOCUMENT_NOT_FOUND",
+			"message": "Document not found",
 		})
 	}
 
@@ -128,19 +216,16 @@ func (h *DocumentReviewHandler) ValidateDocument(c echo.Context) error {
 		})
 	}
 
-	// Inject business_id from header if not already present in draft_data
-	if _, exists := req.DraftData["business_id"]; !exists {
-		if headerBusinessID := c.Request().Header.Get("X-Business-ID"); headerBusinessID != "" {
-			req.DraftData["business_id"] = headerBusinessID
-		}
-	}
+	// Stamp the authenticated user and business from JWT — never trust client-supplied values.
+	req.UserID, _ = c.Get("userId").(string)
+	req.DraftData["business_id"] = businessID.String()
 
 	if err := h.reviewService.ValidateDocument(c.Request().Context(), docID, &req); err != nil {
 		h.logger.ErrorWith("ValidateDocument failed", "error", err, "doc_id", docID)
 		return c.JSON(http.StatusUnprocessableEntity, map[string]any{
 			"status":  "error",
 			"error":   "VALIDATION_FAILED",
-			"message": err.Error(),
+			"message": "Failed to validate document",
 		})
 	}
 
@@ -154,8 +239,13 @@ func (h *DocumentReviewHandler) ValidateDocument(c echo.Context) error {
 }
 
 // GetInvoiceLineItems handles GET /vouchers/invoices/:invoice_id/line-items
-// Returns typed line items for a given extracted invoice. Amounts are in rupees (converted from paise).
+// Returns typed line items for a given extracted invoice.
 func (h *DocumentReviewHandler) GetInvoiceLineItems(c echo.Context) error {
+	businessID, err := businessIDFromContext(c)
+	if err != nil {
+		return unauthorizedBusiness(c)
+	}
+
 	invoiceIDStr := c.Param("invoice_id")
 	invoiceID, err := uuid.Parse(invoiceIDStr)
 	if err != nil {
@@ -163,6 +253,18 @@ func (h *DocumentReviewHandler) GetInvoiceLineItems(c echo.Context) error {
 			"status":  "error",
 			"error":   "INVALID_INVOICE_ID",
 			"message": "Invalid invoice ID format",
+		})
+	}
+
+	if err := h.reviewService.AssertInvoiceOwnership(c.Request().Context(), invoiceID, businessID); err != nil {
+		if errors.Is(err, voucherSvc.ErrDocumentNotOwned) {
+			return forbidden(c)
+		}
+		h.logger.ErrorWith("GetInvoiceLineItems ownership check failed", "error", err, "invoice_id", invoiceID)
+		return c.JSON(http.StatusNotFound, map[string]any{
+			"status":  "error",
+			"error":   "INVOICE_NOT_FOUND",
+			"message": "Invoice not found",
 		})
 	}
 
@@ -176,7 +278,6 @@ func (h *DocumentReviewHandler) GetInvoiceLineItems(c echo.Context) error {
 		})
 	}
 
-	// Convert paise to rupees for amounts
 	type lineItemResponse struct {
 		ID          string  `json:"id"`
 		SKU         string  `json:"sku"`
@@ -194,10 +295,10 @@ func (h *DocumentReviewHandler) GetInvoiceLineItems(c echo.Context) error {
 			SKU:         item.SKU,
 			Description: item.Description,
 			Quantity:    item.Quantity,
-			UnitPrice:   float64(item.UnitPrice) / 100,
+			UnitPrice:   item.UnitPrice,
 			TaxRate:     item.TaxRate,
-			TaxAmount:   float64(item.TaxAmount) / 100,
-			TotalAmount: float64(item.TotalAmount) / 100,
+			TaxAmount:   item.TaxAmount,
+			TotalAmount: item.TotalAmount,
 		}
 	}
 
@@ -208,8 +309,13 @@ func (h *DocumentReviewHandler) GetInvoiceLineItems(c echo.Context) error {
 }
 
 // GetPurchaseOrderLineItems handles GET /vouchers/purchase-orders/:po_id/line-items
-// Returns typed line items for a given purchase order. Amounts are in rupees (converted from paise).
+// Returns typed line items for a given purchase order.
 func (h *DocumentReviewHandler) GetPurchaseOrderLineItems(c echo.Context) error {
+	businessID, err := businessIDFromContext(c)
+	if err != nil {
+		return unauthorizedBusiness(c)
+	}
+
 	poIDStr := c.Param("po_id")
 	poID, err := uuid.Parse(poIDStr)
 	if err != nil {
@@ -217,6 +323,18 @@ func (h *DocumentReviewHandler) GetPurchaseOrderLineItems(c echo.Context) error 
 			"status":  "error",
 			"error":   "INVALID_PO_ID",
 			"message": "Invalid purchase order ID format",
+		})
+	}
+
+	if err := h.reviewService.AssertPOOwnership(c.Request().Context(), poID, businessID); err != nil {
+		if errors.Is(err, voucherSvc.ErrDocumentNotOwned) {
+			return forbidden(c)
+		}
+		h.logger.ErrorWith("GetPurchaseOrderLineItems ownership check failed", "error", err, "po_id", poID)
+		return c.JSON(http.StatusNotFound, map[string]any{
+			"status":  "error",
+			"error":   "PO_NOT_FOUND",
+			"message": "Purchase order not found",
 		})
 	}
 
@@ -249,10 +367,10 @@ func (h *DocumentReviewHandler) GetPurchaseOrderLineItems(c echo.Context) error 
 			Description: item.Description,
 			Quantity:    item.Quantity,
 			QtyReceived: item.QtyReceived,
-			UnitPrice:   float64(item.UnitPrice) / 100,
+			UnitPrice:   item.UnitPrice,
 			TaxRate:     item.TaxRate,
-			TaxAmount:   float64(item.TaxAmount) / 100,
-			TotalAmount: float64(item.TotalAmount) / 100,
+			TaxAmount:   item.TaxAmount,
+			TotalAmount: item.TotalAmount,
 		}
 	}
 
@@ -265,6 +383,11 @@ func (h *DocumentReviewHandler) GetPurchaseOrderLineItems(c echo.Context) error 
 // GetMatchResult handles GET /vouchers/invoices/:invoice_id/match-result
 // Returns the deterministic matching outcome for a given invoice
 func (h *DocumentReviewHandler) GetMatchResult(c echo.Context) error {
+	businessID, err := businessIDFromContext(c)
+	if err != nil {
+		return unauthorizedBusiness(c)
+	}
+
 	invoiceIDStr := c.Param("invoice_id")
 	invoiceID, err := uuid.Parse(invoiceIDStr)
 	if err != nil {
@@ -272,6 +395,18 @@ func (h *DocumentReviewHandler) GetMatchResult(c echo.Context) error {
 			"status":  "error",
 			"error":   "INVALID_INVOICE_ID",
 			"message": "Invalid invoice ID format",
+		})
+	}
+
+	if err := h.reviewService.AssertInvoiceOwnership(c.Request().Context(), invoiceID, businessID); err != nil {
+		if errors.Is(err, voucherSvc.ErrDocumentNotOwned) {
+			return forbidden(c)
+		}
+		h.logger.ErrorWith("GetMatchResult ownership check failed", "error", err, "invoice_id", invoiceID)
+		return c.JSON(http.StatusNotFound, map[string]any{
+			"status":  "error",
+			"error":   "INVOICE_NOT_FOUND",
+			"message": "Invoice not found",
 		})
 	}
 
@@ -294,15 +429,17 @@ func (h *DocumentReviewHandler) GetMatchResult(c echo.Context) error {
 // ListMatchResults handles GET /vouchers/match-results
 // Returns paginated joined view of match_results + invoice + purchase_orders for a business.
 func (h *DocumentReviewHandler) ListMatchResults(c echo.Context) error {
-	filter := voucher.MatchResultListFilter{
-		Page:     h.getQueryParamInt(c, "page", 1),
-		PageSize: h.getQueryParamInt(c, "limit", 20),
+	businessID, err := businessIDFromContext(c)
+	if err != nil {
+		return unauthorizedBusiness(c)
 	}
+	page, pageSize := paginationFromQuery(c)
 
-	if bid := c.QueryParam("business_id"); bid != "" {
-		if u, err := uuid.Parse(bid); err == nil {
-			filter.BusinessID = &u
-		}
+	bid := businessID
+	filter := voucher.MatchResultListFilter{
+		BusinessID: &bid,
+		Page:       page,
+		PageSize:   pageSize,
 	}
 
 	res, err := h.reviewService.ListMatchResults(c.Request().Context(), filter)
@@ -323,13 +460,28 @@ func (h *DocumentReviewHandler) ListMatchResults(c echo.Context) error {
 
 // ListDocuments handles GET /vouchers/documents
 func (h *DocumentReviewHandler) ListDocuments(c echo.Context) error {
+	businessID, err := businessIDFromContext(c)
+	if err != nil {
+		return unauthorizedBusiness(c)
+	}
+	page, pageSize := paginationFromQuery(c)
+
+	bid := businessID
 	filter := voucher.DocumentListFilter{
-		Page:     h.getQueryParamInt(c, "page", 1),
-		PageSize: h.getQueryParamInt(c, "limit", 20),
+		BusinessID: &bid,
+		Page:       page,
+		PageSize:   pageSize,
 	}
 
-	if status := c.QueryParam("status"); status != "" {
-		docStatus := voucher.DocumentStatus(status)
+	if raw := c.QueryParam("status"); raw != "" {
+		docStatus := voucher.DocumentStatus(raw)
+		if !validDocumentStatuses[docStatus] {
+			return c.JSON(http.StatusBadRequest, map[string]any{
+				"status":  "error",
+				"error":   "INVALID_STATUS",
+				"message": "status must be one of QUEUED, OCR_PROCESSING, PENDING_LLM, LLM_PROCESSING, REVIEW_REQUIRED, VALIDATED, FAILED",
+			})
+		}
 		filter.Status = &docStatus
 	}
 
@@ -351,15 +503,17 @@ func (h *DocumentReviewHandler) ListDocuments(c echo.Context) error {
 
 // ListInvoices handles GET /vouchers/invoices
 func (h *DocumentReviewHandler) ListInvoices(c echo.Context) error {
-	filter := voucher.ExtractedInvoiceListFilter{
-		Page:     h.getQueryParamInt(c, "page", 1),
-		PageSize: h.getQueryParamInt(c, "limit", 20),
+	businessID, err := businessIDFromContext(c)
+	if err != nil {
+		return unauthorizedBusiness(c)
 	}
+	page, pageSize := paginationFromQuery(c)
 
-	if bid := c.QueryParam("business_id"); bid != "" {
-		if u, err := uuid.Parse(bid); err == nil {
-			filter.BusinessID = &u
-		}
+	bid := businessID
+	filter := voucher.ExtractedInvoiceListFilter{
+		BusinessID: &bid,
+		Page:       page,
+		PageSize:   pageSize,
 	}
 
 	res, err := h.reviewService.ListInvoices(c.Request().Context(), filter)
@@ -380,9 +534,17 @@ func (h *DocumentReviewHandler) ListInvoices(c echo.Context) error {
 
 // ListPurchaseOrders handles GET /vouchers/purchase-orders
 func (h *DocumentReviewHandler) ListPurchaseOrders(c echo.Context) error {
+	businessID, err := businessIDFromContext(c)
+	if err != nil {
+		return unauthorizedBusiness(c)
+	}
+	page, pageSize := paginationFromQuery(c)
+
+	bid := businessID
 	filter := voucher.PurchaseOrderListFilter{
-		Page:     h.getQueryParamInt(c, "page", 1),
-		PageSize: h.getQueryParamInt(c, "limit", 20),
+		BusinessID: &bid,
+		Page:       page,
+		PageSize:   pageSize,
 	}
 
 	if docID := c.QueryParam("document_id"); docID != "" {
@@ -419,13 +581,9 @@ func (h *DocumentReviewHandler) QuickCreateVendor(c echo.Context) error {
 		})
 	}
 
-	businessID := c.Request().Header.Get("X-Business-ID")
-	if businessID == "" {
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"status":  "error",
-			"error":   "MISSING_BUSINESS_ID",
-			"message": "X-Business-ID header is required",
-		})
+	businessID, err := businessIDFromContext(c)
+	if err != nil {
+		return unauthorizedBusiness(c)
 	}
 
 	var body struct {
@@ -450,7 +608,7 @@ func (h *DocumentReviewHandler) QuickCreateVendor(c echo.Context) error {
 	}
 
 	resp, err := h.reviewService.QuickCreateVendor(c.Request().Context(), voucherSvc.QuickCreateVendorRequest{
-		BusinessID:   businessID,
+		BusinessID:   businessID.String(),
 		AddedBy:      userID,
 		DisplayName:  body.DisplayName,
 		GSTIN:        body.GSTIN,
@@ -462,7 +620,7 @@ func (h *DocumentReviewHandler) QuickCreateVendor(c echo.Context) error {
 		return c.JSON(http.StatusInternalServerError, map[string]any{
 			"status":  "error",
 			"error":   "CREATE_FAILED",
-			"message": err.Error(),
+			"message": "Failed to create vendor",
 		})
 	}
 
@@ -473,16 +631,4 @@ func (h *DocumentReviewHandler) QuickCreateVendor(c echo.Context) error {
 			"relation_id": resp.RelationID,
 		},
 	})
-}
-
-func (h *DocumentReviewHandler) getQueryParamInt(c echo.Context, name string, defaultValue int) int {
-	val := c.QueryParam(name)
-	if val == "" {
-		return defaultValue
-	}
-	var i int
-	if _, err := fmt.Sscanf(val, "%d", &i); err != nil {
-		return defaultValue
-	}
-	return i
 }

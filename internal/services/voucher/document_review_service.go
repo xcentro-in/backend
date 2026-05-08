@@ -2,9 +2,10 @@ package voucher
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"reflect"
 	"time"
 
 	"github.com/google/uuid"
@@ -14,6 +15,62 @@ import (
 	"xcentro.in/internal/core/voucher"
 	"xcentro.in/internal/shared/logger"
 )
+
+// HITL regen thresholds — tuneable knobs for the template-degradation feedback
+// loop. We require a minimum sample size before regenerating to avoid acting
+// on a single bad doc, and a correction ratio that signals the template is
+// systemically wrong (not just an unusual document).
+const (
+	templateRegenLookback        = 30 * 24 * time.Hour
+	templateRegenMinTotalDocs    = 5
+	templateRegenCorrectionRatio = 0.6 // ≥60% of validated docs had corrections
+)
+
+// templateDegraded returns true when a template's recent correction history
+// indicates it is producing wrong values often enough to warrant regeneration.
+// Pulled out of ValidateDocument so the threshold logic can be unit-tested in
+// isolation from the repository and redis machinery.
+func templateDegraded(corrected, total int) bool {
+	if total < templateRegenMinTotalDocs {
+		return false
+	}
+	return float64(corrected)/float64(total) >= templateRegenCorrectionRatio
+}
+
+// diffDraftData returns one DocumentCorrection per field whose JSON
+// representation changed between before and after. Fields that are identical
+// (or present only in after due to the merge) but unchanged are skipped.
+func diffDraftData(before, after map[string]interface{}) []voucher.DocumentCorrection {
+	var diffs []voucher.DocumentCorrection
+	for key, newVal := range after {
+		oldVal := before[key]
+		oldJSON, _ := json.Marshal(oldVal)
+		newJSON, _ := json.Marshal(newVal)
+		if string(oldJSON) != string(newJSON) {
+			diffs = append(diffs, voucher.DocumentCorrection{
+				Field:    key,
+				OldValue: oldVal,
+				NewValue: newVal,
+			})
+		}
+	}
+	return diffs
+}
+
+// draftHash returns a deterministic hash of a draft_data map so we can detect
+// human edits without the false-positive landmines of reflect.DeepEqual on
+// JSON-round-tripped data (where int/float64 and nil/absent fields differ).
+func draftHash(m map[string]interface{}) string {
+	if m == nil {
+		return ""
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
+}
 
 // DocumentReviewService handles the HITL document review workflow.
 // It orchestrates fetching draft data, checking status, and validating
@@ -227,6 +284,45 @@ func (s *DocumentReviewService) GetDocumentDraftWithResolution(ctx context.Conte
 	return result, nil
 }
 
+// AssertDocumentOwnership returns ErrDocumentNotOwned when the document
+// does not belong to the given business. Legacy rows with a nil bid fail closed.
+func (s *DocumentReviewService) AssertDocumentOwnership(ctx context.Context, docID, businessID uuid.UUID) error {
+	owner, err := s.voucherRepo.GetVoucherDocumentBusinessID(ctx, docID)
+	if err != nil {
+		return err
+	}
+	if owner == uuid.Nil || owner != businessID {
+		return ErrDocumentNotOwned
+	}
+	return nil
+}
+
+// AssertInvoiceOwnership returns ErrDocumentNotOwned when the invoice does not
+// belong to the given business. Rows with a nil bid fail closed.
+func (s *DocumentReviewService) AssertInvoiceOwnership(ctx context.Context, invoiceID, businessID uuid.UUID) error {
+	owner, err := s.voucherRepo.GetInvoiceBusinessID(ctx, invoiceID)
+	if err != nil {
+		return err
+	}
+	if owner == uuid.Nil || owner != businessID {
+		return ErrDocumentNotOwned
+	}
+	return nil
+}
+
+// AssertPOOwnership returns ErrDocumentNotOwned when the purchase order does not
+// belong to the given business. Rows with a nil bid fail closed.
+func (s *DocumentReviewService) AssertPOOwnership(ctx context.Context, poID, businessID uuid.UUID) error {
+	owner, err := s.voucherRepo.GetPurchaseOrderBusinessID(ctx, poID)
+	if err != nil {
+		return err
+	}
+	if owner == uuid.Nil || owner != businessID {
+		return ErrDocumentNotOwned
+	}
+	return nil
+}
+
 // GetDocumentStatus fetches just the processing status for a document
 func (s *DocumentReviewService) GetDocumentStatus(ctx context.Context, docID uuid.UUID) (voucher.DocumentStatus, error) {
 	doc, err := s.voucherRepo.GetVoucherDocumentByID(ctx, docID)
@@ -241,6 +337,7 @@ func (s *DocumentReviewService) GetDocumentStatus(ctx context.Context, docID uui
 // ValidateDocumentRequest is the input for the ValidateDocument method
 type ValidateDocumentRequest struct {
 	DraftData map[string]interface{} `json:"draft_data"`
+	UserID    string                 `json:"-"` // set by handler from JWT; never from request body
 }
 
 // ValidateDocument accepts corrected fields, updates the document to VALIDATED,
@@ -258,90 +355,134 @@ func (s *DocumentReviewService) ValidateDocument(ctx context.Context, docID uuid
 		return fmt.Errorf("document is not in REVIEW_REQUIRED status; current status: %s", doc.Status)
 	}
 
-	// 3. Update draft data and set status to VALIDATED
-	if err := s.voucherRepo.UpdateVoucherDocumentValidation(ctx, docID, voucher.DocStatusValidated, req.DraftData); err != nil {
+	// 3. Merge: start from the worker-generated draft_data, apply only the
+	// human's explicit field corrections on top. This prevents a client from
+	// submitting a wholly fabricated payload — they can correct values the LLM
+	// extracted but cannot inject fields the worker never produced.
+	mergedData := make(map[string]interface{}, len(doc.DraftData)+len(req.DraftData))
+	for k, v := range doc.DraftData {
+		mergedData[k] = v
+	}
+	for k, v := range req.DraftData {
+		mergedData[k] = v
+	}
+	// business_id is already stamped by the handler from the JWT claim;
+	// re-stamp from the doc's own bid so the DB value is always authoritative.
+	if doc.BusinessID != nil {
+		mergedData["business_id"] = doc.BusinessID.String()
+	}
+
+	// 4. Persist merged data and set status to VALIDATED
+	if err := s.voucherRepo.UpdateVoucherDocumentValidation(ctx, docID, voucher.DocStatusValidated, mergedData); err != nil {
 		s.logger.ErrorWith("Failed to update document validation", "error", err, "doc_id", docID)
 		return err
 	}
 
 	s.logger.InfoWith("Document validated successfully", "doc_id", docID)
 
-	// 4. Persist to typed table based on doc_type
-	docType := doc.DocType
-	// Allow override from the draft_data if present
-	if dt, ok := req.DraftData["doc_type"].(string); ok && dt != "" {
-		docType = dt
+	// 5. Record which fields the human changed (audit trail for compliance).
+	if corrections := diffDraftData(doc.DraftData, mergedData); len(corrections) > 0 && req.UserID != "" {
+		if err := s.voucherRepo.InsertDocumentCorrections(ctx, docID, req.UserID, corrections); err != nil {
+			// Non-fatal: log but don't fail the validation.
+			s.logger.ErrorWith("Failed to write document corrections audit log", "error", err, "doc_id", docID)
+		}
 	}
+
+	// 6. Route to the correct typed table using the doc_type recorded by the
+	// worker — never from the client payload.
+	docType := doc.DocType
 
 	switch docType {
 	case string(voucher.DocTypePurchaseOrder):
-		if poID, err := s.voucherRepo.CreatePurchaseOrder(ctx, docID, req.DraftData); err != nil {
+		if poID, err := s.voucherRepo.CreatePurchaseOrder(ctx, docID, mergedData); err != nil {
 			s.logger.ErrorWith("Failed to persist purchase order", "error", err, "doc_id", docID)
 			return fmt.Errorf("validated but failed to persist purchase order: %w", err)
 		} else {
 			s.logger.InfoWith("Purchase order persisted", "doc_id", docID, "po_id", poID)
-			
-			// Trigger orphan invoice reconciliation matching
-			poNumber, _ := req.DraftData["po_number"].(string)
-			businessIDStr, _ := req.DraftData["business_id"].(string)
+
+			// Enqueue orphan-retry for the async worker instead of blocking the
+			// request on a detached goroutine.
+			poNumber, _ := mergedData["po_number"].(string)
+			businessIDStr, _ := mergedData["business_id"].(string)
 			if poNumber != "" && businessIDStr != "" && s.matchingEngine != nil {
-				if bid, err := uuid.Parse(businessIDStr); err == nil {
-					go func() {
-						matchCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-						defer cancel()
-						if err := s.matchingEngine.RetryOrphanInvoices(matchCtx, poNumber, bid); err != nil {
-							s.logger.ErrorWith("Orphan reconciliation failed", "error", err, "po_number", poNumber)
-						}
-					}()
+				if bid, parseErr := uuid.Parse(businessIDStr); parseErr == nil {
+					if err := s.matchingEngine.EnqueueOrphanRetry(ctx, poNumber, bid); err != nil {
+						s.logger.ErrorWith("Failed to enqueue orphan retry", "error", err, "po_number", poNumber)
+					}
 				}
 			}
 		}
 
 	case string(voucher.DocTypeInvoice):
-		if invoiceID, err := s.voucherRepo.CreateInvoiceFromExtraction(ctx, docID, req.DraftData); err != nil {
+		if invoiceID, err := s.voucherRepo.CreateInvoiceFromExtraction(ctx, docID, mergedData); err != nil {
 			s.logger.ErrorWith("Failed to persist extracted invoice", "error", err, "doc_id", docID)
 			return fmt.Errorf("validated but failed to persist extracted invoice: %w", err)
 		} else {
 			s.logger.InfoWith("Extracted invoice persisted", "doc_id", docID, "invoice_id", invoiceID)
-			
-			// Trigger invoice-PO matching
+
 			if s.matchingEngine != nil {
-				go func() {
-					matchCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-					defer cancel()
-					if err := s.matchingEngine.RunMatchingForInvoice(matchCtx, invoiceID); err != nil {
-						s.logger.ErrorWith("Matching engine failed for invoice", "error", err, "invoice_id", invoiceID)
-					}
-				}()
+				if err := s.matchingEngine.EnqueueInvoiceMatch(ctx, invoiceID); err != nil {
+					s.logger.ErrorWith("Failed to enqueue invoice match", "error", err, "invoice_id", invoiceID)
+				}
 			}
 		}
 
 	default:
 		// For UNKNOWN doc_type, default to invoice
 		s.logger.WarnWith("Unknown doc_type, defaulting to invoice", "doc_type", docType, "doc_id", docID)
-		if invoiceID, err := s.voucherRepo.CreateInvoiceFromExtraction(ctx, docID, req.DraftData); err != nil {
+		if invoiceID, err := s.voucherRepo.CreateInvoiceFromExtraction(ctx, docID, mergedData); err != nil {
 			s.logger.ErrorWith("Failed to persist extracted invoice (default)", "error", err, "doc_id", docID)
 			return fmt.Errorf("validated but failed to persist extracted invoice: %w", err)
 		} else {
-			// Trigger invoice-PO matching
 			if s.matchingEngine != nil {
-				go func() {
-					matchCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-					defer cancel()
-					if err := s.matchingEngine.RunMatchingForInvoice(matchCtx, invoiceID); err != nil {
-						s.logger.ErrorWith("Matching engine failed for invoice (default)", "error", err, "invoice_id", invoiceID)
-					}
-				}()
+				if err := s.matchingEngine.EnqueueInvoiceMatch(ctx, invoiceID); err != nil {
+					s.logger.ErrorWith("Failed to enqueue invoice match (default)", "error", err, "invoice_id", invoiceID)
+				}
 			}
 		}
 	}
 
-	// 5. Enqueue template generation task if processed by LLM or human corrected the data
-	humanCorrected := !reflect.DeepEqual(doc.DraftData, req.DraftData)
-	if doc.ProcessedBy == "LLM" || humanCorrected {
+	// 6. Enqueue template generation task. Three triggers:
+	//   a) LLM extracted (no template yet exists for this vendor)
+	//   b) Human corrected the worker's draft (the existing template, if any,
+	//      missed something that's worth re-learning)
+	//   c) HITL feedback loop: the template that produced this doc has been
+	//      systematically wrong over the last lookback window — regenerate.
+	// Hash comparison avoids reflect.DeepEqual's false positives on JSON-round-tripped data
+	// (float64 vs int, absent vs nil, etc.).
+	humanCorrected := draftHash(doc.DraftData) != draftHash(mergedData)
+	degraded := false
+	if doc.I2DTemplate != "" {
+		corrected, total, err := s.voucherRepo.GetTemplateCorrectionRate(
+			ctx, doc.I2DTemplate, templateRegenLookback,
+		)
+		if err != nil {
+			s.logger.WarnWith("Could not query template correction rate",
+				"error", err, "template", doc.I2DTemplate)
+		} else if templateDegraded(corrected, total) {
+			degraded = true
+			s.logger.InfoWith("event=template.regen.triggered",
+				"template", doc.I2DTemplate,
+				"corrected", corrected,
+				"total", total,
+				"ratio", float64(corrected)/float64(total),
+			)
+		}
+	}
+
+	// Force regen when:
+	//   a) the template is statistically degraded (repeated corrections), or
+	//   b) this specific document was extracted by a template but the user had
+	//      to correct the values — meaning the template was wrong for this doc.
+	//      Without force_regen the worker skips because a template already exists.
+	templateWasWrong := humanCorrected && doc.ProcessedBy == "INVOICE2DATA"
+	forceRegen := degraded || templateWasWrong
+
+	if doc.ProcessedBy == "LLM" || humanCorrected || degraded {
 		taskPayload := map[string]interface{}{
 			"document_id": docID.String(),
 			"task_type":   "generate_template",
+			"force_regen": forceRegen,
 		}
 
 		if taskJSON, err := json.Marshal(taskPayload); err != nil {
@@ -354,6 +495,8 @@ func (s *DocumentReviewService) ValidateDocument(ctx context.Context, docID uuid
 					"doc_id", docID,
 					"reason_llm", doc.ProcessedBy == "LLM",
 					"reason_corrected", humanCorrected,
+					"reason_degraded", degraded,
+					"force_regen", forceRegen,
 				)
 			}
 		}

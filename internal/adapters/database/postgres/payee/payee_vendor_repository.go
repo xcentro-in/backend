@@ -99,7 +99,7 @@ func (r *PgPayeeVendorRepository) Create(ctx context.Context, vendor *payee.Paye
 // FindByID retrieves a vendor payee by its payee ID
 func (r *PgPayeeVendorRepository) FindByID(ctx context.Context, payeeID string) (*payee.PayeeVendor, error) {
 	query := `
-		SELECT payee_id, gstin, legal_name, business_type, registration_date, gst_status,
+		SELECT payee_id, COALESCE(gstin, ''), COALESCE(legal_name, ''), business_type, registration_date, COALESCE(gst_status, ''),
 		       building_name, street, city, state, pincode,
 		       gst_verification_status, gst_verified_at, gst_data, metadata, created_at, updated_at
 		FROM xcentro.payee_vendor
@@ -180,7 +180,7 @@ func (r *PgPayeeVendorRepository) FindByID(ctx context.Context, payeeID string) 
 // FindByGSTIN retrieves a vendor payee by GSTIN
 func (r *PgPayeeVendorRepository) FindByGSTIN(ctx context.Context, gstin string) (*payee.PayeeVendor, error) {
 	query := `
-		SELECT payee_id, gstin, legal_name, business_type, registration_date, gst_status,
+		SELECT payee_id, COALESCE(gstin, ''), COALESCE(legal_name, ''), business_type, registration_date, COALESCE(gst_status, ''),
 		       building_name, street, city, state, pincode,
 		       gst_verification_status, gst_verified_at, gst_data, metadata, created_at, updated_at
 		FROM xcentro.payee_vendor
@@ -317,7 +317,7 @@ func (r *PgPayeeVendorRepository) Update(ctx context.Context, vendor *payee.Paye
 // Search searches for vendor payees with filters
 func (r *PgPayeeVendorRepository) Search(ctx context.Context, filters payee.VendorSearchFilters) ([]*payee.PayeeVendor, error) {
 	query := `
-		SELECT payee_id, gstin, legal_name, business_type, registration_date, gst_status,
+		SELECT payee_id, COALESCE(gstin, ''), COALESCE(legal_name, ''), business_type, registration_date, COALESCE(gst_status, ''),
 		       building_name, street, city, state, pincode,
 		       gst_verification_status, gst_verified_at, gst_data, metadata, created_at, updated_at
 		FROM xcentro.payee_vendor

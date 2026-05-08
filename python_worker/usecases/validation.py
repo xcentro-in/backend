@@ -42,17 +42,27 @@ def check_gstin(result: ExtractionResult) -> list[str]:
 
     for label, gstin in [("vendor_gstin", result.vendor_gstin), ("buyer_gstin", result.buyer_gstin)]:
         if gstin is not None and not _GSTIN_RE.match(gstin.strip().upper()):
-            failures.append(f"Invalid GSTIN format for {label}: {gstin}")
+            masked = gstin[:5] + "***" if gstin and len(gstin) >= 5 else "***"
+            failures.append(f"Invalid GSTIN format for {label}: {masked}")
 
     return failures
 
 
-def _line_item_total(item: LineItem) -> float | None:
-    """Compute expected amount for a single line item."""
+def _line_item_total(item: LineItem) -> tuple[float, bool] | None:
+    """Compute expected amount for a single line item.
+
+    Returns (total, tax_was_applied) or None when quantity/price are missing.
+    tax_was_applied is True when the total includes a tax component so the
+    caller knows not to also add top-level GST amounts.
+    """
     if item.quantity is None or item.unit_price is None:
         return None
     base = item.quantity * item.unit_price
-    return base + (item.tax or 0.0)
+    if item.tax is not None:
+        return base + item.tax, True
+    if item.tax_rate is not None:
+        return base + base * (item.tax_rate / 100.0), True
+    return base, False
 
 
 def _compute_discount(subtotal: float, discount: float | None, discount_type: str | None) -> float:
@@ -81,20 +91,35 @@ def check_arithmetic(result: ExtractionResult) -> list[str]:
 
     computed_total = 0.0
     skipped = 0
+    any_tax_applied = False
     for item in result.line_items:
-        item_total = _line_item_total(item)
-        if item_total is None:
+        ret = _line_item_total(item)
+        if ret is None:
             skipped += 1
             continue
+        item_total, tax_applied = ret
         computed_total += item_total
+        if tax_applied:
+            any_tax_applied = True
 
     # Only flag if we actually computed something meaningful
     if skipped == len(result.line_items):
         return failures
 
+    # When no line item carried a tax component, add the document-level GST
+    # totals so computed_total reflects the full invoice amount.
+    if not any_tax_applied:
+        computed_total += (result.igst or 0.0) + (result.cgst or 0.0) + (result.sgst or 0.0)
+        computed_total += (result.total_gst or 0.0)
+
     # Account for discount (flat or percentage) before comparing
     abs_discount = _compute_discount(computed_total, result.discount, result.discount_type)
     computed_total -= abs_discount
+
+    # Account for shipping/freight charges — total_amount is the grand total
+    # the buyer must pay, which includes shipping on top of taxed line items.
+    # Without this, any invoice with freight charges produces a false failure.
+    computed_total += (result.shipping or 0.0)
 
     diff = abs(computed_total - result.total_amount)
     if diff > _ARITHMETIC_TOLERANCE:

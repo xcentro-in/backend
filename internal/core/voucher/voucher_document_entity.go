@@ -48,6 +48,7 @@ const (
 // It tracks the lifecycle of an uploaded document from ingestion through extraction to validation.
 type VoucherDocument struct {
 	ID             uuid.UUID              `json:"id"`
+	BusinessID     *uuid.UUID             `json:"business_id,omitempty"` // owning business — enforced for authorization
 	S3Path         string                 `json:"s3_path"`
 	DocType        string                 `json:"doc_type"`
 	Status         DocumentStatus         `json:"status"`

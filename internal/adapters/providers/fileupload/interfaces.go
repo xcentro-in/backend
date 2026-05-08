@@ -23,6 +23,9 @@ type FileUploader interface {
 	// CompleteMultipartUpload completes an initiated multipart upload with the provided parts (ETags)
 	CompleteMultipartUpload(ctx context.Context, key string, uploadID string, parts []MultipartUploadedPart) error
 
+	// DeleteObject removes an object from storage
+	DeleteObject(ctx context.Context, key string) error
+
 	// ConfirmUpload verifies that the object exists and returns a presigned download URL
 	ConfirmUpload(ctx context.Context, key string, expiration time.Duration) (string, error)
 }

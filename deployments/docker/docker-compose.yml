@@ -15,6 +15,12 @@ services:
       # Configs
       - ./custom.conf:/etc/postgresql/custom.conf:ro
     command: [ "postgres", "-c", "config_file=/etc/postgresql/custom.conf" ]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
 
   redis:
     image: redis:8-bookworm
@@ -30,6 +36,12 @@ services:
       - redis_data:/data
       - ./redis.conf:/usr/local/etc/redis/redis.conf:ro
       - ./redis-entrypoint.sh:/usr/local/etc/redis/redis-entrypoint.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli --user ${REDIS_SUPERUSER} -a ${REDIS_SUPERUSER_PASSWORD} ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
 
   python_worker:
     build:
@@ -38,23 +50,34 @@ services:
     container_name: xcentro-python-worker
     restart: unless-stopped
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     env_file:
       - ../../python_worker/.env
+      - .env
     environment:
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
-      POSTGRES_DB: ${POSTGRES_DB:-xcentro}
-      POSTGRES_USER: ${DB_RW_USER:-xcentro_rw}
-      POSTGRES_PASSWORD: ${DB_RW_PASSWORD:-RwSecure101!}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${DB_RW_USER}
+      POSTGRES_PASSWORD: ${DB_RW_PASSWORD}
       REDIS_HOST: redis
       REDIS_PORT: 6379
-      REDIS_USER: ${REDIS_APP_USER:-xcentro_redis}
-      REDIS_PASSWORD: ${REDIS_APP_PASSWORD:-XcentroRedis456!}
+      REDIS_USER: ${REDIS_APP_USER}
+      REDIS_PASSWORD: ${REDIS_APP_PASSWORD}
       REDIS_QUEUE: xcentro:extraction_tasks
     volumes:
       - ../../python_worker/templates:/app/templates
+    # A cheap liveness check: the worker logs a startup line; absence of the
+    # process (main.py exiting) causes `pgrep` to fail and Docker to restart.
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'python .*main.py' >/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 
 volumes:
   postgres_data:

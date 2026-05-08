@@ -708,6 +708,7 @@ func (r *PgBusinessPayeeRelationRepository) GetVendorsForDropdown(ctx context.Co
 	query := `
 		SELECT
 			bpr.relation_id,
+			bpr.payee_id,
 			bpr.display_name,
 			COALESCE(bpr.contact_email, '') as contact_email,
 			COALESCE(bpr.contact_phone, '') as contact_phone
@@ -734,6 +735,7 @@ func (r *PgBusinessPayeeRelationRepository) GetVendorsForDropdown(ctx context.Co
 		var vendor payee.VendorDropdownItem
 		err := rows.Scan(
 			&vendor.RelationID,
+			&vendor.PayeeID,
 			&vendor.DisplayName,
 			&vendor.ContactEmail,
 			&vendor.ContactPhone,

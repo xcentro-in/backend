@@ -58,5 +58,7 @@ func RegisterVoucherRoutes(group *echo.Group, voucherService voucherSvc.VoucherS
 	group.GET("/:document_id/draft", reviewHandler.GetDocumentDraft)                              // GET /vouchers/:document_id/draft - Get extracted draft data
 	group.GET("/:document_id/status", reviewHandler.GetDocumentStatus)                            // GET /vouchers/:document_id/status - Get processing status
 	group.GET("/:document_id/url", uploadHandler.GetDocumentURL)                                  // GET /vouchers/:document_id/url - Get presigned S3 download URL
+	group.POST("/:document_id/retry", uploadHandler.RetryDocument)                                // POST /vouchers/:document_id/retry - Retry failed document extraction
+	group.DELETE("/documents/:document_id", uploadHandler.DeleteDocument)                          // DELETE /vouchers/documents/:document_id - Delete failed document from DB and S3
 	group.POST("/:document_id/validate", reviewHandler.ValidateDocument)                          // POST /vouchers/:document_id/validate - Validate with corrections
 }

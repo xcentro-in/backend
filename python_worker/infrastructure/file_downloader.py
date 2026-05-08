@@ -4,62 +4,72 @@ from __future__ import annotations
 
 import logging
 import os
-import urllib.request
-from urllib.parse import urlparse
 
-import boto3
 from botocore.client import BaseClient
 
 from domain.ports import FileDownloader
 
 logger = logging.getLogger(__name__)
 
-
-class HTTPFileDownloader(FileDownloader):
-    """Downloads files from an HTTP/HTTPS URL (e.g. S3 pre-signed URL).
-
-    Kept for backward-compatibility or testing with direct URLs.
-    """
-
-    def download(self, url: str, dest_dir: str) -> str:
-        os.makedirs(dest_dir, exist_ok=True)
-
-        parsed = urlparse(url)
-        filename = os.path.basename(parsed.path) or "document"
-        dest_path = os.path.join(dest_dir, filename)
-
-        logger.info("Downloading %s → %s", url, dest_path)
-        urllib.request.urlretrieve(url, dest_path)
-
-        return dest_path
+_DEFAULT_MAX_BYTES = 50 * 1024 * 1024  # 50 MB
 
 
 class S3FileDownloader(FileDownloader):
-    """Downloads files from S3 by generating a presigned URL from the object key.
+    """Downloads files directly from S3 via boto3 with a hard size cap.
 
-    The `download` method receives an S3 object key (s3_path), generates a
-    time-limited presigned GET URL, and downloads the file to a local path.
+    The download is streamed in chunks and aborted if the cumulative byte
+    count exceeds `max_bytes`. This protects the worker host from a
+    zip-bomb-style exhaustion attack via a maliciously-sized S3 object.
     """
 
-    def __init__(self, s3_client: BaseClient, bucket_name: str, expiry: int = 3600) -> None:
+    _CHUNK = 64 * 1024
+
+    def __init__(
+        self,
+        s3_client: BaseClient,
+        bucket_name: str,
+        max_bytes: int = _DEFAULT_MAX_BYTES,
+    ) -> None:
         self._s3 = s3_client
         self._bucket = bucket_name
-        self._expiry = expiry
+        self._max_bytes = max_bytes
 
     def download(self, s3_path: str, dest_dir: str) -> str:
         os.makedirs(dest_dir, exist_ok=True)
-
         filename = os.path.basename(s3_path) or "document"
         dest_path = os.path.join(dest_dir, filename)
 
-        presigned_url = self._s3.generate_presigned_url(
-            "get_object",
-            Params={"Bucket": self._bucket, "Key": s3_path},
-            ExpiresIn=self._expiry,
+        # Pre-flight HEAD to reject oversized objects without pulling bytes.
+        head = self._s3.head_object(Bucket=self._bucket, Key=s3_path)
+        content_length = int(head.get("ContentLength", 0))
+        if content_length > self._max_bytes:
+            raise ValueError(
+                f"s3://{self._bucket}/{s3_path} is {content_length} bytes, "
+                f"exceeds cap {self._max_bytes}"
+            )
+
+        resp = self._s3.get_object(Bucket=self._bucket, Key=s3_path)
+        body = resp["Body"]
+        written = 0
+        try:
+            with open(dest_path, "wb") as fh:
+                while True:
+                    chunk = body.read(self._CHUNK)
+                    if not chunk:
+                        break
+                    written += len(chunk)
+                    if written > self._max_bytes:
+                        fh.close()
+                        os.remove(dest_path)
+                        raise ValueError(
+                            f"Download exceeded cap {self._max_bytes} bytes"
+                        )
+                    fh.write(chunk)
+        finally:
+            body.close()
+
+        logger.info(
+            "Downloaded s3://%s/%s → %s (%d bytes)",
+            self._bucket, s3_path, dest_path, written,
         )
-        logger.info("Generated presigned URL for s3://%s/%s (expires in %ds)", self._bucket, s3_path, self._expiry)
-
-        urllib.request.urlretrieve(presigned_url, dest_path)
-        logger.info("Downloaded s3://%s/%s → %s", self._bucket, s3_path, dest_path)
-
         return dest_path

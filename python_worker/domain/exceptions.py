@@ -23,3 +23,18 @@ class TemplateMatchError(ExtractionError):
 
 class LLMExtractionError(ExtractionError):
     """Raised when the LLM fails to produce a valid extraction."""
+
+
+class TemplateGenerationError(Exception):
+    """Raised when template generation cannot complete.
+
+    Attributes:
+        retryable: True for transient failures (retry up to MAX_RETRIES).
+                   False for permanent failures (DLQ immediately).
+        reason: Short outcome tag matching the done-event log.
+    """
+
+    def __init__(self, reason: str, *, retryable: bool) -> None:
+        self.retryable = retryable
+        self.reason = reason
+        super().__init__(f"Template generation failed ({reason}), retryable={retryable}")

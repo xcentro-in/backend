@@ -195,8 +195,17 @@ type VoucherRepository interface {
 	// CreateMatchResult persists a matching audit record.
 	CreateMatchResult(ctx context.Context, result *MatchResult) error
 
-	// GetOrphanInvoicesByPONumber finds invoices in ORPHAN_INVOICE status with the given po_number.
-	GetOrphanInvoicesByPONumber(ctx context.Context, poNumber string) ([]*ExtractedInvoice, error)
+	// GetInvoiceBusinessID returns the owning bid of an invoice for ownership checks.
+	// Returns uuid.Nil (and no error) when the invoice exists but has no bid set.
+	GetInvoiceBusinessID(ctx context.Context, invoiceID uuid.UUID) (uuid.UUID, error)
+
+	// GetPurchaseOrderBusinessID returns the owning bid of a PO for ownership checks.
+	// Returns uuid.Nil (and no error) when the PO exists but has no bid set.
+	GetPurchaseOrderBusinessID(ctx context.Context, poID uuid.UUID) (uuid.UUID, error)
+
+	// GetOrphanInvoicesByPONumber finds invoices in ORPHAN_INVOICE status with the given po_number,
+	// scoped to the given business so the query never crosses tenant boundaries.
+	GetOrphanInvoicesByPONumber(ctx context.Context, poNumber string, businessID uuid.UUID) ([]*ExtractedInvoice, error)
 
 	// GetMatchResultsByInvoiceID retrieves all match result records for a given invoice, most recent first.
 	GetMatchResultsByInvoiceID(ctx context.Context, invoiceID uuid.UUID) ([]*MatchResult, error)
@@ -205,8 +214,33 @@ type VoucherRepository interface {
 	// scoped to a business. Used by the "Match Results" tab on the frontend.
 	ListMatchResults(ctx context.Context, filter MatchResultListFilter) ([]*MatchResultSummary, int64, error)
 
+	// DeleteVoucherDocument removes a voucher document record from the database.
+	DeleteVoucherDocument(ctx context.Context, docID uuid.UUID) error
+
+	// UpdateVoucherDocumentStatus updates only the status column on a voucher document.
+	UpdateVoucherDocumentStatus(ctx context.Context, docID uuid.UUID, status DocumentStatus) error
+
 	// GetValidatedDocumentsByTemplate retrieves validated_data for recent documents that used a given i2d template.
 	GetValidatedDocumentsByTemplate(ctx context.Context, templateName string, limit int) ([]*VoucherDocument, error)
+
+	// GetVoucherDocumentBusinessID returns the owning bid of a document so handlers
+	// can enforce per-business authorization before reading drafts / presigned URLs.
+	// Returns uuid.Nil (and no error) when the document exists but has no bid set
+	// (legacy rows predating migration 000061).
+	GetVoucherDocumentBusinessID(ctx context.Context, docID uuid.UUID) (uuid.UUID, error)
+
+	// ListQueuedDocumentsOlderThan returns documents stuck in QUEUED for reconciliation.
+	ListQueuedDocumentsOlderThan(ctx context.Context, staleness time.Duration, limit int) ([]*VoucherDocument, error)
+
+	// InsertDocumentCorrections records field-level changes made by a human reviewer during HITL validation.
+	// Each entry captures the field name, the worker-extracted value, and the human-corrected value.
+	InsertDocumentCorrections(ctx context.Context, docID uuid.UUID, userID string, corrections []DocumentCorrection) error
+
+	// GetTemplateCorrectionRate returns (corrected_doc_count, total_validated_doc_count)
+	// for documents that used the given i2d template within the lookback window.
+	// Used by the HITL feedback loop to decide whether a template has degraded
+	// and should be regenerated.
+	GetTemplateCorrectionRate(ctx context.Context, templateName string, since time.Duration) (int, int, error)
 }
 
 // VoucherFilters defines filter criteria for listing vouchers

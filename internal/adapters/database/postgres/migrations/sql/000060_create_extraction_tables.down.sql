@@ -1,4 +1,14 @@
--- Tear down in reverse dependency order
+-- Tear down in reverse dependency order.
+
+-- -------------------------------------------------------
+-- 11. Drop templates_history
+-- -------------------------------------------------------
+DROP TABLE IF EXISTS xcentro.templates_history;
+
+-- -------------------------------------------------------
+-- 10. Drop document_corrections
+-- -------------------------------------------------------
+DROP TABLE IF EXISTS xcentro.document_corrections;
 
 -- -------------------------------------------------------
 -- 8. Revert quick vendor creation schema changes (idempotent)
@@ -8,7 +18,20 @@
 DROP INDEX IF EXISTS xcentro.business_payee_relation_bpa_unique;
 DROP INDEX IF EXISTS xcentro.business_payee_relation_bp_pending_unique;
 
--- Remove any pending relations (NULL account_id) before restoring NOT NULL
+-- Remove any pending relations (NULL account_id) before restoring NOT NULL.
+-- This is DESTRUCTIVE: pending vendor relations created via the quick-create
+-- flow will be lost. Surface a NOTICE with the row count so operators can
+-- archive before proceeding.
+DO $$
+DECLARE
+    pending_count BIGINT;
+BEGIN
+    SELECT COUNT(*) INTO pending_count
+    FROM xcentro.business_payee_relation WHERE account_id IS NULL;
+    IF pending_count > 0 THEN
+        RAISE NOTICE 'Down-migration 000060: deleting % pending business_payee_relation rows (account_id IS NULL). Archive first if needed.', pending_count;
+    END IF;
+END $$;
 DELETE FROM xcentro.business_payee_relation WHERE account_id IS NULL;
 
 -- Restore account_id NOT NULL only if it is currently nullable
@@ -50,7 +73,19 @@ DO $$ BEGIN
     END IF;
 END $$;
 
--- Remove any unverified vendor rows before restoring NOT NULL
+-- Remove any unverified vendor rows before restoring NOT NULL.
+-- DESTRUCTIVE: vendors quick-created without GSTIN will be lost.
+DO $$
+DECLARE
+    unverified_count BIGINT;
+BEGIN
+    SELECT COUNT(*) INTO unverified_count
+    FROM xcentro.payee_vendor
+    WHERE gstin IS NULL OR legal_name IS NULL OR gst_status IS NULL;
+    IF unverified_count > 0 THEN
+        RAISE NOTICE 'Down-migration 000060: deleting % unverified payee_vendor rows. Archive first if needed.', unverified_count;
+    END IF;
+END $$;
 DELETE FROM xcentro.payee_vendor WHERE gstin IS NULL OR legal_name IS NULL OR gst_status IS NULL;
 
 -- Restore NOT NULL on payee_vendor columns only if currently nullable
@@ -67,6 +102,11 @@ DO $$ BEGIN
         ALTER TABLE xcentro.payee_vendor ALTER COLUMN gst_status SET NOT NULL;
     END IF;
 END $$;
+
+-- -------------------------------------------------------
+-- 9. Drop templates table
+-- -------------------------------------------------------
+DROP TABLE IF EXISTS xcentro.templates;
 
 -- -------------------------------------------------------
 -- 7–1. Drop extraction tables
