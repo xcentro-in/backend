@@ -25,10 +25,9 @@ func NewDocumentUploadHandler(uploadService *voucherSvc.DocumentUploadService, l
 }
 
 // businessIDFromContext extracts the authenticated business UUID set by
-// BusinessAccessMiddleware. Routes that use these handlers must apply the
-// middleware — missing / malformed values are treated as a 401.
+// JWTMiddleware via the "bid" claim. Missing or malformed values are treated as a 401.
 func businessIDFromContext(c echo.Context) (uuid.UUID, error) {
-	raw := c.Get("businessId")
+	raw := c.Get("bid")
 	s, ok := raw.(string)
 	if !ok || s == "" {
 		return uuid.Nil, errors.New("business context missing")

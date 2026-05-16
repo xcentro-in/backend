@@ -80,7 +80,7 @@ type OnboardingInitResponse struct {
 }
 
 type CompleteKYBRequest struct {
-	BID              string              `json:"bid" validate:"required"`
+	BID              string              `json:"bid"`
 	BusinessType     shared.BusinessType `json:"businessType" validate:"required"`
 	BusinessModel    string              `json:"businessModel,omitempty"`    // Optional business model description
 	BusinessTurnover string              `json:"businessTurnover,omitempty"` // Optional business turnover description
@@ -116,7 +116,7 @@ type BusinessUserDTO struct {
 	Name      string          `json:"name"`
 	Role      shared.UserRole `json:"role"`
 	RoleClaim shared.UserRole `json:"roleClaim"`
-	KycNeeded bool            `json:"kycNeeded"`
+	KycStatus shared.KYCStatus `json:"kycStatus"`
 	AddedAt   string          `json:"addedAt"`
 	UpdatedAt string          `json:"updatedAt"`
 }

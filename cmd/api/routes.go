@@ -114,6 +114,14 @@ func (f *serviceFactory) createCoreServices(verificationSvc *verification.Docume
 	busSvc = businessSvc.NewBusinessService(businessRepo, businessUserRelRepo, userRepository, userService, paymentRepository, f.clients, f.cfg)
 	// 3. Auth service (depends on user service and business service, includes businessUserRelRepo for optimized role fetching)
 	authSvc = authservice.NewAuthService(sessionRepo, deviceVersionRepo, businessUserRelRepo, userRepository, userService, busSvc, f.clients, f.cfg)
+	// 4. Wire authSvc back into business and user services for token revocation on role changes.
+	//    Done after authSvc creation to break the circular dependency (authSvc → busSvc → authSvc).
+	if busSvcImpl, ok := busSvc.(*businessSvc.BusinessServiceImpl); ok {
+		busSvcImpl.SetAuthService(authSvc)
+	}
+	if userSvcImpl, ok := userService.(*userSvc.UserServiceImpl); ok {
+		userSvcImpl.SetAuthService(authSvc)
+	}
 	return
 }
 
@@ -145,7 +153,7 @@ func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group
 	pendingVoucherRepository := paymentRepo.NewPaymentVoucherPendingRepository(clients.db)
 	stateChangeRepository := paymentRepo.NewPostgresPaymentStateChangeRepository(clients.db)
 
-	_, _, _, businessUserRelRepo, userService, busSvc, authSvc := factory.createCoreServices(nil)
+	_, _, _, _, userService, busSvc, authSvc := factory.createCoreServices(nil)
 
 	// Initialize payment gateway clients conditionally based on MockPG setting
 	var easebuzzClient, jioPayClient, mockPGClient corePayment.PaymentGateway
@@ -218,10 +226,10 @@ func registerV1PaymentRoutes(clients *externalClients, cfg *config.Config, group
 	invoiceGroup.GET("/download", invoiceUserHandler.DownloadInvoice)
 
 	// Register JWT-protected routes (authenticated user operations)
-	payment.RegisterPaymentRoutes(processPaymentGroup, paymentService, paymentSourceService, walletService, authSvc, voucherRepository, stateChangeRepository, businessPayeeRelationRepo, storedCardRepository, bankAccountRepository, businessUserRelRepo, clients.rcache, cookieManager, logger.GetDefault())
+	payment.RegisterPaymentRoutes(processPaymentGroup, paymentService, paymentSourceService, walletService, authSvc, voucherRepository, stateChangeRepository, businessPayeeRelationRepo, storedCardRepository, bankAccountRepository, cookieManager, logger.GetDefault())
 
 	walletGroup := group.Group("/wallet")
-	payment.RegisterWalletRoutes(walletGroup, paymentService, paymentSourceService, walletService, authSvc, storedCardRepository, businessUserRelRepo, clients.rcache, cookieManager, logger.GetDefault())
+	payment.RegisterWalletRoutes(walletGroup, paymentService, paymentSourceService, walletService, authSvc, storedCardRepository, cookieManager, logger.GetDefault())
 }
 
 func registerV1BusinessRoutes(clients *externalClients, cfg *config.Config, group *echo.Group, cookieManager *httputil.CookieManager) {
@@ -231,8 +239,8 @@ func registerV1BusinessRoutes(clients *externalClients, cfg *config.Config, grou
 		panic("Failed to create verification service: " + err.Error())
 	}
 
-	_, _, _, businessUserRelRepo, userService, busSvc, authSvc := factory.createCoreServices(verificationSvc)
-	businessHandler.RegisterBusinessRoutes(group, busSvc, authSvc, userService, &cfg.S3, businessUserRelRepo, clients.rcache, cookieManager)
+	_, _, _, _, userService, busSvc, authSvc := factory.createCoreServices(verificationSvc)
+	businessHandler.RegisterBusinessRoutes(group, busSvc, authSvc, userService, &cfg.S3, cookieManager)
 }
 
 func registerV1UserRoutes(clients *externalClients, cfg *config.Config, group *echo.Group, cookieManager *httputil.CookieManager) {
@@ -243,27 +251,32 @@ func registerV1UserRoutes(clients *externalClients, cfg *config.Config, group *e
 	}
 
 	_, _, _, businessUserRelRepo, userService, _, authSvc := factory.createCoreServices(verificationSvc)
-	userHandler.RegisterUserRoutes(group, userService, authSvc, businessUserRelRepo, clients.rcache, cfg, cookieManager)
+	userHandler.RegisterUserRoutes(group, userService, authSvc, businessUserRelRepo, cfg, cookieManager)
 }
 
 func registerV1PayeeRoutes(clients *externalClients, cfg *config.Config, group *echo.Group, cookieManager *httputil.CookieManager) {
 	factory := &serviceFactory{clients, cfg}
-	_, _, _, businessUserRelationRepo, _, busSvc, authSvc := factory.createCoreServices(nil)
+	_, _, _, _, _, busSvc, authSvc := factory.createCoreServices(nil)
 
 	payeeFactory := payeeSvc.NewPayeeServiceFactory(clients.db, clients.txManager, busSvc, cfg)
 	payeeService := payeeFactory.NewPayeeService()
 
 	payeeGroup := group.Group("/payees")
 	payeeGroup.Use(middleware.JWTMiddleware(authSvc))
-	payeeGroup.Use(middleware.BusinessAccessMiddleware(businessUserRelationRepo, clients.rcache))
 	payeeGroup.Use(ratelimiter.MiddlewareDefault())
 
 	payee.RegisterPayeeRoutes(payeeGroup, payeeService, authSvc, cookieManager)
+
+	// Utility routes that don't require business context (JWT only)
+	payeeUtilGroup := group.Group("/payees")
+	payeeUtilGroup.Use(middleware.JWTMiddleware(authSvc))
+	payeeUtilGroup.Use(ratelimiter.MiddlewareDefault())
+	payee.RegisterPayeeUtilityRoutes(payeeUtilGroup, payeeService)
 }
 
 func registerV1VoucherRoutes(clients *externalClients, cfg *config.Config, group *echo.Group, cookieManager *httputil.CookieManager) {
 	factory := &serviceFactory{clients, cfg}
-	_, _, _, businessUserRelRepo, _, _, authSvc := factory.createCoreServices(nil)
+	_, _, _, _, _, _, authSvc := factory.createCoreServices(nil)
 
 	voucherRepository := voucherRepo.NewPostgresVoucherRepository(clients.db, cfg.BankAccountEncryption.EncryptionKey)
 	queueRepository := voucherRepo.NewPostgresERPSyncQueueRepository(clients.db)
@@ -299,7 +312,7 @@ func registerV1VoucherRoutes(clients *externalClients, cfg *config.Config, group
 	go uploadService.StartReconcileLoop(context.Background())
 
 	voucherGroup := group.Group("/vouchers")
-	voucherHandler.RegisterVoucherRoutes(voucherGroup, voucherService, uploadHandler, reviewHandler, authSvc, businessUserRelRepo, clients.rcache, cookieManager)
+	voucherHandler.RegisterVoucherRoutes(voucherGroup, voucherService, uploadHandler, reviewHandler, authSvc, cookieManager)
 }
 
 func registerV1PayoutRoutes(clients *externalClients, cfg *config.Config, group *echo.Group, cookieManager *httputil.CookieManager) {
@@ -402,6 +415,10 @@ func registerV1Routes(s *xcentroServer) {
 	v1 := s.echo.Group("/v1")
 
 	v1.GET("/health", func(c echo.Context) error {
+		if err := s.meta.clients.db.Ping(c.Request().Context()); err != nil {
+			logger.GetDefault().Errorf("Health check failed: %v", err)
+			return c.JSON(503, map[string]string{"status": "degraded"})
+		}
 		return c.JSON(200, map[string]string{"status": "ok"})
 	})
 

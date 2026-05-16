@@ -661,7 +661,7 @@ func (r *PgPaymentRepository) GetSettledPaymentsReadyForPayout(ctx context.Conte
 		       description, gateway_used::text, gateway_payment_id, callback_url, redirect_url,
 		       payment_source_id, payment_source_type, fee_amount, convenience_fee, convenience_fee_gst,
 		       total_amount, metadata,
-		       settlement_status::text, settled_at::text, settlement_reference_id, settlement_utr,
+		       settlement_status::text, settled_at, settlement_reference_id, settlement_utr,
 		       settlement_metadata, settlement_amount, mdr_amount, net_settlement_amount,
 		       created_at, updated_at
 		FROM xcentro.payments
@@ -690,7 +690,8 @@ func (r *PgPaymentRepository) GetSettledPaymentsReadyForPayout(ctx context.Conte
 		var gatewayUsed, gatewayPaymentID, redirectURL, paymentSourceID, paymentSourceType *string
 		var metadataJSON, settlementMetadataJSON []byte
 		var updatedAt *time.Time
-		var settlementStatus, settledAtStr string
+		var settlementStatus string
+		var settledAt *time.Time
 		var settlementReferenceID, settlementUTR *string
 		var settlementAmount, netSettlementAmount *int64
 
@@ -716,7 +717,7 @@ func (r *PgPaymentRepository) GetSettledPaymentsReadyForPayout(ctx context.Conte
 			&p.TotalAmount,
 			&metadataJSON,
 			&settlementStatus,
-			&settledAtStr,
+			&settledAt,
 			&settlementReferenceID,
 			&settlementUTR,
 			&settlementMetadataJSON,
@@ -751,12 +752,7 @@ func (r *PgPaymentRepository) GetSettledPaymentsReadyForPayout(ctx context.Conte
 
 		// Handle settlement fields
 		p.SettlementStatus = payment.SettlementStatus(settlementStatus)
-		if settledAtStr != "" {
-			settledAt, err := time.Parse(time.RFC3339, settledAtStr)
-			if err == nil {
-				p.SettledAt = &settledAt
-			}
-		}
+		p.SettledAt = settledAt
 		if settlementReferenceID != nil {
 			p.SettlementReferenceID = *settlementReferenceID
 		}
@@ -1545,7 +1541,7 @@ func (r *PgPaymentRepository) buildOpsPaymentMethodDetails(
 func (r *PgPaymentRepository) getPayeesForPayment(ctx context.Context, paymentID string, status string) ([]payment.OpsPayeeDetails, error) {
 	var query string
 
-	if status == "success" {
+	if status == string(payment.PaymentStatusSuccess) {
 		// Finalized vouchers - payment_id is set in payment_vouchers
 		query = `
 			SELECT DISTINCT
@@ -1627,7 +1623,7 @@ func (r *PgPaymentRepository) GetCollectionDetails(ctx context.Context, paymentI
 			ba.account_number_encrypted,
 			-- Settlement fields
 			COALESCE(p.settlement_status::text, '') as settlement_status,
-			COALESCE(p.settled_at::text, '') as settled_at,
+			p.settled_at,
 			p.settlement_amount,
 			p.mdr_amount,
 			p.net_settlement_amount,
@@ -1650,7 +1646,8 @@ func (r *PgPaymentRepository) GetCollectionDetails(ctx context.Context, paymentI
 	var cardType, cardCategory, issuerBank, cardLast4 *string
 	var bankName, ifscCode, accountNumberEncrypted *string
 	var businessName *string
-	var settlementStatus, settlementUTR, settlementReferenceID, settledAtStr string
+	var settlementStatus, settlementUTR, settlementReferenceID string
+	var settledAt *time.Time
 	var settlementAmount, netSettlementAmount *int64
 	var mdrAmount int64
 
@@ -1682,7 +1679,7 @@ func (r *PgPaymentRepository) GetCollectionDetails(ctx context.Context, paymentI
 		&accountNumberEncrypted,
 		// Settlement
 		&settlementStatus,
-		&settledAtStr,
+		&settledAt,
 		&settlementAmount,
 		&mdrAmount,
 		&netSettlementAmount,
@@ -1726,13 +1723,7 @@ func (r *PgPaymentRepository) GetCollectionDetails(ctx context.Context, paymentI
 			SettlementReferenceID: settlementReferenceID,
 		}
 
-		// Parse settled_at timestamp if present
-		if settledAtStr != "" {
-			settledAt, err := time.Parse(time.RFC3339, settledAtStr)
-			if err == nil {
-				settlement.SettledAt = &settledAt
-			}
-		}
+		settlement.SettledAt = settledAt
 
 		details.Settlement = settlement
 	}

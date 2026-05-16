@@ -2,7 +2,6 @@ package user
 
 import (
 	"github.com/labstack/echo/v4"
-	redisClient "xcentro.in/internal/adapters/cache/redis/client"
 	"xcentro.in/internal/core/auth"
 	coreBusiness "xcentro.in/internal/core/business"
 	"xcentro.in/internal/core/user"
@@ -16,21 +15,23 @@ import (
 )
 
 type UserHandler struct {
-	userService user.UserService
-	authService auth.AuthService
-	logger      *logger.Logger
+	userService         user.UserService
+	authService         auth.AuthService
+	businessUserRelRepo coreBusiness.BusinessUserRelationRepository
+	logger              *logger.Logger
 }
 
-func NewUserHandler(userService user.UserService, authService auth.AuthService) *UserHandler {
+func NewUserHandler(userService user.UserService, authService auth.AuthService, businessUserRelRepo coreBusiness.BusinessUserRelationRepository) *UserHandler {
 	return &UserHandler{
-		userService: userService,
-		authService: authService,
-		logger:      logger.GetDefault(),
+		userService:         userService,
+		authService:         authService,
+		businessUserRelRepo: businessUserRelRepo,
+		logger:              logger.GetDefault(),
 	}
 }
 
-func RegisterUserRoutes(e *echo.Group, userService user.UserService, authService auth.AuthService, businessUserRelRepo coreBusiness.BusinessUserRelationRepository, rclient *redisClient.RedisClient, cfg *config.Config, cookieManager *httputil.CookieManager) {
-	handler := NewUserHandler(userService, authService)
+func RegisterUserRoutes(e *echo.Group, userService user.UserService, authService auth.AuthService, businessUserRelRepo coreBusiness.BusinessUserRelationRepository, cfg *config.Config, cookieManager *httputil.CookieManager) {
+	handler := NewUserHandler(userService, authService, businessUserRelRepo)
 	aadhaarHandler := NewAadhaarCallbackHandler(userService, cfg)
 
 	userGroup := e.Group("/user")
@@ -41,17 +42,21 @@ func RegisterUserRoutes(e *echo.Group, userService user.UserService, authService
 	protectedUser.Use(middleware.CSRFMiddleware(cookieManager))
 	protectedUser.Use(ratelimiter.MiddlewareDefault())
 
-	// User onboarding endpoints
-	protectedUser.POST("/onboard/init", handler.InitiateOnboarding)
-	protectedUser.POST("/onboard/complete", handler.CompleteOnboarding)
-	protectedUser.GET("/onboard/status", handler.GetOnboardingStatus)
+	// User onboarding endpoints — all exempt from KYC gate so re-KYC flow works.
+	noKycUser := userGroup.Group("")
+	noKycUser.Use(middleware.JWTMiddlewareNoKYCCheck(authService))
+	noKycUser.Use(middleware.CSRFMiddleware(cookieManager))
+	noKycUser.Use(ratelimiter.MiddlewareDefault())
+	noKycUser.POST("/onboard/init", handler.InitiateOnboarding)
+	noKycUser.POST("/onboard/complete", handler.CompleteOnboarding)
+	noKycUser.GET("/onboard/status", handler.GetOnboardingStatus)
 
 	// User profile endpoints
 	protectedUser.GET("/profile", handler.GetProfile)
 	protectedUser.PUT("/profile", handler.UpdateProfile)
 
-	// User roles endpoint (requires both JWT and BusinessRoles middleware)
-	protectedUser.GET("/roles", handler.GetUserRoles, middleware.BusinessRolesMiddleware(businessUserRelRepo, rclient))
+	// User roles endpoint
+	protectedUser.GET("/roles", handler.GetUserRoles)
 
 	// Public routes (rate limiter first since no JWT)
 	publicUser := userGroup.Group("")
@@ -122,7 +127,7 @@ func (h *UserHandler) InitiateOnboarding(c echo.Context) error {
 
 // CompleteOnboarding completes the user onboarding after Aadhaar verification
 // Supports two flows:
-// 1. Create new business: businessID in X-Business-ID header + claimedRole in body
+// 1. Create new business: businessID from JWT context (bid) + claimedRole in body
 // 2. Join existing business: gstin + claimedRole in body
 func (h *UserHandler) CompleteOnboarding(c echo.Context) error {
 	var dto user.CompleteOnboardingDTO
@@ -147,8 +152,12 @@ func (h *UserHandler) CompleteOnboarding(c echo.Context) error {
 		return c.JSON(401, map[string]string{"message": "Unauthorized request"})
 	}
 
-	// Get businessID from header (for create new business flow)
-	businessID := c.Request().Header.Get("X-Business-ID")
+	// Get businessID from JWT context; fall back to body bid for creator flow
+	// where active_bid is not yet set in the DB before KYC completes.
+	businessID, _ := c.Get("bid").(string)
+	if businessID == "" {
+		businessID = dto.BusinessID
+	}
 
 	// Call CompleteOnboarding with both businessID and gstin
 	// Service will determine which flow based on which parameter is provided
@@ -285,17 +294,12 @@ func (h *UserHandler) GetUserRoles(c echo.Context) error {
 		return c.JSON(401, map[string]string{"message": "Unauthorized request"})
 	}
 
-	// Get user roles from context (injected by BusinessRolesMiddleware)
-	userRolesRaw := c.Get("userRoles")
-	if userRolesRaw == nil {
-		// No business roles found
-		return c.JSON(200, map[string]interface{}{
-			"message": "User roles retrieved successfully",
-			"data":    []map[string]string{},
-		})
+	allUserRoles, err := h.businessUserRelRepo.FindByUser(c.Request().Context(), userID)
+	if err != nil {
+		h.logger.ErrorWith("Failed to fetch user roles", "error", err, "user_id", userID)
+		return c.JSON(500, map[string]any{"message": "Failed to retrieve user roles"})
 	}
 
-	// Format response: return userId, businessId, role, and kycNeeded for non-empty roles
 	type RoleResponse struct {
 		UserID     string `json:"userId"`
 		BusinessID string `json:"businessId"`
@@ -303,11 +307,8 @@ func (h *UserHandler) GetUserRoles(c echo.Context) error {
 		KycNeeded  bool   `json:"kycNeeded"`
 	}
 
-	allUserRoles := userRolesRaw.([]*coreBusiness.BusinessUserRelation)
 	roles := make([]RoleResponse, 0, len(allUserRoles))
-
 	for _, rel := range allUserRoles {
-		// Only include entries where role is not NULL or empty (skip onboarding in progress)
 		if rel.Role != "" {
 			roles = append(roles, RoleResponse{
 				UserID:     rel.UserID,

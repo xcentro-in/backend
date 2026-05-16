@@ -26,6 +26,7 @@ type RateLimiter struct {
 	policies                map[string]Policy
 	defaultPolicy           Policy
 	invalidSignaturePenalty int // in seconds
+	enabled                 bool
 	log                     *logger.Logger
 	mu                      sync.RWMutex
 }
@@ -57,7 +58,13 @@ func Initialize(redisClient *redis.Client, cfg *config.RateLimiterConfig, cookie
 			cookieSecure,
 			cookieSameSite,
 			cookieDomain,
+			cfg.SkipDeviceValidation,
 		)
+
+		// Log dev mode warning if device validation is disabled
+		if cfg.SkipDeviceValidation {
+			log.Warn("⚠️  Device signature validation is DISABLED (dev mode) - all device cookies will be accepted")
+		}
 
 		// Get built-in policies (includes default, login, signup, api_high, SES, etc.)
 		// Default policy uses values from config (environment variables)
@@ -81,7 +88,12 @@ func Initialize(redisClient *redis.Client, cfg *config.RateLimiterConfig, cookie
 			policies:                policies,
 			defaultPolicy:           policies["default"],
 			invalidSignaturePenalty: int(cfg.InvalidSignaturePenalty.Seconds()),
+			enabled:                 cfg.Enabled,
 			log:                     log,
+		}
+
+		if !cfg.Enabled {
+			log.Warn("⚠️  Rate limiter is DISABLED (RATE_LIMITER_ENABLED=false) - all requests will be allowed")
 		}
 
 		log.Info("RateLimiter initialized successfully")

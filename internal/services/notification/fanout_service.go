@@ -213,7 +213,7 @@ func (s *FanoutService) getPreferencesWithCache(ctx context.Context, prefsRepo n
 	// 3. Set cache for next time (use TTL as fallback, explicit invalidation is primary)
 	prefsJSON, err := json.Marshal(prefs)
 	if err == nil {
-		if err := s.redisClient.Set(ctx, cacheKey, prefsJSON, keys.TTLNotificationPreferences).Err(); err != nil {
+		if err := s.redisClient.Set(ctx, cacheKey, prefsJSON, keys.WithJitter(keys.TTLNotificationPreferences)).Err(); err != nil {
 			s.logger.Warnf("Failed to cache preferences for user %s: %v", userID, err)
 		}
 	}

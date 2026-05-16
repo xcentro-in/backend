@@ -51,13 +51,13 @@ func (h *DashboardHandler) GetDashboardMetrics(c echo.Context) error {
 	}
 	h.logger.DebugWith("User authenticated", "user_id", userID)
 
-	// Extract business_id from X-Business-ID header
-	businessID := c.Request().Header.Get("X-Business-ID")
+	// Extract business_id from JWT context (set by JWTMiddleware)
+	businessID, _ := c.Get("bid").(string)
 	if businessID == "" {
-		h.logger.Warn("Missing X-Business-ID header")
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "MISSING_BUSINESS_ID",
-			"message": "X-Business-ID header is required",
+		h.logger.Warn("Missing bid in JWT context")
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "NO_BUSINESS_CONTEXT",
+			"message": "No active business in token",
 		})
 	}
 	h.logger.DebugWith("Business ID extracted", "business_id", businessID)
@@ -71,7 +71,6 @@ func (h *DashboardHandler) GetDashboardMetrics(c echo.Context) error {
 		return c.JSON(http.StatusInternalServerError, map[string]any{
 			"error":   "FETCH_METRICS_ERROR",
 			"message": "Failed to fetch dashboard metrics",
-			"details": err.Error(),
 		})
 	}
 

@@ -9,9 +9,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/labstack/echo/v4"
-	redis_client "xcentro.in/internal/adapters/cache/redis/client"
 	"xcentro.in/internal/core/auth"
-	"xcentro.in/internal/core/business"
 	"xcentro.in/internal/core/business_rules"
 	payeeCore "xcentro.in/internal/core/payee"
 	"xcentro.in/internal/core/payment"
@@ -79,13 +77,13 @@ func (h *PaymentHandler) FetchWallet(c echo.Context) error {
 	}
 	h.logger.DebugWith("User authenticated", "user_id", userID)
 
-	// Extract business_id from X-Business-ID header
-	businessID := c.Request().Header.Get("X-Business-ID")
+	// Extract business_id from JWT context (set by JWTMiddleware)
+	businessID, _ := c.Get("bid").(string)
 	if businessID == "" {
-		h.logger.Warn("Missing X-Business-ID header")
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "MISSING_BUSINESS_ID",
-			"message": "X-Business-ID header is required",
+		h.logger.Warn("No active business in JWT context")
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "NO_BUSINESS_CONTEXT",
+			"message": "No active business in token",
 		})
 	}
 	h.logger.DebugWith("Business ID extracted", "business_id", businessID)
@@ -142,45 +140,23 @@ func (h *PaymentHandler) UpdateCardStatus(c echo.Context) error {
 	}
 	h.logger.DebugWith("User authenticated", "user_id", userID)
 
-	// Extract business_id from X-Business-ID header
-	businessID := c.Request().Header.Get("X-Business-ID")
-	if businessID == "" {
-		h.logger.Warn("Missing X-Business-ID header")
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "MISSING_BUSINESS_ID",
-			"message": "X-Business-ID header is required",
-		})
-	}
+	// Read role and bid from JWT context (set by JWTMiddleware)
+	// bid in context IS the active business this token is scoped to
+	role, _ := c.Get("role").(string)
+	bid, _ := c.Get("bid").(string)
 
-	// Extract user roles from context (set by BusinessRolesMiddleware)
-	// Only owner role is allowed to update card status
-	userRoles, ok := c.Get("userRoles").([]*business.BusinessUserRelation)
-	if !ok {
-		h.logger.Warn("Missing userRoles in context")
-		return c.JSON(http.StatusForbidden, map[string]any{
-			"error":   "FORBIDDEN",
-			"message": "Access denied: insufficient permissions",
-		})
-	}
-
-	// Check if user has owner role for this business
-	hasOwnerRole := false
-	for _, relation := range userRoles {
-		if relation.BID == businessID && relation.Role == shared.Owner {
-			hasOwnerRole = true
-			break
-		}
-	}
-
-	if !hasOwnerRole {
-		h.logger.WarnWith("User does not have owner role for business",
+	// role must be "owner" for this operation
+	if bid == "" || role != string(shared.Owner) {
+		h.logger.WarnWith("User does not have owner role for active business",
 			"user_id", userID,
-			"business_id", businessID)
+			"token_bid", bid,
+			"role", role)
 		return c.JSON(http.StatusForbidden, map[string]any{
 			"error":   "FORBIDDEN",
 			"message": "Only business owners can update card status",
 		})
 	}
+	businessID := bid
 
 	// Extract card_id from URL parameter
 	cardID := c.Param("card_id")
@@ -551,13 +527,13 @@ func (h *PaymentHandler) Tokenize(c echo.Context) error {
 	}
 	h.logger.DebugWith("User authenticated", "user_id", userID)
 
-	// Extract business_id from X-Business-ID header
-	businessID := c.Request().Header.Get("X-Business-ID")
+	// Extract business_id from JWT context (set by JWTMiddleware)
+	businessID, _ := c.Get("bid").(string)
 	if businessID == "" {
-		h.logger.Warn("Missing X-Business-ID header")
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "MISSING_BUSINESS_ID",
-			"message": "X-Business-ID header is required",
+		h.logger.Warn("No active business in JWT context")
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "NO_BUSINESS_CONTEXT",
+			"message": "No active business in token",
 		})
 	}
 	h.logger.DebugWith("Business ID extracted", "business_id", businessID)
@@ -665,13 +641,13 @@ func (h *PaymentHandler) MakePayment(c echo.Context) error {
 	}
 	h.logger.DebugWith("User authenticated", "user_id", userID)
 
-	// Extract business_id from X-Business-ID header
-	businessID := c.Request().Header.Get("X-Business-ID")
+	// Extract business_id from JWT context (set by JWTMiddleware)
+	businessID, _ := c.Get("bid").(string)
 	if businessID == "" {
-		h.logger.Warn("Missing X-Business-ID header")
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "MISSING_BUSINESS_ID",
-			"message": "X-Business-ID header is required",
+		h.logger.Warn("No active business in JWT context")
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "NO_BUSINESS_CONTEXT",
+			"message": "No active business in token",
 		})
 	}
 	h.logger.DebugWith("Business ID extracted", "business_id", businessID)
@@ -883,7 +859,7 @@ func (h *PaymentHandler) handleBankAccountAddition(ctx context.Context, c echo.C
 
 		return c.JSON(http.StatusInternalServerError, map[string]any{
 			"error":   "internal_error",
-			"message": fmt.Sprintf("Failed to add bank account: %v", err),
+			"message": "Failed to add bank account",
 		})
 	}
 
@@ -1000,14 +976,20 @@ func (h *PaymentHandler) validatePaymentRequest(req *MakePaymentRequest) error {
 		return fmt.Errorf("amount must be greater than 0")
 	}
 
-	// Validate currency
-	if req.Currency != "INR" && req.Currency != "USD" {
+	// Validate currency, default to INR if not provided
+	if req.Currency == "" {
+		req.Currency = "INR"
+	} else if req.Currency != "INR" && req.Currency != "USD" {
 		return fmt.Errorf("currency must be INR or USD")
 	}
 
 	// Validate payment method
 	validMethods := map[string]bool{
-		"card": true, "token_card": true, "net_banking": true, "upi": true, "wallet": true,
+		string(payment.PaymentMethodCard):       true,
+		string(payment.PaymentMethodTokenCard):  true,
+		string(payment.PaymentMethodNetBanking): true,
+		string(payment.PaymentMethodUPI):        true,
+		string(payment.PaymentMethodWallet):     true,
 	}
 	if !validMethods[req.PaymentMethod] {
 		return fmt.Errorf("invalid payment method: %s", req.PaymentMethod)
@@ -1028,35 +1010,35 @@ func (h *PaymentHandler) validatePaymentRequest(req *MakePaymentRequest) error {
 
 	// Payment method specific validation
 	switch req.PaymentMethod {
-	case "card":
+	case string(payment.PaymentMethodCard):
 		if req.CardDetails == nil {
 			return fmt.Errorf("card_details are required for card payments")
 		}
 		if err := h.validateCardDetails(req.CardDetails); err != nil {
 			return fmt.Errorf("card validation failed: %v", err)
 		}
-	case "token_card":
+	case string(payment.PaymentMethodTokenCard):
 		if req.TokenDetails == nil {
 			return fmt.Errorf("token_details are required for token card payments")
 		}
 		if req.TokenDetails.CardID == "" {
 			return fmt.Errorf("card_id is required for token card payments")
 		}
-	case "netbanking":
+	case string(payment.PaymentMethodNetBanking):
 		if req.NetBanking == nil {
-			return fmt.Errorf("net_banking details are required for netbanking payments")
+			return fmt.Errorf("net_banking details are required for net_banking payments")
 		}
 		if req.NetBanking.BankCode == "" {
-			return fmt.Errorf("bank_code is required for netbanking")
+			return fmt.Errorf("bank_code is required for net_banking")
 		}
-	case "upi":
+	case string(payment.PaymentMethodUPI):
 		if req.UPI == nil {
 			return fmt.Errorf("upi details are required for UPI payments")
 		}
 		if req.UPI.VPA == "" {
 			return fmt.Errorf("vpa is required for UPI payments")
 		}
-	case "wallet":
+	case string(payment.PaymentMethodWallet):
 		if req.Wallet == nil {
 			return fmt.Errorf("wallet details are required for wallet payments")
 		}
@@ -1123,7 +1105,7 @@ func getCardCategoryFromRequest(req *MakePaymentRequest) string {
 // populatePaymentMethodDetails adds payment method specific details to core request
 func (h *PaymentHandler) populatePaymentMethodDetails(coreReq *payment.PaymentRequest, httpReq *MakePaymentRequest) {
 	switch httpReq.PaymentMethod {
-	case "card":
+	case string(payment.PaymentMethodCard):
 		if httpReq.CardDetails != nil {
 			coreReq.CardDetails = &payment.Card{
 				Number:         httpReq.CardDetails.CardNumber,
@@ -1136,26 +1118,26 @@ func (h *PaymentHandler) populatePaymentMethodDetails(coreReq *payment.PaymentRe
 				LastFourDigits: httpReq.CardDetails.LastFourDigits,
 			}
 		}
-	case "token_card":
+	case string(payment.PaymentMethodTokenCard):
 		if httpReq.TokenDetails != nil {
 			coreReq.TokenCardDetails = &payment.TokenCardDetails{
 				CardID: httpReq.TokenDetails.CardID,
 			}
 		}
-	case "netbanking":
+	case string(payment.PaymentMethodNetBanking):
 		if httpReq.NetBanking != nil {
 			coreReq.NetBankingDetails = &payment.NetBanking{
 				BankCode: httpReq.NetBanking.BankCode,
 				BankName: httpReq.NetBanking.BankName,
 			}
 		}
-	case "upi":
+	case string(payment.PaymentMethodUPI):
 		if httpReq.UPI != nil {
 			coreReq.UPIDetails = &payment.UPI{
 				VPA: httpReq.UPI.VPA,
 			}
 		}
-	case "wallet":
+	case string(payment.PaymentMethodWallet):
 		if httpReq.Wallet != nil {
 			coreReq.WalletDetails = &payment.Wallet{
 				WalletID: httpReq.Wallet.WalletID,
@@ -1257,8 +1239,15 @@ func (h *PaymentHandler) GetPaymentSourcesWithFees(c echo.Context) error {
 		})
 	}
 
-	// Validate business_id
-	businessID := c.Request().Header.Get("X-Business-ID")
+	// Extract business_id from JWT context (set by JWTMiddleware)
+	businessID, _ := c.Get("bid").(string)
+	if businessID == "" {
+		h.logger.Warn("No active business in JWT context")
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "NO_BUSINESS_CONTEXT",
+			"message": "No active business in token",
+		})
+	}
 	req.BusinessID = businessID
 
 	// Round base amount to nearest integer (paise)
@@ -1387,16 +1376,13 @@ func RegisterPaymentRoutes(
 	payeeRelationRepo payeeCore.BusinessPayeeRelationRepository,
 	storedCardRepo payment.StoredCardRepository,
 	bankAccountRepo payment.BankAccountRepository,
-	businessUserRelRepo business.BusinessUserRelationRepository,
-	rclient *redis_client.RedisClient,
 	cookieManager *httputil.CookieManager,
 	log *logger.Logger,
 ) {
 	handler := NewPaymentHandler(paymentService, paymentSourceService, walletService, voucherRepo, stateChangeRepo, payeeRelationRepo, storedCardRepo, bankAccountRepo, log)
 
-	// Apply JWT, BusinessAccess, and CSRF middleware to all payment routes
+	// Apply JWT and CSRF middleware to all payment routes
 	group.Use(middleware.JWTMiddleware(authService))
-	group.Use(middleware.BusinessAccessMiddleware(businessUserRelRepo, rclient))
 	group.Use(middleware.CSRFMiddleware(cookieManager))
 	group.Use(ratelimiter.MiddlewareDefault())
 
@@ -1415,7 +1401,7 @@ func RegisterPaymentRoutes(
 }
 
 // RegisterWalletRoutes registers all wallet management routes
-func RegisterWalletRoutes(group *echo.Group, paymentService *payments.PaymentService, paymentSourceService *payments.PaymentSourceService, walletService business_rules.WalletService, authService auth.AuthService, storedCardRepo payment.StoredCardRepository, businessUserRelRepo business.BusinessUserRelationRepository, rclient *redis_client.RedisClient, cookieManager *httputil.CookieManager, log *logger.Logger) {
+func RegisterWalletRoutes(group *echo.Group, paymentService *payments.PaymentService, paymentSourceService *payments.PaymentSourceService, walletService business_rules.WalletService, authService auth.AuthService, storedCardRepo payment.StoredCardRepository, cookieManager *httputil.CookieManager, log *logger.Logger) {
 	// Wallet routes need storedCardRepo for card status updates
 	handler := NewPaymentHandler(paymentService, paymentSourceService, walletService, nil, nil, nil, storedCardRepo, nil, log)
 
@@ -1425,20 +1411,20 @@ func RegisterWalletRoutes(group *echo.Group, paymentService *payments.PaymentSer
 	group.Use(ratelimiter.MiddlewareDefault())
 
 	// Wallet operations
-	group.GET("", handler.FetchWallet)                                                                                                // GET /wallet - fetch wallet with inactive cards
-	group.POST("/add_source", handler.AddPaymentSource)                                                                               // POST /wallet/add_source - add new payment source
-	group.PATCH("/cards/:card_id/status", handler.UpdateCardStatus, middleware.BusinessRolesMiddleware(businessUserRelRepo, rclient)) // PATCH /wallet/cards/:card_id/status - toggle card active/inactive (owner only)
+	group.GET("", handler.FetchWallet)                                          // GET /wallet - fetch wallet with inactive cards
+	group.POST("/add_source", handler.AddPaymentSource)                         // POST /wallet/add_source - add new payment source
+	group.PATCH("/cards/:card_id/status", handler.UpdateCardStatus)             // PATCH /wallet/cards/:card_id/status - toggle card active/inactive (owner only)
 }
 
 // GetPaymentList handles GET /payments
 // Retrieves paginated list of payments for a business with voucher/bill aggregation
 func (h *PaymentHandler) GetPaymentList(c echo.Context) error {
-	// Extract business_id from X-Business-ID header
-	businessID := c.Request().Header.Get("X-Business-ID")
+	// Extract business_id from JWT context (set by JWTMiddleware)
+	businessID, _ := c.Get("bid").(string)
 	if businessID == "" {
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "MISSING_BUSINESS_ID",
-			"message": "X-Business-ID header is required",
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "NO_BUSINESS_CONTEXT",
+			"message": "No active business in token",
 		})
 	}
 
@@ -1489,12 +1475,12 @@ func (h *PaymentHandler) GetPaymentByID(c echo.Context) error {
 		})
 	}
 
-	// Extract business_id from X-Business-ID header
-	businessID := c.Request().Header.Get("X-Business-ID")
+	// Extract business_id from JWT context (set by JWTMiddleware)
+	businessID, _ := c.Get("bid").(string)
 	if businessID == "" {
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "MISSING_BUSINESS_ID",
-			"message": "X-Business-ID header is required",
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "NO_BUSINESS_CONTEXT",
+			"message": "No active business in token",
 		})
 	}
 
@@ -1718,13 +1704,13 @@ func (h *PaymentHandler) RetryPayment(c echo.Context) error {
 		})
 	}
 
-	// Extract business_id from X-Business-ID header
-	businessID := c.Request().Header.Get("X-Business-ID")
+	// Extract business_id from JWT context (set by JWTMiddleware)
+	businessID, _ := c.Get("bid").(string)
 	if businessID == "" {
-		h.logger.Warn("Missing X-Business-ID header")
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "MISSING_BUSINESS_ID",
-			"message": "X-Business-ID header is required",
+		h.logger.Warn("No active business in JWT context")
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "NO_BUSINESS_CONTEXT",
+			"message": "No active business in token",
 		})
 	}
 

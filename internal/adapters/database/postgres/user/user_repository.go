@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -65,7 +64,8 @@ func (r *PgUserRepository) CreateUser(ctx context.Context, authPayload auth.Auth
 // GetUserByID retrieves a user by ID
 func (r *PgUserRepository) GetUserByID(ctx context.Context, userID string) (*user.User, error) {
 	query := `
-		SELECT id, email, pwd_hash, mobile, name, dob, tax_id, kyc_status, kyc_needed, email_verified, mobile_verified
+		SELECT id, email, pwd_hash, mobile, name, dob, tax_id, kyc_status, kyc_needed, email_verified, mobile_verified,
+		       COALESCE(active_bid::text, '') as active_bid
 		FROM xcentro.user_table
 		WHERE id = $1
 	`
@@ -86,6 +86,7 @@ func (r *PgUserRepository) GetUserByID(ctx context.Context, userID string) (*use
 		&u.KycNeeded,
 		&u.EmailVerified,
 		&u.MobileVerified,
+		&u.ActiveBid,
 	)
 
 	if err != nil {
@@ -99,6 +100,24 @@ func (r *PgUserRepository) GetUserByID(ctx context.Context, userID string) (*use
 	u.KycStatus = parseKYCStatus(kycStatusStr)
 
 	return &u, nil
+}
+
+// SetActiveBid updates the active_bid column for a user.
+// Pass an empty string to set the column to NULL.
+func (r *PgUserRepository) SetActiveBid(ctx context.Context, userID string, activeBid string) error {
+	if activeBid == "" {
+		// Set to NULL for empty string input
+		query := `UPDATE xcentro.user_table SET active_bid = NULL WHERE id = $1`
+		_, err := r.querier.Exec(ctx, query, userID)
+		return err
+	}
+	query := `
+		UPDATE xcentro.user_table
+		SET active_bid = $2::uuid
+		WHERE id = $1
+	`
+	_, err := r.querier.Exec(ctx, query, userID, activeBid)
+	return err
 }
 
 // GetUserMobileByID retrieves only the mobile number for a user
@@ -590,15 +609,14 @@ func (r *PgUserRepository) GetVerificationCodeByCode(ctx context.Context, hashed
 	`
 
 	var vc user.UserVerificationCodes
-	var expiresAt, createdAt time.Time
 
 	err := r.querier.QueryRow(ctx, query, hashedCode, codeType).Scan(
 		&vc.ID,
 		&vc.UserID,
 		&vc.Code,
 		&vc.CodeType,
-		&expiresAt,
-		&createdAt,
+		&vc.ExpiresAt,
+		&vc.CreatedAt,
 		&vc.Used,
 		&vc.RetryAttempts,
 	)
@@ -609,10 +627,6 @@ func (r *PgUserRepository) GetVerificationCodeByCode(ctx context.Context, hashed
 		}
 		return nil, fmt.Errorf("failed to get verification code: %w", err)
 	}
-
-	// Convert time.Time to string format
-	vc.ExpiresAt = expiresAt.Format(time.RFC3339)
-	vc.CreatedAt = createdAt.Format(time.RFC3339)
 
 	return &vc, nil
 }
@@ -649,15 +663,14 @@ func (r *PgUserRepository) GetVerificationCodeByUserIDAndCode(ctx context.Contex
 	`
 
 	var vc user.UserVerificationCodes
-	var expiresAt, createdAt time.Time
 
 	err := r.querier.QueryRow(ctx, query, userID, hashedCode, codeType).Scan(
 		&vc.ID,
 		&vc.UserID,
 		&vc.Code,
 		&vc.CodeType,
-		&expiresAt,
-		&createdAt,
+		&vc.ExpiresAt,
+		&vc.CreatedAt,
 		&vc.Used,
 		&vc.RetryAttempts,
 	)
@@ -668,10 +681,6 @@ func (r *PgUserRepository) GetVerificationCodeByUserIDAndCode(ctx context.Contex
 		}
 		return nil, fmt.Errorf("failed to get verification code: %w", err)
 	}
-
-	// Convert time.Time to string format
-	vc.ExpiresAt = expiresAt.Format(time.RFC3339)
-	vc.CreatedAt = createdAt.Format(time.RFC3339)
 
 	return &vc, nil
 }
@@ -713,6 +722,149 @@ func (r *PgUserRepository) UpdateUserMobileVerification(ctx context.Context, use
 	rowsAffected := result.RowsAffected()
 	if rowsAffected == 0 {
 		return fmt.Errorf("user not found")
+	}
+
+	return nil
+}
+
+// InvalidatePreviousVerificationCodes marks all unused verification codes of a specific type as used
+// This ensures only the latest code is valid (security best practice)
+func (r *PgUserRepository) InvalidatePreviousVerificationCodes(ctx context.Context, userID string, codeType shared.VerificationType) error {
+	query := `
+		UPDATE xcentro.user_verification_codes
+		SET used = TRUE
+		WHERE user_id = $1 AND code_type = $2 AND used = FALSE AND expires_at > NOW()
+	`
+
+	_, err := r.querier.Exec(ctx, query, userID, codeType)
+	if err != nil {
+		return fmt.Errorf("failed to invalidate previous verification codes: %w", err)
+	}
+
+	return nil
+}
+
+// IncrementResendAttempts increments the retry_attempts counter for the latest verification code
+// Used for analytics and fraud detection
+func (r *PgUserRepository) IncrementResendAttempts(ctx context.Context, userID string, codeType shared.VerificationType) error {
+	query := `
+		UPDATE xcentro.user_verification_codes
+		SET retry_attempts = retry_attempts + 1
+		WHERE id = (
+			SELECT id FROM xcentro.user_verification_codes
+			WHERE user_id = $1 AND code_type = $2 AND used = FALSE
+			ORDER BY created_at DESC
+			LIMIT 1
+		)
+	`
+
+	result, err := r.querier.Exec(ctx, query, userID, codeType)
+	if err != nil {
+		return fmt.Errorf("failed to increment resend attempts: %w", err)
+	}
+
+	rowsAffected := result.RowsAffected()
+	if rowsAffected == 0 {
+		return fmt.Errorf("no active verification code found")
+	}
+
+	return nil
+}
+
+// GetResendAttemptsCount returns the total number of resend attempts in the last 24 hours
+// Used for analytics dashboards and fraud pattern detection
+func (r *PgUserRepository) GetResendAttemptsCount(ctx context.Context, userID string, codeType shared.VerificationType) (int, error) {
+	query := `
+		SELECT COALESCE(SUM(retry_attempts), 0) as total_attempts
+		FROM xcentro.user_verification_codes
+		WHERE user_id = $1 AND code_type = $2 AND created_at > NOW() - INTERVAL '24 hours'
+	`
+
+	var count int
+	err := r.querier.QueryRow(ctx, query, userID, codeType).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get resend attempts count: %w", err)
+	}
+
+	return count, nil
+}
+
+// CreateVerificationCodeWithInvalidation atomically invalidates old codes and creates a new one
+// This prevents race conditions where multiple valid codes could exist simultaneously
+// Uses a transaction to ensure atomicity - either both operations succeed or both fail
+func (r *PgUserRepository) CreateVerificationCodeWithInvalidation(ctx context.Context, code *user.UserVerificationCodes) error {
+	// Type assert to check if querier is a DB (has BeginTx capability)
+	db, isDB := r.querier.(client.DB)
+
+	// If we're already in a transaction, just execute the operations sequentially
+	if !isDB {
+		// We're already in a transaction, execute directly
+		if err := r.invalidateAndCreate(ctx, r.querier, code); err != nil {
+			return err
+		}
+		return nil
+	}
+
+	// Start a new transaction
+	tx, err := db.BeginTx(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+
+	// Ensure rollback on error
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback(ctx)
+		}
+	}()
+
+	// Execute the operations in transaction
+	if err = r.invalidateAndCreate(ctx, tx, code); err != nil {
+		return err
+	}
+
+	// Commit transaction
+	if err = tx.Commit(ctx); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	return nil
+}
+
+// invalidateAndCreate is a helper that performs the actual invalidate + create operations
+func (r *PgUserRepository) invalidateAndCreate(ctx context.Context, q client.Querier, code *user.UserVerificationCodes) error {
+	// Step 1: Invalidate old codes
+	invalidateQuery := `
+		UPDATE xcentro.user_verification_codes
+		SET used = TRUE
+		WHERE user_id = $1 AND code_type = $2 AND used = FALSE AND expires_at > NOW()
+	`
+
+	_, err := q.Exec(ctx, invalidateQuery, code.UserID, code.CodeType)
+	if err != nil {
+		return fmt.Errorf("failed to invalidate previous verification codes: %w", err)
+	}
+
+	// Step 2: Create new code
+	createQuery := `
+		INSERT INTO xcentro.user_verification_codes (id, user_id, code, code_type, expires_at, created_at, used, retry_attempts)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+	`
+
+	codeID := uuid.Must(uuid.NewV7()).String()
+	_, err = q.Exec(ctx, createQuery,
+		codeID,
+		code.UserID,
+		code.Code,
+		code.CodeType,
+		code.ExpiresAt,
+		code.CreatedAt,
+		code.Used,
+		code.RetryAttempts,
+	)
+
+	if err != nil {
+		return fmt.Errorf("failed to create verification code: %w", err)
 	}
 
 	return nil

@@ -1,14 +1,18 @@
 package user
 
-import "xcentro.in/internal/core/shared"
+import (
+	"time"
+
+	"xcentro.in/internal/core/shared"
+)
 
 type UserVerificationCodes struct {
 	ID            string                  `json:"id"`
 	UserID        string                  `json:"userId"`
 	Code          string                  `json:"code"`
 	CodeType      shared.VerificationType `json:"codeType"`
-	ExpiresAt     string                  `json:"expiresAt"`
-	CreatedAt     string                  `json:"createdAt"`
+	ExpiresAt     time.Time               `json:"expiresAt"`
+	CreatedAt     time.Time               `json:"createdAt"`
 	Used          bool                    `json:"used"`
 	RetryAttempts uint8                   `json:"retryAttempts"`
 }
@@ -34,6 +38,7 @@ type User struct {
 	KycNeeded      bool             `json:"kycNeeded"`
 	EmailVerified  bool             `json:"emailVerified"`
 	MobileVerified bool             `json:"mobileVerified"`
+	ActiveBid      string           `json:"activeBid"` // active business ID from user_table.active_bid; empty string if NULL
 }
 
 // InitiateOnboardingDTO represents the request payload for initiating user onboarding
@@ -46,11 +51,13 @@ type InitiateOnboardingDTO struct {
 }
 
 // CompleteOnboardingDTO represents the request payload for completing onboarding
-// After identity verification, user claims role in a specific business
-// Note: BusinessID is now passed via X-Business-ID header
+// After identity verification, user claims role in a specific business.
+// BusinessID can be provided in the body as a fallback when the JWT bid claim is empty
+// (e.g. creator flow where active_bid is not yet set before KYC completes).
 type CompleteOnboardingDTO struct {
 	ClaimedRole shared.UserRole `json:"claimedRole" validate:"required"`
 	GSTIN       string          `json:"gstin,omitempty" validate:"omitempty,gstin"`
+	BusinessID  string          `json:"bid,omitempty" validate:"omitempty,uuid"`
 }
 
 // OnboardingStatusDTO represents the response for onboarding status

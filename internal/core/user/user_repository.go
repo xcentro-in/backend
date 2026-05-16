@@ -13,6 +13,7 @@ type UserRepository interface {
 	WithTx(tx client.Tx) UserRepository
 	CreateUser(ctx context.Context, authPayload auth.AuthPayload) (*User, error)
 	GetUserByID(ctx context.Context, userID string) (*User, error)
+	SetActiveBid(ctx context.Context, userID string, activeBid string) error
 	GetUserByEmail(ctx context.Context, email string) (*User, error)
 	UpdateUserMobile(ctx context.Context, userID, newMobile string) error
 	UpdateUserTaxID(ctx context.Context, userID, newTaxID string) error
@@ -37,6 +38,12 @@ type UserRepository interface {
 	CheckUserEmailVerified(ctx context.Context, userID string) (bool, error)
 	CheckUserMobileVerified(ctx context.Context, userID string) (bool, error)
 	CheckUserEmailMobileVerified(ctx context.Context, userID string) (bool, error)
+
+	// Verification code management for rate limiting and security
+	InvalidatePreviousVerificationCodes(ctx context.Context, userID string, codeType shared.VerificationType) error
+	IncrementResendAttempts(ctx context.Context, userID string, codeType shared.VerificationType) error
+	GetResendAttemptsCount(ctx context.Context, userID string, codeType shared.VerificationType) (int, error)
+	CreateVerificationCodeWithInvalidation(ctx context.Context, code *UserVerificationCodes) error
 
 	// Aadhaar verification methods
 	UpdateAadhaarTransactionID(ctx context.Context, taxID, txnID string) error

@@ -347,8 +347,8 @@ func TestJioPayClientWithMock_CardTokenization(t *testing.T) {
 		t.Errorf("Expected TransactionID 'tokenize-txn-001', got '%s'", response.TransactionID)
 	}
 
-	if response.Status != "success" {
-		t.Errorf("Expected Status 'success', got '%s'", response.Status)
+	if response.Status != string(payment.PaymentStatusSuccess) {
+		t.Errorf("Expected Status %q, got '%s'", payment.PaymentStatusSuccess, response.Status)
 	}
 
 	// Verify metadata contains JioPay-specific fields (new response format)

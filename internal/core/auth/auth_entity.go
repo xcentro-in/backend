@@ -26,6 +26,38 @@ type LoginResponse struct {
 	RefreshToken string `json:"refreshToken"`
 }
 
+// UnifiedUserProfile is the user portion of the unified login response
+type UnifiedUserProfile struct {
+	Id                    string `json:"id"`
+	Name                  string `json:"name"`
+	Email                 string `json:"email"`
+	Mobile                string `json:"mobile"`
+	KycStatus             string `json:"kyc_status"`
+	HasAddedPaymentMethod bool   `json:"has_added_payment_method"`
+	HasAddedVendor        bool   `json:"has_added_vendor"`
+	HasCreatedFirstPayment bool  `json:"has_created_first_payment"`
+}
+
+// UnifiedBusinessInfo is one entry in the businesses list of the unified login response
+type UnifiedBusinessInfo struct {
+	Bid       string `json:"bid"`
+	Name      string `json:"name"`
+	Role      string `json:"role"`
+	KybStatus string `json:"kyb_status"`
+	KycNeeded bool   `json:"kyc_needed"`
+}
+
+// UnifiedLoginResponse replaces LoginResponse for the /auth/login endpoint.
+// Contains complete frontend context: user profile, all businesses, and active business ID.
+// AccessToken and RefreshToken are still set as cookies (not in response body).
+type UnifiedLoginResponse struct {
+	AccessToken  string                 `json:"accessToken"`  // kept for backward compat — also set as cookie
+	RefreshToken string                 `json:"refreshToken"` // kept for backward compat — also set as cookie
+	User         *UnifiedUserProfile    `json:"user"`
+	Businesses   []*UnifiedBusinessInfo `json:"businesses"`
+	ActiveBid    string                 `json:"active_bid"`
+}
+
 // Session represents a user refresh token session
 type Session struct {
 	SessionID        string    `json:"sessionId"`
@@ -45,6 +77,10 @@ type CustomClaims struct {
 	SessionID     string `json:"session_id"`
 	DeviceType    string `json:"device_type"`
 	DeviceVersion int    `json:"device_version"`
+	Bid           string `json:"bid"`        // active business ID; empty string if user has no business
+	Role          string `json:"role"`       // user's role in active business; empty string if none
+	KycStatus     string `json:"kyc_status"` // user's KYC status at token issuance time
+	KycNeeded     bool   `json:"kyc_needed"` // whether KYC is still required for the active business relation
 }
 
 // UserDeviceVersion tracks JWT version per user per device type
@@ -85,15 +121,13 @@ type ChangePasswordRequest struct {
 	OTP         string `json:"otp" validate:"required,len=6,numeric"`
 }
 
-// VerifyEmailRequest represents the request to verify email with token
-type VerifyEmailRequest struct {
-	UserID    string `json:"uid" validate:"required"`
-	Token     string `json:"token" validate:"required"`
-	Signature string `json:"sig" validate:"required"`
-}
-
 // ResendVerificationRequest represents the request to resend email verification
 type ResendVerificationRequest struct {
+	Email string `json:"email" validate:"required,email"`
+}
+
+// ResendMobileOTPRequest represents the request to resend mobile OTP during signup
+type ResendMobileOTPRequest struct {
 	Email string `json:"email" validate:"required,email"`
 }
 
@@ -136,6 +170,29 @@ type SendMobileUpdateOTPRequest struct {
 type VerifyMobileUpdateRequest struct {
 	MobileNumber string `json:"mobileNumber" validate:"required,phone_in"`
 	OTP          string `json:"otp" validate:"required,len=6,numeric"`
+}
+
+// SwitchBusinessRequest is the request body for POST /v1/auth/switch-business
+type SwitchBusinessRequest struct {
+	Bid string `json:"bid" validate:"required,uuid"`
+}
+
+// SwitchBusinessResponse is the response body for a successful business switch.
+// Contains the switched business context so the frontend can update its state immediately.
+type SwitchBusinessResponse struct {
+	Bid       string `json:"bid"`
+	Role      string `json:"role"`
+	KybStatus string `json:"kyb_status"`
+	KycNeeded bool   `json:"kyc_needed"`
+}
+
+// VerifySessionResponse is the response for GET /v1/auth/verify-session.
+// Contains full session context: user KYC status, all businesses, and active business ID.
+type VerifySessionResponse struct {
+	UID        string                 `json:"uid"`
+	KycStatus  string                 `json:"kyc_status"`
+	Businesses []*UnifiedBusinessInfo `json:"businesses"`
+	ActiveBid  string                 `json:"active_bid"`
 }
 
 // type AuthJWTClaim struct {

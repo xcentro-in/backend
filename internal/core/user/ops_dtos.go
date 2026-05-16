@@ -21,6 +21,6 @@ type OpsReloadUserPANRequest struct {
 // OpsKYCActionRequest represents the request for KYC action
 type OpsKYCActionRequest struct {
 	UserID string `param:"user_id" validate:"required"`
-	Action string `query:"action" validate:"required,oneof=reject"`
+	Action string `query:"action" validate:"required,oneof=reject approve"`
 	Notes  string `json:"notes" validate:"omitempty,max=500"`
 }

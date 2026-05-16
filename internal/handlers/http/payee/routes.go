@@ -38,3 +38,12 @@ func RegisterPayeeRoutes(group *echo.Group, payeeService *payeeSvc.PayeeService,
 	// Employee list endpoint (for tabulated display)
 	group.GET("/employees", handler.GetEmployeesForList)
 }
+
+// RegisterPayeeUtilityRoutes registers utility routes that don't require business context
+// These routes only require JWT authentication (not business access)
+func RegisterPayeeUtilityRoutes(group *echo.Group, payeeService *payeeSvc.PayeeService) {
+	handler := NewPayeeHandler(payeeService, logger.GetDefault())
+
+	// IFSC validation endpoint (proxies Razorpay API) - No business context needed
+	group.GET("/validate-ifsc/:ifsc_code", handler.ValidateIFSC) // GET /payees/validate-ifsc/:ifsc_code
+}

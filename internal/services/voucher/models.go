@@ -10,47 +10,47 @@ import (
 
 // CreateDraftVoucherRequest represents the request to create a draft voucher
 type CreateDraftVoucherRequest struct {
-	// Business context (populated from X-Business-ID header and JWT)
-	BusinessID uuid.UUID `json:"-"` // Populated from X-Business-ID header
+	// Business context (populated from JWT context)
+	BusinessID uuid.UUID `json:"-"` // Populated from bid claim in JWT context
 	UserID     uuid.UUID `json:"-"` // Populated from JWT token (created_by)
 
 	// Payee reference (simplified with surrogate key)
-	RelationID uuid.UUID `json:"relation_id"` // Single identifier for business-payee-account relationship
+	RelationID uuid.UUID `json:"relation_id" validate:"required"` // Single identifier for business-payee-account relationship
 
 	// Invoice details
-	InvoiceNumber  string      `json:"invoice_number"`
+	InvoiceNumber  string      `json:"invoice_number" validate:"required,min=1,max=100,safe_text"`
 	InvoiceDate    *types.Date `json:"invoice_date,omitempty"`
 	InvoiceDueDate *types.Date `json:"invoice_due_date,omitempty"`
 
 	// Amounts (all in paise)
-	GrossAmount    int64   `json:"gross_amount"`
-	NetAmount      int64   `json:"net_amount"`
-	Currency       string  `json:"currency"` // Default: INR
-	GSTAmount      int64   `json:"gst_amount"`
+	GrossAmount    int64   `json:"gross_amount" validate:"required,gt=0"`
+	NetAmount      int64   `json:"net_amount" validate:"required,gt=0"`
+	Currency       string  `json:"currency" validate:"omitempty,oneof=INR USD"` // Default: INR
+	GSTAmount      int64   `json:"gst_amount" validate:"gte=0"`
 	GSTRate        float64 `json:"gst_rate,omitempty"`
-	CGSTAmount     int64   `json:"cgst_amount,omitempty"`
-	SGSTAmount     int64   `json:"sgst_amount,omitempty"`
-	IGSTAmount     int64   `json:"igst_amount,omitempty"`
-	TDSAmount      int64   `json:"tds_amount"`
+	CGSTAmount     int64   `json:"cgst_amount,omitempty" validate:"gte=0"`
+	SGSTAmount     int64   `json:"sgst_amount,omitempty" validate:"gte=0"`
+	IGSTAmount     int64   `json:"igst_amount,omitempty" validate:"gte=0"`
+	TDSAmount      int64   `json:"tds_amount" validate:"gte=0"`
 	TDSRate        float64 `json:"tds_rate,omitempty"`
-	TDSSection     string  `json:"tds_section,omitempty"`
-	FeeAmount      int64   `json:"fee_amount,omitempty"`
-	DiscountAmount int64   `json:"discount_amount,omitempty"`
+	TDSSection     string  `json:"tds_section,omitempty" validate:"omitempty,max=50,safe_text"`
+	FeeAmount      int64   `json:"fee_amount,omitempty" validate:"gte=0"`
+	DiscountAmount int64   `json:"discount_amount,omitempty" validate:"gte=0"`
 
 	// Additional details
 	FinancialDetails map[string]interface{} `json:"financial_details,omitempty"`
 	Attachments      map[string]interface{} `json:"attachments,omitempty"`
-	ExpenseCategory  string                 `json:"expense_category,omitempty"`
-	Description      string                 `json:"description,omitempty"`
+	ExpenseCategory  string                 `json:"expense_category,omitempty" validate:"omitempty,max=100,safe_text"`
+	Description      string                 `json:"description,omitempty" validate:"omitempty,max=500,safe_text"`
 
 	// General ledger codes
-	GLExpenseAccount string `json:"gl_expense_account,omitempty"`
-	GLBankAccount    string `json:"gl_bank_account,omitempty"`
-	CostCenter       string `json:"cost_center,omitempty"`
+	GLExpenseAccount string `json:"gl_expense_account,omitempty" validate:"omitempty,max=50,safe_text"`
+	GLBankAccount    string `json:"gl_bank_account,omitempty" validate:"omitempty,max=50,safe_text"`
+	CostCenter       string `json:"cost_center,omitempty" validate:"omitempty,max=100,safe_text"`
 
 	// Payment terms and vendor reference
-	PaymentTerms          string `json:"payment_terms,omitempty"`
-	VendorReferenceNumber string `json:"vendor_reference_number,omitempty"`
+	PaymentTerms          string `json:"payment_terms,omitempty" validate:"omitempty,max=50,safe_text"`
+	VendorReferenceNumber string `json:"vendor_reference_number,omitempty" validate:"omitempty,max=100,safe_text"`
 
 	// Metadata
 	Metadata map[string]interface{} `json:"metadata,omitempty"`
@@ -73,35 +73,35 @@ type UpdateVoucherRequest struct {
 	RelationID *uuid.UUID `json:"relation_id,omitempty"`
 
 	// Invoice details
-	InvoiceNumber  *string     `json:"invoice_number,omitempty"`
+	InvoiceNumber  *string     `json:"invoice_number,omitempty" validate:"omitempty,min=1,max=100,safe_text"`
 	InvoiceDate    *types.Date `json:"invoice_date,omitempty"`
 	InvoiceDueDate *types.Date `json:"invoice_due_date,omitempty"`
 
 	// Amounts (all in paise)
-	GrossAmount    *int64   `json:"gross_amount,omitempty"`
-	NetAmount      *int64   `json:"net_amount,omitempty"`
-	Currency       *string  `json:"currency,omitempty"`
-	GSTAmount      *int64   `json:"gst_amount,omitempty"`
+	GrossAmount    *int64   `json:"gross_amount,omitempty" validate:"omitempty,gt=0"`
+	NetAmount      *int64   `json:"net_amount,omitempty" validate:"omitempty,gt=0"`
+	Currency       *string  `json:"currency,omitempty" validate:"omitempty,oneof=INR USD"`
+	GSTAmount      *int64   `json:"gst_amount,omitempty" validate:"omitempty,gte=0"`
 	GSTRate        *float64 `json:"gst_rate,omitempty"`
-	CGSTAmount     *int64   `json:"cgst_amount,omitempty"`
-	SGSTAmount     *int64   `json:"sgst_amount,omitempty"`
-	IGSTAmount     *int64   `json:"igst_amount,omitempty"`
-	TDSAmount      *int64   `json:"tds_amount,omitempty"`
+	CGSTAmount     *int64   `json:"cgst_amount,omitempty" validate:"omitempty,gte=0"`
+	SGSTAmount     *int64   `json:"sgst_amount,omitempty" validate:"omitempty,gte=0"`
+	IGSTAmount     *int64   `json:"igst_amount,omitempty" validate:"omitempty,gte=0"`
+	TDSAmount      *int64   `json:"tds_amount,omitempty" validate:"omitempty,gte=0"`
 	TDSRate        *float64 `json:"tds_rate,omitempty"`
-	TDSSection     *string  `json:"tds_section,omitempty"`
-	FeeAmount      *int64   `json:"fee_amount,omitempty"`
-	DiscountAmount *int64   `json:"discount_amount,omitempty"`
+	TDSSection     *string  `json:"tds_section,omitempty" validate:"omitempty,min=1,max=50,safe_text"`
+	FeeAmount      *int64   `json:"fee_amount,omitempty" validate:"omitempty,gte=0"`
+	DiscountAmount *int64   `json:"discount_amount,omitempty" validate:"omitempty,gte=0"`
 
 	// Additional details
 	FinancialDetails *map[string]interface{} `json:"financial_details,omitempty"`
 	Attachments      *map[string]interface{} `json:"attachments,omitempty"`
-	ExpenseCategory  *string                 `json:"expense_category,omitempty"`
-	Description      *string                 `json:"description,omitempty"`
+	ExpenseCategory  *string                 `json:"expense_category,omitempty" validate:"omitempty,min=1,max=100,safe_text"`
+	Description      *string                 `json:"description,omitempty" validate:"omitempty,min=1,max=500,safe_text"`
 
 	// General ledger codes
-	GLExpenseAccount *string `json:"gl_expense_account,omitempty"`
-	GLBankAccount    *string `json:"gl_bank_account,omitempty"`
-	CostCenter       *string `json:"cost_center,omitempty"`
+	GLExpenseAccount *string `json:"gl_expense_account,omitempty" validate:"omitempty,min=1,max=50,safe_text"`
+	GLBankAccount    *string `json:"gl_bank_account,omitempty" validate:"omitempty,min=1,max=50,safe_text"`
+	CostCenter       *string `json:"cost_center,omitempty" validate:"omitempty,min=1,max=100,safe_text"`
 
 	// Metadata
 	Metadata *map[string]interface{} `json:"metadata,omitempty"`
@@ -243,22 +243,22 @@ type VoucherListSummary struct {
 
 // CreateMultiVouchersRequest represents request to create multiple vouchers for multi-bill payment
 type CreateMultiVouchersRequest struct {
-	BusinessID uuid.UUID            `json:"-"` // Populated from X-Business-ID header
+	BusinessID uuid.UUID            `json:"-"` // Populated from bid claim in JWT context
 	UserID     uuid.UUID            `json:"-"` // Populated from JWT token
-	Vouchers   []BillVoucherRequest `json:"vouchers"`
+	Vouchers   []BillVoucherRequest `json:"vouchers" validate:"required,min=1,dive"`
 }
 
 // BillVoucherRequest represents a single bill in multi-bill payment
 type BillVoucherRequest struct {
-	RelationID       uuid.UUID              `json:"relation_id"` // Single identifier for business-payee-account relationship
-	InvoiceNumber    string                 `json:"invoice_number"`
+	RelationID       uuid.UUID              `json:"relation_id" validate:"required"` // Single identifier for business-payee-account relationship
+	InvoiceNumber    string                 `json:"invoice_number" validate:"required,min=1,max=100,safe_text"`
 	InvoiceDate      *types.Date            `json:"invoice_date,omitempty"`
-	GrossAmount      int64                  `json:"gross_amount"`
-	NetAmount        int64                  `json:"net_amount"`
-	GSTAmount        int64                  `json:"gst_amount"`
-	TDSAmount        int64                  `json:"tds_amount"`
-	ExpenseCategory  string                 `json:"expense_category,omitempty"`
-	Description      string                 `json:"description,omitempty"`
+	GrossAmount      int64                  `json:"gross_amount" validate:"required,gt=0"`
+	NetAmount        int64                  `json:"net_amount" validate:"required,gt=0"`
+	GSTAmount        int64                  `json:"gst_amount" validate:"gte=0"`
+	TDSAmount        int64                  `json:"tds_amount" validate:"gte=0"`
+	ExpenseCategory  string                 `json:"expense_category,omitempty" validate:"omitempty,max=100,safe_text"`
+	Description      string                 `json:"description,omitempty" validate:"omitempty,max=500,safe_text"`
 	FinancialDetails map[string]interface{} `json:"financial_details,omitempty"`
 }
 
@@ -325,7 +325,7 @@ type ApproveCancellationResponse struct {
 
 // GetVouchersByPayeeRequest represents request to get vouchers for a specific payee
 type GetVouchersByPayeeRequest struct {
-	BusinessID uuid.UUID `json:"business_id"` // From X-Business-ID header
+	BusinessID uuid.UUID `json:"business_id"` // From bid claim in JWT context
 	RelationID uuid.UUID `json:"relation_id"` // From path parameter
 	Page       int       `json:"page"`        // Page number (1-based)
 	PageSize   int       `json:"page_size"`   // Items per page

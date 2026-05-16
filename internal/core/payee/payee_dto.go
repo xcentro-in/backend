@@ -12,7 +12,7 @@ import (
 // OnboardPayeeRequest represents a polymorphic request to onboard a new payee
 // The PayeeType field determines which type-specific fields are required
 type OnboardPayeeRequest struct {
-	BusinessID string    `json:"-"` // Our customer (extracted from X-Business-ID header)
+	BusinessID string    `json:"-"` // Our customer (extracted from bid claim in JWT context)
 	AddedBy    string    `json:"-"` // User who is adding this payee (extracted from JWT context)
 	PayeeType  PayeeType `json:"payee_type"` // Type discriminator: vendor, gst_payment, biller, employee
 
@@ -106,7 +106,7 @@ type OnboardPayeeResponse struct {
 
 // UpdateRelationRequest represents a request to update customer-payee relationship metadata
 type UpdateRelationRequest struct {
-	BusinessID string `json:"-"` // Our customer (extracted from X-Business-ID header)
+	BusinessID string `json:"-"` // Our customer (extracted from bid claim in JWT context)
 	PayeeID    string `json:"payee_id"`
 	AccountID  string `json:"account_id"`
 
@@ -121,7 +121,7 @@ type UpdateRelationRequest struct {
 
 // UpdatePayeeStatusRequest represents a request to toggle payee active status
 type UpdatePayeeStatusRequest struct {
-	BusinessID string `json:"-"` // Our customer (extracted from X-Business-ID header)
+	BusinessID string `json:"-"` // Our customer (extracted from bid claim in JWT context)
 	RelationID string `json:"-"` // Extracted from URL path parameter
 	IsActive   bool   `json:"is_active"`
 }
@@ -372,4 +372,33 @@ type PayeeAccountDetails struct {
 	AccountNumberLast4 string `json:"account_number_last_4"`
 	BankName           string `json:"bank_name"`
 	IFSCCode           string `json:"ifsc_code"`
+}
+
+// ############################################################################
+// # IFSC Validation (For GET /payees/validate-ifsc/:ifsc_code)
+// ############################################################################
+
+// IFSCValidationRequest represents the request for IFSC validation (from URL path parameter)
+type IFSCValidationRequest struct {
+	IFSCCode string `param:"ifsc_code" validate:"required,ifsc"`
+}
+
+// IFSCValidationResponse represents the response from IFSC validation
+type IFSCValidationResponse struct {
+	IFSC    string              `json:"ifsc"`
+	Bank    string              `json:"bank"`
+	Branch  string              `json:"branch"`
+	Address string              `json:"address"`
+	City    string              `json:"city"`
+	Contact string              `json:"contact"`
+	MICR    string              `json:"micr"`
+	Features IFSCBankFeatures   `json:"features"`
+}
+
+// IFSCBankFeatures represents bank features
+type IFSCBankFeatures struct {
+	RTGS bool `json:"rtgs"`
+	NEFT bool `json:"neft"`
+	IMPS bool `json:"imps"`
+	UPI  bool `json:"upi"`
 }

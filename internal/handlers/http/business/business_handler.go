@@ -3,10 +3,10 @@ package business
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/labstack/echo/v4"
-	redisClient "xcentro.in/internal/adapters/cache/redis/client"
 	"xcentro.in/internal/core/auth"
 	"xcentro.in/internal/core/business"
 	"xcentro.in/internal/core/shared"
@@ -38,46 +38,45 @@ func NewBusinessHandler(businessService business.BusinessService, authService au
 	}
 }
 
-// getRequesterRoleForBusiness extracts the requester's role for a specific business from middleware context
+// getRequesterRoleForBusiness extracts the requester's role for the active business from JWT context
 func (h *BusinessHandler) getRequesterRoleForBusiness(c echo.Context, businessID string) (shared.UserRole, error) {
-	ur := c.Get("userRoles")
-	if ur == nil {
+	bid, _ := c.Get("bid").(string)
+	role, _ := c.Get("role").(string)
+	if bid == "" || role == "" {
 		return "", fmt.Errorf("no business association found")
 	}
-	roles := ur.([]*business.BusinessUserRelation)
-
-	for _, rel := range roles {
-		if rel.BID == businessID {
-			return rel.Role, nil
-		}
+	if bid != businessID {
+		return "", fmt.Errorf("you don't have access to this business")
 	}
-
-	return "", fmt.Errorf("you don't have access to this business")
+	return shared.UserRole(role), nil
 }
 
-func RegisterBusinessRoutes(e *echo.Group, businessService business.BusinessService, authService auth.AuthService, userService user.UserService, s3Config *config.S3Config, businessUserRelRepo business.BusinessUserRelationRepository, rclient *redisClient.RedisClient, cookieManager *httputil.CookieManager) {
+func RegisterBusinessRoutes(e *echo.Group, businessService business.BusinessService, authService auth.AuthService, userService user.UserService, s3Config *config.S3Config, cookieManager *httputil.CookieManager) {
 	handler := NewBusinessHandler(businessService, authService, userService, s3Config)
 
 	businessGroup := e.Group("/business")
-	// Apply middleware to the business group (JWT, CSRF, rate limiter, then business roles)
+	// Apply middleware to the business group (JWT, CSRF, rate limiter)
 	businessGroup.Use(middleware.JWTMiddleware(authService))
 	businessGroup.Use(middleware.CSRFMiddleware(cookieManager))
 	businessGroup.Use(ratelimiter.MiddlewareDefault())
-	businessGroup.Use(middleware.BusinessRolesMiddleware(businessUserRelRepo, rclient))
 
 	// Business details route
 	businessGroup.GET("", handler.GetBusinessDetails)
 
-	// Onboarding routes
-	onboardingGroup := businessGroup.Group("/onboard")
-	onboardingGroup.POST("/init", handler.InitiateOnboarding, middleware.TurnstileMiddleware())
-	onboardingGroup.POST("/complete", handler.CompleteOnboarding, middleware.TurnstileMiddleware())
-	onboardingGroup.GET("/status", handler.GetOnboardingStatus)
-	onboardingGroup.GET("/upload", handler.UploadKYBDocuments)
-	onboardingGroup.POST("/confirm-upload", handler.ConfirmKYBDocumentsUpload, middleware.TurnstileMiddleware())
+	// Business onboarding routes — all exempt from KYC gate so re-KYC flow works.
+	noKycBusiness := e.Group("/business/onboard")
+	noKycBusiness.Use(middleware.JWTMiddlewareNoKYCCheck(authService))
+	noKycBusiness.Use(middleware.CSRFMiddleware(cookieManager))
+	noKycBusiness.Use(ratelimiter.MiddlewareDefault())
+	noKycBusiness.POST("/init", handler.InitiateOnboarding, middleware.TurnstileMiddleware())
+	noKycBusiness.POST("/complete", handler.CompleteOnboarding, middleware.TurnstileMiddleware())
+	noKycBusiness.GET("/status", handler.GetOnboardingStatus)
+	noKycBusiness.GET("/upload", handler.UploadKYBDocuments)
+	noKycBusiness.POST("/confirm-upload", handler.ConfirmKYBDocumentsUpload, middleware.TurnstileMiddleware())
 
-	// Invite user route
+	// Invite user routes
 	businessGroup.POST("/invite-user", handler.InviteUser, middleware.TurnstileMiddleware())
+	businessGroup.POST("/resend-invite", handler.ResendInvite, middleware.TurnstileMiddleware())
 
 	// User management routes
 	businessGroup.GET("/users", handler.ListBusinessUsers)
@@ -88,20 +87,25 @@ func RegisterBusinessRoutes(e *echo.Group, businessService business.BusinessServ
 }
 
 func (h *BusinessHandler) UploadKYBDocuments(c echo.Context) error {
-	// Get user roles from middleware
-	ur := c.Get("userRoles")
-	if ur == nil {
-		return c.JSON(403, map[string]interface{}{"message": "Create a business first", "data": nil})
+	bid, _ := c.Get("bid").(string)
+	if bid == "" {
+		bid = c.QueryParam("bid")
 	}
-	roles := ur.([]*business.BusinessUserRelation)
+	if bid == "" {
+		return c.JSON(http.StatusUnauthorized, map[string]interface{}{
+			"error":   "NO_BUSINESS_CONTEXT",
+			"message": "No active business in token or bid query param",
+		})
+	}
+	c.Set("bid", bid)
 
 	// Get presigned URL from service (service handles authorization and S3 operations)
-	url, err := h.businessService.GetKYBDocumentUploadURL(c.Request().Context(), roles)
+	url, err := h.businessService.GetKYBDocumentUploadURL(c, c.Request().Context())
 	if err != nil {
 		h.logger.Errorf("Error getting upload URL: %v", err)
 		return c.JSON(500, map[string]interface{}{
 			"error":   "INTERNAL_ERROR",
-			"message": err.Error(),
+			"message": "Failed to generate upload URL",
 		})
 	}
 
@@ -109,20 +113,25 @@ func (h *BusinessHandler) UploadKYBDocuments(c echo.Context) error {
 }
 
 func (h *BusinessHandler) ConfirmKYBDocumentsUpload(c echo.Context) error {
-	// Get user roles from middleware
-	ur := c.Get("userRoles")
-	if ur == nil {
-		return c.JSON(403, map[string]interface{}{"message": "Create a business first", "data": nil})
+	bid, _ := c.Get("bid").(string)
+	if bid == "" {
+		bid = c.QueryParam("bid")
 	}
-	roles := ur.([]*business.BusinessUserRelation)
+	if bid == "" {
+		return c.JSON(http.StatusUnauthorized, map[string]interface{}{
+			"error":   "NO_BUSINESS_CONTEXT",
+			"message": "No active business in token or bid query param",
+		})
+	}
+	c.Set("bid", bid)
 
 	// Confirm upload (service handles authorization, S3 operations, and DB update)
-	fileurl, err := h.businessService.ConfirmKYBDocumentUpload(c.Request().Context(), roles)
+	fileurl, err := h.businessService.ConfirmKYBDocumentUpload(c, c.Request().Context())
 	if err != nil {
 		h.logger.Errorf("Error confirming upload: %v", err)
 		return c.JSON(500, map[string]interface{}{
 			"error":   "INTERNAL_ERROR",
-			"message": err.Error(),
+			"message": "Failed to confirm document upload",
 		})
 	}
 
@@ -135,16 +144,13 @@ func (h *BusinessHandler) ConfirmKYBDocumentsUpload(c echo.Context) error {
 
 // InitiateOnboarding creates a new business and starts the KYB process
 func (h *BusinessHandler) InitiateOnboarding(c echo.Context) error {
-	// Check if user already has business relations
-	ur := c.Get("userRoles")
-	if ur != nil {
-		roles := ur.([]*business.BusinessUserRelation)
-		if len(roles) > 0 {
-			return c.JSON(403, map[string]interface{}{
-				"error":   "USER_ALREADY_ASSOCIATED",
-				"message": "User is already associated with a business",
-			})
-		}
+	// Check if user already has an active business in JWT context
+	bid, _ := c.Get("bid").(string)
+	if bid != "" {
+		return c.JSON(403, map[string]interface{}{
+			"error":   "USER_ALREADY_ASSOCIATED",
+			"message": "User is already associated with a business",
+		})
 	}
 
 	// Parse request
@@ -224,19 +230,12 @@ func (h *BusinessHandler) CompleteOnboarding(c echo.Context) error {
 	}
 	userID := userIDRaw.(string)
 
-	// Get businessID from header and set it BEFORE validation
-	businessID := c.Request().Header.Get("X-Business-ID")
-	if businessID == "" {
-		return c.JSON(400, map[string]interface{}{
-			"error":   "MISSING_BUSINESS_ID",
-			"message": "X-Business-ID header is required",
-		})
-	}
-	req.BID = businessID
+	// Pass the JWT bid to the request (may be empty — service will resolve from DB if needed)
+	req.BID, _ = c.Get("bid").(string)
 
-	// Auto-populate ITID from business data if not provided
-	if req.ITID == "" {
-		businessData, err := h.businessService.GetBusiness(c.Request().Context(), businessID)
+	// Auto-populate ITID from business data if not provided (only if bid is known at handler level)
+	if req.ITID == "" && req.BID != "" {
+		businessData, err := h.businessService.GetBusiness(c.Request().Context(), req.BID)
 		if err != nil {
 			h.logger.Errorf("Failed to fetch business data: %v", err)
 			return c.JSON(400, map[string]interface{}{
@@ -245,14 +244,14 @@ func (h *BusinessHandler) CompleteOnboarding(c echo.Context) error {
 			})
 		}
 		if businessData.ITID == "" {
-			h.logger.Errorf("Business %s has no ITID - initiate onboarding first", businessID)
+			h.logger.Errorf("Business %s has no ITID - initiate onboarding first", req.BID)
 			return c.JSON(400, map[string]interface{}{
 				"error":   "INCOMPLETE_ONBOARDING",
 				"message": "Business onboarding not initiated - please call initiate endpoint first",
 			})
 		}
 		req.ITID = businessData.ITID
-		h.logger.Infof("Auto-populated ITID %s from business data for BID %s", req.ITID, businessID)
+		h.logger.Infof("Auto-populated ITID %s from business data for BID %s", req.ITID, req.BID)
 	}
 
 	// Validate input (after BID and ITID are set)
@@ -271,18 +270,8 @@ func (h *BusinessHandler) CompleteOnboarding(c echo.Context) error {
 		})
 	}
 
-	// Get user roles from middleware context
-	ur := c.Get("userRoles")
-	if ur == nil {
-		return c.JSON(403, map[string]interface{}{
-			"error":   "FORBIDDEN",
-			"message": "No business association found",
-		})
-	}
-	userRoles := ur.([]*business.BusinessUserRelation)
-
-	// Complete KYB (passing middleware-injected roles)
-	response, err := h.businessService.CompleteKYB(c.Request().Context(), userID, userRoles, &req)
+	// Complete KYB (service reads bid from echo.Context)
+	response, err := h.businessService.CompleteKYB(c, c.Request().Context(), userID, &req)
 	if err != nil {
 		h.logger.Errorf("Error completing KYB: %v", err)
 		return h.handleBusinessError(c, err)
@@ -306,15 +295,8 @@ func (h *BusinessHandler) GetOnboardingStatus(c echo.Context) error {
 	}
 	userID := userIDRaw.(string)
 
-	// Get user roles from middleware context
-	ur := c.Get("userRoles")
-	var userRoles []*business.BusinessUserRelation
-	if ur != nil {
-		userRoles = ur.([]*business.BusinessUserRelation)
-	}
-
-	// Get onboarding status (passing middleware-injected roles)
-	status, err := h.businessService.GetOnboardingStatus(c.Request().Context(), userID, userRoles)
+	// Get onboarding status (service reads bid from echo.Context)
+	status, err := h.businessService.GetOnboardingStatus(c, c.Request().Context(), userID)
 	if err != nil {
 		h.logger.Errorf("Error fetching onboarding status: %v", err)
 		return c.JSON(500, map[string]interface{}{
@@ -331,24 +313,12 @@ func (h *BusinessHandler) GetOnboardingStatus(c echo.Context) error {
 
 // GetBusinessDetails retrieves business details for display in UI
 func (h *BusinessHandler) GetBusinessDetails(c echo.Context) error {
-	// Read BusinessID from X-Business-ID header
-	businessID := strings.TrimSpace(c.Request().Header.Get("X-Business-ID"))
+	businessID, _ := c.Get("bid").(string)
 	if businessID == "" {
-		return c.JSON(400, map[string]interface{}{
-			"error":   "MISSING_BUSINESS_ID",
-			"message": "X-Business-ID header is required",
+		return c.JSON(http.StatusUnauthorized, map[string]interface{}{
+			"error":   "NO_BUSINESS_CONTEXT",
+			"message": "No active business in token",
 		})
-	}
-
-	// Validate UUID format
-	if v, ok := c.Echo().Validator.(*customValidator.CustomValidator); ok {
-		if err := v.Var(businessID, "required,uuid"); err != nil {
-			h.logger.Errorf("Invalid business ID format: %s", businessID)
-			return c.JSON(400, map[string]interface{}{
-				"error":   "INVALID_BUSINESS_ID",
-				"message": "X-Business-ID must be a valid UUID",
-			})
-		}
 	}
 
 	// Get requester's role for this business
@@ -378,24 +348,12 @@ func (h *BusinessHandler) GetBusinessDetails(c echo.Context) error {
 
 // InviteUser invites a user to a business (only admin/owner can invite)
 func (h *BusinessHandler) InviteUser(c echo.Context) error {
-	// Read BusinessID from X-Business-ID header
-	businessID := strings.TrimSpace(c.Request().Header.Get("X-Business-ID"))
+	businessID, _ := c.Get("bid").(string)
 	if businessID == "" {
-		return c.JSON(400, map[string]interface{}{
-			"error":   "MISSING_BUSINESS_ID",
-			"message": "X-Business-ID header is required",
+		return c.JSON(http.StatusUnauthorized, map[string]interface{}{
+			"error":   "NO_BUSINESS_CONTEXT",
+			"message": "No active business in token",
 		})
-	}
-
-	// Validate UUID format
-	if v, ok := c.Echo().Validator.(*customValidator.CustomValidator); ok {
-		if err := v.Var(businessID, "required,uuid"); err != nil {
-			h.logger.Errorf("Invalid business ID format: %s", businessID)
-			return c.JSON(400, map[string]interface{}{
-				"error":   "INVALID_BUSINESS_ID",
-				"message": "X-Business-ID must be a valid UUID",
-			})
-		}
 	}
 
 	// Parse request
@@ -465,26 +423,124 @@ func (h *BusinessHandler) InviteUser(c echo.Context) error {
 	})
 }
 
-// ListBusinessUsers lists all users associated with a business (only admin/owner can access)
-func (h *BusinessHandler) ListBusinessUsers(c echo.Context) error {
-	// Read BusinessID from X-Business-ID header
-	businessID := strings.TrimSpace(c.Request().Header.Get("X-Business-ID"))
+// ResendInvite resends invitation email to a user (only admin/owner)
+func (h *BusinessHandler) ResendInvite(c echo.Context) error {
+	businessID, _ := c.Get("bid").(string)
 	if businessID == "" {
-		return c.JSON(400, map[string]interface{}{
-			"error":   "MISSING_BUSINESS_ID",
-			"message": "X-Business-ID header is required",
+		return c.JSON(http.StatusUnauthorized, map[string]interface{}{
+			"error":   "NO_BUSINESS_CONTEXT",
+			"message": "No active business in token",
 		})
 	}
 
-	// Validate UUID format
-	if v, ok := c.Echo().Validator.(*customValidator.CustomValidator); ok {
-		if err := v.Var(businessID, "required,uuid"); err != nil {
-			h.logger.Errorf("Invalid business ID format: %s", businessID)
+	// Parse request
+	var req struct {
+		Email string `json:"email" validate:"required,email"`
+	}
+
+	// Bind input
+	if err := c.Bind(&req); err != nil {
+		h.logger.Errorf("Invalid input: %v", err)
+		return c.JSON(400, map[string]interface{}{
+			"error":   "INVALID_INPUT",
+			"message": "Invalid request payload",
+		})
+	}
+
+	// Validate input
+	if err := c.Validate(&req); err != nil {
+		h.logger.Errorf("Validation failed: %v", err)
+		if ve, ok := err.(*customValidator.ValidationError); ok {
 			return c.JSON(400, map[string]interface{}{
-				"error":   "INVALID_BUSINESS_ID",
-				"message": "X-Business-ID must be a valid UUID",
+				"error":   "VALIDATION_FAILED",
+				"message": "Validation failed",
+				"errors":  ve.Errors,
 			})
 		}
+		return c.JSON(400, map[string]interface{}{
+			"error":   "VALIDATION_FAILED",
+			"message": "Validation failed",
+		})
+	}
+
+	// Get requester's role for this business
+	requesterRole, err := h.getRequesterRoleForBusiness(c, businessID)
+	if err != nil {
+		return c.JSON(403, map[string]interface{}{
+			"error":   "FORBIDDEN",
+			"message": err.Error(),
+		})
+	}
+
+	// Authorization: Only admin or owner can resend invitations
+	if requesterRole != shared.Owner && requesterRole != shared.Admin {
+		return c.JSON(403, map[string]interface{}{
+			"error":   "FORBIDDEN",
+			"message": "Only business owner or admin can resend invitations",
+		})
+	}
+
+	// Validate user belongs to this business
+	isValid, err := h.businessService.ValidateUserInBusiness(c.Request().Context(), req.Email, businessID)
+	if err != nil {
+		h.logger.Errorf("Error validating user in business: %v", err)
+		return c.JSON(500, map[string]interface{}{
+			"error":   "INTERNAL_ERROR",
+			"message": "Failed to validate user",
+		})
+	}
+
+	if !isValid {
+		return c.JSON(404, map[string]interface{}{
+			"error":   "USER_NOT_FOUND",
+			"message": "User not found in this business",
+		})
+	}
+
+	// Resend invitation email using auth service
+	if err := h.authService.ResendInviteEmail(c.Request().Context(), req.Email); err != nil {
+		h.logger.Errorf("Error resending invitation email: %v", err)
+
+		// Check for specific error types
+		if strings.Contains(err.Error(), "user not found") {
+			return c.JSON(404, map[string]interface{}{
+				"error":   "USER_NOT_FOUND",
+				"message": "User not found",
+			})
+		}
+
+		if strings.Contains(err.Error(), "already activated") {
+			return c.JSON(400, map[string]interface{}{
+				"error":   "ALREADY_ACTIVATED",
+				"message": "User has already activated their account",
+			})
+		}
+
+		return c.JSON(500, map[string]interface{}{
+			"error":   "EMAIL_SEND_FAILED",
+			"message": "Failed to send invitation email. Please try again.",
+		})
+	}
+
+	userID, _ := c.Get("userId").(string)
+	h.logger.Infof("Admin %s resent invitation to %s for business %s", userID, req.Email, businessID)
+
+	return c.JSON(200, map[string]interface{}{
+		"message": "Invitation email resent successfully",
+		"data": map[string]string{
+			"email": req.Email,
+		},
+	})
+}
+
+// ListBusinessUsers lists all users associated with a business (only admin/owner can access)
+func (h *BusinessHandler) ListBusinessUsers(c echo.Context) error {
+	businessID, _ := c.Get("bid").(string)
+	if businessID == "" {
+		return c.JSON(http.StatusUnauthorized, map[string]interface{}{
+			"error":   "NO_BUSINESS_CONTEXT",
+			"message": "No active business in token",
+		})
 	}
 
 	// Get requester's role for this business
@@ -514,24 +570,12 @@ func (h *BusinessHandler) ListBusinessUsers(c echo.Context) error {
 
 // UpdateBusinessUser updates a user's role in a business (only admin/owner can update)
 func (h *BusinessHandler) UpdateBusinessUser(c echo.Context) error {
-	// Read BusinessID from X-Business-ID header
-	businessID := strings.TrimSpace(c.Request().Header.Get("X-Business-ID"))
+	businessID, _ := c.Get("bid").(string)
 	if businessID == "" {
-		return c.JSON(400, map[string]interface{}{
-			"error":   "MISSING_BUSINESS_ID",
-			"message": "X-Business-ID header is required",
+		return c.JSON(http.StatusUnauthorized, map[string]interface{}{
+			"error":   "NO_BUSINESS_CONTEXT",
+			"message": "No active business in token",
 		})
-	}
-
-	// Validate UUID format
-	if v, ok := c.Echo().Validator.(*customValidator.CustomValidator); ok {
-		if err := v.Var(businessID, "required,uuid"); err != nil {
-			h.logger.Errorf("Invalid business ID format: %s", businessID)
-			return c.JSON(400, map[string]interface{}{
-				"error":   "INVALID_BUSINESS_ID",
-				"message": "X-Business-ID must be a valid UUID",
-			})
-		}
 	}
 
 	// Parse request
@@ -588,30 +632,15 @@ func (h *BusinessHandler) UpdateBusinessUser(c echo.Context) error {
 
 // RemoveBusinessUser removes a user from a business (only admin/owner can remove)
 func (h *BusinessHandler) RemoveBusinessUser(c echo.Context) error {
-	// Read BusinessID from X-Business-ID header
-	businessID := strings.TrimSpace(c.Request().Header.Get("X-Business-ID"))
+	businessID, _ := c.Get("bid").(string)
 	if businessID == "" {
-		return c.JSON(400, map[string]interface{}{
-			"error":   "MISSING_BUSINESS_ID",
-			"message": "X-Business-ID header is required",
+		return c.JSON(http.StatusUnauthorized, map[string]interface{}{
+			"error":   "NO_BUSINESS_CONTEXT",
+			"message": "No active business in token",
 		})
 	}
 
-	// Validate UUID format
-	if v, ok := c.Echo().Validator.(*customValidator.CustomValidator); ok {
-		if err := v.Var(businessID, "required,uuid"); err != nil {
-			h.logger.Errorf("Invalid business ID format: %s", businessID)
-			return c.JSON(400, map[string]interface{}{
-				"error":   "INVALID_BUSINESS_ID",
-				"message": "X-Business-ID must be a valid UUID",
-			})
-		}
-	}
-
-	// Parse request
 	var req business.RemoveBusinessUserRequest
-
-	// Bind input
 	if err := c.Bind(&req); err != nil {
 		h.logger.Errorf("Invalid input: %v", err)
 		return c.JSON(400, map[string]interface{}{
@@ -619,8 +648,6 @@ func (h *BusinessHandler) RemoveBusinessUser(c echo.Context) error {
 			"message": "Invalid request payload",
 		})
 	}
-
-	// Validate input
 	if err := c.Validate(&req); err != nil {
 		h.logger.Errorf("Validation failed: %v", err)
 		if ve, ok := err.(*customValidator.ValidationError); ok {
@@ -645,7 +672,7 @@ func (h *BusinessHandler) RemoveBusinessUser(c echo.Context) error {
 		})
 	}
 
-	// Remove user from business (service handles all authorization checks and fetches target role)
+	// Remove target user from business
 	err = h.businessService.RemoveUserFromBusiness(c.Request().Context(), businessID, req.UserID, requesterRole)
 	if err != nil {
 		h.logger.Errorf("Error removing user from business: %v", err)
@@ -700,9 +727,10 @@ func (h *BusinessHandler) handleBusinessError(c echo.Context, err error) error {
 		}
 	}
 
-	// Generic error
+	// Generic error - log the actual error for debugging
+	h.logger.Errorf("Unexpected error: %v", err)
 	return c.JSON(500, map[string]interface{}{
 		"error":   "INTERNAL_ERROR",
-		"message": err.Error(),
+		"message": "An internal server error occurred",
 	})
 }

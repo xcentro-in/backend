@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/google/uuid"
@@ -20,6 +21,7 @@ import (
 	"xcentro.in/internal/services/verification"
 	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/logger"
+	"xcentro.in/internal/shared/timeutil"
 	"xcentro.in/internal/shared/utils"
 )
 
@@ -534,7 +536,7 @@ func (s *PayeeService) onboardGSTPayee(ctx context.Context, req payee.OnboardPay
 			"financial_year", gst.FinancialYear)
 
 		// Check if it's still valid
-		if time.Now().After(existingVA.ValidUntil) {
+		if timeutil.IsExpired(existingVA.ValidUntil) {
 			s.logger.WarnWith("Existing virtual account expired, will create new one")
 			needsVirtualAccountCreation = true
 		} else {
@@ -1964,5 +1966,81 @@ func (s *PayeeService) validateAccountHolderName(accountHolderName, legalName, t
 		"matched_against", matchedAgainst)
 
 	return nil
+}
+
+// ValidateIFSC validates an IFSC code by calling Razorpay's IFSC API
+// Returns bank details if the IFSC is valid
+// Note: Format validation is done at the handler level using Echo validator
+func (s *PayeeService) ValidateIFSC(ctx context.Context, ifscCode string) (*payee.IFSCValidationResponse, error) {
+	s.logger.InfoWith("Validating IFSC code with Razorpay API", "ifsc_code", ifscCode)
+
+	// Call Razorpay IFSC API
+	s.logger.DebugWith("Calling Razorpay IFSC API", "ifsc_code", ifscCode)
+
+	// Create HTTP client with timeout
+	httpClient := &http.Client{
+		Timeout: 10 * time.Second,
+	}
+
+	// Make GET request to Razorpay IFSC API
+	url := fmt.Sprintf("https://ifsc.razorpay.com/%s", ifscCode)
+	resp, err := httpClient.Get(url)
+	if err != nil {
+		s.logger.ErrorWith("Failed to call Razorpay API", "error", err)
+		return nil, fmt.Errorf("external API call failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Check HTTP status code
+	if resp.StatusCode == 404 {
+		s.logger.WarnWith("IFSC not found", "ifsc_code", ifscCode)
+		return nil, fmt.Errorf("IFSC not found")
+	}
+	if resp.StatusCode != 200 {
+		s.logger.ErrorWith("Razorpay API returned error", "status_code", resp.StatusCode)
+		return nil, fmt.Errorf("external API returned status: %d", resp.StatusCode)
+	}
+
+	// Parse response
+	var razorpayResp struct {
+		BANK    string `json:"BANK"`
+		IFSC    string `json:"IFSC"`
+		BRANCH  string `json:"BRANCH"`
+		ADDRESS string `json:"ADDRESS"`
+		CITY    string `json:"CITY"`
+		CONTACT string `json:"CONTACT"`
+		MICR    string `json:"MICR"`
+		RTGS    bool   `json:"RTGS"`
+		NEFT    bool   `json:"NEFT"`
+		IMPS    bool   `json:"IMPS"`
+		UPI     bool   `json:"UPI"`
+	}
+
+	if err := json.NewDecoder(resp.Body).Decode(&razorpayResp); err != nil {
+		s.logger.ErrorWith("Failed to decode Razorpay response", "error", err)
+		return nil, fmt.Errorf("failed to parse API response: %w", err)
+	}
+
+	s.logger.InfoWith("IFSC validation successful",
+		"ifsc_code", ifscCode,
+		"bank", razorpayResp.BANK,
+		"branch", razorpayResp.BRANCH)
+
+	// Map to our response structure
+	return &payee.IFSCValidationResponse{
+		IFSC:    razorpayResp.IFSC,
+		Bank:    razorpayResp.BANK,
+		Branch:  razorpayResp.BRANCH,
+		Address: razorpayResp.ADDRESS,
+		City:    razorpayResp.CITY,
+		Contact: razorpayResp.CONTACT,
+		MICR:    razorpayResp.MICR,
+		Features: payee.IFSCBankFeatures{
+			RTGS: razorpayResp.RTGS,
+			NEFT: razorpayResp.NEFT,
+			IMPS: razorpayResp.IMPS,
+			UPI:  razorpayResp.UPI,
+		},
+	}, nil
 }
 

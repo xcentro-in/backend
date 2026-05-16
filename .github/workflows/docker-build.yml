@@ -6,9 +6,7 @@ on:
       - main
     tags:
       - 'v*'
-  pull_request:
-    branches:
-      - main
+  # Removed pull_request trigger - only build and push when merged to main
 
 env:
   REGISTRY: ghcr.io

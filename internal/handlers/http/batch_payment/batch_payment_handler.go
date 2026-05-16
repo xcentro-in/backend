@@ -33,12 +33,12 @@ func NewBatchPaymentHandler(batchService *batch_payment.BatchPaymentService, s3C
 func (h *BatchPaymentHandler) UploadCSV(c echo.Context) error {
 	h.logger.InfoWith("UploadCSV API called")
 
-	// Get business ID from header
-	businessIDStr := c.Request().Header.Get("X-Business-ID")
+	// Get business ID from JWT context (set by JWTMiddleware)
+	businessIDStr, _ := c.Get("bid").(string)
 	if businessIDStr == "" {
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "MISSING_BUSINESS_ID",
-			"message": "X-Business-ID header is required",
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "NO_BUSINESS_CONTEXT",
+			"message": "No active business in token",
 		})
 	}
 
@@ -126,12 +126,12 @@ func (h *BatchPaymentHandler) UploadCSV(c echo.Context) error {
 func (h *BatchPaymentHandler) ProcessBatch(c echo.Context) error {
 	h.logger.InfoWith("ProcessBatch API called")
 
-	// Get business ID from header
-	businessIDStr := c.Request().Header.Get("X-Business-ID")
+	// Get business ID from JWT context (set by JWTMiddleware)
+	businessIDStr, _ := c.Get("bid").(string)
 	if businessIDStr == "" {
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "MISSING_BUSINESS_ID",
-			"message": "X-Business-ID header is required",
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "NO_BUSINESS_CONTEXT",
+			"message": "No active business in token",
 		})
 	}
 
@@ -241,12 +241,12 @@ func (h *BatchPaymentHandler) GetBatchStatus(c echo.Context) error {
 func (h *BatchPaymentHandler) GetBatchList(c echo.Context) error {
 	h.logger.InfoWith("GetBatchList API called")
 
-	// Get business ID from header
-	businessIDStr := c.Request().Header.Get("X-Business-ID")
+	// Get business ID from JWT context (set by JWTMiddleware)
+	businessIDStr, _ := c.Get("bid").(string)
 	if businessIDStr == "" {
-		return c.JSON(http.StatusBadRequest, map[string]any{
-			"error":   "MISSING_BUSINESS_ID",
-			"message": "X-Business-ID header is required",
+		return c.JSON(http.StatusUnauthorized, map[string]any{
+			"error":   "NO_BUSINESS_CONTEXT",
+			"message": "No active business in token",
 		})
 	}
 

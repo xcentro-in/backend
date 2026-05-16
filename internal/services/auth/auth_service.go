@@ -22,7 +22,9 @@ import (
 	"xcentro.in/internal/shared/config"
 	"xcentro.in/internal/shared/email"
 	"xcentro.in/internal/shared/logger"
+	"xcentro.in/internal/shared/ratelimiter"
 	"xcentro.in/internal/shared/security"
+	"xcentro.in/internal/shared/timeutil"
 )
 
 type AuthService struct {
@@ -41,6 +43,7 @@ type AuthService struct {
 	metrics             metrics.MetricsProvider
 	appConfig           *config.Config
 	txManager           client.TxManager
+	rateLimiter         *ratelimiter.RateLimiter
 }
 
 func NewAuthService(
@@ -69,11 +72,12 @@ func NewAuthService(
 		metrics:             clients.GetMetrics().(metrics.MetricsProvider),
 		appConfig:           cfg,
 		txManager:           clients.GetTxManager(), // Extract from clients
+		rateLimiter:         ratelimiter.GetInstance(),
 	}
 }
 
-// generateToken creates a JWT token with device information and session ID
-func (s *AuthService) generateToken(userID string, sessionID string, deviceType string, deviceVersion int, expiry time.Duration) (string, error) {
+// generateToken creates a JWT token with device information, session ID, and optional business context
+func (s *AuthService) generateToken(userID string, sessionID string, deviceType string, deviceVersion int, bid string, role string, kycStatus string, kycNeeded bool, expiry time.Duration) (string, error) {
 	claims := auth.CustomClaims{
 		RegisteredClaims: jwt.RegisteredClaims{
 			Subject:   userID,
@@ -83,6 +87,10 @@ func (s *AuthService) generateToken(userID string, sessionID string, deviceType 
 		SessionID:     sessionID,
 		DeviceType:    deviceType,
 		DeviceVersion: deviceVersion,
+		Bid:           bid,
+		Role:          role,
+		KycStatus:     kycStatus,
+		KycNeeded:     kycNeeded,
 	}
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	signedToken, err := token.SignedString([]byte(s.config.SecretKey))
@@ -95,16 +103,34 @@ func (s *AuthService) generateToken(userID string, sessionID string, deviceType 
 
 // generateAccessToken creates a new short-lived access token with device information and session ID
 func (s *AuthService) generateAccessToken(userID string, sessionID string, deviceType string, deviceVersion int) (string, error) {
-	return s.generateToken(userID, sessionID, deviceType, deviceVersion, s.config.AccessTokenExpiry)
+	return s.generateToken(userID, sessionID, deviceType, deviceVersion, "", "", "", false, s.config.AccessTokenExpiry)
 }
 
 // generateRefreshToken creates a new long-lived refresh token with device information and session ID
 func (s *AuthService) generateRefreshToken(userID string, sessionID string, deviceType string, deviceVersion int) (string, error) {
-	return s.generateToken(userID, sessionID, deviceType, deviceVersion, s.config.RefreshTokenExpiry)
+	return s.generateToken(userID, sessionID, deviceType, deviceVersion, "", "", "", false, s.config.RefreshTokenExpiry)
+}
+
+// resolveActiveBid returns the user's active business ID. If active_bid is not set in the DB
+// but the user has at least one business relation, it uses the first relation's BID and persists
+// it so future calls are consistent (self-healing for accounts created before active_bid existed).
+func (s *AuthService) resolveActiveBid(ctx context.Context, userID, currentActiveBid string) string {
+	if currentActiveBid != "" {
+		return currentActiveBid
+	}
+	relations, err := s.businessUserRelRepo.FindByUser(ctx, userID)
+	if err != nil || len(relations) == 0 {
+		return ""
+	}
+	fallbackBid := relations[0].BID
+	if setErr := s.userRepo.SetActiveBid(ctx, userID, fallbackBid); setErr != nil {
+		logger.Warnf("resolveActiveBid: failed to persist fallback active_bid for user %s: %v", userID, setErr)
+	}
+	return fallbackBid
 }
 
 // CreateTokenPair creates a new access and refresh token pair with device session management
-func (s *AuthService) CreateTokenPair(ctx context.Context, userID, userAgent string, deviceType string) (accessToken, refreshToken string, err error) {
+func (s *AuthService) CreateTokenPair(ctx context.Context, userID, userAgent string, deviceType string, kycStatus string) (accessToken, refreshToken string, err error) {
 	// Default to web if no device type provided (backward compatibility)
 	if deviceType == "" {
 		deviceType = string(shared.DeviceWeb)
@@ -113,6 +139,24 @@ func (s *AuthService) CreateTokenPair(ctx context.Context, userID, userAgent str
 	// Validate device type
 	if !shared.ValidateDeviceType(deviceType) {
 		return "", "", fmt.Errorf("invalid device type: %s", deviceType)
+	}
+
+	// Fetch active_bid and role from DB so the access token is immediately usable.
+	activeBid := ""
+	activeBidRole := ""
+	activeBidKycNeeded := false
+	if freshUser, fetchErr := s.userRepo.GetUserByID(ctx, userID); fetchErr != nil {
+		logger.Warnf("CreateTokenPair: failed to fetch user %s for bid/role: %v — issuing token with empty bid/role", userID, fetchErr)
+	} else if freshUser != nil {
+		activeBid = s.resolveActiveBid(ctx, userID, freshUser.ActiveBid)
+		if activeBid != "" {
+			if rel, relErr := s.businessUserRelRepo.FindByUserAndBusiness(ctx, userID, activeBid); relErr != nil {
+				logger.Warnf("CreateTokenPair: failed to fetch role for user %s bid %s: %v — issuing token with empty role", userID, activeBid, relErr)
+			} else if rel != nil {
+				activeBidRole = string(rel.Role)
+				activeBidKycNeeded = rel.KycNeeded
+			}
+		}
 	}
 
 	var currentVersion int
@@ -165,8 +209,11 @@ func (s *AuthService) CreateTokenPair(ctx context.Context, userID, userAgent str
 			}
 		}
 
-		// Generate tokens with device information and session ID
-		accessToken, err = s.generateAccessToken(userID, sessionID, deviceType, currentVersion)
+		// Generate tokens with device information and session ID.
+		// Access token includes active_bid, role, kycStatus, kycNeeded fetched from DB so the
+		// cookie token is immediately usable without a separate refresh call.
+		// Refresh token uses empty claims (re-fetched on each access token issue).
+		accessToken, err = s.generateToken(userID, sessionID, deviceType, currentVersion, activeBid, activeBidRole, kycStatus, activeBidKycNeeded, s.config.AccessTokenExpiry)
 		if err != nil {
 			return err
 		}
@@ -185,7 +232,7 @@ func (s *AuthService) CreateTokenPair(ctx context.Context, userID, userAgent str
 			sessionID,
 			userID,
 			tokenHash,
-			time.Now().Add(s.config.RefreshTokenExpiry),
+			timeutil.ExpiryFromNow(s.config.RefreshTokenExpiry),
 			userAgent,
 			deviceType,
 			currentVersion,
@@ -256,7 +303,7 @@ func (s *AuthService) RefreshAccessToken(ctx context.Context, refreshToken strin
 		// Cache the version for future requests
 		go func() {
 			bgCtx := context.Background()
-			if err := s.rclient.Client.Set(bgCtx, cacheKey, dbVersion, keys.TTLDeviceVersion).Err(); err != nil {
+			if err := s.rclient.Client.Set(bgCtx, cacheKey, dbVersion, keys.WithJitter(keys.TTLDeviceVersion)).Err(); err != nil {
 				logger.Warnf("Failed to cache device version: %v", err)
 			}
 		}()
@@ -274,8 +321,111 @@ func (s *AuthService) RefreshAccessToken(ctx context.Context, refreshToken strin
 		logger.Warnf("Failed to update last used: %v", err)
 	}
 
-	// Generate new access token with same device info and session ID
-	return s.generateAccessToken(userID, sessionID, deviceType, deviceVersion)
+	// Re-fetch active_bid, role, kyc_status, and kyc_needed from DB to avoid stale JWT claims (AUTH-05)
+	freshUser, fetchErr := s.userRepo.GetUserByID(ctx, userID)
+	if fetchErr != nil {
+		logger.Errorf("RefreshAccessToken: failed to fetch user %s: %v", userID, fetchErr)
+		return "", fmt.Errorf("failed to validate session")
+	}
+	if freshUser == nil {
+		logger.Warnf("RefreshAccessToken: user %s not found — account deleted", userID)
+		return "", fmt.Errorf("user not found")
+	}
+
+	activeBid := s.resolveActiveBid(ctx, userID, freshUser.ActiveBid)
+	kycStatus := string(freshUser.KycStatus)
+	role := ""
+	kycNeeded := false
+	if activeBid != "" {
+		rel, relErr := s.businessUserRelRepo.FindByUserAndBusiness(ctx, userID, activeBid)
+		if relErr != nil {
+			logger.Errorf("RefreshAccessToken: relation not found for user %s bid %s: %v", userID, activeBid, relErr)
+			return "", fmt.Errorf("failed to validate session")
+		}
+		role = string(rel.Role)
+		if role == "" || role == string(shared.None) {
+			logger.Warnf("RefreshAccessToken: user %s has no assigned role in business %s (role=%q) — denying refresh", userID, activeBid, role)
+			return "", fmt.Errorf("no role assigned")
+		}
+		kycNeeded = rel.KycNeeded
+	}
+
+	// Generate new access token with re-fetched bid/role/kyc_status/kyc_needed
+	return s.generateToken(userID, sessionID, deviceType, deviceVersion, activeBid, role, kycStatus, kycNeeded, s.config.AccessTokenExpiry)
+}
+
+// SwitchBusiness validates that the requesting user (identified via accessToken claims)
+// belongs to newBid, issues a new access token on the same session with updated bid/role,
+// and persists active_bid to DB (non-fatal on DB write failure).
+//
+// Returns: (*SwitchBusinessResponse, newAccessToken string, error)
+// Error cases:
+//   - Invalid/expired accessToken → error (handler: 401)
+//   - User is not a member of newBid → error "user is not a member of this business" (handler: 403)
+//   - Business lookup failure → error (handler: 500)
+func (s *AuthService) SwitchBusiness(ctx context.Context, accessToken, newBid string) (*auth.SwitchBusinessResponse, string, error) {
+	// 1. Parse access token to extract session claims (sessionID, deviceType, deviceVersion, userID)
+	//    Using the same parseAndValidateToken as RefreshAccessToken — access token is a signed JWT.
+	claims, err := s.parseAndValidateToken(accessToken)
+	if err != nil {
+		logger.Warnf("SwitchBusiness: invalid access token: %v", err)
+		return nil, "", fmt.Errorf("invalid access token")
+	}
+	userID := claims.Subject
+	sessionID := claims.SessionID
+	deviceType := claims.DeviceType
+	deviceVersion := claims.DeviceVersion
+
+	// 2. Check membership: any error (including pgx.ErrNoRows wrapping) means access denied.
+	//    FindByUserAndBusiness also returns role and kyc_needed — no additional lookup required.
+	rel, err := s.businessUserRelRepo.FindByUserAndBusiness(ctx, userID, newBid)
+	if err != nil {
+		// Do NOT log at Errorf — this is expected for unauthorized attempts.
+		logger.Warnf("SwitchBusiness: user %s is not a member of business %s: %v", userID, newBid, err)
+		return nil, "", fmt.Errorf("user is not a member of this business")
+	}
+
+	// 3. Fetch business details for kyb_status in response.
+	//    Fatal: if we can't get kyb_status we can't return a valid response body.
+	biz, err := s.businessService.GetBusiness(ctx, newBid)
+	if err != nil {
+		logger.Errorf("SwitchBusiness: failed to fetch business %s: %v", newBid, err)
+		return nil, "", fmt.Errorf("failed to fetch business details")
+	}
+
+	// 4. Issue new access token with updated bid/role on the SAME session.
+	//    CRITICAL: use generateToken (not CreateTokenPair) — switch-business does not create a new session.
+	//    CRITICAL: do not re-set CSRF token — CSRF = HMAC(sessionID, secret); sessionID unchanged.
+	//    Re-fetch kyc_status from DB so it is always current.
+	kycStatus := ""
+	if freshUser, fetchErr := s.userRepo.GetUserByID(ctx, userID); fetchErr != nil {
+		logger.Warnf("SwitchBusiness: failed to fetch kyc_status for user %s: %v — issuing token with empty kyc_status", userID, fetchErr)
+	} else if freshUser != nil {
+		kycStatus = string(freshUser.KycStatus)
+	}
+	newToken, err := s.generateToken(
+		userID, sessionID, deviceType, deviceVersion,
+		newBid, string(rel.Role), kycStatus, rel.KycNeeded,
+		s.config.AccessTokenExpiry,
+	)
+	if err != nil {
+		logger.Errorf("SwitchBusiness: failed to issue new token for user %s: %v", userID, err)
+		return nil, "", fmt.Errorf("failed to issue new token")
+	}
+
+	// 5. Persist active_bid to DB. Non-fatal: token was already issued; a transient DB
+	//    failure should not undo the switch. Matches pattern in BuildUnifiedLoginResponse.
+	if dbErr := s.userRepo.SetActiveBid(ctx, userID, newBid); dbErr != nil {
+		logger.Warnf("SwitchBusiness: failed to persist active_bid for user %s bid %s: %v — continuing", userID, newBid, dbErr)
+	}
+
+	resp := &auth.SwitchBusinessResponse{
+		Bid:       newBid,
+		Role:      string(rel.Role),
+		KybStatus: string(biz.KybStatus),
+		KycNeeded: rel.KycNeeded,
+	}
+	return resp, newToken, nil
 }
 
 // RevokeRefreshToken revokes a specific refresh token (logout from one session)
@@ -407,7 +557,7 @@ func (s *AuthService) ValidateAccessTokenWithVersion(ctx context.Context, tokenS
 		// Cache the version for future requests
 		go func() {
 			bgCtx := context.Background()
-			if err := s.rclient.Client.Set(bgCtx, cacheKey, dbVersion, keys.TTLDeviceVersion).Err(); err != nil {
+			if err := s.rclient.Client.Set(bgCtx, cacheKey, dbVersion, keys.WithJitter(keys.TTLDeviceVersion)).Err(); err != nil {
 				logger.Warnf("Failed to cache device version: %v", err)
 			}
 		}()
@@ -480,12 +630,7 @@ func (s *AuthService) ChangePassword(ctx context.Context, userID, oldPassword, n
 		}
 
 		// Check OTP expiry
-		expiresAt, err := time.Parse(time.RFC3339, verificationCode.ExpiresAt)
-		if err != nil {
-			return fmt.Errorf("invalid expiration time format")
-		}
-
-		if time.Now().After(expiresAt) {
+		if timeutil.IsExpired(verificationCode.ExpiresAt) {
 			return fmt.Errorf("OTP has expired")
 		}
 
@@ -581,14 +726,49 @@ func (s *AuthService) Signup(ctx context.Context, email, password string) (*auth
 		return nil, err
 	}
 
-	// Hash password
+	// Rate limit check FIRST (prevent spam signups)
+	rateLimitKey := fmt.Sprintf("xcentro:rl:email:%s|signup", email)
+	result, err := s.rateLimiter.CheckLimitWithKey(ctx, rateLimitKey, "signup")
+	if err == nil && !result.Allowed {
+		return nil, fmt.Errorf("too many signup attempts. Please wait %s seconds before trying again", result.RetryAfterSecs)
+	}
+
+	// Check if user already exists (security: prevent enumeration)
+	existingUser, err := s.userRepo.GetUserByEmail(ctx, email)
+
+	if err == nil && existingUser != nil {
+		// User exists - handle based on verification status
+		if existingUser.EmailVerified {
+			// Verified user - silent success (prevent enumeration attack)
+			logger.Infof("Signup attempt for verified email (silent): %s", email)
+			return &auth.SignupResponse{
+				UserID:  existingUser.Id,
+				Message: "Account created successfully. Please check your email for verification link.",
+			}, nil
+		}
+
+		// Unverified user - resend verification email
+		logger.Infof("Signup attempt for unverified email (resend): %s", email)
+		go func() {
+			bgCtx := context.Background()
+			if err := s.SendEmailVerification(bgCtx, existingUser.Id); err != nil {
+				logger.Errorf("Failed to resend email verification: %v", err)
+			}
+		}()
+
+		return &auth.SignupResponse{
+			UserID:  existingUser.Id,
+			Message: "Account created successfully. Please check your email for verification link.",
+		}, nil
+	}
+
+	// New user - proceed with creation
 	hashedPassword, err := s.HashPassword(password)
 	if err != nil {
 		logger.Errorf("Failed to hash password: %v", err)
 		return nil, fmt.Errorf("failed to process password")
 	}
 
-	// Create user
 	authPayload := auth.AuthPayload{
 		Email:    email,
 		Password: hashedPassword,
@@ -597,12 +777,11 @@ func (s *AuthService) Signup(ctx context.Context, email, password string) (*auth
 	createdUser, err := s.userService.CreateUser(ctx, authPayload)
 	if err != nil {
 		logger.Errorf("Failed to create user: %v", err)
-		// Return the actual error message (e.g., "user already exists")
 		return nil, err
 	}
 
-	// Send email verification (non-blocking) - only if user was created successfully
-	userID := createdUser.Id // Capture the ID to avoid race conditions
+	// Send email verification (non-blocking)
+	userID := createdUser.Id
 	go func() {
 		bgCtx := context.Background()
 		if err := s.SendEmailVerification(bgCtx, userID); err != nil {
@@ -612,12 +791,12 @@ func (s *AuthService) Signup(ctx context.Context, email, password string) (*auth
 
 	return &auth.SignupResponse{
 		UserID:  createdUser.Id,
-		Message: "User created successfully. Please check your email for verification link.",
+		Message: "Account created successfully. Please check your email for verification link.",
 	}, nil
 }
 
 // Login handles complete login flow with token pair generation
-func (s *AuthService) Login(ctx context.Context, email, password, userAgent, deviceType string) (*auth.LoginResponse, error) {
+func (s *AuthService) Login(ctx context.Context, email, password, userAgent, deviceType string) (*auth.UnifiedLoginResponse, error) {
 	logger.Info("Processing login for email: %s, device: %s", email, deviceType)
 
 	// Validate input
@@ -648,8 +827,8 @@ func (s *AuthService) Login(ctx context.Context, email, password, userAgent, dev
 		return nil, fmt.Errorf("invalid email or password")
 	}
 
-	// Create token pair with device information
-	accessToken, refreshToken, err := s.CreateTokenPair(ctx, userObj.Id, userAgent, deviceType)
+	// Create token pair with device information; embed kyc_status in access token
+	accessToken, refreshToken, err := s.CreateTokenPair(ctx, userObj.Id, userAgent, deviceType, string(userObj.KycStatus))
 	if err != nil {
 		logger.Errorf("Failed to create token pair: %v", err)
 		return nil, fmt.Errorf("failed to create authentication tokens")
@@ -657,11 +836,139 @@ func (s *AuthService) Login(ctx context.Context, email, password, userAgent, dev
 
 	s.metrics.Counter(ctx, "auth.loginsucess", 1, metrics.MetricLabels{"Test": "Check"})
 
-	return &auth.LoginResponse{
-		AccessToken:  accessToken,
-		RefreshToken: refreshToken,
-	}, nil
+	unifiedResp, err := s.BuildUnifiedLoginResponse(ctx, userObj.Id)
+	if err != nil {
+		logger.Errorf("Failed to build unified login response for user %s: %v", userObj.Id, err)
+		// Non-fatal: fall back to minimal response (tokens only, no context)
+		return &auth.UnifiedLoginResponse{
+			AccessToken:  accessToken,
+			RefreshToken: refreshToken,
+			User:         &auth.UnifiedUserProfile{Id: userObj.Id, Email: userObj.Email},
+			Businesses:   []*auth.UnifiedBusinessInfo{},
+			ActiveBid:    "",
+		}, nil
+	}
+	unifiedResp.AccessToken = accessToken
+	unifiedResp.RefreshToken = refreshToken
+	return unifiedResp, nil
+}
 
+// BuildUnifiedLoginResponse assembles the full unified login response for a given user:
+// user profile, all business relations, active_bid, and onboarding flags for the active business.
+func (s *AuthService) BuildUnifiedLoginResponse(ctx context.Context, userID string) (*auth.UnifiedLoginResponse, error) {
+	// 1. Fetch user record (has ActiveBid from Phase 1 migration)
+	userObj, err := s.userRepo.GetUserByID(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch user: %w", err)
+	}
+
+	// 2. Fetch all business relations for this user
+	relations, err := s.businessUserRelRepo.FindByUser(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch business relations: %w", err)
+	}
+
+	// 3. For each relation, fetch business details and assemble UnifiedBusinessInfo
+	businesses := make([]*auth.UnifiedBusinessInfo, 0, len(relations))
+	for _, rel := range relations {
+		biz, err := s.businessService.GetBusiness(ctx, rel.BID)
+		if err != nil {
+			logger.Warnf("BuildUnifiedLoginResponse: failed to fetch business %s for user %s: %v — skipping", rel.BID, userID, err)
+			continue // skip businesses that can't be fetched; don't fail entire login
+		}
+		businesses = append(businesses, &auth.UnifiedBusinessInfo{
+			Bid:       rel.BID,
+			Name:      biz.Name,
+			Role:      string(rel.Role),
+			KybStatus: string(biz.KybStatus),
+			KycNeeded: rel.KycNeeded,
+		})
+	}
+
+	// 4. Determine active_bid: from user_table.active_bid, fallback to first business, else ""
+	activeBid := userObj.ActiveBid
+	if activeBid == "" && len(businesses) > 0 {
+		activeBid = businesses[0].Bid
+	}
+
+	// 5. Compute onboarding flags for active business only
+	hasAddedPaymentMethod := false
+	hasAddedVendor := false
+	hasCreatedFirstPayment := false
+	if activeBid != "" {
+		flags, err := s.businessService.GetBusinessOnboardingFlags(ctx, activeBid)
+		if err != nil {
+			logger.Warnf("BuildUnifiedLoginResponse: failed to get onboarding flags for bid %s: %v — defaulting to false", activeBid, err)
+		} else if flags != nil {
+			hasAddedPaymentMethod = flags.HasAddedPaymentMethod
+			hasAddedVendor = flags.HasAddedVendor
+			hasCreatedFirstPayment = flags.HasCreatedFirstPayment
+		}
+	}
+
+	return &auth.UnifiedLoginResponse{
+		User: &auth.UnifiedUserProfile{
+			Id:                     userObj.Id,
+			Name:                   userObj.Name,
+			Email:                  userObj.Email,
+			Mobile:                 userObj.Mobile,
+			KycStatus:              string(userObj.KycStatus),
+			HasAddedPaymentMethod:  hasAddedPaymentMethod,
+			HasAddedVendor:         hasAddedVendor,
+			HasCreatedFirstPayment: hasCreatedFirstPayment,
+		},
+		Businesses: businesses,
+		ActiveBid:  activeBid,
+	}, nil
+}
+
+// VerifySession returns full session context for the authenticated user.
+// Used by the frontend on every app load/refresh to hydrate the session state.
+// KYB visibility rule: non-owners and non-initiators always see kyb_status="completed"
+// so that onboarding guards reject them without leaking actual KYB state.
+func (s *AuthService) VerifySession(ctx context.Context, userID string) (*auth.VerifySessionResponse, error) {
+	userObj, err := s.userRepo.GetUserByID(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch user: %w", err)
+	}
+
+	relations, err := s.businessUserRelRepo.FindByUser(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch relations: %w", err)
+	}
+
+	businesses := make([]*auth.UnifiedBusinessInfo, 0, len(relations))
+	for _, rel := range relations {
+		biz, err := s.businessService.GetBusiness(ctx, rel.BID)
+		if err != nil {
+			logger.Warnf("VerifySession: failed to fetch business %s: %v — skipping", rel.BID, err)
+			continue
+		}
+		kybStatus := string(biz.KybStatus)
+		// Non-owners and non-initiators always see "completed" to prevent onboarding access
+		if !rel.KybInitiated && rel.Role != shared.Owner {
+			kybStatus = string(shared.KYBCompleted)
+		}
+		businesses = append(businesses, &auth.UnifiedBusinessInfo{
+			Bid:       rel.BID,
+			Name:      biz.Name,
+			Role:      string(rel.Role),
+			KybStatus: kybStatus,
+			KycNeeded: rel.KycNeeded,
+		})
+	}
+
+	activeBid := userObj.ActiveBid
+	if activeBid == "" && len(businesses) > 0 {
+		activeBid = businesses[0].Bid
+	}
+
+	return &auth.VerifySessionResponse{
+		UID:        userObj.Id,
+		KycStatus:  string(userObj.KycStatus),
+		Businesses: businesses,
+		ActiveBid:  activeBid,
+	}, nil
 }
 
 // ============================================================================
@@ -690,48 +997,74 @@ func (s *AuthService) SendPasswordResetEmail(ctx context.Context, emailAddr stri
 		return fmt.Errorf("user not found")
 	}
 
-	// Generate secure verification token (32 bytes = 256 bits)
-	resetToken, err := security.GenerateSecureToken()
+	// Use transaction to atomically invalidate old tokens and create new one
+	// SECURITY: Prevents multiple valid reset tokens from existing simultaneously
+	var resetToken string
+	err = s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
+		txUserRepo := s.userRepo.WithTx(tx)
+
+		// Invalidate all previous password reset tokens for this user
+		// SECURITY: Only the latest reset link should be valid
+		if err := txUserRepo.InvalidatePreviousVerificationCodes(ctx, userObj.Id, shared.PasswordReset); err != nil {
+			logger.Errorf("Failed to invalidate previous reset tokens: %v", err)
+			// Return success to prevent information disclosure (for reset type)
+			if emailType == "reset" {
+				return nil
+			}
+			return fmt.Errorf("failed to invalidate previous tokens: %w", err)
+		}
+
+		// Generate secure verification token (32 bytes = 256 bits)
+		var genErr error
+		resetToken, genErr = security.GenerateSecureToken()
+		if genErr != nil {
+			logger.Errorf("Failed to generate reset token: %v", genErr)
+			// Return success to prevent information disclosure (for reset type)
+			if emailType == "reset" {
+				return nil
+			}
+			return fmt.Errorf("failed to generate token: %w", genErr)
+		}
+
+		// Hash the token before storing in database
+		hashedToken := security.HashTokenWithPepper(resetToken, s.bcryptConfig.Pepper)
+
+		// Create verification code record
+		verificationCode := &user.UserVerificationCodes{
+			UserID:        userObj.Id,
+			Code:          hashedToken,
+			CodeType:      shared.PasswordReset,
+			ExpiresAt:     timeutil.ExpiryFromNow(s.config.PasswordResetExpiry),
+			CreatedAt:     timeutil.NowUTC(),
+			Used:          false,
+			RetryAttempts: 0,
+		}
+
+		logger.Debugf("Creating password reset code: user_id=%s, expires_at=%s (UTC), duration=%s",
+			userObj.Id, verificationCode.ExpiresAt.Format(time.RFC3339), s.config.PasswordResetExpiry)
+
+		// Store verification code in database (within transaction)
+		if err := txUserRepo.CreateVerificationCode(ctx, verificationCode); err != nil {
+			logger.Errorf("Failed to create password reset code: %v", err)
+			// Return success to prevent information disclosure (for reset type)
+			if emailType == "reset" {
+				return nil
+			}
+			return fmt.Errorf("failed to create verification code: %w", err)
+		}
+
+		return nil
+	})
+
 	if err != nil {
-		logger.Errorf("Failed to generate reset token: %v", err)
-		// Return success to prevent information disclosure (for reset type)
+		// Transaction failed - return success for reset type (enumeration protection)
 		if emailType == "reset" {
 			return nil
 		}
-		return fmt.Errorf("failed to generate token: %w", err)
+		return err
 	}
 
-	// Hash the token before storing in database
-	hashedToken := security.HashTokenWithPepper(resetToken, s.bcryptConfig.Pepper)
-
-	// Calculate timestamps - 1 hour expiry for password reset (IMPORTANT: Use UTC)
-	now := time.Now().UTC()
-	expiresAt := now.Add(1 * time.Hour)
-
-	// Create verification code record
-	verificationCode := &user.UserVerificationCodes{
-		UserID:        userObj.Id,
-		Code:          hashedToken,
-		CodeType:      shared.PasswordReset,
-		ExpiresAt:     expiresAt.Format(time.RFC3339),
-		CreatedAt:     now.Format(time.RFC3339),
-		Used:          false,
-		RetryAttempts: 0,
-	}
-
-	logger.Debugf("Creating password reset code: user_id=%s, expires_at=%s (UTC), duration=1h",
-		userObj.Id, expiresAt.Format(time.RFC3339))
-
-	// Store verification code in database
-	if err := s.userRepo.CreateVerificationCode(ctx, verificationCode); err != nil {
-		logger.Errorf("Failed to create password reset code: %v", err)
-		// Return success to prevent information disclosure (for reset type)
-		if emailType == "reset" {
-			return nil
-		}
-		return fmt.Errorf("failed to create verification code: %w", err)
-	}
-
+	// Transaction succeeded, now send email
 	// Generate HMAC signature for uid:token
 	signature := security.GenerateHMACSignature(userObj.Id, resetToken, s.config.SecretKey)
 
@@ -783,6 +1116,119 @@ func (s *AuthService) SendPasswordResetEmail(ctx context.Context, emailAddr stri
 	}
 
 	logger.Infof("Email sent successfully to %s, Message ID: %s, Type: %s", userObj.Email, messageID, emailType)
+	return nil
+}
+
+// ResendInviteEmail resends invitation email to a user (admin function)
+// Unlike SendPasswordResetEmail, this method:
+// - Validates user hasn't already activated (password not set)
+// - Invalidates previous invite tokens (in transaction)
+// - Does NOT fail-open (returns actual errors for admin feedback)
+func (s *AuthService) ResendInviteEmail(ctx context.Context, emailAddr string) error {
+	logger.Infof("Resending invitation email to: %s", emailAddr)
+
+	if emailAddr == "" {
+		return fmt.Errorf("email address is required")
+	}
+
+	// Get user details
+	userObj, err := s.userRepo.GetUserByEmail(ctx, emailAddr)
+	if err != nil || userObj == nil {
+		logger.Errorf("User not found for email: %s", emailAddr)
+		return fmt.Errorf("user not found")
+	}
+
+	// Check if user has already completed KYC onboarding
+	if userObj.KycStatus == shared.KYCVerified || userObj.KycStatus == shared.KYCCompleted {
+		logger.Warnf("Cannot resend invite to activated user: %s", emailAddr)
+		return fmt.Errorf("user has already activated their account")
+	}
+
+	// Use transaction to atomically invalidate old tokens and create new one
+	var resetToken string
+	err = s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
+		txUserRepo := s.userRepo.WithTx(tx)
+
+		// Invalidate all previous password reset/invite tokens for this user
+		if err := txUserRepo.InvalidatePreviousVerificationCodes(ctx, userObj.Id, shared.PasswordReset); err != nil {
+			logger.Errorf("Failed to invalidate previous invite tokens: %v", err)
+			return fmt.Errorf("failed to invalidate previous tokens: %w", err)
+		}
+
+		// Generate secure verification token (32 bytes = 256 bits)
+		var genErr error
+		resetToken, genErr = security.GenerateSecureToken()
+		if genErr != nil {
+			logger.Errorf("Failed to generate reset token: %v", genErr)
+			return fmt.Errorf("failed to generate token: %w", genErr)
+		}
+
+		// Hash the token before storing in database
+		hashedToken := security.HashTokenWithPepper(resetToken, s.bcryptConfig.Pepper)
+
+		// Create verification code record
+		verificationCode := &user.UserVerificationCodes{
+			UserID:        userObj.Id,
+			Code:          hashedToken,
+			CodeType:      shared.PasswordReset,
+			ExpiresAt:     timeutil.ExpiryFromNow(s.config.InvitationExpiry),
+			CreatedAt:     timeutil.NowUTC(),
+			Used:          false,
+			RetryAttempts: 0,
+		}
+
+		logger.Debugf("Creating invite code: user_id=%s, expires_at=%s (UTC), duration=%s",
+			userObj.Id, verificationCode.ExpiresAt.Format(time.RFC3339), s.config.InvitationExpiry)
+
+		// Store verification code in database (within transaction)
+		if err := txUserRepo.CreateVerificationCode(ctx, verificationCode); err != nil {
+			logger.Errorf("Failed to create invite code: %v", err)
+			return fmt.Errorf("failed to create verification code: %w", err)
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return err
+	}
+
+	// Transaction succeeded, now send email
+	// Generate HMAC signature for uid:token
+	signature := security.GenerateHMACSignature(userObj.Id, resetToken, s.config.SecretKey)
+
+	// Create invitation URL with uid, token, and sig as query parameters
+	inviteURL := fmt.Sprintf("%s/set-password?uid=%s&token=%s&sig=%s",
+		s.appConfig.Frontend.URL, userObj.Id, resetToken, signature)
+
+	// Render invitation email templates
+	renderer := email.GetRenderer()
+	subject := "Welcome to xcentro - Set Your Password"
+	htmlBody, textBody, renderErr := renderer.RenderInvitation(userObj.Name, inviteURL)
+
+	if renderErr != nil {
+		logger.Errorf("Failed to render invitation email templates: %v", renderErr)
+		return fmt.Errorf("failed to render email templates: %w", renderErr)
+	}
+
+	// Create email message
+	emailMsg := &mailers.EmailMessage{
+		To:       []string{userObj.Email},
+		From:     s.appConfig.SES.DefaultFromEmail,
+		FromName: s.appConfig.SES.DefaultFromName,
+		Subject:  subject,
+		HTMLBody: htmlBody,
+		TextBody: textBody,
+	}
+
+	// Send email
+	messageID, err := s.emailService.SendEmail(ctx, emailMsg)
+	if err != nil {
+		logger.Errorf("Failed to send invitation email to %s: %v", userObj.Email, err)
+		return fmt.Errorf("failed to send email: %w", err)
+	}
+
+	logger.Infof("Invitation email resent successfully to %s, Message ID: %s", userObj.Email, messageID)
 	return nil
 }
 
@@ -840,12 +1286,7 @@ func (s *AuthService) ResetPasswordWithToken(ctx context.Context, userID, token,
 		}
 
 		// Check if token is expired
-		expiresAt, err := time.Parse(time.RFC3339, verificationCode.ExpiresAt)
-		if err != nil {
-			return fmt.Errorf("invalid expiration time format")
-		}
-
-		if time.Now().After(expiresAt) {
+		if timeutil.IsExpired(verificationCode.ExpiresAt) {
 			return fmt.Errorf("reset token has expired")
 		}
 
@@ -912,26 +1353,22 @@ func (s *AuthService) SendEmailVerification(ctx context.Context, userID string) 
 	// Hash the token before storing in database (SECURITY: Never store plaintext tokens)
 	hashedToken := security.HashTokenWithPepper(verificationToken, s.bcryptConfig.Pepper)
 
-	// Calculate proper timestamps (IMPORTANT: Use UTC to avoid timezone issues)
-	now := time.Now().UTC()
-	expiresAt := now.Add(24 * time.Hour) // 24 hour expiry for email verification
-
-	// Create verification code record with 24 hour expiry
+	// Create verification code record
 	verificationCode := &user.UserVerificationCodes{
 		UserID:        userID,
 		Code:          hashedToken, // Store hashed version, not plaintext
 		CodeType:      shared.EmailVerification,
-		ExpiresAt:     expiresAt.Format(time.RFC3339),
-		CreatedAt:     now.Format(time.RFC3339),
+		ExpiresAt:     timeutil.ExpiryFromNow(s.config.EmailVerificationExpiry),
+		CreatedAt:     timeutil.NowUTC(),
 		Used:          false,
 		RetryAttempts: 0,
 	}
 
-	logger.Debugf("Creating email verification code: user_id=%s, expires_at=%s (UTC), duration=24h",
-		userID, expiresAt.Format(time.RFC3339))
+	logger.Debugf("Creating email verification code: user_id=%s, expires_at=%s (UTC), duration=%s",
+		userID, verificationCode.ExpiresAt.Format(time.RFC3339), s.config.EmailVerificationExpiry)
 
-	// Store verification code in database
-	if err := s.userRepo.CreateVerificationCode(ctx, verificationCode); err != nil {
+	// Atomically invalidate old codes and create new one (SECURITY: prevents race conditions)
+	if err := s.userRepo.CreateVerificationCodeWithInvalidation(ctx, verificationCode); err != nil {
 		return fmt.Errorf("failed to create verification code: %w", err)
 	}
 
@@ -973,85 +1410,23 @@ func (s *AuthService) SendEmailVerification(ctx context.Context, userID string) 
 }
 
 // VerifyEmailWithToken verifies user's email using verification token with HMAC signature validation
-func (s *AuthService) VerifyEmailWithToken(ctx context.Context, userID, token, signature string) error {
-	logger.Infof("Verifying email with token for user: %s", userID)
-
-	if userID == "" || token == "" || signature == "" {
-		return fmt.Errorf("userID, token, and signature are required")
-	}
-
-	// Validate HMAC signature first (prevents tampering)
-	if !security.ValidateHMACSignature(userID, token, signature, s.config.SecretKey) {
-		logger.Errorf("Invalid HMAC signature for user: %s", userID)
-		return fmt.Errorf("invalid or tampered verification link")
-	}
-
-	// Hash the incoming token to compare with stored hash
-	hashedToken := security.HashTokenWithPepper(token, s.bcryptConfig.Pepper)
-
-	// Use transaction to ensure atomicity
-	err := s.txManager.WithTx(ctx, func(ctx context.Context, tx client.Tx) error {
-		txUserRepo := s.userRepo.WithTx(tx)
-
-		// Get verification code record using userID and hashed token (faster with userID index)
-		verificationCode, err := txUserRepo.GetVerificationCodeByUserIDAndCode(ctx, userID, hashedToken, shared.EmailVerification)
-		if err != nil {
-			logger.Errorf("Failed to get verification code: %v", err)
-			return fmt.Errorf("invalid or expired verification token")
-		}
-
-		if verificationCode == nil {
-			return fmt.Errorf("verification token not found")
-		}
-
-		if verificationCode.Used {
-			return fmt.Errorf("verification token already used")
-		}
-
-		// Check if token is expired (use UTC for consistency)
-		expiresAt, err := time.Parse(time.RFC3339, verificationCode.ExpiresAt)
-		if err != nil {
-			return fmt.Errorf("invalid expiration time format")
-		}
-		expiresAt = expiresAt.UTC() // Ensure UTC timezone
-
-		nowUTC := time.Now().UTC()
-		if nowUTC.After(expiresAt) {
-			logger.Warnf("Email verification token expired: user_id=%s, expires_at=%s, current_time=%s, age=%v",
-				userID, expiresAt.Format(time.RFC3339), nowUTC.Format(time.RFC3339), nowUTC.Sub(expiresAt))
-			return fmt.Errorf("verification token has expired")
-		}
-
-		logger.Debugf("Email verification token valid: user_id=%s, expires_at=%s, current_time=%s, remaining=%v",
-			userID, expiresAt.Format(time.RFC3339), nowUTC.Format(time.RFC3339), expiresAt.Sub(nowUTC))
-
-		// Mark verification code as used
-		if err := txUserRepo.MarkVerificationCodeAsUsed(ctx, verificationCode.ID); err != nil {
-			return fmt.Errorf("failed to mark verification code as used: %w", err)
-		}
-
-		// Update user email verification status
-		if err := txUserRepo.UpdateUserEmailVerification(ctx, verificationCode.UserID, true); err != nil {
-			return fmt.Errorf("failed to update user email verification: %w", err)
-		}
-
-		return nil
-	})
-
-	if err != nil {
-		return err
-	}
-
-	logger.Infof("Email verified successfully for user: %s", userID)
-	return nil
-}
-
 // ResendEmailVerification resends email verification for a given email
 func (s *AuthService) ResendEmailVerification(ctx context.Context, email string) error {
 	logger.Infof("Resending email verification for email: %s", email)
 
 	if email == "" {
 		return fmt.Errorf("email is required")
+	}
+
+	// Rate limit check (email-scoped, fail open for UX)
+	rateLimitKey := fmt.Sprintf("xcentro:rl:email:%s|resend_email_verification", email)
+	result, err := s.rateLimiter.CheckLimitWithKey(ctx, rateLimitKey, "resend_email_verification")
+
+	if err != nil {
+		logger.Errorf("Rate limit check failed: %v", err)
+		// Fail open for UX (allow if Redis unavailable)
+	} else if !result.Allowed {
+		return fmt.Errorf("too many resend requests. Please wait %s seconds before trying again", result.RetryAfterSecs)
 	}
 
 	// Get user details
@@ -1068,8 +1443,90 @@ func (s *AuthService) ResendEmailVerification(ctx context.Context, email string)
 		return fmt.Errorf("email already verified")
 	}
 
-	// Send verification email
+	// Send verification email (will invalidate old codes)
 	return s.SendEmailVerification(ctx, userObj.Id)
+}
+
+// ResendMobileOTP resends OTP during signup flow (public endpoint, uses email to lookup user)
+func (s *AuthService) ResendMobileOTP(ctx context.Context, email string) error {
+	logger.Infof("Resending mobile OTP for email: %s", email)
+
+	if email == "" {
+		return fmt.Errorf("email is required")
+	}
+
+	// Rate limit check (email-scoped, fail closed for SMS cost control)
+	rateLimitKey := fmt.Sprintf("xcentro:rl:email:%s|resend_mobile_otp", email)
+	result, err := s.rateLimiter.CheckLimitWithKey(ctx, rateLimitKey, "resend_mobile_otp")
+
+	if err != nil || !result.Allowed {
+		if err != nil {
+			return fmt.Errorf("rate limit check failed, please try again later")
+		}
+		return fmt.Errorf("too many resend requests. Please wait %s seconds before trying again", result.RetryAfterSecs)
+	}
+
+	// Get user by email
+	userObj, err := s.userRepo.GetUserByEmail(ctx, email)
+	if err != nil || userObj == nil {
+		return fmt.Errorf("user not found")
+	}
+
+	if userObj.MobileVerified {
+		return fmt.Errorf("mobile already verified")
+	}
+
+	if userObj.Mobile == "" {
+		return fmt.Errorf("user does not have a mobile number registered")
+	}
+
+	// NOTE: Code invalidation is handled atomically in SendMobileVerificationOTP
+
+	// Increment resend attempts (analytics tracking)
+	_ = s.userRepo.IncrementResendAttempts(ctx, userObj.Id, shared.MobileVerification)
+
+	// Send new OTP (with retry logic and atomic code invalidation)
+	return s.SendMobileVerificationOTP(ctx, userObj.Id, userObj.Mobile)
+}
+
+// ResendInviteOTP resends OTP for invited users with rate limiting and signature validation
+func (s *AuthService) ResendInviteOTP(ctx context.Context, userID, token, signature string) error {
+	logger.Infof("Resending invite OTP for user: %s", userID)
+
+	// Validate HMAC signature first (ensures legitimate invite link)
+	if !security.ValidateHMACSignature(userID, token, signature, s.config.SecretKey) {
+		logger.Errorf("Invalid HMAC signature for user: %s", userID)
+		return fmt.Errorf("invalid or tampered invitation link")
+	}
+
+	// Rate limit check (user-scoped, reuses same policy as mobile OTP)
+	rateLimitKey := fmt.Sprintf("xcentro:rl:user:%s|resend_mobile_otp", userID)
+	result, err := s.rateLimiter.CheckLimitWithKey(ctx, rateLimitKey, "resend_mobile_otp")
+
+	if err != nil || !result.Allowed {
+		if err != nil {
+			return fmt.Errorf("rate limit check failed, please try again later")
+		}
+		return fmt.Errorf("too many resend requests. Please wait %s seconds before trying again", result.RetryAfterSecs)
+	}
+
+	// Fetch user to get mobile number
+	usr, err := s.userRepo.GetUserByID(ctx, userID)
+	if err != nil {
+		return fmt.Errorf("failed to fetch user: %w", err)
+	}
+
+	if usr.Mobile == "" {
+		return fmt.Errorf("user does not have a mobile number registered")
+	}
+
+	// NOTE: Code invalidation is handled atomically in SendMobileVerificationOTP
+
+	// Increment resend attempts (analytics tracking)
+	_ = s.userRepo.IncrementResendAttempts(ctx, userID, shared.MobileVerification)
+
+	// Generate and send new OTP (with retry logic and atomic code invalidation)
+	return s.SendMobileVerificationOTP(ctx, userID, usr.Mobile)
 }
 
 // ============================================================================
@@ -1098,36 +1555,35 @@ func (s *AuthService) SendMobileVerificationOTP(ctx context.Context, userID, mob
 		UserID:        userID,
 		Code:          hashedOTP,
 		CodeType:      shared.MobileVerification,
-		ExpiresAt:     time.Now().Add(s.smsConfig.OTPExpiry).Format(time.RFC3339),
-		CreatedAt:     time.Now().Format(time.RFC3339),
+		ExpiresAt:     timeutil.ExpiryFromNow(s.smsConfig.OTPExpiry),
+		CreatedAt:     timeutil.NowUTC(),
 		Used:          false,
 		RetryAttempts: 0,
 	}
 
-	if err := s.userRepo.CreateVerificationCode(ctx, verificationCode); err != nil {
+	// Atomically invalidate old codes and create new one (SECURITY: prevents race conditions)
+	if err := s.userRepo.CreateVerificationCodeWithInvalidation(ctx, verificationCode); err != nil {
 		return fmt.Errorf("failed to create verification code: %w", err)
 	}
 
-	// Send OTP via SMS using Fast2SMS
-	// Use type assertion to access Fast2SMS-specific methods
+	// Send OTP via SMS (retry logic now built into Fast2SMS library)
 	var messageID string
+	var sendErr error
+
 	if fast2smsClient, ok := s.smsService.(*sms.Fast2SMSClient); ok {
-		messageID, err = fast2smsClient.SendOTPSMS(ctx, mobileNumber, otp, "signup")
-		if err != nil {
-			logger.Errorf("Failed to send SMS OTP: %v", err)
-			return fmt.Errorf("failed to send SMS: %w", err)
-		}
+		messageID, sendErr = fast2smsClient.SendOTPSMS(ctx, mobileNumber, otp, "signup")
 	} else {
-		// Fallback to generic SendSMS (for other providers)
+		// Fallback to generic SendSMS (for other providers - no retry)
 		smsMessage := &sms.SMSMessage{
 			To:   mobileNumber,
 			Body: otp,
 		}
-		messageID, err = s.smsService.SendSMS(ctx, smsMessage)
-		if err != nil {
-			logger.Errorf("Failed to send SMS OTP: %v", err)
-			return fmt.Errorf("failed to send SMS: %w", err)
-		}
+		messageID, sendErr = s.smsService.SendSMS(ctx, smsMessage)
+	}
+
+	if sendErr != nil {
+		logger.Errorf("Failed to send SMS OTP: %v", sendErr)
+		return fmt.Errorf("failed to send SMS: %w", sendErr)
 	}
 
 	logger.Infof("SMS OTP sent successfully to %s, Message ID: %s", mobileNumber, messageID)
@@ -1152,7 +1608,12 @@ func (s *AuthService) GenerateMobileOTP(ctx context.Context, userID string) erro
 		return fmt.Errorf("user does not have a mobile number registered")
 	}
 
-	// Reuse existing SendMobileVerificationOTP method
+	// NOTE: Code invalidation is handled atomically in SendMobileVerificationOTP
+
+	// Increment resend attempts (analytics tracking)
+	_ = s.userRepo.IncrementResendAttempts(ctx, userID, shared.MobileVerification)
+
+	// Send OTP (with retry logic and atomic code invalidation)
 	return s.SendMobileVerificationOTP(ctx, userID, usr.Mobile)
 }
 
@@ -1168,6 +1629,13 @@ func (s *AuthService) SendInviteOTP(ctx context.Context, userID, token, signatur
 	if !security.ValidateHMACSignature(userID, token, signature, s.config.SecretKey) {
 		logger.Errorf("Invalid HMAC signature for user: %s", userID)
 		return fmt.Errorf("invalid or tampered invitation link")
+	}
+
+	// Validate the invite token exists in DB and hasn't been used
+	hashedToken := security.HashTokenWithPepper(token, s.bcryptConfig.Pepper)
+	if _, err := s.userRepo.GetVerificationCodeByUserIDAndCode(ctx, userID, hashedToken, shared.PasswordReset); err != nil {
+		logger.Errorf("Invalid or expired invite token for user %s: %v", userID, err)
+		return fmt.Errorf("invalid or expired invitation link")
 	}
 
 	// Fetch user to get mobile number
@@ -1194,13 +1662,14 @@ func (s *AuthService) SendInviteOTP(ctx context.Context, userID, token, signatur
 		UserID:        userID,
 		Code:          hashedOTP,
 		CodeType:      shared.MobileVerification,
-		ExpiresAt:     time.Now().Add(s.smsConfig.OTPExpiry).Format(time.RFC3339),
-		CreatedAt:     time.Now().Format(time.RFC3339),
+		ExpiresAt:     timeutil.ExpiryFromNow(s.smsConfig.OTPExpiry),
+		CreatedAt:     timeutil.NowUTC(),
 		Used:          false,
 		RetryAttempts: 0,
 	}
 
-	if err := s.userRepo.CreateVerificationCode(ctx, verificationCode); err != nil {
+	// Atomically invalidate old codes and create new one (SECURITY: prevents race conditions)
+	if err := s.userRepo.CreateVerificationCodeWithInvalidation(ctx, verificationCode); err != nil {
 		return fmt.Errorf("failed to create verification code: %w", err)
 	}
 
@@ -1262,12 +1731,7 @@ func (s *AuthService) VerifyEmailWithMobile(ctx context.Context, userID, token, 
 		}
 
 		// Check expiry
-		expiresAt, err := time.Parse(time.RFC3339, verificationCode.ExpiresAt)
-		if err != nil {
-			return fmt.Errorf("invalid expiration time format")
-		}
-
-		if time.Now().After(expiresAt) {
+		if timeutil.IsExpired(verificationCode.ExpiresAt) {
 			return fmt.Errorf("verification token has expired")
 		}
 
@@ -1331,12 +1795,7 @@ func (s *AuthService) VerifyMobileOTP(ctx context.Context, userID, otp string) e
 		}
 
 		// Check expiry
-		expiresAt, err := time.Parse(time.RFC3339, verificationCode.ExpiresAt)
-		if err != nil {
-			return fmt.Errorf("invalid expiration time format")
-		}
-
-		if time.Now().After(expiresAt) {
+		if timeutil.IsExpired(verificationCode.ExpiresAt) {
 			return fmt.Errorf("OTP has expired")
 		}
 
@@ -1405,21 +1864,14 @@ func (s *AuthService) ResetPasswordWithMobileOTP(ctx context.Context, userID, to
 			return fmt.Errorf("reset token already used")
 		}
 
-		resetExpiresAt, err := time.Parse(time.RFC3339, resetCode.ExpiresAt)
-		if err != nil {
-			return fmt.Errorf("invalid expiration time format")
-		}
-		resetExpiresAt = resetExpiresAt.UTC() // Ensure UTC timezone
-
-		nowUTC := time.Now().UTC()
-		if nowUTC.After(resetExpiresAt) {
-			logger.Warnf("Password reset token expired: user_id=%s, expires_at=%s, current_time=%s, age=%v",
-				userID, resetExpiresAt.Format(time.RFC3339), nowUTC.Format(time.RFC3339), nowUTC.Sub(resetExpiresAt))
+		if timeutil.IsExpired(resetCode.ExpiresAt) {
+			logger.Warnf("Password reset token expired: user_id=%s, expires_at=%s",
+				userID, resetCode.ExpiresAt.Format(time.RFC3339))
 			return fmt.Errorf("reset token has expired")
 		}
 
-		logger.Debugf("Password reset token valid: user_id=%s, expires_at=%s, current_time=%s, remaining=%v",
-			userID, resetExpiresAt.Format(time.RFC3339), nowUTC.Format(time.RFC3339), resetExpiresAt.Sub(nowUTC))
+		logger.Debugf("Password reset token valid: user_id=%s, expires_at=%s, remaining=%v",
+			userID, resetCode.ExpiresAt.Format(time.RFC3339), time.Until(resetCode.ExpiresAt))
 
 		// Verify mobile OTP
 		otpCode, err := txUserRepo.GetVerificationCodeByUserIDAndCode(ctx, userID, hashedOTP, shared.MobileVerification)
@@ -1432,12 +1884,7 @@ func (s *AuthService) ResetPasswordWithMobileOTP(ctx context.Context, userID, to
 			return fmt.Errorf("OTP already used")
 		}
 
-		otpExpiresAt, err := time.Parse(time.RFC3339, otpCode.ExpiresAt)
-		if err != nil {
-			return fmt.Errorf("invalid expiration time format")
-		}
-
-		if time.Now().After(otpExpiresAt) {
+		if timeutil.IsExpired(otpCode.ExpiresAt) {
 			return fmt.Errorf("OTP has expired")
 		}
 
@@ -1508,12 +1955,7 @@ func (s *AuthService) VerifyAndUpdateMobile(ctx context.Context, userID, newMobi
 		}
 
 		// Check expiry
-		expiresAt, err := time.Parse(time.RFC3339, verificationCode.ExpiresAt)
-		if err != nil {
-			return fmt.Errorf("invalid expiration time format")
-		}
-
-		if time.Now().After(expiresAt) {
+		if timeutil.IsExpired(verificationCode.ExpiresAt) {
 			return fmt.Errorf("OTP has expired")
 		}
 

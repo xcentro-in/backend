@@ -172,3 +172,5 @@ build-errors*.log
 **/__pycache__/
 *.pyc
 api
+
+.claude

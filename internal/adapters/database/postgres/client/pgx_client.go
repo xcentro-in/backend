@@ -71,10 +71,20 @@ func NewPgxDB(ctx context.Context, config DBConfig) (*PgxDB, error) {
 		return nil, fmt.Errorf("failed to create connection pool: %w", err)
 	}
 
-	// Test connection
-	if err := pool.Ping(ctx); err != nil {
+	// Test connection with exponential backoff (1s, 2s, 4s, 8s, 16s)
+	const maxAttempts = 5
+	var pingErr error
+	for i := range maxAttempts {
+		if pingErr = pool.Ping(ctx); pingErr == nil {
+			break
+		}
+		wait := time.Duration(1<<uint(i)) * time.Second
+		fmt.Printf("DB ping failed (attempt %d/%d), retrying in %s: %v\n", i+1, maxAttempts, wait, pingErr)
+		time.Sleep(wait)
+	}
+	if pingErr != nil {
 		pool.Close()
-		return nil, fmt.Errorf("failed to ping database: %w", err)
+		return nil, fmt.Errorf("failed to connect to database after %d attempts: %w", maxAttempts, pingErr)
 	}
 
 	return &PgxDB{pool: pool}, nil
