@@ -285,8 +285,34 @@ func registerV1VoucherRoutes(clients *externalClients, cfg *config.Config, group
 	notificationEventRepo := notificationRepo.NewPgNotificationEventRepository(clients.db)
 	voucherService := voucherSvc.NewVoucherService(voucherRepository, queueRepository, voucherCoreService, businessPayeeRelationRepo, notificationEventRepo, logger.GetDefault())
 
+	// S3 client for document uploads — document upload is a first-class feature
+	// and the service panics if the client is nil, so fail fast at startup.
+	s3Client, err := fileupload.NewS3ClientFromConfig(cfg.S3)
+	if err != nil {
+		panic("Failed to create S3 client for voucher uploads: " + err.Error())
+	}
+
+	// Document upload service & handler
+	uploadService := voucherSvc.NewDocumentUploadService(voucherRepository, s3Client, clients.rcache.Client, logger.GetDefault())
+	uploadHandler := voucherHandler.NewDocumentUploadHandler(uploadService, logger.GetDefault())
+
+	// Document review (HITL) service & handler
+	payeeVendorRepository := payeeRepo.NewPgPayeeVendorRepository(clients.db)
+	payeeMasterRepository := payeeRepo.NewPgPayeeMasterRepository(clients.db)
+	reviewBusinessPayeeRelationRepo := payeeRepo.NewPgBusinessPayeeRelationRepository(clients.db, cfg.BankAccountEncryption.EncryptionKey)
+	matchingEngine := voucherSvc.NewMatchingEngine(voucherRepository, clients.rcache.Client, clients.txManager, logger.GetDefault())
+	reviewService := voucherSvc.NewDocumentReviewService(voucherRepository, payeeVendorRepository, clients.rcache.Client, matchingEngine, payeeMasterRepository, reviewBusinessPayeeRelationRepo, clients.txManager, logger.GetDefault())
+	reviewHandler := voucherHandler.NewDocumentReviewHandler(reviewService, logger.GetDefault())
+
+	// Async workers for the voucher document pipeline.
+	// StartMatchingWorker drains the matching queue on a blocking BRPop loop.
+	// StartReconcileLoop re-enqueues extraction tasks for documents stuck in
+	// QUEUED past the threshold (e.g. lost during a Redis outage at upload time).
+	go matchingEngine.StartMatchingWorker(context.Background())
+	go uploadService.StartReconcileLoop(context.Background())
+
 	voucherGroup := group.Group("/vouchers")
-	voucherHandler.RegisterVoucherRoutes(voucherGroup, voucherService, authSvc, cookieManager)
+	voucherHandler.RegisterVoucherRoutes(voucherGroup, voucherService, uploadHandler, reviewHandler, authSvc, cookieManager)
 }
 
 func registerV1PayoutRoutes(clients *externalClients, cfg *config.Config, group *echo.Group, cookieManager *httputil.CookieManager) {

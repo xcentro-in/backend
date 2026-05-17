@@ -416,7 +416,8 @@ CREATE TABLE xcentro.invoice (
     total_amount DECIMAL(20,2),
     currency VARCHAR(3),
     invoice_url TEXT,
-    comments TEXT
+    comments TEXT,
+    document_id UUID REFERENCES xcentro.voucher_documents(id)
 );
 
 CREATE TABLE xcentro.recurring_invoice (
@@ -656,3 +657,35 @@ CREATE INDEX idx_business_itid ON xcentro.business(itid);
 CREATE INDEX idx_bbps_invoice_bid ON xcentro.bbps_invoice(bid);
 CREATE INDEX idx_reward_goals_bid ON xcentro.reward_goals(bid);
 
+-- #############################################################################
+-- # Extraction and Document Processing Tables
+-- #############################################################################
+
+CREATE TABLE xcentro.voucher_documents (
+    id UUID PRIMARY KEY,
+    s3_path TEXT NOT NULL,
+    doc_type TEXT,
+    status TEXT NOT NULL DEFAULT 'QUEUED',
+    raw_extraction JSONB,
+    draft_data JSONB,
+    i2d_template TEXT,
+    processed_by TEXT,
+    validated_data JSONB
+);
+COMMENT ON TABLE xcentro.voucher_documents IS 'Tracks the lifecycle of uploaded documents from ingestion through extraction to validation.';
+
+CREATE TABLE xcentro.purchase_orders (
+    id UUID PRIMARY KEY DEFAULT generate_uuid_v7(),
+    document_id UUID NOT NULL REFERENCES xcentro.voucher_documents(id),
+    po_number TEXT,
+    po_date TEXT,
+    vendor_name TEXT,
+    vendor_gstin TEXT,
+    buyer_gstin TEXT,
+    total_amount DECIMAL(20,2),
+    discount DECIMAL(20,2),
+    discount_type TEXT,
+    line_items JSONB,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+COMMENT ON TABLE xcentro.purchase_orders IS 'Stores validated purchase order data extracted from voucher documents.';

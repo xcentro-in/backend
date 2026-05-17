@@ -8,6 +8,7 @@ Before you begin, ensure you have the following installed:
 
 - **Go 1.23+** - [Download](https://go.dev/dl/)
 - **Docker & Docker Compose** - [Install Docker](https://docs.docker.com/get-docker/)
+- 
 - **Git** - [Install Git](https://git-scm.com/downloads)
 
 Verify installations:

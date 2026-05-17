@@ -111,6 +111,24 @@ func (s *AuthService) generateRefreshToken(userID string, sessionID string, devi
 	return s.generateToken(userID, sessionID, deviceType, deviceVersion, "", "", "", false, s.config.RefreshTokenExpiry)
 }
 
+// resolveActiveBid returns the user's active business ID. If active_bid is not set in the DB
+// but the user has at least one business relation, it uses the first relation's BID and persists
+// it so future calls are consistent (self-healing for accounts created before active_bid existed).
+func (s *AuthService) resolveActiveBid(ctx context.Context, userID, currentActiveBid string) string {
+	if currentActiveBid != "" {
+		return currentActiveBid
+	}
+	relations, err := s.businessUserRelRepo.FindByUser(ctx, userID)
+	if err != nil || len(relations) == 0 {
+		return ""
+	}
+	fallbackBid := relations[0].BID
+	if setErr := s.userRepo.SetActiveBid(ctx, userID, fallbackBid); setErr != nil {
+		logger.Warnf("resolveActiveBid: failed to persist fallback active_bid for user %s: %v", userID, setErr)
+	}
+	return fallbackBid
+}
+
 // CreateTokenPair creates a new access and refresh token pair with device session management
 func (s *AuthService) CreateTokenPair(ctx context.Context, userID, userAgent string, deviceType string, kycStatus string) (accessToken, refreshToken string, err error) {
 	// Default to web if no device type provided (backward compatibility)
@@ -130,7 +148,7 @@ func (s *AuthService) CreateTokenPair(ctx context.Context, userID, userAgent str
 	if freshUser, fetchErr := s.userRepo.GetUserByID(ctx, userID); fetchErr != nil {
 		logger.Warnf("CreateTokenPair: failed to fetch user %s for bid/role: %v — issuing token with empty bid/role", userID, fetchErr)
 	} else if freshUser != nil {
-		activeBid = freshUser.ActiveBid
+		activeBid = s.resolveActiveBid(ctx, userID, freshUser.ActiveBid)
 		if activeBid != "" {
 			if rel, relErr := s.businessUserRelRepo.FindByUserAndBusiness(ctx, userID, activeBid); relErr != nil {
 				logger.Warnf("CreateTokenPair: failed to fetch role for user %s bid %s: %v — issuing token with empty role", userID, activeBid, relErr)
@@ -314,7 +332,7 @@ func (s *AuthService) RefreshAccessToken(ctx context.Context, refreshToken strin
 		return "", fmt.Errorf("user not found")
 	}
 
-	activeBid := freshUser.ActiveBid
+	activeBid := s.resolveActiveBid(ctx, userID, freshUser.ActiveBid)
 	kycStatus := string(freshUser.KycStatus)
 	role := ""
 	kycNeeded := false

@@ -258,6 +258,7 @@ type PayeeSearchRequest struct {
 // Used in voucher creation UI where only relation_id is needed
 type VendorDropdownItem struct {
 	RelationID   string `json:"relation_id"`   // Surrogate key for voucher API
+	PayeeID      string `json:"payee_id"`      // Global payee master ID (for matching payee resolution)
 	DisplayName  string `json:"display_name"`  // How customer refers to vendor
 	ContactEmail string `json:"contact_email"` // Customer's contact point
 	ContactPhone string `json:"contact_phone"` // Customer's contact phone

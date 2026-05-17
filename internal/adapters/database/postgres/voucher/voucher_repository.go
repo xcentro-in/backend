@@ -2304,3 +2304,53 @@ func (r *PostgresVoucherRepository) GetCalendarViewBills(ctx context.Context, bu
 
 	return bills, nil
 }
+
+// InsertDocumentCorrections writes a HITL audit record for field-level changes made during document review.
+func (r *PostgresVoucherRepository) InsertDocumentCorrections(ctx context.Context, docID uuid.UUID, userID string, corrections []voucher.DocumentCorrection) error {
+	if len(corrections) == 0 {
+		return nil
+	}
+	corrJSON, err := json.Marshal(corrections)
+	if err != nil {
+		return fmt.Errorf("failed to marshal corrections: %w", err)
+	}
+	_, err = r.querier.Exec(ctx, `
+		INSERT INTO xcentro.document_corrections (document_id, user_id, corrections)
+		VALUES ($1, $2, $3)
+	`, docID, userID, corrJSON)
+	return err
+}
+
+// GetTemplateCorrectionRate counts validated docs that used the given i2d
+// template in the lookback window, and how many of those had at least one
+// human correction recorded. Returns (corrected, total, error).
+func (r *PostgresVoucherRepository) GetTemplateCorrectionRate(
+	ctx context.Context,
+	templateName string,
+	since time.Duration,
+) (int, int, error) {
+	if templateName == "" {
+		return 0, 0, nil
+	}
+	cutoff := time.Now().Add(-since)
+	const query = `
+		SELECT
+		    COUNT(*) FILTER (WHERE c.document_id IS NOT NULL) AS corrected,
+		    COUNT(*) AS total
+		FROM xcentro.voucher_documents d
+		LEFT JOIN LATERAL (
+		    SELECT 1 AS document_id
+		    FROM xcentro.document_corrections dc
+		    WHERE dc.document_id = d.id
+		    LIMIT 1
+		) c ON TRUE
+		WHERE d.i2d_template = $1
+		  AND d.status = 'VALIDATED'
+		  AND d.created_at >= $2
+	`
+	var corrected, total int
+	if err := r.querier.QueryRow(ctx, query, templateName, cutoff).Scan(&corrected, &total); err != nil {
+		return 0, 0, fmt.Errorf("failed to query template correction rate: %w", err)
+	}
+	return corrected, total, nil
+}

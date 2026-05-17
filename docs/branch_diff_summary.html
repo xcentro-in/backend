@@ -1,0 +1,971 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Branch Diff: dev-dsangule vs dev</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #222535;
+    --border: #2e3147;
+    --accent: #6c63ff;
+    --accent2: #00d4aa;
+    --accent3: #ff6b6b;
+    --accent4: #ffd166;
+    --accent5: #06d6a0;
+    --text: #e2e4f0;
+    --text-muted: #8b8fa8;
+    --green: #06d6a0;
+    --red: #ff6b6b;
+    --yellow: #ffd166;
+    --blue: #4cc9f0;
+    --purple: #7c3aed;
+    --font: 'Segoe UI', system-ui, sans-serif;
+    --mono: 'Cascadia Code', 'Fira Code', monospace;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    line-height: 1.6;
+    padding: 0 0 60px;
+  }
+
+  /* ── Header ── */
+  .header {
+    background: linear-gradient(135deg, #1a1d27 0%, #16192a 50%, #1a1d27 100%);
+    border-bottom: 1px solid var(--border);
+    padding: 40px 48px 36px;
+    position: relative;
+    overflow: hidden;
+  }
+  .header::before {
+    content: '';
+    position: absolute;
+    top: -80px; right: -80px;
+    width: 300px; height: 300px;
+    background: radial-gradient(circle, rgba(108,99,255,0.12) 0%, transparent 70%);
+    pointer-events: none;
+  }
+  .branch-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(108,99,255,0.15);
+    border: 1px solid rgba(108,99,255,0.35);
+    border-radius: 20px;
+    padding: 4px 14px;
+    font-size: 13px;
+    font-family: var(--mono);
+    color: #a9a3ff;
+    margin-bottom: 14px;
+  }
+  .header h1 { font-size: 28px; font-weight: 700; color: #fff; margin-bottom: 6px; }
+  .header p { color: var(--text-muted); font-size: 14px; }
+  .merge-base { font-family: var(--mono); color: var(--accent2); font-size: 12px; }
+
+  /* ── Layout ── */
+  .container { max-width: 1200px; margin: 0 auto; padding: 0 24px; }
+  .section { margin-top: 40px; }
+  .section-title {
+    font-size: 13px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1.2px;
+    color: var(--text-muted);
+    margin-bottom: 16px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  /* ── Stat cards ── */
+  .stat-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 16px;
+    margin-top: 32px;
+  }
+  .stat-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    text-align: center;
+    transition: border-color 0.2s;
+  }
+  .stat-card:hover { border-color: var(--accent); }
+  .stat-number {
+    font-size: 36px;
+    font-weight: 800;
+    line-height: 1;
+    margin-bottom: 6px;
+  }
+  .stat-label { font-size: 12px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.8px; }
+  .color-purple { color: var(--accent); }
+  .color-green  { color: var(--green); }
+  .color-red    { color: var(--red); }
+  .color-yellow { color: var(--yellow); }
+  .color-blue   { color: var(--blue); }
+
+  /* ── Commit timeline ── */
+  .timeline { position: relative; padding-left: 28px; }
+  .timeline::before {
+    content: '';
+    position: absolute;
+    left: 8px; top: 6px; bottom: 0;
+    width: 2px;
+    background: linear-gradient(to bottom, var(--accent), transparent);
+  }
+  .timeline-item {
+    position: relative;
+    margin-bottom: 20px;
+  }
+  .timeline-dot {
+    position: absolute;
+    left: -24px; top: 6px;
+    width: 12px; height: 12px;
+    border-radius: 50%;
+    border: 2px solid var(--accent);
+    background: var(--bg);
+  }
+  .commit-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 18px;
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+    transition: border-color 0.2s;
+  }
+  .commit-card:hover { border-color: var(--accent); }
+  .commit-hash {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--accent);
+    background: rgba(108,99,255,0.1);
+    border-radius: 6px;
+    padding: 2px 8px;
+    white-space: nowrap;
+    flex-shrink: 0;
+    margin-top: 2px;
+  }
+  .commit-num {
+    font-size: 11px;
+    color: var(--text-muted);
+    flex-shrink: 0;
+    margin-top: 3px;
+  }
+  .commit-msg { font-size: 14px; font-weight: 500; color: var(--text); flex: 1; }
+  .commit-tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+  .tag {
+    font-size: 11px;
+    border-radius: 4px;
+    padding: 1px 7px;
+    font-weight: 500;
+  }
+  .tag-python { background: rgba(0,212,170,0.12); color: var(--accent2); border: 1px solid rgba(0,212,170,0.25); }
+  .tag-go     { background: rgba(76,201,240,0.12); color: var(--blue);    border: 1px solid rgba(76,201,240,0.25); }
+  .tag-db     { background: rgba(255,209,102,0.12); color: var(--yellow); border: 1px solid rgba(255,209,102,0.25); }
+  .tag-infra  { background: rgba(255,107,107,0.12); color: var(--red);    border: 1px solid rgba(255,107,107,0.25); }
+  .tag-fix    { background: rgba(108,99,255,0.12); color: #a9a3ff;        border: 1px solid rgba(108,99,255,0.25); }
+
+  /* ── Architecture diagram ── */
+  .diagram-wrap {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 28px;
+    overflow-x: auto;
+  }
+
+  /* ── Two-col layout ── */
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  @media (max-width: 700px) { .two-col { grid-template-columns: 1fr; } }
+
+  /* ── File change bar chart ── */
+  .bar-chart { display: flex; flex-direction: column; gap: 10px; }
+  .bar-row { display: flex; align-items: center; gap: 10px; }
+  .bar-label {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-muted);
+    width: 280px;
+    flex-shrink: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .bar-outer {
+    flex: 1;
+    background: rgba(255,255,255,0.05);
+    border-radius: 4px;
+    height: 18px;
+    overflow: hidden;
+    position: relative;
+  }
+  .bar-inner {
+    height: 100%;
+    border-radius: 4px;
+    transition: width 1s ease;
+    display: flex;
+    align-items: center;
+    padding-left: 8px;
+    font-size: 10px;
+    font-weight: 600;
+    color: rgba(0,0,0,0.7);
+    white-space: nowrap;
+  }
+  .bar-go     { background: linear-gradient(90deg, #4cc9f0, #3a9fc4); }
+  .bar-python { background: linear-gradient(90deg, #06d6a0, #04b089); }
+  .bar-db     { background: linear-gradient(90deg, #ffd166, #e6b040); }
+  .bar-infra  { background: linear-gradient(90deg, #ff6b6b, #d94f4f); }
+
+  /* ── API endpoint table ── */
+  .ep-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .ep-table th {
+    text-align: left;
+    padding: 10px 12px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--border);
+  }
+  .ep-table td {
+    padding: 9px 12px;
+    border-bottom: 1px solid rgba(46,49,71,0.5);
+    vertical-align: top;
+  }
+  .ep-table tr:hover td { background: rgba(108,99,255,0.04); }
+  .method {
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 700;
+    padding: 2px 6px;
+    border-radius: 4px;
+  }
+  .method-get  { background: rgba(6,214,160,0.15); color: var(--green); }
+  .method-post { background: rgba(108,99,255,0.15); color: var(--accent); }
+  .ep-path { font-family: var(--mono); font-size: 12px; color: var(--text); }
+  .ep-desc { color: var(--text-muted); font-size: 12px; }
+
+  /* ── DB schema boxes ── */
+  .schema-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; }
+  .schema-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .schema-header {
+    padding: 10px 14px;
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .schema-header .icon { font-size: 14px; }
+  .schema-body { padding: 8px 0; }
+  .schema-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 4px 14px;
+    font-size: 12px;
+    border-left: 2px solid transparent;
+  }
+  .schema-row:hover { background: rgba(255,255,255,0.02); }
+  .schema-row.pk { border-left-color: var(--yellow); }
+  .schema-row.fk { border-left-color: var(--blue); }
+  .schema-col-name { font-family: var(--mono); color: var(--text); }
+  .schema-col-type { color: var(--text-muted); font-size: 11px; font-family: var(--mono); }
+  .schema-divider { height: 1px; background: var(--border); margin: 4px 0; }
+
+  /* table theme colors */
+  .t-voucher-docs .schema-header { background: rgba(108,99,255,0.12); color: #a9a3ff; }
+  .t-invoice      .schema-header { background: rgba(6,214,160,0.12);  color: var(--green); }
+  .t-po           .schema-header { background: rgba(76,201,240,0.12); color: var(--blue); }
+  .t-line-items   .schema-header { background: rgba(255,209,102,0.12);color: var(--yellow); }
+  .t-match        .schema-header { background: rgba(255,107,107,0.12);color: var(--red); }
+
+  /* ── Matching engine flow ── */
+  .flow-steps { display: flex; flex-direction: column; gap: 0; }
+  .flow-step {
+    display: flex;
+    align-items: flex-start;
+    gap: 14px;
+    padding: 14px 16px;
+    border-radius: 0;
+    border-left: 2px solid var(--border);
+    position: relative;
+  }
+  .flow-step:first-child { border-radius: 10px 10px 0 0; border-top: 1px solid var(--border); }
+  .flow-step:last-child  { border-radius: 0 0 10px 10px; border-bottom: 1px solid var(--border); }
+  .flow-step:not(:last-child) { border-bottom: 1px dashed var(--border); }
+  .flow-step:hover { background: rgba(108,99,255,0.04); }
+  .step-num {
+    width: 28px; height: 28px;
+    border-radius: 50%;
+    background: var(--accent);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  .step-content { flex: 1; }
+  .step-title { font-weight: 600; font-size: 14px; color: var(--text); }
+  .step-detail { font-size: 12px; color: var(--text-muted); margin-top: 3px; }
+
+  /* ── Mini legend ── */
+  .legend { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; }
+  .legend-item { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-muted); }
+  .legend-dot { width: 10px; height: 10px; border-radius: 50%; }
+
+  /* ── Summary badges ── */
+  .badge-row { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 8px; }
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 12px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 600;
+  }
+  .badge-new   { background: rgba(6,214,160,0.12); color: var(--green); border: 1px solid rgba(6,214,160,0.25); }
+  .badge-ext   { background: rgba(76,201,240,0.12); color: var(--blue); border: 1px solid rgba(76,201,240,0.25); }
+  .badge-fix   { background: rgba(255,107,107,0.12); color: var(--red); border: 1px solid rgba(255,107,107,0.25); }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px 24px;
+  }
+  .card h3 { font-size: 15px; font-weight: 600; margin-bottom: 14px; color: var(--text); }
+</style>
+</head>
+<body>
+
+<!-- ══ HEADER ══ -->
+<div class="header">
+  <div style="max-width:1200px;margin:0 auto;">
+    <div class="branch-badge">⎇ dev-dsangule → dev</div>
+    <h1>Branch Diff Summary</h1>
+    <p>Merge base: <span class="merge-base">0802aa8</span> &nbsp;·&nbsp; 6 commits &nbsp;·&nbsp; Full voucher document intelligence feature</p>
+  </div>
+</div>
+
+<div class="container">
+
+  <!-- ══ STATS ══ -->
+  <div class="stat-grid">
+    <div class="stat-card">
+      <div class="stat-number color-purple">6</div>
+      <div class="stat-label">Commits</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-number color-blue">47</div>
+      <div class="stat-label">Files Changed</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-number color-green">+6,012</div>
+      <div class="stat-label">Lines Added</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-number color-red">−10</div>
+      <div class="stat-label">Lines Removed</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-number color-yellow">5</div>
+      <div class="stat-label">New DB Tables</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-number color-purple">14</div>
+      <div class="stat-label">New API Endpoints</div>
+    </div>
+  </div>
+
+  <!-- ══ WHAT WAS BUILT ══ -->
+  <div class="section">
+    <div class="section-title">What Was Built</div>
+    <div class="card">
+      <p style="color:var(--text-muted);font-size:14px;line-height:1.8;">
+        This branch introduces the complete <strong style="color:var(--text)">Voucher Document Intelligence</strong> system — a full-stack feature enabling automated extraction, review, and matching of invoice and purchase order documents. A new Python microservice handles AI-powered data extraction, while the Go backend gains HITL review workflows, a deterministic PO-Invoice matching engine, and payee resolution.
+      </p>
+      <div class="badge-row" style="margin-top:14px;">
+        <span class="badge badge-new">🐍 Python worker (new microservice)</span>
+        <span class="badge badge-new">🏗️ 5 new DB tables</span>
+        <span class="badge badge-new">🔀 PO-Invoice matching engine</span>
+        <span class="badge badge-new">🧑‍💻 HITL review workflow</span>
+        <span class="badge badge-new">🔍 Payee resolution service</span>
+        <span class="badge badge-ext">📡 14 new API routes</span>
+        <span class="badge badge-ext">🐳 Docker multi-stage build</span>
+        <span class="badge badge-fix">🔧 Nullable payee schema</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ COMMIT TIMELINE ══ -->
+  <div class="section">
+    <div class="section-title">Commit Timeline (oldest → newest)</div>
+    <div class="timeline">
+
+      <div class="timeline-item">
+        <div class="timeline-dot"></div>
+        <div class="commit-card">
+          <div class="commit-num">#1</div>
+          <div class="commit-hash">e8c18fc</div>
+          <div>
+            <div class="commit-msg">implement extraction worker, Redis queue, and backend updates</div>
+            <div class="commit-tags">
+              <span class="tag tag-python">Python worker</span>
+              <span class="tag tag-go">Go upload handler</span>
+              <span class="tag tag-db">Migration 000060</span>
+              <span class="tag tag-infra">Dockerfile</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="timeline-item">
+        <div class="timeline-dot"></div>
+        <div class="commit-card">
+          <div class="commit-num">#2</div>
+          <div class="commit-hash">9ae94c9</div>
+          <div>
+            <div class="commit-msg">added apis for listing invoice, po and voucher_documents tables</div>
+            <div class="commit-tags">
+              <span class="tag tag-go">List endpoints</span>
+              <span class="tag tag-go">Review handler</span>
+              <span class="tag tag-go">Repository layer</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="timeline-item">
+        <div class="timeline-dot"></div>
+        <div class="commit-card">
+          <div class="commit-num">#3</div>
+          <div class="commit-hash">260cb3b</div>
+          <div>
+            <div class="commit-msg">fix voucher saving logic and improve extraction results</div>
+            <div class="commit-tags">
+              <span class="tag tag-fix">Bug fix</span>
+              <span class="tag tag-python">LLM prompt improvements</span>
+              <span class="tag tag-python">Validation</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="timeline-item">
+        <div class="timeline-dot"></div>
+        <div class="commit-card">
+          <div class="commit-num">#4</div>
+          <div class="commit-hash">10c3b56</div>
+          <div>
+            <div class="commit-msg">Clean up environment configs and fix worker JSON serialization error</div>
+            <div class="commit-tags">
+              <span class="tag tag-fix">JSON serialization fix</span>
+              <span class="tag tag-infra">Docker env cleanup</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="timeline-item">
+        <div class="timeline-dot"></div>
+        <div class="commit-card">
+          <div class="commit-num">#5</div>
+          <div class="commit-hash">6483372</div>
+          <div>
+            <div class="commit-msg">added template generation and matching</div>
+            <div class="commit-tags">
+              <span class="tag tag-python">Template gen (HITL loop)</span>
+              <span class="tag tag-go">Matching engine v1</span>
+              <span class="tag tag-go">Payee resolution</span>
+              <span class="tag tag-python">invoice2data wrapper</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="timeline-item">
+        <div class="timeline-dot" style="border-color:var(--accent2);"></div>
+        <div class="commit-card" style="border-color:rgba(0,212,170,0.3);">
+          <div class="commit-num">#6</div>
+          <div class="commit-hash" style="color:var(--accent2);background:rgba(0,212,170,0.1);">c2fd5bb</div>
+          <div>
+            <div class="commit-msg">feat: implement PO-invoice matching engine and enhance document extraction accuracy</div>
+            <div class="commit-tags">
+              <span class="tag tag-go">Full matching engine</span>
+              <span class="tag tag-go">Quick vendor creation</span>
+              <span class="tag tag-python">Extraction accuracy improvements</span>
+              <span class="tag tag-db">Schema updates</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ══ ARCHITECTURE ══ -->
+  <div class="section">
+    <div class="section-title">System Architecture — New Flow</div>
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 960 420" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:960px;display:block;margin:0 auto;">
+        <defs>
+          <marker id="arr" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+            <path d="M0,0 L0,6 L8,3 z" fill="#6c63ff"/>
+          </marker>
+          <marker id="arr2" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+            <path d="M0,0 L0,6 L8,3 z" fill="#06d6a0"/>
+          </marker>
+          <marker id="arr3" markerWidth="8" markerHeight="8" refX="6" refY="3" orient="auto">
+            <path d="M0,0 L0,6 L8,3 z" fill="#ffd166"/>
+          </marker>
+        </defs>
+
+        <!-- User -->
+        <rect x="20" y="170" width="100" height="50" rx="8" fill="#1a1d27" stroke="#2e3147" stroke-width="1.5"/>
+        <text x="70" y="190" text-anchor="middle" fill="#8b8fa8" font-size="10" font-family="Segoe UI,sans-serif">Frontend</text>
+        <text x="70" y="206" text-anchor="middle" fill="#e2e4f0" font-size="12" font-family="Segoe UI,sans-serif" font-weight="600">User</text>
+
+        <!-- Go API -->
+        <rect x="160" y="155" width="120" height="80" rx="8" fill="rgba(76,201,240,0.08)" stroke="#4cc9f0" stroke-width="1.5"/>
+        <text x="220" y="183" text-anchor="middle" fill="#4cc9f0" font-size="10" font-family="Segoe UI,sans-serif" font-weight="600">GO BACKEND</text>
+        <text x="220" y="199" text-anchor="middle" fill="#e2e4f0" font-size="11" font-family="Segoe UI,sans-serif">Upload Service</text>
+        <text x="220" y="214" text-anchor="middle" fill="#8b8fa8" font-size="10" font-family="Segoe UI,sans-serif">Review Service</text>
+        <text x="220" y="227" text-anchor="middle" fill="#8b8fa8" font-size="10" font-family="Segoe UI,sans-serif">Matching Engine</text>
+
+        <!-- S3 -->
+        <rect x="160" y="60" width="120" height="50" rx="8" fill="rgba(255,209,102,0.08)" stroke="#ffd166" stroke-width="1.5"/>
+        <text x="220" y="80" text-anchor="middle" fill="#ffd166" font-size="10" font-family="Segoe UI,sans-serif" font-weight="600">AWS S3</text>
+        <text x="220" y="97" text-anchor="middle" fill="#e2e4f0" font-size="11" font-family="Segoe UI,sans-serif">PDF Storage</text>
+
+        <!-- Redis -->
+        <rect x="330" y="155" width="110" height="55" rx="8" fill="rgba(255,107,107,0.08)" stroke="#ff6b6b" stroke-width="1.5"/>
+        <text x="385" y="177" text-anchor="middle" fill="#ff6b6b" font-size="10" font-family="Segoe UI,sans-serif" font-weight="600">REDIS</text>
+        <text x="385" y="193" text-anchor="middle" fill="#e2e4f0" font-size="11" font-family="Segoe UI,sans-serif">Task Queue</text>
+        <text x="385" y="207" text-anchor="middle" fill="#8b8fa8" font-size="10" font-family="Segoe UI,sans-serif">+ DLQ</text>
+
+        <!-- Python Worker -->
+        <rect x="490" y="120" width="145" height="125" rx="8" fill="rgba(6,214,160,0.08)" stroke="#06d6a0" stroke-width="1.5"/>
+        <text x="562" y="143" text-anchor="middle" fill="#06d6a0" font-size="10" font-family="Segoe UI,sans-serif" font-weight="600">PYTHON WORKER</text>
+        <text x="562" y="161" text-anchor="middle" fill="#e2e4f0" font-size="11" font-family="Segoe UI,sans-serif">OCR Selection</text>
+        <text x="562" y="177" text-anchor="middle" fill="#e2e4f0" font-size="11" font-family="Segoe UI,sans-serif">Template Extract</text>
+        <text x="562" y="193" text-anchor="middle" fill="#e2e4f0" font-size="11" font-family="Segoe UI,sans-serif">LLM Fallback</text>
+        <text x="562" y="209" text-anchor="middle" fill="#8b8fa8" font-size="10" font-family="Segoe UI,sans-serif">GST Normalizer</text>
+        <text x="562" y="225" text-anchor="middle" fill="#8b8fa8" font-size="10" font-family="Segoe UI,sans-serif">Template Gen</text>
+
+        <!-- Gemini -->
+        <rect x="685" y="135" width="110" height="50" rx="8" fill="rgba(108,99,255,0.08)" stroke="#6c63ff" stroke-width="1.5"/>
+        <text x="740" y="157" text-anchor="middle" fill="#a9a3ff" font-size="10" font-family="Segoe UI,sans-serif" font-weight="600">GEMINI API</text>
+        <text x="740" y="175" text-anchor="middle" fill="#e2e4f0" font-size="11" font-family="Segoe UI,sans-serif">Flash 2.5</text>
+
+        <!-- PostgreSQL -->
+        <rect x="685" y="230" width="110" height="50" rx="8" fill="rgba(255,209,102,0.08)" stroke="#ffd166" stroke-width="1.5"/>
+        <text x="740" y="250" text-anchor="middle" fill="#ffd166" font-size="10" font-family="Segoe UI,sans-serif" font-weight="600">POSTGRESQL</text>
+        <text x="740" y="268" text-anchor="middle" fill="#e2e4f0" font-size="11" font-family="Segoe UI,sans-serif">5 new tables</text>
+
+        <!-- Templates DB -->
+        <rect x="490" y="290" width="145" height="45" rx="8" fill="rgba(108,99,255,0.06)" stroke="#6c63ff" stroke-width="1.2" stroke-dasharray="4 3"/>
+        <text x="562" y="310" text-anchor="middle" fill="#a9a3ff" font-size="10" font-family="Segoe UI,sans-serif" font-weight="600">Templates Store</text>
+        <text x="562" y="326" text-anchor="middle" fill="#8b8fa8" font-size="10" font-family="Segoe UI,sans-serif">xcentro.templates</text>
+
+        <!-- Human Reviewer -->
+        <rect x="160" y="310" width="120" height="50" rx="8" fill="#1a1d27" stroke="#2e3147" stroke-width="1.5"/>
+        <text x="220" y="330" text-anchor="middle" fill="#8b8fa8" font-size="10" font-family="Segoe UI,sans-serif">Human Reviewer</text>
+        <text x="220" y="347" text-anchor="middle" fill="#e2e4f0" font-size="11" font-family="Segoe UI,sans-serif" font-weight="600">HITL Review</text>
+
+        <!-- Arrows -->
+        <!-- User → Go API (upload) -->
+        <line x1="120" y1="192" x2="158" y2="192" stroke="#6c63ff" stroke-width="1.5" marker-end="url(#arr)"/>
+        <text x="139" y="187" text-anchor="middle" fill="#8b8fa8" font-size="9" font-family="Segoe UI,sans-serif">PDF</text>
+
+        <!-- Go API → S3 -->
+        <line x1="220" y1="155" x2="220" y2="112" stroke="#ffd166" stroke-width="1.5" marker-end="url(#arr3)"/>
+
+        <!-- Go API → Redis -->
+        <line x1="280" y1="183" x2="328" y2="183" stroke="#ff6b6b" stroke-width="1.5" marker-end="url(#arr)"/>
+        <text x="304" y="177" text-anchor="middle" fill="#8b8fa8" font-size="9" font-family="Segoe UI,sans-serif">enqueue</text>
+
+        <!-- Redis → Python Worker -->
+        <line x1="440" y1="183" x2="488" y2="183" stroke="#06d6a0" stroke-width="1.5" marker-end="url(#arr2)"/>
+        <text x="464" y="177" text-anchor="middle" fill="#8b8fa8" font-size="9" font-family="Segoe UI,sans-serif">BRPOP</text>
+
+        <!-- Python ↔ S3 (download) -->
+        <path d="M 562 120 Q 562 30 220 85" stroke="#ffd166" stroke-width="1.2" fill="none" stroke-dasharray="4 3" marker-end="url(#arr3)"/>
+        <text x="390" y="42" text-anchor="middle" fill="#8b8fa8" font-size="9" font-family="Segoe UI,sans-serif">download PDF</text>
+
+        <!-- Python → Gemini -->
+        <line x1="635" y1="160" x2="683" y2="160" stroke="#6c63ff" stroke-width="1.5" marker-end="url(#arr)"/>
+        <text x="659" y="154" text-anchor="middle" fill="#8b8fa8" font-size="9" font-family="Segoe UI,sans-serif">LLM</text>
+
+        <!-- Python → PostgreSQL -->
+        <line x1="635" y1="215" x2="683" y2="245" stroke="#ffd166" stroke-width="1.5" marker-end="url(#arr3)"/>
+        <text x="672" y="226" text-anchor="middle" fill="#8b8fa8" font-size="9" font-family="Segoe UI,sans-serif">draft_data</text>
+
+        <!-- Python ↔ Templates -->
+        <line x1="562" y1="245" x2="562" y2="288" stroke="#6c63ff" stroke-width="1.2" fill="none" stroke-dasharray="4 3" marker-end="url(#arr)"/>
+
+        <!-- Go API → PostgreSQL (validate) -->
+        <line x1="280" y1="220" x2="683" y2="255" stroke="#06d6a0" stroke-width="1.2" fill="none" stroke-dasharray="4 3" marker-end="url(#arr2)"/>
+        <text x="500" y="246" text-anchor="middle" fill="#8b8fa8" font-size="9" font-family="Segoe UI,sans-serif">validated_data</text>
+
+        <!-- User → HITL Review -->
+        <line x1="70" y1="220" x2="70" y2="350" stroke="#2e3147" stroke-width="1.2"/>
+        <line x1="70" y1="350" x2="158" y2="340" stroke="#2e3147" stroke-width="1.2" marker-end="url(#arr)"/>
+
+        <!-- HITL → Go API -->
+        <line x1="220" y1="310" x2="220" y2="237" stroke="#06d6a0" stroke-width="1.5" marker-end="url(#arr2)"/>
+        <text x="206" y="274" text-anchor="middle" fill="#8b8fa8" font-size="9" font-family="Segoe UI,sans-serif" transform="rotate(-90 206 274)">validate</text>
+
+        <!-- labels -->
+        <text x="30" y="380" fill="#8b8fa8" font-size="10" font-family="Segoe UI,sans-serif">─── sync  ╌╌╌ async/cache</text>
+      </svg>
+    </div>
+  </div>
+
+  <!-- ══ FILE CHANGES BAR CHART ══ -->
+  <div class="section">
+    <div class="section-title">Largest Files Changed (lines added)</div>
+    <div class="card">
+      <div class="legend" style="margin-bottom:18px;">
+        <div class="legend-item"><div class="legend-dot" style="background:#4cc9f0"></div>Go</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#06d6a0"></div>Python</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#ffd166"></div>SQL/DB</div>
+        <div class="legend-item"><div class="legend-dot" style="background:#ff6b6b"></div>Infra</div>
+      </div>
+      <div class="bar-chart">
+        <!-- Go files -->
+        <div class="bar-row">
+          <div class="bar-label">voucher_repository.go</div>
+          <div class="bar-outer"><div class="bar-inner bar-go" style="width:88%">1,091</div></div>
+        </div>
+        <div class="bar-row">
+          <div class="bar-label">document_review_service.go</div>
+          <div class="bar-outer"><div class="bar-inner bar-go" style="width:40%">492</div></div>
+        </div>
+        <div class="bar-row">
+          <div class="bar-label">document_review_handler.go</div>
+          <div class="bar-outer"><div class="bar-inner bar-go" style="width:39%">488</div></div>
+        </div>
+        <div class="bar-row">
+          <div class="bar-label">matching_engine.go</div>
+          <div class="bar-outer"><div class="bar-inner bar-go" style="width:32%">400</div></div>
+        </div>
+        <div class="bar-row">
+          <div class="bar-label">document_upload_service.go</div>
+          <div class="bar-outer"><div class="bar-inner bar-go" style="width:18%">225</div></div>
+        </div>
+        <div class="bar-row">
+          <div class="bar-label">payee_resolution_service.go</div>
+          <div class="bar-outer"><div class="bar-inner bar-go" style="width:14%">175</div></div>
+        </div>
+        <div class="bar-row">
+          <div class="bar-label">extracted_entities.go</div>
+          <div class="bar-outer"><div class="bar-inner bar-go" style="width:12%">157</div></div>
+        </div>
+        <!-- Python -->
+        <div class="bar-row">
+          <div class="bar-label">llm_client.py</div>
+          <div class="bar-outer"><div class="bar-inner bar-python" style="width:33%">405</div></div>
+        </div>
+        <div class="bar-row">
+          <div class="bar-label">extraction_service.py</div>
+          <div class="bar-outer"><div class="bar-inner bar-python" style="width:29%">362</div></div>
+        </div>
+        <div class="bar-row">
+          <div class="bar-label">invoice2data_wrapper.py</div>
+          <div class="bar-outer"><div class="bar-inner bar-python" style="width:13%">163</div></div>
+        </div>
+        <div class="bar-row">
+          <div class="bar-label">main.py</div>
+          <div class="bar-outer"><div class="bar-inner bar-python" style="width:15%">184</div></div>
+        </div>
+        <div class="bar-row">
+          <div class="bar-label">validation.py</div>
+          <div class="bar-outer"><div class="bar-inner bar-python" style="width:10%">122</div></div>
+        </div>
+        <!-- SQL -->
+        <div class="bar-row">
+          <div class="bar-label">000060_create_extraction_tables.up.sql</div>
+          <div class="bar-outer"><div class="bar-inner bar-db" style="width:19%">236</div></div>
+        </div>
+        <!-- Infra -->
+        <div class="bar-row">
+          <div class="bar-label">Dockerfile.python_worker</div>
+          <div class="bar-outer"><div class="bar-inner bar-infra" style="width:4%">45</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ TWO-COL: API ROUTES + MATCHING ENGINE ══ -->
+  <div class="section">
+    <div class="section-title">New API Endpoints</div>
+    <div class="card" style="padding:0;overflow:hidden;">
+      <table class="ep-table">
+        <thead>
+          <tr>
+            <th style="width:60px">Method</th>
+            <th>Path</th>
+            <th>Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td><span class="method method-post">POST</span></td><td class="ep-path">/vouchers/upload</td><td class="ep-desc">Upload Invoice/PO PDF → queue for extraction</td></tr>
+          <tr><td><span class="method method-post">POST</span></td><td class="ep-path">/vouchers/vendors/quick-create</td><td class="ep-desc">Create vendor without bank verification</td></tr>
+          <tr><td><span class="method method-get">GET</span></td><td class="ep-path">/vouchers/match-results</td><td class="ep-desc">Paginated joined invoice + PO match view</td></tr>
+          <tr><td><span class="method method-get">GET</span></td><td class="ep-path">/vouchers/documents</td><td class="ep-desc">List voucher documents with status filter</td></tr>
+          <tr><td><span class="method method-get">GET</span></td><td class="ep-path">/vouchers/invoices</td><td class="ep-desc">List extracted invoices</td></tr>
+          <tr><td><span class="method method-get">GET</span></td><td class="ep-path">/vouchers/purchase-orders</td><td class="ep-desc">List purchase orders with balance info</td></tr>
+          <tr><td><span class="method method-get">GET</span></td><td class="ep-path">/vouchers/:doc_id/draft</td><td class="ep-desc">Get extracted draft + payee resolution</td></tr>
+          <tr><td><span class="method method-get">GET</span></td><td class="ep-path">/vouchers/:doc_id/status</td><td class="ep-desc">Poll extraction pipeline status</td></tr>
+          <tr><td><span class="method method-get">GET</span></td><td class="ep-path">/vouchers/:doc_id/url</td><td class="ep-desc">Presigned S3 URL for document preview</td></tr>
+          <tr><td><span class="method method-post">POST</span></td><td class="ep-path">/vouchers/:doc_id/validate</td><td class="ep-desc">Submit HITL corrections → create typed records + trigger matching</td></tr>
+          <tr><td><span class="method method-get">GET</span></td><td class="ep-path">/vouchers/invoices/:id/match-result</td><td class="ep-desc">Match result for a specific invoice</td></tr>
+          <tr><td><span class="method method-get">GET</span></td><td class="ep-path">/vouchers/invoices/:id/line-items</td><td class="ep-desc">Line items for an invoice</td></tr>
+          <tr><td><span class="method method-get">GET</span></td><td class="ep-path">/vouchers/purchase-orders/:id/line-items</td><td class="ep-desc">Line items for a PO</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ══ DB SCHEMA ══ -->
+  <div class="section">
+    <div class="section-title">New Database Tables</div>
+    <div class="schema-grid">
+
+      <div class="schema-card t-voucher-docs">
+        <div class="schema-header"><span class="icon">📄</span>voucher_documents</div>
+        <div class="schema-body">
+          <div class="schema-row pk"><span class="schema-col-name">id</span><span class="schema-col-type">UUID PK</span></div>
+          <div class="schema-row"><span class="schema-col-name">s3_path</span><span class="schema-col-type">TEXT</span></div>
+          <div class="schema-row"><span class="schema-col-name">status</span><span class="schema-col-type">TEXT (enum)</span></div>
+          <div class="schema-row"><span class="schema-col-name">doc_type</span><span class="schema-col-type">TEXT</span></div>
+          <div class="schema-row"><span class="schema-col-name">raw_ocr</span><span class="schema-col-type">TEXT</span></div>
+          <div class="schema-row"><span class="schema-col-name">draft_data</span><span class="schema-col-type">JSONB</span></div>
+          <div class="schema-row"><span class="schema-col-name">validated_data</span><span class="schema-col-type">JSONB</span></div>
+          <div class="schema-row"><span class="schema-col-name">i2d_template</span><span class="schema-col-type">TEXT</span></div>
+          <div class="schema-row"><span class="schema-col-name">file_hash</span><span class="schema-col-type">TEXT UNIQUE</span></div>
+        </div>
+      </div>
+
+      <div class="schema-card t-invoice">
+        <div class="schema-header"><span class="icon">🧾</span>invoice</div>
+        <div class="schema-body">
+          <div class="schema-row pk"><span class="schema-col-name">id</span><span class="schema-col-type">UUID PK</span></div>
+          <div class="schema-row"><span class="schema-col-name">inv_id</span><span class="schema-col-type">TEXT</span></div>
+          <div class="schema-row fk"><span class="schema-col-name">bid</span><span class="schema-col-type">UUID → business</span></div>
+          <div class="schema-row fk"><span class="schema-col-name">document_id</span><span class="schema-col-type">UUID → vou_docs</span></div>
+          <div class="schema-row"><span class="schema-col-name">total_amount</span><span class="schema-col-type">DECIMAL(20,2)</span></div>
+          <div class="schema-row"><span class="schema-col-name">net_amount</span><span class="schema-col-type">DECIMAL(20,2)</span></div>
+          <div class="schema-row"><span class="schema-col-name">cgst/sgst/igst</span><span class="schema-col-type">DECIMAL(10,2)</span></div>
+          <div class="schema-row"><span class="schema-col-name">match_status</span><span class="schema-col-type">TEXT</span></div>
+          <div class="schema-row fk"><span class="schema-col-name">po_id</span><span class="schema-col-type">UUID → pur_orders</span></div>
+        </div>
+      </div>
+
+      <div class="schema-card t-po">
+        <div class="schema-header"><span class="icon">📋</span>purchase_orders</div>
+        <div class="schema-body">
+          <div class="schema-row pk"><span class="schema-col-name">id</span><span class="schema-col-type">UUID PK</span></div>
+          <div class="schema-row fk"><span class="schema-col-name">document_id</span><span class="schema-col-type">UUID → vou_docs</span></div>
+          <div class="schema-row"><span class="schema-col-name">po_number</span><span class="schema-col-type">TEXT</span></div>
+          <div class="schema-row"><span class="schema-col-name">total_amount</span><span class="schema-col-type">DECIMAL(20,2)</span></div>
+          <div class="schema-row"><span class="schema-col-name">remaining_balance</span><span class="schema-col-type">DECIMAL(20,2)</span></div>
+          <div class="schema-row"><span class="schema-col-name">po_status</span><span class="schema-col-type">OPEN/PARTIAL/CLOSED</span></div>
+          <div class="schema-row"><span class="schema-col-name">vendor_gstin</span><span class="schema-col-type">TEXT</span></div>
+        </div>
+      </div>
+
+      <div class="schema-card t-line-items">
+        <div class="schema-header"><span class="icon">📊</span>line_items</div>
+        <div class="schema-body">
+          <div class="schema-row pk"><span class="schema-col-name">id</span><span class="schema-col-type">UUID PK</span></div>
+          <div class="schema-row fk"><span class="schema-col-name">invoice_id</span><span class="schema-col-type">UUID nullable</span></div>
+          <div class="schema-row fk"><span class="schema-col-name">purchase_order_id</span><span class="schema-col-type">UUID nullable</span></div>
+          <div class="schema-row"><span class="schema-col-name">sku</span><span class="schema-col-type">TEXT (HSN/item code)</span></div>
+          <div class="schema-row"><span class="schema-col-name">quantity</span><span class="schema-col-type">DECIMAL(12,4)</span></div>
+          <div class="schema-row"><span class="schema-col-name">qty_received</span><span class="schema-col-type">DECIMAL(12,4)</span></div>
+          <div class="schema-row"><span class="schema-col-name">unit_price</span><span class="schema-col-type">BIGINT (paise)</span></div>
+          <div class="schema-divider"></div>
+          <div class="schema-row" style="font-size:10px;color:var(--text-muted);padding-top:2px;"><span>CHECK: exactly one FK non-null</span></div>
+        </div>
+      </div>
+
+      <div class="schema-card t-match">
+        <div class="schema-header"><span class="icon">🔗</span>match_results</div>
+        <div class="schema-body">
+          <div class="schema-row pk"><span class="schema-col-name">id</span><span class="schema-col-type">UUID PK</span></div>
+          <div class="schema-row fk"><span class="schema-col-name">invoice_id</span><span class="schema-col-type">UUID → invoice</span></div>
+          <div class="schema-row fk"><span class="schema-col-name">purchase_order_id</span><span class="schema-col-type">UUID nullable</span></div>
+          <div class="schema-row"><span class="schema-col-name">match_status</span><span class="schema-col-type">TEXT</span></div>
+          <div class="schema-row"><span class="schema-col-name">match_details</span><span class="schema-col-type">JSONB (audit)</span></div>
+          <div class="schema-row"><span class="schema-col-name">created_at</span><span class="schema-col-type">TIMESTAMPTZ</span></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ══ MATCHING ENGINE FLOW ══ -->
+  <div class="section">
+    <div class="section-title">PO-Invoice Matching Engine — Decision Flow</div>
+    <div class="two-col">
+      <div class="card" style="padding:0;overflow:hidden;">
+        <div style="padding:14px 18px;border-bottom:1px solid var(--border);font-size:13px;font-weight:600;color:var(--text);">RunMatchingForInvoice</div>
+        <div class="flow-steps">
+          <div class="flow-step">
+            <div class="step-num">1</div>
+            <div class="step-content">
+              <div class="step-title">Idempotency check</div>
+              <div class="step-detail">Skip if match_status ≠ PENDING_MATCH</div>
+            </div>
+          </div>
+          <div class="flow-step">
+            <div class="step-num">2</div>
+            <div class="step-content">
+              <div class="step-title">PO number check</div>
+              <div class="step-detail">No PO number → ORPHAN_INVOICE immediately</div>
+            </div>
+          </div>
+          <div class="flow-step">
+            <div class="step-num">3</div>
+            <div class="step-content">
+              <div class="step-title">PO lookup (Redis cache → DB)</div>
+              <div class="step-detail">5-min TTL, key: po_cache:&lt;bid&gt;:&lt;po_num&gt;</div>
+            </div>
+          </div>
+          <div class="flow-step">
+            <div class="step-num">4</div>
+            <div class="step-content">
+              <div class="step-title">Amount check</div>
+              <div class="step-detail">invoice.net_amount ≤ po.remaining_balance ± 1%</div>
+            </div>
+          </div>
+          <div class="flow-step">
+            <div class="step-num">5</div>
+            <div class="step-content">
+              <div class="step-title">Line-item matching</div>
+              <div class="step-detail">Phase 1: SKU exact match → Phase 2: description Dice coeff ≥ 0.5</div>
+            </div>
+          </div>
+          <div class="flow-step">
+            <div class="step-num">6</div>
+            <div class="step-content">
+              <div class="step-title">Apply result</div>
+              <div class="step-detail">MATCHED: update PO balance, qty_received, invalidate cache<br>MISMATCH: flag for procurement review + write audit</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Match Status States</h3>
+        <div style="display:flex;flex-direction:column;gap:12px;">
+          <div style="background:rgba(6,214,160,0.08);border:1px solid rgba(6,214,160,0.25);border-radius:8px;padding:12px;">
+            <div style="color:var(--green);font-weight:600;font-size:13px;margin-bottom:4px;">✓ MATCHED</div>
+            <div style="color:var(--text-muted);font-size:12px;">PO found, amounts within 1%, all line items matched by SKU or description similarity. PO balance decremented; PO transitions OPEN → PARTIALLY_INVOICED → CLOSED.</div>
+          </div>
+          <div style="background:rgba(255,107,107,0.08);border:1px solid rgba(255,107,107,0.25);border-radius:8px;padding:12px;">
+            <div style="color:var(--red);font-weight:600;font-size:13px;margin-bottom:4px;">⚠ MISMATCH</div>
+            <div style="color:var(--text-muted);font-size:12px;">PO found but amount exceeds balance OR line items have qty/price variance. Flagged for Procurement Manager review. Full details stored in match_details JSONB.</div>
+          </div>
+          <div style="background:rgba(255,209,102,0.08);border:1px solid rgba(255,209,102,0.25);border-radius:8px;padding:12px;">
+            <div style="color:var(--yellow);font-weight:600;font-size:13px;margin-bottom:4px;">◎ ORPHAN_INVOICE</div>
+            <div style="color:var(--text-muted);font-size:12px;">No matching PO found in the business. Stored as orphan — re-matched automatically when a PO with the same po_number is validated later.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ EXTRACTION PIPELINE ══ -->
+  <div class="section">
+    <div class="section-title">Python Worker — Extraction Pipeline</div>
+    <div class="card">
+      <svg viewBox="0 0 900 80" xmlns="http://www.w3.org/2000/svg" style="width:100%;display:block;">
+        <defs>
+          <marker id="parr" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto">
+            <path d="M0,0 L0,6 L7,3 z" fill="#4cc9f0"/>
+          </marker>
+          <marker id="parr2" markerWidth="7" markerHeight="7" refX="5" refY="3" orient="auto">
+            <path d="M0,0 L0,6 L7,3 z" fill="#ff6b6b"/>
+          </marker>
+        </defs>
+
+        <!-- Step boxes -->
+        <rect x="10"  y="20" width="90"  height="40" rx="6" fill="rgba(255,107,107,0.1)" stroke="#ff6b6b" stroke-width="1.2"/>
+        <text x="55"  y="36" text-anchor="middle" fill="#ff6b6b"  font-size="9"  font-family="Segoe UI,sans-serif" font-weight="600">REDIS</text>
+        <text x="55"  y="51" text-anchor="middle" fill="#e2e4f0"  font-size="10" font-family="Segoe UI,sans-serif">Dequeue</text>
+
+        <rect x="125" y="20" width="90"  height="40" rx="6" fill="rgba(255,209,102,0.1)" stroke="#ffd166" stroke-width="1.2"/>
+        <text x="170" y="36" text-anchor="middle" fill="#ffd166"  font-size="9"  font-family="Segoe UI,sans-serif" font-weight="600">S3</text>
+        <text x="170" y="51" text-anchor="middle" fill="#e2e4f0"  font-size="10" font-family="Segoe UI,sans-serif">Download</text>
+
+        <rect x="240" y="20" width="90"  height="40" rx="6" fill="rgba(6,214,160,0.1)" stroke="#06d6a0" stroke-width="1.2"/>
+        <text x="285" y="36" text-anchor="middle" fill="#06d6a0"  font-size="9"  font-family="Segoe UI,sans-serif" font-weight="600">OCR</text>
+        <text x="285" y="51" text-anchor="middle" fill="#e2e4f0"  font-size="10" font-family="Segoe UI,sans-serif">pdf/tesseract</text>
+
+        <rect x="355" y="20" width="100" height="40" rx="6" fill="rgba(108,99,255,0.1)" stroke="#6c63ff" stroke-width="1.2"/>
+        <text x="405" y="36" text-anchor="middle" fill="#a9a3ff"  font-size="9"  font-family="Segoe UI,sans-serif" font-weight="600">TEMPLATE</text>
+        <text x="405" y="51" text-anchor="middle" fill="#e2e4f0"  font-size="10" font-family="Segoe UI,sans-serif">invoice2data</text>
+
+        <rect x="475" y="5"  width="80"  height="28" rx="5" fill="rgba(255,107,107,0.08)" stroke="#ff6b6b" stroke-width="1" stroke-dasharray="3 2"/>
+        <text x="515" y="15" text-anchor="middle" fill="#ff6b6b"  font-size="8"  font-family="Segoe UI,sans-serif">if fail / invalid</text>
+        <text x="515" y="27" text-anchor="middle" fill="#e2e4f0"  font-size="9"  font-family="Segoe UI,sans-serif">↓ fallback</text>
+
+        <rect x="475" y="42" width="80"  height="28" rx="5" fill="rgba(108,99,255,0.1)" stroke="#6c63ff" stroke-width="1.2"/>
+        <text x="515" y="56" text-anchor="middle" fill="#a9a3ff"  font-size="9"  font-family="Segoe UI,sans-serif" font-weight="600">GEMINI LLM</text>
+        <text x="515" y="66" text-anchor="middle" fill="#8b8fa8"  font-size="8"  font-family="Segoe UI,sans-serif">extract()</text>
+
+        <rect x="580" y="20" width="90"  height="40" rx="6" fill="rgba(6,214,160,0.1)" stroke="#06d6a0" stroke-width="1.2"/>
+        <text x="625" y="36" text-anchor="middle" fill="#06d6a0"  font-size="9"  font-family="Segoe UI,sans-serif" font-weight="600">NORMALIZE</text>
+        <text x="625" y="51" text-anchor="middle" fill="#e2e4f0"  font-size="10" font-family="Segoe UI,sans-serif">GST rules</text>
+
+        <rect x="695" y="20" width="90"  height="40" rx="6" fill="rgba(76,201,240,0.1)" stroke="#4cc9f0" stroke-width="1.2"/>
+        <text x="740" y="36" text-anchor="middle" fill="#4cc9f0"  font-size="9"  font-family="Segoe UI,sans-serif" font-weight="600">VALIDATE</text>
+        <text x="740" y="51" text-anchor="middle" fill="#e2e4f0"  font-size="10" font-family="Segoe UI,sans-serif">fields+arith</text>
+
+        <rect x="810" y="20" width="80"  height="40" rx="6" fill="rgba(255,209,102,0.1)" stroke="#ffd166" stroke-width="1.2"/>
+        <text x="850" y="36" text-anchor="middle" fill="#ffd166"  font-size="9"  font-family="Segoe UI,sans-serif" font-weight="600">PERSIST</text>
+        <text x="850" y="51" text-anchor="middle" fill="#e2e4f0"  font-size="10" font-family="Segoe UI,sans-serif">draft_data</text>
+
+        <!-- Arrows -->
+        <line x1="100" y1="40" x2="123" y2="40" stroke="#4cc9f0" stroke-width="1.5" marker-end="url(#parr)"/>
+        <line x1="215" y1="40" x2="238" y2="40" stroke="#4cc9f0" stroke-width="1.5" marker-end="url(#parr)"/>
+        <line x1="330" y1="40" x2="353" y2="40" stroke="#4cc9f0" stroke-width="1.5" marker-end="url(#parr)"/>
+        <line x1="455" y1="40" x2="473" y2="40" stroke="#4cc9f0" stroke-width="1.5" marker-end="url(#parr)"/>
+        <line x1="555" y1="56" x2="578" y2="42" stroke="#4cc9f0" stroke-width="1.5" marker-end="url(#parr)"/>
+        <line x1="555" y1="40" x2="578" y2="40" stroke="#4cc9f0" stroke-width="1.5" marker-end="url(#parr)"/>
+        <line x1="670" y1="40" x2="693" y2="40" stroke="#4cc9f0" stroke-width="1.5" marker-end="url(#parr)"/>
+        <line x1="785" y1="40" x2="808" y2="40" stroke="#4cc9f0" stroke-width="1.5" marker-end="url(#parr)"/>
+      </svg>
+    </div>
+  </div>
+
+  <!-- ══ FOOTER ══ -->
+  <div style="margin-top:48px;padding-top:20px;border-top:1px solid var(--border);text-align:center;color:var(--text-muted);font-size:12px;">
+    Generated from <code style="font-family:var(--mono);color:var(--accent)">git diff 0802aa8..dev-dsangule</code> &nbsp;·&nbsp; 47 files &nbsp;·&nbsp; 6,012 insertions &nbsp;·&nbsp; 10 deletions
+  </div>
+
+</div>
+</body>
+</html>

@@ -14,13 +14,19 @@ services:
       - postgres_data:/var/lib/postgresql/
       # Configs
       - ./custom.conf:/etc/postgresql/custom.conf:ro
-    command: ["postgres", "-c", "config_file=/etc/postgresql/custom.conf"]
+    command: [ "postgres", "-c", "config_file=/etc/postgresql/custom.conf" ]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
 
   redis:
     image: redis:8-bookworm
     container_name: xcentro-redis
     restart: unless-stopped
-    command: ["sh", "/usr/local/etc/redis/redis-entrypoint.sh"]
+    command: [ "sh", "/usr/local/etc/redis/redis-entrypoint.sh" ]
     environment:
       REDIS_SUPERUSER: ${REDIS_SUPERUSER:-redis_super}
       REDIS_SUPERUSER_PASSWORD: ${REDIS_SUPERUSER_PASSWORD:-RedisSuper123!}
@@ -30,6 +36,48 @@ services:
       - redis_data:/data
       - ./redis.conf:/usr/local/etc/redis/redis.conf:ro
       - ./redis-entrypoint.sh:/usr/local/etc/redis/redis-entrypoint.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli --user ${REDIS_SUPERUSER} -a ${REDIS_SUPERUSER_PASSWORD} ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  python_worker:
+    build:
+      context: ../../
+      dockerfile: Dockerfile.python_worker
+    container_name: xcentro-python-worker
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - ../../python_worker/.env
+      - .env
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${DB_RW_USER}
+      POSTGRES_PASSWORD: ${DB_RW_PASSWORD}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_USER: ${REDIS_APP_USER}
+      REDIS_PASSWORD: ${REDIS_APP_PASSWORD}
+      REDIS_QUEUE: xcentro:extraction_tasks
+    volumes:
+      - ../../python_worker/templates:/app/templates
+    # A cheap liveness check: the worker logs a startup line; absence of the
+    # process (main.py exiting) causes `pgrep` to fail and Docker to restart.
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'python .*main.py' >/dev/null"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 
 volumes:
   postgres_data:

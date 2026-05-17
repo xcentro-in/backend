@@ -263,6 +263,21 @@ func (s *S3Client) CompleteMultipartUpload(ctx context.Context, key string, uplo
 	return nil
 }
 
+// DeleteObject removes an object from S3.
+func (s *S3Client) DeleteObject(ctx context.Context, key string) error {
+	if key == "" {
+		return fmt.Errorf("key is required")
+	}
+	_, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{
+		Bucket: aws.String(s.bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to delete S3 object: %w", err)
+	}
+	return nil
+}
+
 // ConfirmUpload verifies that the object exists and returns a presigned download URL.
 func (s *S3Client) ConfirmUpload(ctx context.Context, key string, expiration time.Duration) (string, error) {
 	if key == "" {

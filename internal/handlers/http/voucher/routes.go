@@ -6,17 +6,20 @@ import (
 	"xcentro.in/internal/middleware"
 	voucherSvc "xcentro.in/internal/services/voucher"
 	"xcentro.in/internal/shared/httputil"
-	"xcentro.in/internal/shared/ratelimiter"
 	"xcentro.in/internal/shared/logger"
+	"xcentro.in/internal/shared/ratelimiter"
 )
 
 // RegisterVoucherRoutes registers all voucher-related routes
-func RegisterVoucherRoutes(group *echo.Group, voucherService voucherSvc.VoucherService, authService auth.AuthService, cookieManager *httputil.CookieManager) {
+func RegisterVoucherRoutes(group *echo.Group, voucherService voucherSvc.VoucherService, uploadHandler *DocumentUploadHandler, reviewHandler *DocumentReviewHandler, authService auth.AuthService, cookieManager *httputil.CookieManager) {
 	handler := NewVoucherHandler(voucherService, logger.GetDefault())
 
 	group.Use(middleware.JWTMiddleware(authService))
 	group.Use(middleware.CSRFMiddleware(cookieManager))
 	group.Use(ratelimiter.MiddlewareDefault())
+
+	// Voucher Document ingestion endpoint
+	group.POST("/upload", uploadHandler.UploadDocument) // POST /vouchers/upload - Upload Invoice/PO document
 
 	// Voucher management endpoints
 	group.POST("/draft", handler.CreateDraftVoucher)                         // POST /vouchers/draft - Create draft voucher
@@ -38,4 +41,20 @@ func RegisterVoucherRoutes(group *echo.Group, voucherService voucherSvc.VoucherS
 	group.DELETE("/:id", handler.DeleteVoucher)                              // DELETE /vouchers/:id - Delete draft voucher
 	group.PUT("/:id/finalize", handler.FinalizeVoucher)                      // PUT /vouchers/:id/finalize - Finalize voucher
 	group.POST("/:voucher_id/request-approval", handler.RequestApproval)     // POST /vouchers/:voucher_id/request-approval - Create/update approval
+
+	// Document review HITL endpoints
+	group.POST("/vendors/quick-create", reviewHandler.QuickCreateVendor)                              // POST /vouchers/vendors/quick-create - Quick vendor creation from document review (no bank verification)
+	group.GET("/match-results", reviewHandler.ListMatchResults)                                   // GET /vouchers/match-results - List match results (joined invoice + PO view)
+	group.GET("/documents", reviewHandler.ListDocuments)                                          // GET /vouchers/documents - List voucher documents
+	group.GET("/invoices", reviewHandler.ListInvoices)                                            // GET /vouchers/invoices - List extracted invoices
+	group.GET("/invoices/:invoice_id/match-result", reviewHandler.GetMatchResult)                 // GET /vouchers/invoices/:invoice_id/match-result - Get match result
+	group.GET("/invoices/:invoice_id/line-items", reviewHandler.GetInvoiceLineItems)              // GET /vouchers/invoices/:invoice_id/line-items - Get line items for an invoice
+	group.GET("/purchase-orders/:po_id/line-items", reviewHandler.GetPurchaseOrderLineItems)     // GET /vouchers/purchase-orders/:po_id/line-items - Get line items for a PO
+	group.GET("/purchase-orders", reviewHandler.ListPurchaseOrders)                               // GET /vouchers/purchase-orders - List purchase orders
+	group.GET("/:document_id/draft", reviewHandler.GetDocumentDraft)                              // GET /vouchers/:document_id/draft - Get extracted draft data
+	group.GET("/:document_id/status", reviewHandler.GetDocumentStatus)                            // GET /vouchers/:document_id/status - Get processing status
+	group.GET("/:document_id/url", uploadHandler.GetDocumentURL)                                  // GET /vouchers/:document_id/url - Get presigned S3 download URL
+	group.POST("/:document_id/retry", uploadHandler.RetryDocument)                                // POST /vouchers/:document_id/retry - Retry failed document extraction
+	group.DELETE("/documents/:document_id", uploadHandler.DeleteDocument)                          // DELETE /vouchers/documents/:document_id - Delete failed document from DB and S3
+	group.POST("/:document_id/validate", reviewHandler.ValidateDocument)                          // POST /vouchers/:document_id/validate - Validate with corrections
 }

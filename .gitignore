@@ -167,4 +167,10 @@ local/
 # Air hot reload
 tmp/
 build-errors*.log
+
+# Python worker
+**/__pycache__/
+*.pyc
+api
+
 .claude

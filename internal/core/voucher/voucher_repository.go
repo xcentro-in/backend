@@ -115,6 +115,31 @@ type VoucherRepository interface {
 	// Fails if payout_transfer_requests exist (ON DELETE RESTRICT)
 	Delete(ctx context.Context, voucherID uuid.UUID) error
 
+	// CreateVoucherDocument inserts a new document record into voucher_documents
+	CreateVoucherDocument(ctx context.Context, doc *VoucherDocument) error
+
+	// GetDocumentByFileHash looks up a document by its SHA-256 file hash.
+	// Returns nil, nil when no match is found (not an error).
+	GetDocumentByFileHash(ctx context.Context, fileHash string) (*VoucherDocument, error)
+
+	// GetVoucherDocumentByID retrieves a voucher document by its ID
+	GetVoucherDocumentByID(ctx context.Context, docID uuid.UUID) (*VoucherDocument, error)
+
+	// UpdateVoucherDocumentValidation updates the validated data and status of a voucher document
+	UpdateVoucherDocumentValidation(ctx context.Context, docID uuid.UUID, status DocumentStatus, validatedData map[string]interface{}) error
+
+	// CreateInvoiceFromExtraction persists validated invoice data to the existing invoice table
+	// Returns the generated invoice UUID for downstream use (e.g., matching engine)
+	CreateInvoiceFromExtraction(ctx context.Context, docID uuid.UUID, data map[string]interface{}) (uuid.UUID, error)
+
+	// CreatePurchaseOrder persists validated PO data to the purchase_orders table
+	// Returns the generated PO UUID for downstream use
+	CreatePurchaseOrder(ctx context.Context, docID uuid.UUID, data map[string]interface{}) (uuid.UUID, error)
+
+	// GetBusinessIDByGSTIN looks up a business by its GSTIN and returns the bid.
+	// Returns empty string if not found, error only on query failures.
+	GetBusinessIDByGSTIN(ctx context.Context, gstin string) (string, error)
+
 	// WithTx creates a new repository instance that uses a transaction
 	// This enables transactional voucher operations (e.g., finalizing vouchers atomically with payments)
 	WithTx(tx interface{}) VoucherRepository
@@ -131,6 +156,91 @@ type VoucherRepository interface {
 	// Returns: (totalAmount, validVoucherCount, error)
 	// Error cases: not all vouchers found, wrong business, not in draft status
 	ValidateAndSumVouchers(ctx context.Context, voucherIDs []uuid.UUID, businessID string) (int64, int, error)
+
+	// ListVoucherDocuments retrieves paginated list of voucher documents
+	ListVoucherDocuments(ctx context.Context, filter DocumentListFilter) ([]*VoucherDocument, int64, error)
+
+	// ListExtractedInvoices retrieves paginated list of extracted invoices
+	ListExtractedInvoices(ctx context.Context, filter ExtractedInvoiceListFilter) ([]*ExtractedInvoice, int64, error)
+
+	// ListPurchaseOrders retrieves paginated list of purchase orders
+	ListPurchaseOrders(ctx context.Context, filter PurchaseOrderListFilter) ([]*PurchaseOrder, int64, error)
+
+	// --- Matching Engine Methods ---
+
+	// GetInvoiceByID retrieves a fully-typed invoice record by its primary key.
+	GetInvoiceByID(ctx context.Context, invoiceID uuid.UUID) (*ExtractedInvoice, error)
+
+	// GetPurchaseOrderByPONumber retrieves a PO by its po_number, scoped to a business.
+	GetPurchaseOrderByPONumber(ctx context.Context, poNumber string, businessID uuid.UUID) (*PurchaseOrder, error)
+
+	// GetLineItemsByPurchaseOrderID retrieves all typed line items for a PO.
+	GetLineItemsByPurchaseOrderID(ctx context.Context, poID uuid.UUID) ([]LineItemDetail, error)
+
+	// GetLineItemsByInvoiceID retrieves all typed line items for an invoice.
+	GetLineItemsByInvoiceID(ctx context.Context, invoiceID uuid.UUID) ([]LineItemDetail, error)
+
+	// UpdateInvoiceMatchStatus updates only the match_status column on an invoice.
+	UpdateInvoiceMatchStatus(ctx context.Context, invoiceID uuid.UUID, status string) error
+
+	// UpdateInvoicePOID sets the po_id FK on an invoice after a successful match.
+	UpdateInvoicePOID(ctx context.Context, invoiceID uuid.UUID, poID uuid.UUID) error
+
+	// UpdatePurchaseOrderBalance atomically updates remaining_balance and po_status.
+	UpdatePurchaseOrderBalance(ctx context.Context, poID uuid.UUID, remainingBalance float64, status string) error
+
+	// UpdateLineItemQtyReceived adds to the qty_received on a line item.
+	UpdateLineItemQtyReceived(ctx context.Context, lineItemID uuid.UUID, qtyReceived float64) error
+
+	// CreateMatchResult persists a matching audit record.
+	CreateMatchResult(ctx context.Context, result *MatchResult) error
+
+	// GetInvoiceBusinessID returns the owning bid of an invoice for ownership checks.
+	// Returns uuid.Nil (and no error) when the invoice exists but has no bid set.
+	GetInvoiceBusinessID(ctx context.Context, invoiceID uuid.UUID) (uuid.UUID, error)
+
+	// GetPurchaseOrderBusinessID returns the owning bid of a PO for ownership checks.
+	// Returns uuid.Nil (and no error) when the PO exists but has no bid set.
+	GetPurchaseOrderBusinessID(ctx context.Context, poID uuid.UUID) (uuid.UUID, error)
+
+	// GetOrphanInvoicesByPONumber finds invoices in ORPHAN_INVOICE status with the given po_number,
+	// scoped to the given business so the query never crosses tenant boundaries.
+	GetOrphanInvoicesByPONumber(ctx context.Context, poNumber string, businessID uuid.UUID) ([]*ExtractedInvoice, error)
+
+	// GetMatchResultsByInvoiceID retrieves all match result records for a given invoice, most recent first.
+	GetMatchResultsByInvoiceID(ctx context.Context, invoiceID uuid.UUID) ([]*MatchResult, error)
+
+	// ListMatchResults retrieves a paginated, joined view of match_results + invoice + purchase_orders
+	// scoped to a business. Used by the "Match Results" tab on the frontend.
+	ListMatchResults(ctx context.Context, filter MatchResultListFilter) ([]*MatchResultSummary, int64, error)
+
+	// DeleteVoucherDocument removes a voucher document record from the database.
+	DeleteVoucherDocument(ctx context.Context, docID uuid.UUID) error
+
+	// UpdateVoucherDocumentStatus updates only the status column on a voucher document.
+	UpdateVoucherDocumentStatus(ctx context.Context, docID uuid.UUID, status DocumentStatus) error
+
+	// GetValidatedDocumentsByTemplate retrieves validated_data for recent documents that used a given i2d template.
+	GetValidatedDocumentsByTemplate(ctx context.Context, templateName string, limit int) ([]*VoucherDocument, error)
+
+	// GetVoucherDocumentBusinessID returns the owning bid of a document so handlers
+	// can enforce per-business authorization before reading drafts / presigned URLs.
+	// Returns uuid.Nil (and no error) when the document exists but has no bid set
+	// (legacy rows predating migration 000061).
+	GetVoucherDocumentBusinessID(ctx context.Context, docID uuid.UUID) (uuid.UUID, error)
+
+	// ListQueuedDocumentsOlderThan returns documents stuck in QUEUED for reconciliation.
+	ListQueuedDocumentsOlderThan(ctx context.Context, staleness time.Duration, limit int) ([]*VoucherDocument, error)
+
+	// InsertDocumentCorrections records field-level changes made by a human reviewer during HITL validation.
+	// Each entry captures the field name, the worker-extracted value, and the human-corrected value.
+	InsertDocumentCorrections(ctx context.Context, docID uuid.UUID, userID string, corrections []DocumentCorrection) error
+
+	// GetTemplateCorrectionRate returns (corrected_doc_count, total_validated_doc_count)
+	// for documents that used the given i2d template within the lookback window.
+	// Used by the HITL feedback loop to decide whether a template has degraded
+	// and should be regenerated.
+	GetTemplateCorrectionRate(ctx context.Context, templateName string, since time.Duration) (int, int, error)
 }
 
 // VoucherFilters defines filter criteria for listing vouchers

@@ -1,0 +1,604 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LLM Model Comparison — Invoice Extraction (May 2026)</title>
+<style>
+  :root {
+    --bg:#0d1117;--bg2:#161b22;--bg3:#21262d;--bg4:#30363d;
+    --border:#30363d;--text:#e6edf3;--text2:#8b949e;--text3:#6e7681;
+    --blue:#58a6ff;--green:#3fb950;--yellow:#d29922;--red:#f85149;
+    --purple:#bc8cff;--orange:#ffa657;--teal:#39d353;
+    --g:#f0883e;--a:#da3633;--o:#58a6ff;--m:#bc8cff;--ow:#3fb950;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;line-height:1.5}
+  .wrap{max-width:1400px;margin:0 auto;padding:32px 24px}
+  h1{font-size:26px;font-weight:700;margin-bottom:6px}
+  h2{font-size:18px;font-weight:600;margin-bottom:14px}
+  h3{font-size:14px;font-weight:600;margin-bottom:10px;color:var(--text2)}
+  .sub{color:var(--text2);margin-bottom:28px;font-size:13px}
+  .card{background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:22px;margin-bottom:22px}
+
+  /* STATS */
+  .stats{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:22px}
+  .stat{background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:14px;text-align:center}
+  .stat-v{font-size:22px;font-weight:700;color:var(--blue)}
+  .stat-l{font-size:10px;color:var(--text2);margin-top:3px;text-transform:uppercase;letter-spacing:.5px}
+
+  /* DIM LEGEND */
+  .dim-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:10px}
+  .dim-card{background:var(--bg3);border-radius:7px;padding:12px;font-size:12px}
+  .dim-card .dim-name{font-weight:700;color:var(--text);margin-bottom:3px;font-size:13px}
+  .dim-card .dim-why{color:var(--text2);line-height:1.5}
+  .dim-wt{display:inline-block;margin-top:5px;font-size:10px;padding:2px 6px;border-radius:3px;background:rgba(88,166,255,.15);color:var(--blue)}
+
+  /* TABLE */
+  .tbl-wrap{overflow-x:auto}
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  thead th{background:var(--bg3);color:var(--text2);font-weight:600;padding:8px 10px;text-align:left;border-bottom:1px solid var(--border);cursor:pointer;user-select:none;white-space:nowrap;position:sticky;top:0;z-index:1}
+  thead th:hover{color:var(--text)}
+  thead th.sorted{color:var(--blue)}
+  tbody tr{border-bottom:1px solid var(--bg3);transition:.1s}
+  tbody tr:hover{background:var(--bg3)}
+  tbody tr.r-cur{background:rgba(35,134,54,.1)}
+  tbody tr.r-rec{background:rgba(88,166,255,.07)}
+  tbody tr.r-warn{background:rgba(248,81,73,.05)}
+  td{padding:7px 10px;vertical-align:middle}
+
+  /* SCORE CELLS */
+  .score-cell{display:flex;align-items:center;gap:5px}
+  .score-bar{flex:1;height:5px;background:var(--bg4);border-radius:3px;min-width:44px}
+  .score-fill{height:100%;border-radius:3px}
+  .score-num{font-weight:700;font-size:12px;min-width:24px;text-align:right}
+
+  /* COMPOSITE */
+  .comp-cell{font-size:16px;font-weight:800}
+
+  /* BADGES */
+  .bdg{display:inline-block;padding:2px 7px;border-radius:10px;font-size:10px;font-weight:700}
+  .b-cur{background:rgba(35,134,54,.25);color:var(--green);border:1px solid rgba(35,134,54,.4)}
+  .b-rec{background:rgba(88,166,255,.2);color:var(--blue);border:1px solid rgba(88,166,255,.4)}
+  .b-warn{background:rgba(210,153,34,.2);color:var(--yellow);border:1px solid rgba(210,153,34,.4)}
+
+  /* FILTER CONTROLS */
+  .ctrls{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;align-items:center;font-size:12px}
+  .ctrls select{background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:5px 9px;border-radius:6px;font-size:12px;cursor:pointer}
+  .fbtn{background:var(--bg3);border:1px solid var(--border);color:var(--text2);padding:4px 11px;border-radius:6px;font-size:11px;cursor:pointer;transition:.15s}
+  .fbtn:hover,.fbtn.active{background:var(--blue);color:#fff;border-color:var(--blue)}
+
+  /* SCATTER */
+  #scwrap{width:100%;height:460px;position:relative;background:var(--bg3);border-radius:8px;overflow:hidden}
+  #scwrap canvas{position:absolute}
+
+  /* TOOLTIP */
+  #tt{position:fixed;background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:12px 14px;font-size:12px;pointer-events:none;display:none;z-index:100;min-width:240px;box-shadow:0 8px 24px rgba(0,0,0,.5)}
+  #tt .t-t{font-weight:700;font-size:14px;margin-bottom:8px}
+  #tt .t-r{display:flex;justify-content:space-between;gap:14px;padding:2px 0}
+  #tt .t-k{color:var(--text2)}.t-v{font-weight:600}
+  #tt .t-n{margin-top:8px;padding-top:8px;border-top:1px solid var(--border);font-size:11px;color:var(--text2);line-height:1.5}
+
+  /* INVOICE2DATA */
+  .i2d-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:14px}
+  .i2d-box{background:var(--bg3);border-radius:8px;padding:16px}
+  .i2d-box h3{font-size:13px;font-weight:700;color:var(--text);margin-bottom:10px}
+  .i2d-box p{font-size:12px;color:var(--text2);line-height:1.7}
+  .be-table{width:100%;border-collapse:collapse;font-size:12px;margin-top:10px}
+  .be-table th{background:var(--bg4);padding:6px 10px;text-align:left;color:var(--text2);font-size:11px}
+  .be-table td{padding:6px 10px;border-bottom:1px solid var(--bg4)}
+
+  /* SELECTION GUIDE */
+  .sel-tree{background:var(--bg3);border-radius:8px;padding:18px;font-size:12px;line-height:2}
+  .sel-tree .q{color:var(--blue);font-weight:600}
+  .sel-tree .a{color:var(--green);margin-left:16px}
+  .sel-tree .note{color:var(--text2);margin-left:32px;font-size:11px;line-height:1.6;display:block;margin-bottom:6px}
+
+  .legend-dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:3px;vertical-align:middle}
+  .legend-ring{display:inline-block;width:9px;height:9px;border-radius:50%;border:2px solid;background:transparent;margin-right:3px;vertical-align:middle}
+
+  .alert{border-radius:8px;padding:12px 16px;margin-bottom:22px;font-size:13px;line-height:1.7}
+  .alert-blue{background:rgba(88,166,255,.08);border:1px solid rgba(88,166,255,.25);color:var(--text)}
+
+  @media(max-width:900px){
+    .stats{grid-template-columns:repeat(3,1fr)}
+    .dim-grid{grid-template-columns:1fr 1fr}
+    .i2d-grid{grid-template-columns:1fr}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>LLM Model Comparison — Invoice Extraction</h1>
+<p class="sub">20 models scored across 7 dimensions for Indian GST invoice extraction. Prices as of May 2026. Cost = 8,000 input + 550 output tokens per invoice.</p>
+
+<!-- STAT CARDS -->
+<div class="stats">
+  <div class="stat"><div class="stat-v">20</div><div class="stat-l">Models compared</div></div>
+  <div class="stat"><div class="stat-v">7</div><div class="stat-l">Scored dimensions</div></div>
+  <div class="stat"><div class="stat-v" id="cheapest-v">—</div><div class="stat-l">Cheapest / invoice</div></div>
+  <div class="stat"><div class="stat-v" id="best-fit-v">—</div><div class="stat-l">Highest fit score</div></div>
+  <div class="stat"><div class="stat-v" id="best-val-v">—</div><div class="stat-l">Best value pick</div></div>
+</div>
+
+<!-- DIMENSION LEGEND -->
+<div class="card">
+  <h2>Scoring Dimensions</h2>
+  <div class="dim-grid">
+    <div class="dim-card">
+      <div class="dim-name">① Output Quality</div>
+      <div class="dim-why">Structured JSON reliability, schema adherence, correct handling of null / missing fields. The primary success metric for the extraction pipeline.</div>
+      <span class="dim-wt">Weight 22%</span>
+    </div>
+    <div class="dim-card">
+      <div class="dim-name">② Native Vision</div>
+      <div class="dim-why">Can the model accept a PDF image directly, bypassing OCR? Direct image input outperforms OCR-then-text by 8–15% on scanned documents. No vision = OCR pre-step required.</div>
+      <span class="dim-wt">Weight 15%</span>
+    </div>
+    <div class="dim-card">
+      <div class="dim-name">③ Indian GST Domain Fit</div>
+      <div class="dim-why">GSTIN format awareness, CGST/SGST/IGST rules, HSN/SAC codes, Indian date formats, mixed Hindi/English text. Estimated from multilingual capability and training data coverage.</div>
+      <span class="dim-wt">Weight 20%</span>
+    </div>
+    <div class="dim-card">
+      <div class="dim-name">④ Document Understanding</div>
+      <div class="dim-why">Multi-page invoices, rotated tables, overlapping headers, nested line items, inconsistent column alignment. Estimated from general reasoning benchmark performance.</div>
+      <span class="dim-wt">Weight 15%</span>
+    </div>
+    <div class="dim-card">
+      <div class="dim-name">⑤ Speed / Throughput</div>
+      <div class="dim-why">Time-to-first-token and tokens/sec. Matters at review time when processing bursts. Less critical for async background extraction. Sourced from Artificial Analysis benchmarks.</div>
+      <span class="dim-wt">Weight 13%</span>
+    </div>
+    <div class="dim-card">
+      <div class="dim-name">⑥ Context Window</div>
+      <div class="dim-why">128K is sufficient for single invoices; 1M+ enables multi-page batching. Low weight because it's rarely the bottleneck in practice.</div>
+      <span class="dim-wt">Weight 8%</span>
+    </div>
+    <div class="dim-card">
+      <div class="dim-name">⑦ API Reliability</div>
+      <div class="dim-why">LLM APIs average 99–99.5% uptime. Azure OpenAI offers a 99.9% SLA; Anthropic averages ~99.32% (~5 hrs downtime/month); Google has no free-tier SLA. Template fallback reduces exposure.</div>
+      <span class="dim-wt">Weight 7%</span>
+    </div>
+  </div>
+  <p style="font-size:11px;color:var(--text3);margin-top:8px">All scores are estimates based on published benchmarks, vendor documentation, and model capabilities. Treat relative rankings as directional, not precise.</p>
+</div>
+
+<!-- TABLE -->
+<div class="card">
+  <h2>Ranked Model Table</h2>
+
+  <div class="ctrls">
+    <button class="fbtn active" onclick="filterBy('all',this)">All</button>
+    <button class="fbtn" onclick="filterBy('google',this)">Google</button>
+    <button class="fbtn" onclick="filterBy('anthropic',this)">Anthropic</button>
+    <button class="fbtn" onclick="filterBy('openai',this)">OpenAI</button>
+    <button class="fbtn" onclick="filterBy('openweight',this)">Open-weight</button>
+    <button class="fbtn" onclick="filterBy('vision',this)">Vision ✓</button>
+    <button class="fbtn" onclick="filterBy('budget',this)">&lt;$0.005/invoice</button>
+    <select onchange="sortBySelect(this.value)" style="margin-left:auto">
+      <option value="">Sort…</option>
+      <option value="composite">Fit Score ↓</option>
+      <option value="cpi">Cost ↑</option>
+      <option value="struct">Output Quality ↓</option>
+      <option value="gst">GST Fit ↓</option>
+      <option value="uptime">API Reliability ↓</option>
+    </select>
+  </div>
+
+  <div class="tbl-wrap">
+    <table id="mainTable">
+      <thead><tr>
+        <th onclick="sortCol('rank')">#</th>
+        <th onclick="sortCol('name')">Model</th>
+        <th onclick="sortCol('prov')">Provider</th>
+        <th onclick="sortCol('cpi')">$/Invoice</th>
+        <th>Vision</th>
+        <th onclick="sortCol('struct')">① Output</th>
+        <th onclick="sortCol('gst')">③ GST Fit</th>
+        <th onclick="sortCol('speed')">⑤ Speed</th>
+        <th onclick="sortCol('uptime')">⑦ Reliability</th>
+        <th onclick="sortCol('composite')" class="sorted">Fit Score ↓</th>
+        <th>Flag</th>
+      </tr></thead>
+      <tbody id="tbody"></tbody>
+    </table>
+  </div>
+  <p style="font-size:11px;color:var(--text3);margin-top:8px">Click any column header to sort. <span style="color:var(--green)">Green rows = current model in production.</span> <span style="color:var(--blue)">Blue rows = recommended upgrade.</span></p>
+</div>
+
+<!-- SCATTER -->
+<div class="card">
+  <h2>Cost vs. Fit Score</h2>
+  <p style="font-size:12px;color:var(--text2);margin-bottom:12px">X-axis = cost per invoice (log scale). Y-axis = composite fit score. Hover bubbles for detail. Bubble size reflects value (score ÷ cost).</p>
+  <div id="scwrap"><canvas id="sc"></canvas></div>
+  <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:10px;font-size:11px;color:var(--text2)">
+    <span><span class="legend-dot" style="background:var(--g)"></span>Google</span>
+    <span><span class="legend-dot" style="background:var(--a)"></span>Anthropic</span>
+    <span><span class="legend-dot" style="background:var(--o)"></span>OpenAI</span>
+    <span><span class="legend-dot" style="background:var(--m)"></span>Mistral</span>
+    <span><span class="legend-dot" style="background:var(--ow)"></span>Open-weight</span>
+    <span><span class="legend-ring" style="border-color:var(--green)"></span>Current model</span>
+    <span><span class="legend-ring" style="border-color:var(--blue)"></span>Recommended</span>
+  </div>
+</div>
+
+<!-- MODEL SELECTION LOGIC -->
+<div class="card">
+  <h2>How to Pick a Model</h2>
+  <div class="sel-tree">
+    <div class="q">1. Start with the highest-fit model at an acceptable cost.</div>
+    <div class="a">→ Gemini 3.1 Flash-Lite ($0.00245/invoice) — best fit-to-cost ratio in the list.</div>
+    <span class="note">BFCL-v3 score 76.5% (structured output). 2.5× faster than Gemini 2.5 Flash. Drop-in replacement for the current Gemini 1.5 Flash.</span>
+
+    <div class="q">2. If you need the highest absolute accuracy and can justify the cost:</div>
+    <div class="a">→ Gemini 3.1 Pro ($0.0226/invoice) for complex layouts with many line items.</div>
+    <span class="note">Best document understanding in the list. Thinking mode handles edge cases (rotated tables, multi-currency). ~9× current cost.</span>
+
+    <div class="a">→ GPT-5.4 ($0.0285/invoice) if you're already on the Azure/OpenAI stack (99.9% SLA).</div>
+    <span class="note">Best API reliability in the comparison. Strong function calling. Well-suited for organisations that already use Azure OpenAI for other services.</span>
+
+    <div class="q">3. If data never leaving your infrastructure is a hard requirement:</div>
+    <div class="a">→ Llama 4 Maverick (self-hosted, ~$0.0044/invoice on Groq) — best open-weight option.</div>
+    <span class="note">Native multimodal, 1M context, self-hostable. Indian financial data (GSTIN, amounts, vendor names) stays within your infra.</span>
+
+    <div class="q">4. If you're on a very high volume and cost is the primary constraint:</div>
+    <div class="a">→ Gemini 1.5 Flash ($0.00077/invoice) is the current model and a fine baseline.</div>
+    <span class="note">Two generations behind but still solid. Upgrade to Flash-Lite for a free quality improvement at 3× the cost — still only $0.00245/invoice.</span>
+  </div>
+</div>
+
+<!-- INVOICE2DATA -->
+<div class="card">
+  <h2>invoice2data Template Hybrid — Is It Worth It?</h2>
+  <p style="font-size:13px;color:var(--text2);margin-bottom:14px">The current system uses invoice2data regex templates as a first-pass extraction layer, with LLM as fallback. Here's when that helps and when it doesn't.</p>
+
+  <div class="i2d-grid">
+    <div class="i2d-box">
+      <h3>✅ Where the hybrid adds real value</h3>
+      <p><strong style="color:var(--text)">Speed:</strong> Template extraction completes in ~200ms vs 5–12s for an LLM call. For invoices from known vendors (templates exist), the user sees the result instantly.<br><br>
+      <strong style="color:var(--text)">Determinism:</strong> Same invoice → bit-for-bit identical output every time. No token sampling variance. Easier to audit and regression test.<br><br>
+      <strong style="color:var(--text)">Cost at volume:</strong> Templates are free. At 10K invoices/month, a 60% template hit rate saves ~$15/month at Flash-Lite pricing — negligible. At 50K+, savings compound. See the break-even table below.</p>
+    </div>
+
+    <div class="i2d-box">
+      <h3>⚠️ Where the hybrid creates risk</h3>
+      <p><strong style="color:var(--text)">Silent template drift:</strong> Vendor changes their invoice layout, template silently extracts wrong fields, validation catches some but not all. LLM is more robust to layout changes.<br><br>
+      <strong style="color:var(--text)">Template maintenance burden:</strong> Each new vendor requires writing and testing a new template. Below ~20 active vendors, the effort often exceeds the savings.<br><br>
+      <strong style="color:var(--text)">Coverage ceiling:</strong> Long-tail vendors (infrequent, varied layouts) will always fall through to LLM anyway. The template layer only helps for the top-N vendors by volume.</p>
+    </div>
+  </div>
+
+  <h3 style="margin-top:16px;margin-bottom:8px;color:var(--text2)">Break-even: cost savings from template hit rate</h3>
+  <p style="font-size:12px;color:var(--text2);margin-bottom:8px">Assumes a 60% template hit rate (realistic for structured operations with a core set of vendors). LLM cost = Flash-Lite at $0.00245/invoice.</p>
+  <div class="tbl-wrap">
+    <table class="be-table">
+      <thead><tr>
+        <th>Monthly volume</th>
+        <th>LLM-only cost</th>
+        <th>Hybrid cost (40% LLM)</th>
+        <th>Monthly saving</th>
+        <th>Template maintenance est.</th>
+        <th>Net</th>
+      </tr></thead>
+      <tbody id="betbody"></tbody>
+    </table>
+  </div>
+
+  <div style="margin-top:16px;padding:12px 16px;background:var(--bg3);border-radius:7px;font-size:12px;color:var(--text2)">
+    <strong style="color:var(--text)">Verdict:</strong> Keep the template hybrid. The speed and determinism benefits exist at any volume — they're not just about cost. The risk of silent drift is real but the existing validation layer mitigates it. The cost argument only becomes financially meaningful above ~50K docs/month with cheap models; it becomes compelling much sooner if you upgrade to GPT-5.4 or Gemini 3.1 Pro.
+    <br><br>
+    <strong style="color:var(--text)">Better alternative?</strong> Not really — but consider prompt caching as a free complement. Your system prompt (~800 tokens, identical across all calls) qualifies for Google's and Anthropic's 90% cache discount immediately. That's an 8–12% cost reduction with zero engineering work.
+  </div>
+</div>
+
+<div style="font-size:11px;color:var(--text3);text-align:center;padding-bottom:16px">
+  Fit score weights: ① Output 22% · ② Vision 15% · ③ GST Fit 20% · ④ Doc Understanding 15% · ⑤ Speed 13% · ⑥ Context 8% · ⑦ API Reliability 7% &nbsp;|&nbsp; All scores are estimates — treat rankings as directional
+</div>
+
+</div><!-- /wrap -->
+<div id="tt"></div>
+
+<script>
+// ═══════════════════ DATA ═══════════════════
+// dims: [struct, vision, gst, docund, speed, ctx, uptime]
+// weights: [0.22, 0.15, 0.20, 0.15, 0.13, 0.08, 0.07]
+const M = [
+  {id:1,  name:"Gemini 1.5 Flash",       lbl:"G1.5 Flash",      prov:"google",     col:"#f0883e", in:0.075,  out:0.30,   vis:true,
+   dims:[7.0, 10, 7.0, 6.5, 8.5, 10.0, 7.5],
+   ctx:"1M", note:"Current model in production. Two generations behind. Solid baseline for cost-sensitive use. 1M context window.",
+   cur:true, rec:false},
+
+  {id:2,  name:"Gemini 2.5 Flash",       lbl:"G2.5 Flash",      prov:"google",     col:"#f0883e", in:0.30,   out:2.50,   vis:true,
+   dims:[8.0, 10, 8.0, 8.5, 7.5, 10.0, 7.5],
+   ctx:"1M", note:"Solid mid-tier option. Superseded by Gemini 3.1 Flash-Lite which is faster and cheaper. Still a valid choice if you prefer a stable, widely-deployed model.",
+   cur:false, rec:false},
+
+  {id:3,  name:"Gemini 3.1 Flash-Lite",  lbl:"G3.1 F-Lite",     prov:"google",     col:"#f0883e", in:0.25,   out:1.50,   vis:true,
+   dims:[8.2, 10, 8.0, 8.0, 9.5, 10.0, 7.5],
+   ctx:"1M", note:"Recommended upgrade. BFCL-v3 structured output score 76.5%. 2.5× faster than Gemini 2.5 Flash at lower cost. Drop-in replacement for current production model.",
+   cur:false, rec:true},
+
+  {id:4,  name:"Gemini 3 Flash",         lbl:"G3 Flash",        prov:"google",     col:"#f0883e", in:0.50,   out:3.00,   vis:true,
+   dims:[8.0, 10, 8.0, 8.5, 7.5, 10.0, 7.5],
+   ctx:"1M", note:"Stronger capability than Flash-Lite but 2× more expensive with no published evidence of improvement on structured extraction tasks. Gemini 3.1 Flash-Lite is better value.",
+   cur:false, rec:false},
+
+  {id:5,  name:"Gemini 3.1 Pro",         lbl:"G3.1 Pro",        prov:"google",     col:"#f0883e", in:2.00,   out:12.00,  vis:true,
+   dims:[9.0, 10, 9.5, 9.5, 6.0, 10.0, 7.5],
+   ctx:"2M", note:"Highest absolute quality in the Gemini family. Extended thinking handles complex layouts and multi-page invoices well. 9× current model cost — justifiable if extraction accuracy directly impacts payment accuracy.",
+   cur:false, rec:false},
+
+  {id:6,  name:"Claude Haiku 4.5",       lbl:"Cl Haiku 4.5",    prov:"anthropic",  col:"#da3633", in:1.00,   out:5.00,   vis:false,
+   dims:[7.5, 0, 7.0, 7.0, 9.0, 7.0, 7.5],
+   ctx:"200K", note:"No native PDF vision — OCR pre-step required. Fast and inexpensive for Anthropic. 4× the cost of Flash-Lite with lower overall fit. Suitable if you're already on the Anthropic stack.",
+   cur:false, rec:false},
+
+  {id:7,  name:"Claude Sonnet 4.6",      lbl:"Cl Sonnet 4.6",   prov:"anthropic",  col:"#da3633", in:3.00,   out:15.00,  vis:false,
+   dims:[8.5, 0, 9.0, 9.0, 7.0, 7.0, 7.5],
+   ctx:"200K", note:"Strong on text-based extraction. No native PDF vision. Benchmark leader for invoice accuracy in text-only path. At $0.032/invoice, it's 42× current model cost.",
+   cur:false, rec:false},
+
+  {id:8,  name:"Claude Opus 4.7",        lbl:"Cl Opus 4.7",     prov:"anthropic",  col:"#da3633", in:5.00,   out:25.00,  vis:false,
+   dims:[8.0, 0, 9.0, 9.5, 5.5, 7.0, 7.5],
+   ctx:"200K", note:"No native PDF vision. New tokenizer generates ~35% more tokens than predecessors — effective cost ≈$0.073/invoice (95× current model). High reasoning capability doesn't justify the cost for structured extraction.",
+   cur:false, rec:false},
+
+  {id:9,  name:"GPT-5.4 Nano",           lbl:"GPT-5.4 Nano",    prov:"openai",     col:"#58a6ff", in:0.20,   out:1.25,   vis:true,
+   dims:[7.5, 10, 6.5, 6.5, 9.0, 6.0, 9.0],
+   ctx:"128K", note:"Purpose-built for extraction and classification. Vision, fast, cheap ($0.00229/invoice). Weaker on complex multi-page Indian GST layouts — Nano tier has less reasoning capacity.",
+   cur:false, rec:false},
+
+  {id:10, name:"GPT-5.4 Mini",           lbl:"GPT-5.4 Mini",    prov:"openai",     col:"#58a6ff", in:0.75,   out:4.50,   vis:true,
+   dims:[8.0, 10, 7.5, 7.5, 8.0, 6.0, 9.0],
+   ctx:"128K", note:"Strong mid-tier. Reliable JSON output, vision, 128K context. At $0.0085/invoice it sits between Flash-Lite and full GPT-5.4 in both cost and capability.",
+   cur:false, rec:false},
+
+  {id:11, name:"GPT-5.4",                lbl:"GPT-5.4",         prov:"openai",     col:"#58a6ff", in:2.50,   out:15.00,  vis:true,
+   dims:[9.0, 10, 8.5, 8.5, 7.5, 6.0, 9.0],
+   ctx:"128K", note:"Best API reliability in the comparison (Azure SLA 99.9%). Strong function calling and structured output. Best choice for teams already on Azure OpenAI. $0.0285/invoice.",
+   cur:false, rec:false},
+
+  {id:12, name:"GPT-5.5",                lbl:"GPT-5.5",         prov:"openai",     col:"#58a6ff", in:5.00,   out:30.00,  vis:true,
+   dims:[9.0, 10, 9.0, 9.0, 7.0, 7.5, 9.0],
+   ctx:"256K", note:"Top OpenAI model. Excellent across all dimensions. At $0.0565/invoice it's 74× current — GPT-5.4 achieves near-identical structured extraction at half the cost.",
+   cur:false, rec:false},
+
+  {id:13, name:"GPT-5.5 Pro",            lbl:"GPT-5.5 Pro",     prov:"openai",     col:"#58a6ff", in:30.00,  out:180.00, vis:true,
+   dims:[9.3, 10, 9.5, 9.5, 5.0, 7.5, 9.0],
+   ctx:"256K", note:"$0.339/invoice. $33,900/month at 100K docs. Marginal improvement over GPT-5.5 for structured data extraction. Pure overkill at this price point.",
+   cur:false, rec:false},
+
+  {id:14, name:"Llama 4 Scout",          lbl:"Llama4 Scout",    prov:"openweight", col:"#3fb950", in:0.11,   out:0.34,   vis:true,
+   dims:[7.0, 10, 6.5, 7.0, 8.5, 10.0, 7.0],
+   ctx:"10M", note:"10M context window — best for long batches. Self-hostable: Indian financial data never leaves your infrastructure. $0.00107/invoice on Groq. Weaker structured output than larger models.",
+   cur:false, rec:false},
+
+  {id:15, name:"Llama 4 Maverick",       lbl:"Llama4 Maverick", prov:"openweight", col:"#3fb950", in:0.50,   out:0.77,   vis:true,
+   dims:[7.5, 10, 7.5, 8.0, 7.5, 10.0, 7.0],
+   ctx:"1M", note:"Best open-weight option. Native multimodal, 1M context, self-hostable. Best pick if data sovereignty is a hard requirement. Validate GSTIN/HSN extraction before production use.",
+   cur:false, rec:false},
+
+  {id:16, name:"DeepSeek V4 Flash",      lbl:"DS V4 Flash",     prov:"openweight", col:"#3fb950", in:0.14,   out:0.28,   vis:false,
+   dims:[7.5, 0, 7.0, 7.5, 8.0, 6.0, 5.5],
+   ctx:"128K", note:"No native vision. Good JSON adherence. If using the closed API: Indian financial data transits to China — regulatory concern under RBI guidelines. Use self-hosted version instead.",
+   cur:false, rec:false},
+
+  {id:17, name:"DeepSeek V4 Pro",        lbl:"DS V4 Pro",       prov:"openweight", col:"#3fb950", in:1.74,   out:0.87,   vis:false,
+   dims:[8.5, 0, 8.0, 8.5, 6.5, 6.0, 5.5],
+   ctx:"128K", note:"Strong structured output. MoE architecture makes output cheaper than input ($0.87 out vs $1.74 in). No vision. Same data sovereignty caution as V4 Flash for the closed API endpoint.",
+   cur:false, rec:false},
+
+  {id:18, name:"Qwen3-32B",              lbl:"Qwen3-32B",       prov:"openweight", col:"#3fb950", in:0.78,   out:0.78,   vis:false,
+   dims:[7.6, 0, 8.0, 7.5, 7.5, 6.0, 7.0],
+   ctx:"128K", note:"BFCL-v3 score 75.7% (strong structured output). Excellent Hindi/multilingual support — good for mixed-language invoices. No vision. Self-hostable option.",
+   cur:false, rec:false},
+
+  {id:19, name:"GPT-5",                  lbl:"GPT-5",           prov:"openai",     col:"#58a6ff", in:1.25,   out:10.00,  vis:true,
+   dims:[8.5, 10, 8.0, 8.0, 7.5, 7.5, 9.0],
+   ctx:"256K", note:"Solid base GPT-5. Largely superseded by GPT-5.4 which has better function calling at a similar price. Still a strong choice for teams already on OpenAI.",
+   cur:false, rec:false},
+
+  {id:20, name:"Mistral Small",          lbl:"M-Small",         prov:"mistral",    col:"#bc8cff", in:0.20,   out:0.60,   vis:false,
+   dims:[6.0, 0, 5.5, 5.0, 8.0, 4.0, 7.0],
+   ctx:"32K", note:"Lowest fit in this comparison. Text-only, 32K context, limited Indian GST domain knowledge. Included as a budget reference point. Not recommended for production GST extraction.",
+   cur:false, rec:false},
+];
+
+const WTS = [0.22, 0.15, 0.20, 0.15, 0.13, 0.08, 0.07];
+const DIM_KEYS = ['struct','vision','gst','docund','speed','ctx','uptime'];
+
+let curFilter = 'all';
+let sortState = {key:'composite', asc:false};
+
+function cpi(m){ return (m.in/1e6)*8000 + (m.out/1e6)*550; }
+function composite(m){ return WTS.reduce((s,w,i)=>s+w*m.dims[i], 0); }
+function fmtCPI(c){ return c<0.001?`$${(c*10000).toFixed(2)}‱`:`$${c.toFixed(4)}`; }
+function cpiCls(c){ if(c<0.001)return'color:var(--teal)'; if(c<0.005)return'color:var(--green)'; if(c<0.02)return'color:var(--yellow)'; return'color:var(--red)'; }
+function scoreCol(s){ if(s>=9)return'#3fb950'; if(s>=8)return'#58a6ff'; if(s>=7)return'#d29922'; if(s>=5.5)return'#ffa657'; return'#f85149'; }
+
+function scoreCell(val){
+  const pct=(val/10*100).toFixed(0), col=scoreCol(val);
+  return `<div class="score-cell"><div class="score-bar"><div class="score-fill" style="width:${pct}%;background:${col}"></div></div><span class="score-num" style="color:${col}">${val.toFixed(1)}</span></div>`;
+}
+
+function rowClass(m){ return m.cur?'r-cur':m.rec?'r-rec':''; }
+function flagBadge(m){
+  if(m.cur) return '<span class="bdg b-cur">★ Current</span>';
+  if(m.rec) return '<span class="bdg b-rec">⚑ Rec</span>';
+  return '';
+}
+
+function filterBy(f, btn){
+  curFilter=f;
+  document.querySelectorAll('.fbtn').forEach(b=>b.classList.remove('active'));
+  btn.classList.add('active');
+  renderTable();
+}
+function sortBySelect(v){
+  const map={composite:{key:'composite',asc:false},cpi:{key:'cpi',asc:true},struct:{key:'struct',asc:false},gst:{key:'gst',asc:false},uptime:{key:'uptime',asc:false}};
+  if(map[v]){sortState=map[v];renderTable();}
+}
+function sortCol(k){
+  if(sortState.key===k) sortState.asc=!sortState.asc;
+  else sortState={key:k, asc:k==='cpi'};
+  renderTable();
+}
+
+const filterFns={
+  all:()=>true, google:m=>m.prov==='google', anthropic:m=>m.prov==='anthropic',
+  openai:m=>m.prov==='openai', openweight:m=>m.prov==='openweight',
+  vision:m=>m.vis, budget:m=>cpi(m)<0.005,
+};
+
+function renderTable(){
+  let data=M.filter(filterFns[curFilter]||filterFns.all);
+  const sf={
+    rank:(a,b)=>a.id-b.id, name:(a,b)=>a.name.localeCompare(b.name),
+    prov:(a,b)=>a.prov.localeCompare(b.prov), cpi:(a,b)=>cpi(a)-cpi(b),
+    composite:(a,b)=>composite(b)-composite(a),
+    struct:(a,b)=>b.dims[0]-a.dims[0], gst:(a,b)=>b.dims[2]-a.dims[2],
+    speed:(a,b)=>b.dims[4]-a.dims[4], uptime:(a,b)=>b.dims[6]-a.dims[6],
+  };
+  const fn=sf[sortState.key]||sf.composite;
+  data.sort((a,b)=>sortState.asc?fn(a,b):-fn(a,b));
+
+  document.getElementById('tbody').innerHTML=data.map((m,i)=>{
+    const c=cpi(m), comp=composite(m);
+    return `<tr class="${rowClass(m)}">
+      <td style="color:var(--text3)">${i+1}</td>
+      <td style="font-weight:600;font-size:13px">${m.name}</td>
+      <td style="font-size:11px;color:var(--text2);text-transform:capitalize">${m.prov}</td>
+      <td style="${cpiCls(c)};font-family:monospace;font-size:12px">${fmtCPI(c)}</td>
+      <td style="text-align:center;font-size:13px">${m.vis?'<span style="color:var(--green)">✓</span>':'<span style="color:var(--text3)">—</span>'}</td>
+      <td>${scoreCell(m.dims[0])}</td>
+      <td>${scoreCell(m.dims[2])}</td>
+      <td>${scoreCell(m.dims[4])}</td>
+      <td>${scoreCell(m.dims[6])}</td>
+      <td><span class="comp-cell" style="color:${scoreCol(comp)}">${comp.toFixed(2)}</span></td>
+      <td>${flagBadge(m)}</td>
+    </tr>`;
+  }).join('');
+}
+
+// ── SCATTER ──
+function renderScatter(){
+  const wrap=document.getElementById('scwrap');
+  const cv=document.getElementById('sc');
+  const W=wrap.offsetWidth, H=wrap.offsetHeight;
+  cv.width=W; cv.height=H;
+  const ctx=cv.getContext('2d');
+  const P={l:60,r:18,t:20,b:44};
+  const PW=W-P.l-P.r, PH=H-P.t-P.b;
+
+  const allC=M.map(cpi);
+  const minL=Math.log10(Math.min(...allC)*0.85), maxL=Math.log10(Math.max(...allC)*1.18);
+  const allComp=M.map(composite);
+  const minComp=Math.min(...allComp)*0.97, maxComp=Math.max(...allComp)*1.01;
+
+  const xp=m=>P.l+(Math.log10(cpi(m))-minL)/(maxL-minL)*PW;
+  const yp=m=>P.t+(1-(composite(m)-minComp)/(maxComp-minComp))*PH;
+  function br(m){ const v=composite(m)/(cpi(m)*500); return Math.max(7, Math.min(22, v*0.5+8)); }
+
+  // grid
+  ctx.strokeStyle='#21262d'; ctx.lineWidth=1;
+  const yTicks=[6,6.5,7,7.5,8,8.5,9];
+  yTicks.forEach(f=>{
+    if(f<minComp||f>maxComp) return;
+    const y=P.t+(1-(f-minComp)/(maxComp-minComp))*PH;
+    ctx.beginPath(); ctx.moveTo(P.l,y); ctx.lineTo(W-P.r,y); ctx.stroke();
+    ctx.fillStyle='#6e7681'; ctx.font='9px sans-serif'; ctx.textAlign='right';
+    ctx.fillText(f.toFixed(1),P.l-4,y+3);
+  });
+  for(let e=Math.ceil(minL*2)/2; e<=maxL; e+=0.5){
+    const x=P.l+(e-minL)/(maxL-minL)*PW;
+    if(x<P.l||x>W-P.r) continue;
+    ctx.strokeStyle='#21262d'; ctx.beginPath(); ctx.moveTo(x,P.t); ctx.lineTo(x,H-P.b); ctx.stroke();
+    const v=Math.pow(10,e);
+    ctx.fillStyle='#6e7681'; ctx.font='9px sans-serif'; ctx.textAlign='center';
+    ctx.fillText(v<0.001?`$${(v*10000).toFixed(2)}‱`:`$${v.toFixed(4)}`,x,H-P.b+13);
+  }
+  ctx.fillStyle='#8b949e'; ctx.font='11px sans-serif'; ctx.textAlign='center';
+  ctx.fillText('Cost per invoice (log scale) →', P.l+PW/2, H-3);
+  ctx.save(); ctx.translate(11,P.t+PH/2); ctx.rotate(-Math.PI/2);
+  ctx.fillText('← Fit Score', 0, 0); ctx.restore();
+
+  M.forEach(m=>{
+    const x=xp(m), y=yp(m), r=br(m);
+    ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2);
+    ctx.fillStyle=m.col+(m.cur||m.rec?'ff':'bb'); ctx.fill();
+    if(m.cur)       {ctx.strokeStyle='#3fb950';ctx.lineWidth=2.5;ctx.stroke();}
+    else if(m.rec)  {ctx.strokeStyle='#58a6ff';ctx.lineWidth=2.5;ctx.stroke();}
+    else            {ctx.strokeStyle='#0d1117';ctx.lineWidth=0.7;ctx.stroke();}
+    if(r>=13||m.cur||m.rec){
+      ctx.fillStyle='#ffffffdd'; ctx.font=`bold ${r>=16?'9':'8'}px sans-serif`; ctx.textAlign='center';
+      ctx.fillText(m.lbl,x,y+(r>=13?3:2));
+    }
+  });
+
+  cv.onmousemove=e=>{
+    const rect=cv.getBoundingClientRect(), mx=e.clientX-rect.left, my=e.clientY-rect.top;
+    let hit=null;
+    M.forEach(m=>{const dx=xp(m)-mx,dy=yp(m)-my; if(Math.sqrt(dx*dx+dy*dy)<br(m)+5) hit=m;});
+    const tt=document.getElementById('tt');
+    if(hit){
+      const c=cpi(hit), comp=composite(hit);
+      tt.innerHTML=`<div class="t-t" style="color:${scoreCol(comp)}">${hit.name}</div>
+        <div class="t-r"><span class="t-k">Provider</span><span class="t-v" style="text-transform:capitalize">${hit.prov}</span></div>
+        <div class="t-r"><span class="t-k">Cost / invoice</span><span class="t-v">${fmtCPI(c)}</span></div>
+        <div class="t-r"><span class="t-k">Fit score</span><span class="t-v" style="color:${scoreCol(comp)}">${comp.toFixed(2)} / 10</span></div>
+        <div class="t-r"><span class="t-k">① Output quality</span><span class="t-v" style="color:${scoreCol(hit.dims[0])}">${hit.dims[0]}</span></div>
+        <div class="t-r"><span class="t-k">③ GST domain fit</span><span class="t-v" style="color:${scoreCol(hit.dims[2])}">${hit.dims[2]}</span></div>
+        <div class="t-r"><span class="t-k">⑦ API reliability</span><span class="t-v" style="color:${scoreCol(hit.dims[6])}">${hit.dims[6]}</span></div>
+        <div class="t-r"><span class="t-k">Vision</span><span class="t-v">${hit.vis?'✓ Native':'— OCR needed'}</span></div>
+        <div class="t-r"><span class="t-k">Context</span><span class="t-v">${hit.ctx}</span></div>
+        <div class="t-n">${hit.note}</div>`;
+      tt.style.display='block'; tt.style.left=(e.clientX+16)+'px'; tt.style.top=Math.max(10,e.clientY-80)+'px';
+      cv.style.cursor='pointer';
+    } else { tt.style.display='none'; cv.style.cursor='default'; }
+  };
+  cv.onmouseleave=()=>document.getElementById('tt').style.display='none';
+}
+
+// ── BREAK-EVEN TABLE ──
+function renderBreakEven(){
+  const vols=[1000,5000,10000,50000,100000];
+  const lflite=0.00245, tmMaint=[5,10,15,30,50]; // $/month est maintenance
+  document.getElementById('betbody').innerHTML=vols.map((v,i)=>{
+    const llmOnly=(v*lflite).toFixed(2);
+    const hybridLlm=(v*0.4*lflite).toFixed(2);
+    const saving=((v*lflite)-(v*0.4*lflite)).toFixed(2);
+    const net=(parseFloat(saving)-tmMaint[i]).toFixed(2);
+    const netCol=parseFloat(net)>0?'color:var(--green)':'color:var(--red)';
+    return `<tr>
+      <td>${v.toLocaleString()}/mo</td>
+      <td style="font-family:monospace">$${llmOnly}</td>
+      <td style="font-family:monospace">$${hybridLlm}</td>
+      <td style="font-family:monospace;color:var(--green)">$${saving}</td>
+      <td style="font-family:monospace;color:var(--text2)">~$${tmMaint[i]}</td>
+      <td style="font-family:monospace;font-weight:700;${netCol}">$${net}</td>
+    </tr>`;
+  }).join('');
+}
+
+// ── STAT CARDS ──
+function renderStats(){
+  const cheapest=M.reduce((a,b)=>cpi(a)<cpi(b)?a:b);
+  const bestFit=M.reduce((a,b)=>composite(a)>composite(b)?a:b);
+  // best value = highest (score / cost)
+  const bestVal=M.reduce((a,b)=>(composite(a)/cpi(a))>(composite(b)/cpi(b))?a:b);
+  document.getElementById('cheapest-v').textContent=fmtCPI(cpi(cheapest));
+  document.getElementById('cheapest-v').title=cheapest.name;
+  document.getElementById('best-fit-v').textContent=bestFit.name.split(' ').slice(0,2).join(' ');
+  document.getElementById('best-val-v').textContent=bestVal.name.split(' ').slice(0,3).join(' ');
+}
+
+// ── INIT ──
+window.addEventListener('load',()=>{
+  renderStats(); renderTable(); renderScatter(); renderBreakEven();
+});
+window.addEventListener('resize',()=>renderScatter());
+</script>
+</body>
+</html>
